@@ -68,6 +68,30 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     node_->get_parameter("enable_global_trajectory_pub", enable_global_trajectory_pub_);
     FSM_LOG_INFO("enable_global_trajectory_pub: %s", enable_global_trajectory_pub_ ? "true" : "false");
 
+    // --- TEST: initial-state injection (vel/acc boundary condition demo) ---
+    node_->declare_parameter("test/inject_init_state", false);
+    node_->get_parameter("test/inject_init_state", inject_init_state_);
+
+    std::vector<double> init_vel_vec{0.0, 0.0, 0.0};
+    std::vector<double> init_acc_vec{0.0, 0.0, 0.0};
+    node_->declare_parameter("test/init_vel", init_vel_vec);
+    node_->declare_parameter("test/init_acc", init_acc_vec);
+    node_->get_parameter("test/init_vel", init_vel_vec);
+    node_->get_parameter("test/init_acc", init_acc_vec);
+
+    inject_init_vel_.setZero();
+    inject_init_acc_.setZero();
+    if (init_vel_vec.size() >= 3)
+        inject_init_vel_ = Eigen::Vector3d(init_vel_vec[0], init_vel_vec[1], init_vel_vec[2]);
+    if (init_acc_vec.size() >= 3)
+        inject_init_acc_ = Eigen::Vector3d(init_acc_vec[0], init_acc_vec[1], init_acc_vec[2]);
+
+    if (inject_init_state_) {
+        FSM_LOG_WARN("[TEST] inject_init_state ENABLED: init vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
+                     inject_init_vel_(0), inject_init_vel_(1), inject_init_vel_(2),
+                     inject_init_acc_(0), inject_init_acc_(1), inject_init_acc_(2));
+    }
+
 
     // Start position will be received from TrajectoryCommand message
     // Initialize with zero until we receive the command
@@ -192,6 +216,15 @@ void ReplanFSM::init()
         Eigen::MatrixXd finState = Eigen::MatrixXd::Zero(3, 3);
         iniState.col(0) = start_pt_;
         finState.col(0) = end_pt_;
+
+        // TEST: seed a non-zero initial vel/acc (otherwise cold-start plans from rest).
+        if (inject_init_state_) {
+            iniState.col(1) = inject_init_vel_;
+            iniState.col(2) = inject_init_acc_;
+            FSM_LOG_WARN("[TEST] init(): injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
+                         inject_init_vel_(0), inject_init_vel_(1), inject_init_vel_(2),
+                         inject_init_acc_(0), inject_init_acc_(1), inject_init_acc_(2));
+        }
 
         bool success = path_manager_->planGlobalTraj(start_pt_, iniState.col(1), iniState.col(2),
                                                      {end_pt_}, finState.col(1), finState.col(2));
@@ -541,6 +574,16 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
         start_acc_ = Eigen::Vector3d::Zero();
         log_manager_->infof("Using current position (no trajectory yet): (%.2f, %.2f, %.2f)",
                    start_pt_(0), start_pt_(1), start_pt_(2));
+    }
+
+    // TEST: override the resolved start vel/acc with the injected boundary condition.
+    // Position is left untouched; only the initial motion state is forced.
+    if (inject_init_state_) {
+        start_vel_ = inject_init_vel_;
+        start_acc_ = inject_init_acc_;
+        log_manager_->infof("[TEST] Injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
+                   start_vel_(0), start_vel_(1), start_vel_(2),
+                   start_acc_(0), start_acc_(1), start_acc_(2));
     }
 
     std::vector<Eigen::Vector3d> waypoints;

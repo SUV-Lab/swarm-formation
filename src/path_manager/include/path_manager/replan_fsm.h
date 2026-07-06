@@ -132,6 +132,14 @@ private:
     Eigen::Vector3d current_vel_;
     Eigen::Vector3d start_pt_, start_vel_, start_acc_;
     Eigen::Vector3d end_pt_;
+
+    // --- TEST: inject a non-zero initial velocity/acceleration into the plan's
+    // head-state boundary condition, to visualize its effect (e.g. start_vel up
+    // while the goal is left → trajectory shoots up then curves to the goal).
+    // Off by default; toggled by the "test/inject_init_state" ROS parameter.
+    bool inject_init_state_;
+    Eigen::Vector3d inject_init_vel_;
+    Eigen::Vector3d inject_init_acc_;
     double current_time_;
     double last_start_time_;
     bool rviz_simulation_;

@@ -29,6 +29,26 @@ namespace ego_planner
       clean_path.insert(clean_path.begin() + 1, mid);
     }
 
+    // --- Initial-velocity lead-in ---
+    // When start_vel is non-zero (in-flight replan), the head piece must leave along
+    // start_vel. The front-end path ignores velocity, so the first segment can be long
+    // (e.g. ~172 m) and point far from start_vel; the min-jerk head then arcs wildly to
+    // reconcile the two, overshooting into risk/obstacle space -> a bad guess L-BFGS
+    // can't recover (time-stretching the head was a no-op: that segment already spanned
+    // ~86 s). Plant a short lead-in point ALONG start_vel so the head coasts out in the
+    // direction the drone is already moving; the redirect then happens over the next,
+    // normal segment. The lead-in is an inner point, so L-BFGS may relax it freely.
+    if (lead_in_time_ > 0.0 && start_vel.norm() > 1e-3) {
+      Eigen::Vector3d v_hat = start_vel.normalized();
+      double d_lead = start_vel.norm() * lead_in_time_;  // distance travelled while redirecting
+      Eigen::Vector3d p_lead = clean_path.front() + v_hat * d_lead;
+      clean_path.insert(clean_path.begin() + 1, p_lead);
+      if (log_manager_) {
+        log_manager_->infof("[LEAD-IN] start_vel=%.2f m/s -> lead point +%.2f m along (%.2f,%.2f,%.2f)",
+                            start_vel.norm(), d_lead, v_hat.x(), v_hat.y(), v_hat.z());
+      }
+    }
+
     int piece_num = static_cast<int>(clean_path.size()) - 1;
     Eigen::MatrixXd innerPts(3, piece_num - 1);
     for (int i = 0; i < piece_num - 1; ++i) {
@@ -908,6 +928,10 @@ namespace ego_planner
     node_->get_parameter("optimization/max_vel", max_vel_);
     node_->declare_parameter("optimization/max_acc", 1.0);
     node_->get_parameter("optimization/max_acc", max_acc_);
+
+    // Initial-velocity lead-in horizon in seconds (0 = disabled/legacy behavior).
+    node_->declare_parameter("optimization/lead_in_time", 1.0);
+    node_->get_parameter("optimization/lead_in_time", lead_in_time_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {

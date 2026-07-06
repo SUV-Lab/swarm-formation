@@ -46,6 +46,13 @@
     manager/max_vel: 2.0
     manager/max_acc: 5.0
 
+    # Initial-velocity lead-in horizon (seconds). On an in-flight replan, plant a
+    # short path point along start_vel so the min-jerk head piece coasts out in the
+    # direction the drone is already moving instead of overshooting toward a far
+    # first waypoint. d_lead = |start_vel| * this. 0.0 = legacy (no lead-in).
+    # Toggle/tune here for A/B without rebuild.
+    optimization/lead_in_time: 0.0   # dormant on main: enable after lead-in validation
+
     # ---- Map / SDF ----
     manager/sdf_voxel_size: 1.0
     manager/ground_height: -0.01        # <= -0.5 disables

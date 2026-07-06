@@ -14,6 +14,19 @@
     enable_waypoint_markers: true
     enable_global_trajectory_pub: true
 
+    # --- TEST: initial-state injection (velocity/acceleration boundary demo) ---
+    # When true, the plan's head-state is forced to start with the vel/acc below.
+    #
+    # STEP 3 (lead-in fix validation): WORST case — vertical (0,0,2), orthogonal to the
+    # horizontal goal — the one that blew up (risk 59x, feasibility 92x, -1005). Step 2's
+    # time-stretch was a no-op (first segment already ~86 s), so we switched levers:
+    # optimization/lead_in_time plants a short path point along start_vel. Expect the
+    # z-overshoot to be capped and costs/convergence to fall toward rest levels.
+    # Set lead_in_time=0 (optimizer_params.yaml) to reproduce the blowup.
+    test/inject_init_state: false
+    test/init_vel: [-1.0, -1.0, 0.0]   # [x, y, z] m/s   VERTICAL ⊥ (worst case)
+    test/init_acc: [0.0, 0.0, 0.0]   # [x, y, z] m/s^2 (map frame)
+
     # Drone hardware mapping
     drone_0:
       index: 0          # Internal agent index (0,1,2,3...) -> /agent0/target_position

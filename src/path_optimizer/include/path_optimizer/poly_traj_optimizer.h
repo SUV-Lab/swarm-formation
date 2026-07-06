@@ -113,6 +113,10 @@ namespace ego_planner
 
     double swarm_clearance_;
     double max_vel_, max_acc_;
+    // Initial-velocity lead-in horizon (seconds): plant a short path point along
+    // start_vel so the head piece coasts out in the direction the drone is already
+    // moving, instead of arcing wildly toward a far first waypoint. 0.0 = disabled.
+    double lead_in_time_;
 
     int formation_size_ = 4;  // Default to 4 drones
     bool use_formation_ = true;
