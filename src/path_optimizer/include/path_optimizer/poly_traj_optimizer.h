@@ -42,11 +42,12 @@ using LogManager = swarm_formation::LogManager;
 
 namespace ego_planner
 {
-  // risk zone (shared definition with path_manager).
+  // risk zone (shared definition with path_manager / front-end RiskZoneLite).
   struct RiskZone {
     Eigen::Vector3d center;
-    double reach;   // meters; risk is exactly zero outside this ball
-    double peak;    // dimensionless in (0, 1]
+    double reach;   // meters; risk is exactly zero outside the vertical cylinder
+    double peak;    // raw yaml max_risk_level; values >= 1 saturate the moat
+                    // at the shared cap (1-1e-3) over most of the cylinder
   };
 
   enum FORMATION_TYPE
@@ -110,6 +111,11 @@ namespace ego_planner
     double wei_formation_;
     double wei_formation_base_;  // Base formation weight (from config)
     double wei_risk_;          // Risk zone cost weight for trajectory optimization
+    // Smoothed trajectory-level equivalent of the front-end's finite barrier
+    // K (manager/risk_barrier): per-length cost on NON-exempt zones so MINCO
+    // keeps the same standoff at the cylinder rim that FM2 planned with.
+    // 0 disables (moat-only sharing).
+    double wei_risk_barrier_{0.0};
 
     double swarm_clearance_;
     double max_vel_, max_acc_;
@@ -143,6 +149,9 @@ namespace ego_planner
     // Risk zone data for trajectory optimization.
     std::vector<RiskZone> risk_zones_;
     bool use_risk_zones_{false};
+    // Per-zone: 1 = contains the plan start/goal, barrier OFF (moat only).
+    // Same must-enter exemption rule as the front-end's prepareBarrier.
+    std::vector<char> zone_barrier_exempt_;
     // Altitude band cap: cubic penalty on z above alt_zhi_ (mission altitude
     // + allowance). Keeps the sparse-piece quintic from ballooning hundreds
     // of metres above ridge crossings; 0 weight disables.
@@ -168,7 +177,15 @@ namespace ego_planner
     void setRiskZones(const std::vector<RiskZone> &zones) {
         risk_zones_ = zones;
         use_risk_zones_ = !zones.empty();
+        // Stale exemptions must not outlive the zone list they were computed
+        // for; prepareRiskBarrier() recomputes them per plan.
+        zone_barrier_exempt_.clear();
     }
+
+    // Mark zones containing the plan start/goal as barrier-exempt (they must
+    // be entered, so they stay soft) — mirrors dyn_a_star.h prepareBarrier.
+    // Call once per plan, after setRiskZones, before optimizing.
+    void prepareRiskBarrier(const Eigen::Vector3d &start, const Eigen::Vector3d &goal);
 
     void setAltitudeBand(double z_hi, double weight) {
         alt_zhi_ = z_hi;
@@ -249,7 +266,9 @@ namespace ego_planner
 
     bool RiskGradCostP(const int i_dp,
                          const Eigen::Vector3d &p,
+                         const Eigen::Vector3d &v,
                          Eigen::Vector3d &gradp,
+                         Eigen::Vector3d &gradv,
                          double &costp);
 
     bool feasibilityGradCostV(const Eigen::Vector3d &v,

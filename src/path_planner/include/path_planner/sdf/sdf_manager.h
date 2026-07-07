@@ -43,6 +43,11 @@ struct PrimitiveSpec {
   //   kCylinder : (diameter_x, diameter_y, height_z)  (axis = z)
   //   kSphere   : (diameter, diameter, diameter)
   Eigen::Vector3d size = Eigen::Vector3d::Ones();
+  // Heading about +Z in radians (kCube/kCylinder; ignored for kSphere).
+  // The patch rasterizer tests occupancy in the rotated frame, so the
+  // resulting patch SDF is exact for the ORIENTED primitive — collision
+  // follows the displayed hull instead of an axis-aligned stand-in.
+  double yaw = 0.0;
 };
 
 class SDFManager : public IDistanceField {

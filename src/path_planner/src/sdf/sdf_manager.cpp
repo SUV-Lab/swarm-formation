@@ -549,7 +549,16 @@ inline bool samplePatch(const DynamicPatch& patch,
 
 // Voxel test for a primitive (in world frame).
 inline bool primitiveOccupies(const PrimitiveSpec& s, const Eigen::Vector3d& p) {
-  const Eigen::Vector3d d = p - s.center;
+  Eigen::Vector3d d = p - s.center;
+  // Oriented primitives: test occupancy in the primitive's own frame
+  // (rotate the query by -yaw about Z). Sphere is rotation-invariant.
+  if (s.yaw != 0.0 && s.kind != PrimitiveKind::kSphere) {
+    const double c = std::cos(s.yaw), sn = std::sin(s.yaw);
+    const double bx =  c * d.x() + sn * d.y();
+    const double by = -sn * d.x() + c * d.y();
+    d.x() = bx;
+    d.y() = by;
+  }
   switch (s.kind) {
     case PrimitiveKind::kCube: {
       const Eigen::Vector3d half = 0.5 * s.size;
@@ -573,10 +582,18 @@ inline bool primitiveOccupies(const PrimitiveSpec& s, const Eigen::Vector3d& p) 
   return false;
 }
 
-// AABB of the primitive's bounding box in world coords.
+// AABB of the primitive's bounding box in world coords. For yawed primitives
+// this is the AABB of the ROTATED footprint (conservative for cylinders).
 inline void primitiveAabb(const PrimitiveSpec& s,
                           Eigen::Vector3d* lo, Eigen::Vector3d* hi) {
-  const Eigen::Vector3d half = 0.5 * s.size;
+  Eigen::Vector3d half = 0.5 * s.size;
+  if (s.yaw != 0.0 && s.kind != PrimitiveKind::kSphere) {
+    const double c = std::abs(std::cos(s.yaw)), sn = std::abs(std::sin(s.yaw));
+    const double hx = c * half.x() + sn * half.y();
+    const double hy = sn * half.x() + c * half.y();
+    half.x() = hx;
+    half.y() = hy;
+  }
   *lo = s.center - half;
   *hi = s.center + half;
 }

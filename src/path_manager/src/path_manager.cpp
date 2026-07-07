@@ -623,6 +623,25 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         searcher_.setRiskZones(astar_tz_ptr);
         log_manager_->infof("[PM DBG] setRiskZones: %zu zones (ptr=%p) weight=%.3f",
             astar_risks.size(), (const void*)astar_tz_ptr, risk_weight_);
+        // Re-bind the optimizer with the SAME zone set every plan, symmetric
+        // with the searcher_ re-bind above. initOptimizer() only snapshots the
+        // set active at startup, so without this per-plan push a runtime zone
+        // update (setRiskZonesRuntime) reaches the front-end and the metrics
+        // panel but never MINCO — which then smooths trajectories into freshly
+        // added zones (and keeps dodging removed ones). An empty list
+        // intentionally clears stale zones.
+        if (poly_traj_opt_) {
+            std::vector<ego_planner::RiskZone> opt_zones;
+            opt_zones.reserve(risk_zones_.size());
+            for (const auto &tz : risk_zones_) {
+                ego_planner::RiskZone oz;
+                oz.center = tz.center;
+                oz.reach = tz.reach;
+                oz.peak = tz.peak;
+                opt_zones.push_back(oz);
+            }
+            poly_traj_opt_->setRiskZones(opt_zones);
+        }
         // A* must see obstacles so the simple_path it returns is already an
         // avoidance path. Feeding that into MINCO makes the initial inner
         // points sit OUTSIDE the obstacle, and L-BFGS only has to smooth the
@@ -785,12 +804,13 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         log_manager_->infof("A* route: %zu waypoints (%.1f ms)",
             full_route.size(),
             std::chrono::duration<double, std::milli>(t_rrt_end - t_astar_start).count());
-        // DEBUG: annotate each A* waypoint with the SAME risk the planner uses,
-        // i.e. the quadratic moat m_i = peak*(1 - d/reach)^2 (see dyn_a_star.h /
-        // poly_traj_optimizer RiskGradCostP) and the OR-composed risk
+        // DEBUG: annotate each A* waypoint with the SAME risk field every
+        // consumer uses (dyn_a_star.h getRiskNorm and poly_traj_optimizer
+        // RiskGradCostP share it verbatim): vertical-cylinder quadratic moat
+        // m_i = peak*(1 - d_horiz/reach)^2, OR-composed risk
         // = 1 - prod_i (1 - m_i), in [0,1]. (Previously this logged a Gaussian *
-        // risk_weight, which did NOT match the planner and made edge passes look
-        // far riskier than they are.)
+        // risk_weight — and later a 3D-sphere distance — neither matched the
+        // planner and made edge passes look far riskier than they are.)
         // Full per-waypoint dump only for small routes: at FM2 k=1 the raw
         // route is 30k+ points and 30k formatted log lines cost ~10 s/plan.
         const size_t kRiskDumpMax = 200;
@@ -802,9 +822,11 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             const bool dump = full_route.size() <= kRiskDumpMax;
             for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
                 const auto &tz = risk_zones_[zi];
-                double dist = (p - tz.center).norm();
+                const double ddx = p.x() - tz.center.x();
+                const double ddy = p.y() - tz.center.y();
+                double dist = std::sqrt(ddx * ddx + ddy * ddy);  // horizontal
                 double moat = 0.0;
-                if (dist < tz.reach) {
+                if (std::abs(p.z() - tz.center.z()) < tz.reach && dist < tz.reach) {
                     double u = 1.0 - dist / tz.reach;
                     moat = tz.peak * u * u;
                 }
@@ -957,12 +979,22 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
 
         double global_time = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
         poly_traj::Trajectory global_traj, local_traj;
-        // Mission altitude band for the optimizer's z-cap: one unit of
-        // allowance above the higher endpoint (ridge crossings exceed it and
-        // pay, which is exactly the "only climb when terrain demands" rule).
+        // Altitude cap reference for the optimizer's z-cap: the FRONT-END
+        // GEODESIC's own max z (not just the endpoints). The eikonal already
+        // priced climb-vs-detour in one metric and committed to this profile
+        // (its alt band makes it leave mission altitude only where terrain
+        // demands), so capping at endpoint+1 re-litigated that decision: a
+        // terrain-forced ridge crossing paid ~77k/plan in altitude cost and
+        // the down-pressure pushed the crest segment into the terrain
+        // (d<0 collision warnings at the crest). The cap's actual job is only
+        // to stop the sparse-piece quintic ballooning ABOVE the committed
+        // profile — same no-re-litigation rule as the shared risk field.
         {
-            double z_hi = std::max(start_pos.z(), waypoints.back().z()) + 1.0;
+            double path_max_z = std::max(start_pos.z(), waypoints.back().z());
+            for (const auto &p : clean_path) path_max_z = std::max(path_max_z, p.z());
+            const double z_hi = path_max_z + 1.0;
             poly_traj_opt_->setAltitudeBand(z_hi, weight_altitude_);
+            log_manager_->infof("[ALT] optimizer z-cap z_hi=%.2f (geodesic max z + 1.0)", z_hi);
         }
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
@@ -1141,10 +1173,17 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
                             center.x(), center.y(), center.z());
         return -2;  // deferred (not an error)
     }
+    // One heading per spawn, shared by BOTH the collision primitive and the
+    // RViz model marker. It used to be visual-only (collision stayed an
+    // axis-aligned box), so a rotated hull stuck out of its own collision
+    // volume and trajectories legally clipped the bow/stern.
+    const double yaw =
+        std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_);
     path_planner::sdf::PrimitiveSpec spec;
     spec.kind = path_planner::sdf::PrimitiveKind::kCube;
     spec.center = center;
     spec.size = size;  // full extents (sx, sy, sz)
+    spec.yaw = yaw;
 
     int id = sdf_manager_.addObstacle(spec);
     if (id < 0) {
@@ -1159,11 +1198,10 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
     dyn_patch_sizes_.push_back(size);
     dyn_patch_is_box_.push_back(1);
     dyn_patch_models_.push_back(model);
-    dyn_patch_yaws_.push_back(
-        std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_));
-    log_manager_->infof("Dynamic box added: id=%d center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f), total=%zu",
+    dyn_patch_yaws_.push_back(yaw);
+    log_manager_->infof("Dynamic box added: id=%d center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f) yaw=%.2f, total=%zu",
                         id, center.x(), center.y(), center.z(),
-                        size.x(), size.y(), size.z(),
+                        size.x(), size.y(), size.z(), yaw,
                         sdf_manager_.numActiveObstacles());
     publishDynamicObstacles();
     return id;
@@ -1266,7 +1304,8 @@ void PathManager::publishDynamicObstacles()
         m.pose.position.x = c.x();
         m.pose.position.y = c.y();
         m.pose.position.z = base_z;
-        // Per-spawn random yaw about Z (visual only; SDF collision stays AABB).
+        // Per-spawn yaw about Z, shared with the SDF collision primitive
+        // (PrimitiveSpec.yaw) — what you see is what the planner avoids.
         const double yaw = (i < dyn_patch_yaws_.size()) ? dyn_patch_yaws_[i] : 0.0;
         m.pose.orientation.z = std::sin(0.5 * yaw);
         m.pose.orientation.w = std::cos(0.5 * yaw);

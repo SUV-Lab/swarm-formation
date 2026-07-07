@@ -34,7 +34,15 @@
     optimization/weight_sqrvariance: 10000.0
     optimization/weight_time: 500.0     # too low -> duration blow-up (loops/loitering knots)
     optimization/weight_formation: 0.0
-    optimization/weight_Risk: 10000.0  # cubic penetration penalty (zone = vertical cylinder)
+    optimization/weight_Risk: 10000.0  # arc-length integral of the FM2-shared OR-moat field:
+                                       # wei * ∫ r(p)*||v|| dt, same r as manager/risk_weight consumes.
+                                       # Layer-agreement scale: ~ risk_weight * weight_time / cruise
+                                       # speed (30*500/2 = 7500); 10000 keeps risk slightly stiffer.
+    optimization/weight_Risk_barrier: 25000.0  # smoothed front-end barrier K on NON-exempt zones
+                                       # (start/goal-inside zones stay moat-only, same rule as FM2).
+                                       # Derivation: K * weight_time / cruise = 100*500/2. Without it
+                                       # MINCO re-litigates the rim standoff: the moat's zero contact
+                                       # slope makes skirt-cutting profitable ~tens of metres deep.
     optimization/weight_altitude: 200.0  # z-cap above mission band (quadratic); keep << weight_obstacle or it presses into terrain
     optimization/swarm_clearance: 0.5
     optimization/formation_type: 2

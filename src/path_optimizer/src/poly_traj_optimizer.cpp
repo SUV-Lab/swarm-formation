@@ -19,6 +19,11 @@ namespace ego_planner
                                            poly_traj::Trajectory &out_global,
                                            poly_traj::Trajectory &out_local)
   {
+    // Barrier exemptions for this plan (same start/goal rule as the
+    // front-end): must be recomputed per plan since zones and endpoints
+    // both change at runtime.
+    prepareRiskBarrier(start_pos, waypoints.back());
+
     // === MINCO initial trajectory from clean_path ===
     // Each shortcut vertex becomes one MINCO piece boundary directly;
     // clean_path is already densified so pieces stay roughly equal length.
@@ -126,10 +131,13 @@ namespace ego_planner
     // mem_size capped at 64: 256 caused -1005 line-search failures.
     lbfgs::lbfgs_parameter_t lbfgs_params;
     lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
-    lbfgs_params.mem_size       = 64;       // ref 16 → 64 (global scale)
+    lbfgs_params.mem_size       = 64;       // ref 16 → 64 (global scale); 256 caused -1005
     lbfgs_params.g_epsilon      = 0.05;     // ref 0.1 → 0.05 (slightly tighter)
     lbfgs_params.min_step       = 1e-32;
-    lbfgs_params.max_iterations = 300;      // ref 60 → 300 (global scale)
+    // 300 consistently ended at -1004 while risk/altitude terms were still
+    // polishing (~0.02%/iter). One-shot global plan on an idle desktop:
+    // 300 iters ≈ 0.3 s, so 3000 ≈ 3 s is nothing — let g_epsilon decide.
+    lbfgs_params.max_iterations = 3000;
 
     if (!use_formation)
     {
@@ -271,7 +279,9 @@ namespace ego_planner
 
     Eigen::VectorXd gradT(opt->piece_num_);
     double smoo_cost = 0, time_cost = 0;
-    Eigen::VectorXd obs_swarm_feas_qvar_costs(6);
+    // Slots: 0 obstacle, 1 swarm, 2 formation, 3 risk (moat+barrier),
+    //        4 feasibility, 5 sqrvariance, 6 altitude band.
+    Eigen::VectorXd obs_swarm_feas_qvar_costs(7);
 
     // High-performance timing for debugging (similar to con code)
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -325,7 +335,8 @@ namespace ego_planner
         opt->log_manager_->infof("  obstacle_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(0), opt->wei_obs_);
         opt->log_manager_->infof("  swarm_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(1), opt->wei_swarm_);
         opt->log_manager_->infof("  formation_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(2), opt->wei_formation_);
-        opt->log_manager_->infof("  risk_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(3), opt->wei_risk_);
+        opt->log_manager_->infof("  risk_cost=%.6f (weight=%.3f, barrier=%.3f)", obs_swarm_feas_qvar_costs(3), opt->wei_risk_, opt->wei_risk_barrier_);
+        opt->log_manager_->infof("  altitude_cost=%.6f (weight=%.3f, z_hi=%.2f)", obs_swarm_feas_qvar_costs(6), opt->wei_alt_, opt->alt_zhi_);
         opt->log_manager_->infof("  feasibility_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(4), opt->wei_feas_);
         opt->log_manager_->infof("  time_cost=%.6f (weight=%.3f)", time_cost, opt->wei_time_);
 
@@ -491,18 +502,20 @@ namespace ego_planner
             }
         }
 
-        // Risk zone cost calculation (soft constraint)
-        if (use_risk_zones_ && RiskGradCostP(i_dp, pos, gradp, costp)) {
-            gradViolaPc = beta0 * gradp.transpose();
-            gradViolaPt = alpha * gradp.transpose() * vel;
+        // Risk zone cost (FM2-shared OR-moat field, arc-length integral
+        // r(p)*||v||; see RiskGradCostP). Position AND velocity couple in.
+        if (use_risk_zones_ && RiskGradCostP(i_dp, pos, vel, gradp, gradv, costp)) {
+            gradViolaPc = beta0 * gradp.transpose() + beta1 * gradv.transpose();
+            gradViolaPt = alpha * (gradp.dot(vel) + gradv.dot(acc));
             jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
             gdT(i) += omg * (costp / K + step * gradViolaPt);
             costs(3) += omg * step * costp;
         }
 
-        // Altitude-band cap (cubic above the mission band, like the obstacle
-        // violation shape). Booked into the risk slot (3): both are
-        // "exposure" costs. Down-side is covered by ground/obstacle terms.
+        // Altitude-band cap. Own slot (6) — it used to share the risk slot
+        // and made zone-risk diagnosis impossible when a terrain-forced climb
+        // (front-end leaves the band only where terrain demands it) was the
+        // real contributor. Down-side is covered by ground/obstacle terms.
         if (wei_alt_ > 0.0 && alt_zhi_ >= 0.0 && pos.z() > alt_zhi_) {
             // QUADRATIC, not cubic: ridge crossings sit several units above
             // the band, and a cubic down-force there outgrows the obstacle
@@ -516,7 +529,7 @@ namespace ego_planner
             gradViolaPt = alpha * grad_a.transpose() * vel;
             jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
             gdT(i) += omg * (costa_z / K + step * gradViolaPt);
-            costs(3) += omg * step * costa_z;
+            costs(6) += omg * step * costa_z;
         }
 
         // Feasibility cost calculation
@@ -820,37 +833,134 @@ namespace ego_planner
     return false;
   }
 
-  // Risk penalty: cubic in PENETRATION DEPTH u = 1 - d/R per zone (vertical
-  // cylinder, matching the front-end). The old wei*risk^2 with risk ~ peak*u^2
-  // was ~u^4 near the boundary — so flat that the time cost always won and
-  // the optimizer shaved corners INTO zones. u^3 mirrors the obstacle
-  // penalty's cubic violation shape: zero-slope contact, growing fast inside.
+  // Same must-enter rule as the front-end's prepareBarrier (dyn_a_star.h):
+  // a zone containing the plan start or goal cannot be avoided, so its
+  // barrier is dropped and only the shared moat prices the crossing.
+  void PolyTrajOptimizer::prepareRiskBarrier(const Eigen::Vector3d &start,
+                                             const Eigen::Vector3d &goal)
+  {
+    zone_barrier_exempt_.assign(risk_zones_.size(), 0);
+    auto in_zone = [](const Eigen::Vector3d &p, const RiskZone &tz) {
+      if (std::abs(p.z() - tz.center.z()) >= tz.reach) return false;
+      const double dx = p.x() - tz.center.x();
+      const double dy = p.y() - tz.center.y();
+      return dx * dx + dy * dy < tz.reach * tz.reach;
+    };
+    for (size_t i = 0; i < risk_zones_.size(); ++i) {
+      if (in_zone(start, risk_zones_[i]) || in_zone(goal, risk_zones_[i])) {
+        zone_barrier_exempt_[i] = 1;
+        LOG_INFO("[RISK] zone %zu contains start/goal -> barrier exempt (moat only)", i);
+      }
+    }
+  }
+
+  // Risk cost: consumes the SAME continuous risk field as the FM2 front-end
+  // (dyn_a_star.h getRiskNorm), so both layers price risk on one shared field:
+  // per zone a vertical-cylinder quadratic moat  m_i = peak_i*(1 - d/R_i)^2
+  // (d = HORIZONTAL distance; z-flat inside |dz| < R_i, zero above/below),
+  // OR-composed  r(p) = 1 - prod_i(1 - min(m_i, 1-1e-3))  in [0, 1].
+  //
+  // Consumption is the ARC-LENGTH integral  ∫ (wei_risk * r + wei_barrier * b)
+  // ||v|| dt — the trajectory-level analogue of the front-end metric
+  // ds*(1 + alpha*risk + K*inside) (FM2 speed map F = 1/(1+cost), shortcut
+  // edge cost and coarse Dijkstra all integrate risk over LENGTH). Geometric
+  // like FM2's, so it cannot be gamed by flying through a zone faster; on a
+  // saturated plateau the surviving gradient (via ||v||) shortens the in-zone
+  // chord — the same "cross at the cheapest transit" the front-end picks.
+  //
+  // b is the SMOOTHED BARRIER: the front-end adds a flat K inside every
+  // non-exempt cylinder, which makes its geodesic keep a hard standoff at the
+  // rim (observed margins of only metres). A moat-only back-end re-litigates
+  // that standoff: near the rim the moat is ~peak*u^2 with ZERO contact
+  // slope, so cutting the skirt is net-profitable against the time cost
+  // until tens of metres deep. The barrier indicator is therefore shared
+  // too (a step has no usable gradient, so it is ramped), OR-composed like
+  // the moat. The ramp sits OUTSIDE the rim — full K at d <= reach, fading
+  // over the outer kBarrierRampFrac band — mirroring how the front-end's
+  // coarse grid bleeds its +K one cell past the rim (any cell whose center
+  // is inside slows the whole cell). The penetration equilibrium therefore
+  // lands OUTSIDE the true cylinder and the sensing volume stays untouched,
+  // instead of the ~1-2 m designed clip an inside ramp allowed. Zones
+  // holding the plan start/goal are exempt — same must-enter rule as
+  // prepareBarrier — so the back-end never fights a committed crossing.
   bool PolyTrajOptimizer::RiskGradCostP(const int i_dp,
                                            const Eigen::Vector3d &p,
+                                           const Eigen::Vector3d &v,
                                            Eigen::Vector3d &gradp,
+                                           Eigen::Vector3d &gradv,
                                            double &costp)
   {
-    (void)i_dp;  // consider all control points
+    (void)i_dp;  // consider all constraint points
     gradp.setZero();
+    gradv.setZero();
     costp = 0.0;
 
-    bool any = false;
-    for (const auto &tz : risk_zones_) {
+    constexpr double kMoatCap = 1.0 - 1e-3;  // identical to getRiskNorm
+    // Barrier ramp width as a fraction of reach, OUTSIDE the rim: s=1 at
+    // d<=reach, fading to 0 at reach*(1+frac). ~ the front-end's coarse-cell
+    // bleed (cres ~ metres) at typical zone sizes; steep enough that the
+    // approach equilibrium sits outside the true rim.
+    constexpr double kBarrierRampFrac = 0.05;
+
+    double Sm = 1.0;                               // moat survival prod(1-m_i)
+    Eigen::Vector3d Gm = Eigen::Vector3d::Zero();  // sum grad(m_i)/(1-m_i)
+    double Sb = 1.0;                               // barrier survival
+    Eigen::Vector3d Gb = Eigen::Vector3d::Zero();
+    for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
+      const auto &tz = risk_zones_[zi];
+      // AABB pre-filter on the ENLARGED support (barrier ramp lives outside
+      // the rim); the moat keeps the exact getRiskNorm support d < reach.
+      // z-gate stays at reach for both, mirroring the front-end cylinder.
+      const double reach_b = tz.reach * (1.0 + kBarrierRampFrac);
       if (std::abs(p.z() - tz.center.z()) >= tz.reach) continue;
-      Eigen::Vector3d diff = p - tz.center;
-      diff.z() = 0.0;
-      const double d = diff.norm();
-      if (d >= tz.reach) continue;
-      const double u = 1.0 - d / tz.reach;       // penetration fraction (0..1)
-      costp += wei_risk_ * u * u * u;
-      if (d > 1e-9) {
-        // d(u^3)/dp = 3u^2 * (-1/R) * diff/d  -> points INTO the zone; the
-        // negative gradient pushes the trajectory back out horizontally.
-        gradp += wei_risk_ * 3.0 * u * u * (-1.0 / tz.reach) * (diff / d);
+      const double dx = p.x() - tz.center.x();
+      if (std::abs(dx) >= reach_b) continue;
+      const double dy = p.y() - tz.center.y();
+      if (std::abs(dy) >= reach_b) continue;
+      const double d = std::sqrt(dx * dx + dy * dy);  // horizontal only
+      if (d >= reach_b) continue;
+      const Eigen::Vector3d dir_h =
+          (d > 1e-9) ? Eigen::Vector3d(dx / d, dy / d, 0.0)
+                     : Eigen::Vector3d::Zero();
+
+      // Shared moat (exact getRiskNorm shape/support).
+      if (d < tz.reach) {
+        const double u = 1.0 - d / tz.reach;
+        const double m = std::min(tz.peak * u * u, kMoatCap);
+        Sm *= (1.0 - m);
+        // Capped zones are locally flat; grad(r) = Sm * sum grad(m_i)/(1-m_i)
+        // with 1-m_i >= 1e-3 guaranteed by the cap.
+        if (m < kMoatCap && d > 1e-9) {
+          Gm += (tz.peak * 2.0 * u * (-1.0 / tz.reach) / (1.0 - m)) * dir_h;
+        }
       }
-      any = true;
+
+      // Smoothed barrier on non-exempt zones (front-end: +K inside ANY such
+      // zone -> OR of indicators; smooth OR = 1 - prod(1 - s_i)).
+      const bool exempt =
+          zi < zone_barrier_exempt_.size() && zone_barrier_exempt_[zi];
+      if (wei_risk_barrier_ > 0.0 && !exempt) {
+        const double w = tz.reach * kBarrierRampFrac;       // ramp width
+        const double t = std::min((reach_b - d) / w, 1.0);  // 0 at reach_b, 1 at rim
+        const double s = t * t;
+        Sb *= (1.0 - s);
+        // Saturated (t=1, at/inside the rim) is flat by design — chord
+        // shortening via ||v|| still applies. Skip the 1-s underflow annulus.
+        if (t < 1.0 && (1.0 - s) > 1e-9 && d > 1e-9) {
+          Gb += (2.0 * t * (-1.0 / w) / (1.0 - s)) * dir_h;
+        }
+      }
     }
-    return any;
+    const double r = 1.0 - Sm;
+    const double b = 1.0 - Sb;
+    if (r <= 0.0 && b <= 0.0) return false;
+
+    const double vnorm = v.norm();
+    const double density = wei_risk_ * r + wei_risk_barrier_ * b;  // per length
+    costp = density * vnorm;
+    gradp = vnorm * (wei_risk_ * (Sm * Gm) + wei_risk_barrier_ * (Sb * Gb));
+    if (vnorm > 1e-9) gradv = density * (v / vnorm);
+    return true;
   }
 
   void PolyTrajOptimizer::distanceSqrVarianceWithGradCost2p(const Eigen::MatrixXd &ps,
@@ -921,6 +1031,8 @@ namespace ego_planner
 
     node_->declare_parameter("optimization/weight_Risk", 0.0);
     node_->get_parameter("optimization/weight_Risk", wei_risk_);
+    node_->declare_parameter("optimization/weight_Risk_barrier", 0.0);
+    node_->get_parameter("optimization/weight_Risk_barrier", wei_risk_barrier_);
 
     node_->declare_parameter("optimization/swarm_clearance", 0.5);
     node_->get_parameter("optimization/swarm_clearance", swarm_clearance_);

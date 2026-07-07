@@ -992,7 +992,9 @@ void ReplanFSM::loadRiskZonesCallback(
         path_manager::RiskZone tz;
         tz.center = Eigen::Vector3d(z.center.x, z.center.y, z.center.z);
         tz.reach = z.reach;
-        tz.peak = std::min(z.peak, 1.0);  // clamp to (0, 1]
+        tz.peak = z.peak;  // raw max_risk_level, same semantics as the yaml
+                           // loader: values >= 1 saturate at the field-level
+                           // moat cap (1-1e-3) in getRiskNorm/RiskGradCostP
         zones.push_back(tz);
     }
     path_manager_->setRiskZonesRuntime(zones);
