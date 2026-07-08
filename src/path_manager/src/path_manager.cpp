@@ -1161,57 +1161,20 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             // line search died (-1005). Default 5 ~ the front-end's own alt
             // band tolerance (one FM2 coarse cell).
             //
-            // TERRAIN FLOOR for the cap: the scalar cap must never sit below
-            // what terrain under the route physically requires. The back-end
-            // smooths/corner-cuts the clean_path polyline, so sample terrain
-            // along its CHORDS (the skeleton the MINCO init and its corner
-            // cuts actually fly) and lift the cap to terrain + 2*clearance
-            // there. Observed root case: the front-end threads a 7.43-high
-            // pass -> cap 7.83, but the back-end's corner cut crosses a 7.95
-            // shoulder needing ~8.1 — the pointwise gate releases the crest
-            // itself yet still prices the BUMP'S SHOULDERS over the falling
-            // terrain beside it, so the climb loses and an 11.6 m crest
-            // penetration becomes the converged optimum. Only a cap >=
-            // terrain+clearance removes that contradiction. Over routes whose
-            // terrain stays below the mission profile the max() is a no-op,
-            // so the cap stays exactly as snug as before (islet
-            // balloon-control unchanged).
-            double terr_under_route = -1e9;
-            if (terrain_data_.valid && clean_path.size() >= 2) {
-                auto sampleSeg = [&](const Eigen::Vector3d &a,
-                                     const Eigen::Vector3d &b) {
-                    const double len = (b - a).head<2>().norm();
-                    const int n = std::max(1, (int)std::ceil(len));  // ~1-unit sampling
-                    for (int s = 0; s <= n; ++s) {
-                        const Eigen::Vector3d p = a + (double(s) / n) * (b - a);
-                        const float e = terrain_data_.getElevation(p.x(), p.y());
-                        if (e > -1e9f)
-                            terr_under_route = std::max(terr_under_route,
-                                                        static_cast<double>(e));
-                    }
-                };
-                // Polyline chords: the MINCO init skeleton.
-                for (size_t k = 0; k + 1 < clean_path.size(); ++k)
-                    sampleSeg(clean_path[k], clean_path[k + 1]);
-                // INNER chords (midpoint -> midpoint): the spine of the region
-                // corner-cutting actually flies. The cut leaves the polyline at
-                // each vertex and hugs the mid-to-mid line, so terrain there is
-                // NOT under any polyline chord — observed: chords read max 7.23
-                // through a pass while the corner-cut crossed a 7.99 shoulder,
-                // leaving the cap floor 0.76 short and the crest pressed 11.7 m
-                // into that shoulder at the converged optimum.
-                for (size_t k = 0; k + 2 < clean_path.size(); ++k) {
-                    const Eigen::Vector3d m0 =
-                        0.5 * (clean_path[k] + clean_path[k + 1]);
-                    const Eigen::Vector3d m1 =
-                        0.5 * (clean_path[k + 1] + clean_path[k + 2]);
-                    sampleSeg(m0, m1);
-                }
-            }
-            const double terr_floor =
-                terr_under_route + 2.0 * opt_obstacle_clearance_;
-            const double z_hi =
-                std::max(path_max_z, terr_floor) + alt_cap_headroom_;
+            // NO terrain floor on the scalar cap (removed). A chord-sampled
+            // "terrain max under the route" floor was added while the
+            // clearance band was 0.12 to fight cap-vs-terrain contradictions,
+            // but (a) it barely moved the crest dip (-0.117 -> -0.084; the
+            // 0.30 band sizing was the actual fix), (b) its 1-D chord/inner-
+            // chord sampling provably missed corner-cut knobs anyway, and
+            // (c) a single tall islet anywhere on the route raised the GLOBAL
+            // ceiling by its full height, licensing high-altitude wandering
+            // everywhere else. Terrain safety is owned pointwise by the
+            // heightmap-gated cap (zero press within 2*clearance of terrain)
+            // plus the 0.30 penalty band sized above the soft-penalty
+            // equilibrium (~0.21) — measured invariant to cap weight, so the
+            // cap's shoulder pressure cannot drag a crest through the band.
+            const double z_hi = path_max_z + alt_cap_headroom_;
             // Floor: mirror of the cap, and the missing LOWER half of the
             // FM2 alt band ("stiff down-side: nothing ever requires diving
             // below mission altitude"). Without it z is only bounded below
@@ -1241,9 +1204,8 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             poly_traj_opt_->setAltitudeBand(z_lo, z_hi, weight_altitude_);
             log_manager_->infof(
                 "[ALT] optimizer z-band [%.2f, %.2f] (mission min - %.2f, "
-                "max(path %.2f, terr %.2f + 2*clr %.2f) + %.2f)",
-                z_lo, z_hi, alt_floor_headroom_, path_max_z,
-                terr_under_route, opt_obstacle_clearance_, alt_cap_headroom_);
+                "path max %.2f + %.2f; terrain owned by gated cap + 0.30 band)",
+                z_lo, z_hi, alt_floor_headroom_, path_max_z, alt_cap_headroom_);
         }
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,

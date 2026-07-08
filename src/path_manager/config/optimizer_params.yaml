@@ -42,26 +42,25 @@
 
     # ---- Shortcut / MINCO input ----
     manager/astar_bypass_shortcut: false  # true = raw front-end path straight to MINCO (debug)
-    manager/length_per_piece: 12.5     # piece scale; segments subdivided to max 4x this (=max_seg).
-                                       # DO NOT shrink below this: finer pieces (tried 6.25) let the
-                                       # obstacle term balloon individual crests into free space where
-                                       # the deliberately-weak cap (200 << obstacle 1e4) can't pull them
-                                       # back -> altitude_cost explodes to ~200k -> L-BFGS -1005/-1008.
-                                       # Sparse pieces are load-bearing for optimizer stability here.
+    manager/length_per_piece: 6.25     # piece scale; segments subdivided to max 4x this (=max_seg).
                                        # THE wave-wavelength knob: a quintic piece cannot express any
-                                       # z-feature narrower than itself, so 50 (=20 km pieces) turned a
-                                       # 100 m islet into a 20-40 km, 200 m-tall hill. 12.5 -> 5 km
-                                       # pieces: bumps narrow to ~5 km and amplitude drops toward the
-                                       # islet+clearance height. Piece count ~30 -> ~70 (opt still <1 s).
+                                       # z-feature narrower than itself. 12.5 (5 km pieces) forced every
+                                       # 200-400 m islet hop to start climbing 2.5-5 km early and spread
+                                       # a wide dome; 6.25 (2.5 km pieces) localizes climbs near the
+                                       # terrain that demands them. Piece count roughly doubles
+                                       # (~85 -> ~170 on the 230-unit routes; iter budget scales with it).
+                                       # NB: an earlier 6.25 attempt exploded (altitude_cost ~200k,
+                                       # -1005/-1008) — that was the pre-consistency era (SDF terrain
+                                       # double-count, frozen gate gradients, mismatched slopes), all
+                                       # since fixed; if those signatures return, revert to 12.5.
     manager/astar_step_size: 1.0        # A* raw path spacing, frame units (astar front-end)
 
     # ---- Optimizer weights ----
-    optimization/constrain_points_perPiece: 200  # penalty-integral samples per piece. Spacing must
-                                       # resolve the violation band (islet + 0.5 clearance, a few
-                                       # units wide): at 200-unit pieces that needed 400+ (100 m->50 m
-                                       # spacing) — the "less wavy at 400" effect. With 50-unit pieces
-                                       # 200 gives 25 m spacing; more just burns CPU (13 GB/iter of
-                                       # samples resolve nothing below the 2.288-unit SDF voxel).
+    optimization/constrain_points_perPiece: 100  # penalty-integral samples per piece. Sized to keep
+                                       # ~25 m sample spacing as pieces shrink: with max_seg 25 units
+                                       # (length_per_piece 6.25) 100 points = 0.25 unit spacing — same
+                                       # resolution the 200-at-50-units setup had. Denser just burns CPU
+                                       # (resolves nothing below the ~2.2-unit DEM cell).
     optimization/weight_smoothness: 10000.0  # explicit jerk-energy weight. The jerk integral scales
                                        # ~1/T^5, so at mission scale (km routes, 50-100 s pieces) the
                                        # implicit weight 1 collapses it 6-7 orders below time_cost and
