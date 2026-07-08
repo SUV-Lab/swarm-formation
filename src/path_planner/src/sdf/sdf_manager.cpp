@@ -78,22 +78,20 @@ inline void fillEDT1D(const std::function<double(int)>& f_get,
 
 }  // namespace
 
-// Dynamic obstacle patch: small dense ESDF over an AABB on the global grid.
-// Stored in voxel-index coords matching the static grid's voxel_size/origin.
+// Analytic dynamic obstacle: the primitive spec itself plus its inflated
+// world AABB (primitive AABB + influence radius). No per-patch voxel grid —
+// distance and gradient are evaluated in CLOSED FORM (primitiveSignedDistance),
+// so box faces are exact instead of aliased to the global voxel: with 229 m
+// xy voxels a 50-160 m box rasterized to 0-1 cells (±115 m geometry error,
+// masked only by the 1 km front-end berth). Value and gradient come from one
+// function — the cost/gradient-consistency rule the trilinear layer obeyed.
 struct DynamicPatch {
   bool active = false;
-  // Inclusive voxel-index AABB on the global grid.
-  int xlo = 0, ylo = 0, zlo = 0;
-  int xhi = 0, yhi = 0, zhi = 0;
-  // Local extent (hi - lo + 1).
-  int lnx = 0, lny = 0, lnz = 0;
-  // Flat ((x * lny) + y) * lnz + z, signed distance in meters.
-  std::vector<float> distance;
-
-  inline size_t flatLocal(int lx, int ly, int lz) const {
-    return ((size_t(lx) * lny) + ly) * lnz + lz;
-  }
-  inline size_t numVoxels() const { return size_t(lnx) * lny * lnz; }
+  PrimitiveSpec spec;
+  // Influence AABB in world coords; outside it the patch contributes nothing
+  // (same "meaningful only within influenceRadius" semantic as the old grid).
+  Eigen::Vector3d aabb_lo = Eigen::Vector3d::Zero();
+  Eigen::Vector3d aabb_hi = Eigen::Vector3d::Zero();
 };
 
 struct SDFManagerImpl {
@@ -451,88 +449,6 @@ inline int clampIdx(int v, int lo, int hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
 
-// 3D signed ESDF over a dense occupancy block of size (nx,ny,nz). occ[i] is
-// nonzero for obstacle voxels. The result `d` (length nx*ny*nz) holds signed
-// distance in meters: positive outside obstacles, negative inside, computed
-// via 1D Felzenszwalb sweeps in z, y, x. Used by both the static layer
-// (initial build) and the dynamic patch builder (small AABB blocks).
-inline void buildSignedEdt3D(const uint8_t* occ, int nx, int ny, int nz,
-                             const Eigen::Vector3d& res, std::vector<float>* d) {
-  const size_t N = size_t(nx) * ny * nz;
-  const double INF = 1e30;  // finite: see the fillEDT1D overflow note
-  auto idx = [nx_ = size_t(nx), ny_ = size_t(ny), nz_ = size_t(nz)]
-             (int x, int y, int z) {
-    return ((size_t(x) * ny_) + y) * nz_ + z;
-  };
-
-  // Edge case: all-free or all-occupied — fillEDT1D produces NaN otherwise.
-  bool any_occupied = false, any_free = false;
-  for (size_t i = 0; i < N; ++i) {
-    if (occ[i] != 0) any_occupied = true; else any_free = true;
-    if (any_occupied && any_free) break;
-  }
-  d->assign(N, 0.0f);
-  if (!any_occupied) {
-    const float kLargeFree = static_cast<float>(
-        std::max({nx * res.x(), ny * res.y(), nz * res.z()}));
-    std::fill(d->begin(), d->end(), kLargeFree);
-    return;
-  }
-  if (!any_free) {
-    const float kLargeNeg = -static_cast<float>(
-        std::max({nx * res.x(), ny * res.y(), nz * res.z()}));
-    std::fill(d->begin(), d->end(), kLargeNeg);
-    return;
-  }
-
-  std::vector<double> tmp1(N), tmp2(N);
-  std::vector<double> d_pos(N), d_neg(N);
-
-  // Positive DT (obstacle = seed). Sweeps in z, y, x.
-  for (int x = 0; x < nx; ++x)
-    for (int y = 0; y < ny; ++y)
-      fillEDT1D(
-          [&](int z) { return occ[idx(x,y,z)] != 0 ? 0.0 : INF; },
-          [&](int z, double v) { tmp1[idx(x,y,z)] = v; },
-          0, nz - 1, res.z());
-  for (int x = 0; x < nx; ++x)
-    for (int z = 0; z < nz; ++z)
-      fillEDT1D(
-          [&](int y) { return tmp1[idx(x,y,z)]; },
-          [&](int y, double v) { tmp2[idx(x,y,z)] = v; },
-          0, ny - 1, res.y());
-  for (int y = 0; y < ny; ++y)
-    for (int z = 0; z < nz; ++z)
-      fillEDT1D(
-          [&](int x) { return tmp2[idx(x,y,z)]; },
-          [&](int x, double v) { d_pos[idx(x,y,z)] = std::sqrt(v); },
-          0, nx - 1, res.x());
-
-  // Negative DT (free = seed).
-  for (int x = 0; x < nx; ++x)
-    for (int y = 0; y < ny; ++y)
-      fillEDT1D(
-          [&](int z) { return occ[idx(x,y,z)] == 0 ? 0.0 : INF; },
-          [&](int z, double v) { tmp1[idx(x,y,z)] = v; },
-          0, nz - 1, res.z());
-  for (int x = 0; x < nx; ++x)
-    for (int z = 0; z < nz; ++z)
-      fillEDT1D(
-          [&](int y) { return tmp1[idx(x,y,z)]; },
-          [&](int y, double v) { tmp2[idx(x,y,z)] = v; },
-          0, ny - 1, res.y());
-  for (int y = 0; y < ny; ++y)
-    for (int z = 0; z < nz; ++z)
-      fillEDT1D(
-          [&](int x) { return tmp2[idx(x,y,z)]; },
-          [&](int x, double v) { d_neg[idx(x,y,z)] = std::sqrt(v); },
-          0, nx - 1, res.x());
-
-  for (size_t i = 0; i < N; ++i) {
-    double s = (occ[i] != 0) ? -d_neg[i] : d_pos[i];
-    (*d)[i] = static_cast<float>(s);
-  }
-}
 
 // Trilinear-sample a dense distance grid `cache` of shape (nx,ny,nz) at
 // voxel-fractional coordinates vf (already shifted by -0.5 for cell centers).
@@ -600,58 +516,94 @@ inline bool sampleTrilinear(const float* cache, int nx, int ny, int nz,
 }
 
 // Sample a dynamic patch at world position p. The patch occupies voxel-index
-// AABB [lo, hi]; we sample its local grid using local fractional coords.
-// Returns +inf when p is outside the patch AABB.
-inline bool samplePatch(const DynamicPatch& patch,
-                        const Eigen::Vector3d& voxel,
-                        const Eigen::Vector3d& origin,
-                        const Eigen::Vector3d& p,
-                        float* out_d,
-                        Eigen::Vector3d* out_grad) {
-  if (!patch.active) return false;
-  // Patch local origin = global origin shifted by (xlo,ylo,zlo) voxels.
-  const Eigen::Vector3d patch_origin = origin + Eigen::Vector3d(
-      patch.xlo * voxel.x(), patch.ylo * voxel.y(), patch.zlo * voxel.z());
-  const Eigen::Vector3d vf =
-      (p - patch_origin).cwiseQuotient(voxel) - Eigen::Vector3d(0.5, 0.5, 0.5);
-  return sampleTrilinear<true>(patch.distance.data(),
-                               patch.lnx, patch.lny, patch.lnz,
-                               voxel, vf, out_d, out_grad);
-}
+// (Dynamic patches are analytic now; see primitiveSignedDistance and the new
+// samplePatch below primitiveAabb.)
 
 // Voxel test for a primitive (in world frame).
-inline bool primitiveOccupies(const PrimitiveSpec& s, const Eigen::Vector3d& p) {
+// Exact signed distance (and its analytic gradient) of a primitive, in the
+// WORLD frame. Negative inside. The gradient is the true derivative of the
+// returned value (unit outward normal; a subgradient on the measure-zero
+// edge/corner/axis sets) — value and gradient always form a consistent pair.
+// kCylinder assumes a CIRCULAR cross-section (all in-tree cylinders are;
+// an elliptical exact SDF has no closed form — the mean radius is used).
+inline float primitiveSignedDistance(const PrimitiveSpec& s,
+                                     const Eigen::Vector3d& p,
+                                     Eigen::Vector3d* out_grad) {
   Eigen::Vector3d d = p - s.center;
-  // Oriented primitives: test occupancy in the primitive's own frame
-  // (rotate the query by -yaw about Z). Sphere is rotation-invariant.
-  if (s.yaw != 0.0 && s.kind != PrimitiveKind::kSphere) {
-    const double c = std::cos(s.yaw), sn = std::sin(s.yaw);
-    const double bx =  c * d.x() + sn * d.y();
-    const double by = -sn * d.x() + c * d.y();
+  const bool rotated = (s.yaw != 0.0 && s.kind != PrimitiveKind::kSphere);
+  double cy = 1.0, sy = 0.0;
+  if (rotated) {
+    cy = std::cos(s.yaw);
+    sy = std::sin(s.yaw);
+    const double bx =  cy * d.x() + sy * d.y();
+    const double by = -sy * d.x() + cy * d.y();
     d.x() = bx;
     d.y() = by;
   }
+
+  double dist = 0.0;
+  Eigen::Vector3d g = Eigen::Vector3d::Zero();  // gradient in the local frame
   switch (s.kind) {
     case PrimitiveKind::kCube: {
-      const Eigen::Vector3d half = 0.5 * s.size;
-      return std::abs(d.x()) <= half.x() &&
-             std::abs(d.y()) <= half.y() &&
-             std::abs(d.z()) <= half.z();
+      const Eigen::Vector3d h = 0.5 * s.size;
+      const Eigen::Vector3d q = d.cwiseAbs() - h;
+      const Eigen::Vector3d qpos = q.cwiseMax(0.0);
+      const double outside = qpos.norm();
+      if (outside > 1e-12) {
+        dist = outside;
+        g = qpos / outside;
+      } else {
+        // Inside: distance to (and normal of) the nearest face.
+        int ax = 0;
+        dist = q.maxCoeff(&ax);
+        g[ax] = 1.0;
+      }
+      // Undo the |d| folding: the gradient picks up sign(d) per axis.
+      for (int i = 0; i < 3; ++i) g[i] *= (d[i] >= 0.0 ? 1.0 : -1.0);
+      break;
     }
     case PrimitiveKind::kCylinder: {
-      const double rx = 0.5 * s.size.x();
-      const double ry = 0.5 * s.size.y();
+      const double r  = 0.25 * (s.size.x() + s.size.y());  // = radius when circular
       const double hz = 0.5 * s.size.z();
-      const double nxn = (rx > 0) ? d.x() / rx : 0.0;
-      const double nyn = (ry > 0) ? d.y() / ry : 0.0;
-      return (nxn*nxn + nyn*nyn) <= 1.0 && std::abs(d.z()) <= hz;
+      const double rho = std::hypot(d.x(), d.y());
+      const double qr = rho - r;
+      const double qz = std::abs(d.z()) - hz;
+      const double or_ = std::max(qr, 0.0), oz = std::max(qz, 0.0);
+      const double outside = std::hypot(or_, oz);
+      double gr, gz;  // gradient in (radial, |z|) space
+      if (outside > 1e-12) {
+        dist = outside;
+        gr = or_ / outside;
+        gz = oz / outside;
+      } else {
+        if (qr > qz) { dist = qr; gr = 1.0; gz = 0.0; }
+        else         { dist = qz; gr = 0.0; gz = 1.0; }
+      }
+      const double inv_rho = (rho > 1e-12) ? 1.0 / rho : 0.0;
+      g = Eigen::Vector3d(gr * d.x() * inv_rho,
+                          gr * d.y() * inv_rho,
+                          gz * (d.z() >= 0.0 ? 1.0 : -1.0));
+      break;
     }
     case PrimitiveKind::kSphere: {
-      const double r = 0.5 * s.size.x();   // assume uniform diameter
-      return d.squaredNorm() <= r * r;
+      const double r = 0.5 * s.size.x();   // uniform diameter
+      const double n = d.norm();
+      dist = n - r;
+      g = (n > 1e-12) ? Eigen::Vector3d(d / n) : Eigen::Vector3d(0, 0, 1);
+      break;
     }
   }
-  return false;
+
+  if (out_grad) {
+    if (rotated) {  // rotate the local gradient back by +yaw
+      out_grad->x() = cy * g.x() - sy * g.y();
+      out_grad->y() = sy * g.x() + cy * g.y();
+      out_grad->z() = g.z();
+    } else {
+      *out_grad = g;
+    }
+  }
+  return static_cast<float>(dist);
 }
 
 // AABB of the primitive's bounding box in world coords. For yawed primitives
@@ -668,6 +620,23 @@ inline void primitiveAabb(const PrimitiveSpec& s,
   }
   *lo = s.center - half;
   *hi = s.center + half;
+}
+
+// Evaluate a dynamic patch at world point p: closed-form signed distance and
+// gradient of the primitive itself. Contributes nothing outside the
+// influence AABB (early-out; keeps getDynamicDistance's "only meaningful
+// within influenceRadius" semantic).
+inline bool samplePatch(const DynamicPatch& patch,
+                        const Eigen::Vector3d& p,
+                        float* out_d,
+                        Eigen::Vector3d* out_grad) {
+  if (!patch.active) return false;
+  if ((p.array() < patch.aabb_lo.array()).any() ||
+      (p.array() > patch.aabb_hi.array()).any()) {
+    return false;
+  }
+  *out_d = primitiveSignedDistance(patch.spec, p, out_grad);
+  return true;
 }
 }  // namespace
 
@@ -696,8 +665,7 @@ float SDFManager::getDistance(const Eigen::Vector3d& pos) const {
   // Dynamic layer: min over patches that contain pos.
   for (const auto& patch : impl_->patches) {
     float d_p;
-    if (samplePatch(patch, impl_->voxel, impl_->origin, pos,
-                    &d_p, nullptr)) {
+    if (samplePatch(patch, pos, &d_p, nullptr)) {
       if (d_p < best) best = d_p;
     }
   }
@@ -712,8 +680,7 @@ float SDFManager::getDynamicDistance(const Eigen::Vector3d& pos) const {
   if (!impl_->initialized) return best;
   for (const auto& patch : impl_->patches) {
     float d_p;
-    if (samplePatch(patch, impl_->voxel, impl_->origin, pos,
-                    &d_p, nullptr)) {
+    if (samplePatch(patch, pos, &d_p, nullptr)) {
       if (d_p < best) best = d_p;
     }
   }
@@ -757,8 +724,7 @@ bool SDFManager::getDistanceAndGradient(const Eigen::Vector3d& pos,
   for (const auto& patch : impl_->patches) {
     float d_p;
     Eigen::Vector3d g_p;
-    if (samplePatch(patch, impl_->voxel, impl_->origin, pos,
-                    &d_p, &g_p)) {
+    if (samplePatch(patch, pos, &d_p, &g_p)) {
       if (!any || d_p < best) {
         best = d_p;
         best_grad = g_p;
@@ -808,55 +774,18 @@ int SDFManager::addObstacle(const PrimitiveSpec& spec) {
     return -1;
   }
 
-  // Build patch AABB (primitive AABB inflated by influence radius), in world
-  // coords, then convert to voxel-index range and clip to the global grid.
+  // Analytic patch: store the primitive itself plus its influence AABB.
+  // No rasterization, no local EDT — queries evaluate the closed-form
+  // signed distance, so geometry is exact regardless of voxel size (the
+  // grid-based patch aliased sub-voxel boxes by up to half a cell).
+  DynamicPatch patch;
+  patch.spec = spec;
   Eigen::Vector3d wlo, whi;
   primitiveAabb(spec, &wlo, &whi);
-  const double inflate = impl_->influence_radius_m;
-  wlo -= Eigen::Vector3d(inflate, inflate, inflate);
-  whi += Eigen::Vector3d(inflate, inflate, inflate);
-
-  const Eigen::Vector3d res = impl_->voxel;
-  const Eigen::Vector3d vlo = (wlo - impl_->origin).cwiseQuotient(res);
-  const Eigen::Vector3d vhi = (whi - impl_->origin).cwiseQuotient(res);
-  const int xlo = clampIdx(int(std::floor(vlo.x())), 0, impl_->nx - 1);
-  const int ylo = clampIdx(int(std::floor(vlo.y())), 0, impl_->ny - 1);
-  const int zlo = clampIdx(int(std::floor(vlo.z())), 0, impl_->nz - 1);
-  const int xhi = clampIdx(int(std::ceil (vhi.x())), 0, impl_->nx - 1);
-  const int yhi = clampIdx(int(std::ceil (vhi.y())), 0, impl_->ny - 1);
-  const int zhi = clampIdx(int(std::ceil (vhi.z())), 0, impl_->nz - 1);
-  if (xhi < xlo || yhi < ylo || zhi < zlo) {
-    std::cerr << "[SDFManager] addObstacle: AABB outside grid\n";
-    return -1;
-  }
-
-  DynamicPatch patch;
-  patch.xlo = xlo; patch.ylo = ylo; patch.zlo = zlo;
-  patch.xhi = xhi; patch.yhi = yhi; patch.zhi = zhi;
-  patch.lnx = xhi - xlo + 1;
-  patch.lny = yhi - ylo + 1;
-  patch.lnz = zhi - zlo + 1;
-  const size_t Nlocal = patch.numVoxels();
-
-  // Rasterize primitive into a small occupancy block over the patch AABB.
-  std::vector<uint8_t> occ(Nlocal, 0);
-  for (int lx = 0; lx < patch.lnx; ++lx) {
-    for (int ly = 0; ly < patch.lny; ++ly) {
-      for (int lz = 0; lz < patch.lnz; ++lz) {
-        // World-frame center of voxel (xlo+lx, ylo+ly, zlo+lz)
-        const Eigen::Vector3d p = impl_->origin + Eigen::Vector3d(
-            (xlo + lx + 0.5) * res.x(), (ylo + ly + 0.5) * res.y(),
-            (zlo + lz + 0.5) * res.z());
-        if (primitiveOccupies(spec, p)) {
-          occ[((size_t(lx) * patch.lny) + ly) * patch.lnz + lz] = 1;
-        }
-      }
-    }
-  }
-
-  // Run the same Felzenszwalb-Huttenlocher ESDF on the small block.
-  buildSignedEdt3D(occ.data(), patch.lnx, patch.lny, patch.lnz, res,
-                   &patch.distance);
+  const Eigen::Vector3d inflate =
+      Eigen::Vector3d::Constant(impl_->influence_radius_m);
+  patch.aabb_lo = wlo - inflate;
+  patch.aabb_hi = whi + inflate;
   patch.active = true;
 
   // Reuse a freed slot if any to keep ids dense.
@@ -874,9 +803,7 @@ void SDFManager::removeObstacle(int patch_id) {
   ++revision_;
   if (patch_id < 0 ||
       static_cast<size_t>(patch_id) >= impl_->patches.size()) return;
-  auto& p = impl_->patches[patch_id];
-  p.active = false;
-  std::vector<float>().swap(p.distance);
+  impl_->patches[patch_id].active = false;
 }
 
 void SDFManager::clearObstacles() {
