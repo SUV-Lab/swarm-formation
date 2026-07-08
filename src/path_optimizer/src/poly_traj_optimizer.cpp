@@ -134,6 +134,9 @@ namespace ego_planner
     lbfgs::lbfgs_parameter_t lbfgs_params;
     lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
     lbfgs_params.mem_size       = 64;       // ref 16 → 64 (global scale); 256 caused -1005
+    // 0.05 is sufficient: tightening to 0.005 (2.7x the iterations) left the
+    // converged trajectory unchanged (crest dip -0.095 -> -0.098), so the
+    // ridge graze is a true optimum of the cost design, not under-convergence.
     lbfgs_params.g_epsilon      = 0.05;     // ref 0.1 → 0.05 (slightly tighter)
     lbfgs_params.min_step       = 1e-32;
     // 300 consistently ended at -1004 while risk/altitude terms were still
@@ -247,22 +250,16 @@ namespace ego_planner
   }
   bool PolyTrajOptimizer::checkCollision(void)
   {
-    double T_end;
     poly_traj::Trajectory traj = jerkOpt_.getTraj();
-
-    int N = traj.getPieceNum();
-    int k = cps_num_prePiece_ * N + 1;
-    int idx = k / 3 * 2;
-    int piece_of_idx = floor((idx - 1) / cps_num_prePiece_);
-    Eigen::VectorXd durations = traj.getDurations();
-
-    if (piece_of_idx < 0 || piece_of_idx >= N) {
-      T_end = durations.sum();
-    } else {
-      T_end = durations.head(piece_of_idx).sum()
-            + durations(piece_of_idx)
-            * (idx - piece_of_idx * cps_num_prePiece_) / (double)cps_num_prePiece_;
-    }
+    // Sweep the FULL duration. The inherited ego-planner heuristic audited
+    // only the first 2/3 (idx = k/3*2) — sensible for a rolling local replan
+    // that never flies its tail, but on a single-shot global plan it left the
+    // final third UNAUDITED: the boxes mission logged "[TERRAIN] min
+    // clearance +0.087" while the RViz panel showed a -12.5 m dip in the
+    // unswept goal-approach segment (a coverage hole, not a measurement
+    // disagreement). Nothing consumes the 2/3 semantic: the verdict is
+    // debug-only and getCollisionCheckTimeEnd() has no callers.
+    const double T_end = traj.getDurations().sum();
 
     bool occ = false;
     double dt = 0.01;

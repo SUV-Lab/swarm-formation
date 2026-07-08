@@ -21,18 +21,24 @@
 
     # ---- Clearances (ISOTROPIC frame: 1 unit = 100 m on every axis since the
     # publisher z-scale fix; SDF distances are finally physical) ----
-    manager/obstacle_clearance: 0.2     # front-end blocked threshold = 20 m in ANY direction.
-                                        # MUST stay > optimization/obstacle_clearance (0.12).
+    manager/obstacle_clearance: 0.38    # front-end blocked threshold = 38 m in ANY direction.
+                                        # MUST stay > optimization/obstacle_clearance (0.30) so the
+                                        # front-end delivers routes with room above the penalty onset.
                                         # Was 1.0 back when z-units were 43.7 m: that demanded ~44 m of
                                         # vertical berth, so metre-scale islets forced 50+ m hops.
     manager/dyn_obstacle_margin: 10.0   # 1 km berth around RUNTIME obstacles (ships); <= clearance disables
-    optimization/obstacle_clearance: 0.12 # optimizer penalty onset (12 m); MUST be < manager/obstacle_clearance
+    optimization/obstacle_clearance: 0.30 # optimizer penalty onset (30 m); MUST be < manager/obstacle_clearance
                                           # (equal -> path sits on the penalty edge and can't be smoothed).
-                                          # KNOWN-GOOD (converges). Raising it for crest margin (tried 0.18,
-                                          # 0.30) destabilizes HARD missions: the trajectory balloons past
-                                          # the altitude cap and altitude_cost explodes (200-300k) -> L-BFGS
-                                          # -1005/-1008. Real margin needs the CAP fixed first, not a bigger
-                                          # clearance. Panel TERRAIN_GRAZE_MARGIN_M mirrors this (12 m).
+                                          # SIZED TO THE SOFT-PENALTY EQUILIBRIUM: under opposing costs the
+                                          # cubic settles ~0.21 units into the band at sharp (sub-piece-
+                                          # wavelength) ridge knobs — measured invariant across cap weights
+                                          # (200 vs 2400) and g_epsilon (0.05 vs 0.005). A 0.12 band was
+                                          # thinner than that equilibrium, so the graze reached ~9 m INTO
+                                          # terrain; 0.30 keeps the same equilibrium inside the band
+                                          # (~+9 m real clearance). NB: 0.18/0.30 attempts in the pre-
+                                          # consistency era blew up (-1005/-1008) — those roots (frozen gate
+                                          # gradients, SDF terrain double-count, smoothed-slope mismatch)
+                                          # are fixed. Panel TERRAIN_GRAZE_MARGIN_M mirrors this (30 m).
 
     # ---- Shortcut / MINCO input ----
     manager/astar_bypass_shortcut: false  # true = raw front-end path straight to MINCO (debug)
