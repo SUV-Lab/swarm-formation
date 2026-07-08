@@ -1331,17 +1331,25 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         static const int OFF[6][3] =
             {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
         double bestT = fm2SampleT(pp);
-        Eigen::Vector3d bdir(0, 0, 0);
+        // Move to the probed lowest-T neighbour ITSELF — per-axis cell-sized
+        // steps. The old `pp + step * bdir.normalized()` was written for
+        // isotropic voxels where step (0.6*cres) ~ the probe distance; with
+        // anisotropic z (cres_z << cres) a z-directed recovery step probed
+        // +-cres_z (0.1) but then jumped 0.6*cres (~1.4 units, ~13 cells)
+        // UNGUARDED past the probed cell — observed as the geodesic plunging
+        // to z=-0.53 (50+ m under the sea) on over-water missions. Stepping to
+        // the probed point keeps the monotone guarantee exactly.
+        Eigen::Vector3d bq = pp;
         ok = false;
         for (auto &o : OFF) {
             const Eigen::Vector3d q =
                 pp + Eigen::Vector3d(o[0]*cres, o[1]*cres, o[2]*cres_z);
             const double tq = fm2SampleT(q);
             if (std::isfinite(tq) && tq < bestT) {
-                bestT = tq; bdir = Eigen::Vector3d(o[0], o[1], o[2]); ok = true;
+                bestT = tq; bq = q; ok = true;
             }
         }
-        return ok ? Eigen::Vector3d(pp + step * bdir.normalized()) : pp;
+        return bq;
     };
     // Keep z inside the grid (outside, the trilinear sample clamps and the
     // z-gradient degenerates to 0, so the path could drift below the floor).

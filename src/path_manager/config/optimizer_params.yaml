@@ -78,7 +78,12 @@
                                        # Derivation: K * weight_time / cruise = 100*500/2. Without it
                                        # MINCO re-litigates the rim standoff: the moat's zero contact
                                        # slope makes skirt-cutting profitable ~tens of metres deep.
-    optimization/weight_altitude: 2400.0  # z-cap above mission band (quadratic); keep << weight_obstacle or it presses into terrain
+    optimization/weight_altitude: 200.0  # z-cap above mission band (quadratic); keep << weight_obstacle
+                                         # or it presses into terrain. Was bumped to 2400 to squash
+                                         # z-spikes in the pre-consistency era; those had a root cause
+                                         # (frozen gate gradient / smoothed-slope mismatch) since fixed,
+                                         # and at 2400 the cap's shoulder pressure set the crest-graze
+                                         # equilibrium ~2.3x deeper (-8.4 m vs the historical -3.9 m).
     optimization/alt_cap_headroom: 0.4   # z-cap slack above the front-end geodesic max. Must leave the
                                          # sparse-piece quintic a workable corridor above the obstacle
                                          # clearance floor: +1 over a sea-level route made a ~4 m band and

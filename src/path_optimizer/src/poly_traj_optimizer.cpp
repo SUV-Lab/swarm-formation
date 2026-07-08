@@ -138,8 +138,13 @@ namespace ego_planner
     lbfgs_params.min_step       = 1e-32;
     // 300 consistently ended at -1004 while risk/altitude terms were still
     // polishing (~0.02%/iter). One-shot global plan on an idle desktop:
-    // 300 iters ≈ 0.3 s, so 3000 ≈ 3 s is nothing — let g_epsilon decide.
-    lbfgs_params.max_iterations = 3000;
+    // 300 iters ≈ 0.3 s, so thousands are nothing — let g_epsilon decide.
+    // Budget scales with problem size: a ~90-piece (300 km) mission was still
+    // actively descending at a flat 3000 (-1004) while small missions
+    // converge in 300-1500; ~1 ms/iter, so even the ceiling stays ~12 s —
+    // proportionate to the ~10 s eikonal on those same maps.
+    lbfgs_params.max_iterations =
+        std::min(12000, std::max(3000, 60 * piece_num_));
 
     if (!use_formation)
     {
@@ -264,6 +269,34 @@ namespace ego_planner
     int i_end = std::max(1, (int)floor(T_end / dt));
     double t = 0.0;
     collision_check_time_end_ = T_end;
+
+    // Terrain sweep via the heightmap: terrain is no longer voxelised into the
+    // SDF, so the SDF pass below is boxes-only and terrain-BLIND — without this
+    // a converged-but-penetrating optimum logged a misleading "no collision".
+    // Reports the worst clearance and WHERE, so dips are locatable.
+    if (terrain_hgrad_) {
+      double worst = std::numeric_limits<double>::infinity();
+      double wt = 0.0;
+      Eigen::Vector3d wp = Eigen::Vector3d::Zero();
+      for (double tt = 0.0; tt < T_end; tt += dt) {
+        const Eigen::Vector3d pos = traj.getPos(tt);
+        float h, gx, gy;
+        if (terrain_hgrad_(pos.x(), pos.y(), &h, &gx, &gy)) {
+          const double c = pos.z() - static_cast<double>(h);
+          if (c < worst) { worst = c; wt = tt; wp = pos; }
+        }
+      }
+      if (std::isfinite(worst)) {
+        if (worst < 0.0) {
+          LOG_WARN("[COLLISION] TERRAIN t=%.3f pos=(%.3f, %.3f, %.3f) clearance=%.3f (below surface)",
+                   wt, wp.x(), wp.y(), wp.z(), worst);
+          occ = true;
+        } else {
+          LOG_INFO("[TERRAIN] min clearance %.3f at t=%.3f pos=(%.3f, %.3f, %.3f)",
+                   worst, wt, wp.x(), wp.y(), wp.z());
+        }
+      }
+    }
 
     if (sdf_manager_ && sdf_manager_->hasData())
     {
@@ -514,30 +547,30 @@ namespace ego_planner
         // obstacle_clearance band. Purely vertical (the horizontal ∂h term is
         // second-order; the obstacle/FM2 layers own lateral avoidance) — Step 1
         // proves the heightmap SEES the penetration the SDF misses.
-        if (terrain_height_) {
-            const float h = terrain_height_(pos.x(), pos.y());  // frame units; -inf = water/invalid
-            if (std::isfinite(h)) {
+        if (terrain_hgrad_ || terrain_height_) {
+            float h = 0.f, dhx = 0.f, dhy = 0.f;
+            bool have = false;
+            if (terrain_hgrad_) {
+                // Value + ANALYTIC slope of the SAME bilinear surface — cost and
+                // gradient must agree exactly (a smoothed central-diff slope
+                // paired with the bilinear value disagreed near DEM-cell edges;
+                // on cliff cells the mismatch killed the line search, -1008).
+                have = terrain_hgrad_(pos.x(), pos.y(), &h, &dhx, &dhy);
+            } else {
+                const float hv = terrain_height_(pos.x(), pos.y());
+                if (std::isfinite(hv)) { h = hv; have = true; }  // value-only: vertical push
+            }
+            if (have) {
                 const double terr_clear = pos.z() - static_cast<double>(h);  // >0 above terrain
                 const double viol = obstacle_clearance_ - terr_clear;
                 if (viol > 0.0) {
                     const double costt = wei_obs_ * viol * viol * viol;
                     const double dcoef = wei_obs_ * 3.0 * viol * viol;  // d(cost)/d(viol)
-                    // SURFACE-NORMAL push. viol = clearance - z + h(x,y), so
-                    //   d(viol)/dz = -1, d(viol)/dx = ∂h/∂x, d(viol)/dy = ∂h/∂y.
-                    // -> the trajectory moves +z AND down-slope (away from the
-                    // rising terrain) instead of straight up, so a steep slope is
-                    // skirted, not spiked over. Central-difference the heightmap
-                    // (bilinear -> exact slope within a DEM cell); a water/invalid
-                    // neighbour leaves that axis' slope at 0 (vertical-only there).
-                    const double p = 1.0;  // probe (frame units ~100 m; < DEM cell)
-                    double dhdx = 0.0, dhdy = 0.0;
-                    const float hxp = terrain_height_(pos.x() + p, pos.y());
-                    const float hxm = terrain_height_(pos.x() - p, pos.y());
-                    if (std::isfinite(hxp) && std::isfinite(hxm)) dhdx = (hxp - hxm) / (2.0 * p);
-                    const float hyp = terrain_height_(pos.x(), pos.y() + p);
-                    const float hym = terrain_height_(pos.x(), pos.y() - p);
-                    if (std::isfinite(hyp) && std::isfinite(hym)) dhdy = (hyp - hym) / (2.0 * p);
-                    Eigen::Vector3d gradt3(dcoef * dhdx, dcoef * dhdy, -dcoef);
+                    // SURFACE-NORMAL push: viol = clearance - z + h(x,y), so
+                    //   d(viol)/dz = -1, d(viol)/dx = ∂h/∂x, d(viol)/dy = ∂h/∂y —
+                    // the trajectory moves +z AND down-slope, skirting steep
+                    // slopes instead of spiking over them.
+                    Eigen::Vector3d gradt3(dcoef * dhx, dcoef * dhy, -dcoef);
                     gradViolaPc = beta0 * gradt3.transpose();
                     gradViolaPt = alpha * gradt3.transpose() * vel;
                     jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -594,27 +627,56 @@ namespace ego_planner
             // alt_zhi_ is a single SCALAR (front-end geodesic max z + headroom),
             // but the sparse-piece back-end corner-cuts across terrain HIGHER
             // than that scalar. There the cap ("come down to alt_zhi_") and the
-            // obstacle penalty ("stay clear of terrain") are physically
-            // unsatisfiable: L-BFGS stalls (-1004) and the crest is pressed into
-            // the DEM. Gate the cap by the SAME SDF clearance the obstacle term
-            // keys on, so the two are mutually exclusive by construction. Within
-            // obstacle_clearance_ of terrain the cap is OFF (terrain rules; the
-            // obstacle term lifts the crest); a smoothstep hands control back to
-            // the cap once the point is safely in free space (>= 2*clearance),
-            // where its only job — stopping the quintic ballooning above the
-            // committed profile — still applies unchanged. Nothing is given up:
-            // the scalar cap, the front-end profile, and islet balloon-control
-            // are identical in free space; only the impossible down-press over
-            // taller-than-cap terrain is removed.
+            // terrain penalty ("stay clear of terrain") are physically
+            // unsatisfiable: L-BFGS stalls (-1004/-1005) and the crest is pressed
+            // into the DEM. Gate the cap by TERRAIN CLEARANCE so the two are
+            // mutually exclusive by construction: within obstacle_clearance_ of
+            // the surface the cap is OFF (terrain rules; the terrain term lifts
+            // the crest); a smoothstep hands control back to the cap once the
+            // point is safely clear (>= 2*clearance), where its only job —
+            // stopping the quintic ballooning above the committed profile —
+            // applies unchanged.
+            // KEYED ON THE HEIGHTMAP (z - h), not the SDF: terrain is no longer
+            // voxelised into the SDF, so getDistance() reads "far" everywhere and
+            // an SDF-keyed gate silently pins to 1 — full cap press inside
+            // terrain-forced climbs, resurrecting the very stall this gate
+            // exists to prevent (regression: -1005 at 0.3% above the old
+            // optimum, crest pressed -15.7 m into the DEM). SDF keying remains
+            // only as a fallback when no heightmap is wired.
             double gate = 1.0;
-            if (sdf_manager_ && sdf_manager_->hasData()) {
+            double dgate = 0.0;                 // d(gate)/d(clearance) — 0 outside the band
+            double gdhx = 0.0, gdhy = 0.0;      // ∂h at pos (for the gate's xy gradient)
+            const double glo = obstacle_clearance_;        // cap OFF at/below clearance
+            const double ghi = 2.0 * obstacle_clearance_;  // cap fully ON above
+            bool gated = false;
+            if (terrain_hgrad_) {
+                float hg = 0.f, hx = 0.f, hy = 0.f;
+                if (terrain_hgrad_(pos.x(), pos.y(), &hg, &hx, &hy)) {
+                    const double tc = pos.z() - static_cast<double>(hg);
+                    double t = (ghi > glo) ? (tc - glo) / (ghi - glo) : 1.0;
+                    t = std::max(0.0, std::min(1.0, t));
+                    gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1
+                    // CONSISTENT gradient: the cost is wei*ua^2*gate(z - h(x,y)),
+                    // so the gradient MUST carry d(gate) with the ANALYTIC slope
+                    // of the same surface. A frozen or smoothed-slope gradient
+                    // disagrees with the cost inside the transition band — the
+                    // exact heightmap parks the crest right in that band (the
+                    // coarse SDF used to under-read terrain and saturate the
+                    // gate), and the line search died (-1005/-1008) there.
+                    if (t > 0.0 && t < 1.0) {
+                        dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
+                        gdhx = hx;
+                        gdhy = hy;
+                    }
+                    gated = true;
+                }
+            }
+            if (!gated && sdf_manager_ && sdf_manager_->hasData()) {
                 const float d = sdf_manager_->getDistance(pos);
                 if (std::isfinite(d)) {
-                    const double lo = obstacle_clearance_;        // cap OFF at/below clearance
-                    const double hi = 2.0 * obstacle_clearance_;  // cap fully ON above
-                    double t = (hi > lo) ? (static_cast<double>(d) - lo) / (hi - lo) : 1.0;
+                    double t = (ghi > glo) ? (static_cast<double>(d) - glo) / (ghi - glo) : 1.0;
                     t = std::max(0.0, std::min(1.0, t));
-                    gate = t * t * (3.0 - 2.0 * t);               // smoothstep, C1
+                    gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1 (legacy: frozen grad)
                 }
             }
             if (gate > 0.0) {
@@ -625,11 +687,14 @@ namespace ego_planner
                 // shapes the swell but can never win against the clearance wall.
                 const double ua = pos.z() - alt_zhi_;
                 const double costa_z = wei_alt_ * ua * ua * gate;
-                // Purely vertical, as before: the gate is evaluated at this
-                // sample's clearance but its spatial derivative is frozen — the
-                // horizontal terrain-avoidance force is the obstacle term's job
-                // (and dominates here). The cost VALUE stays exact.
-                Eigen::Vector3d grad_a(0.0, 0.0, wei_alt_ * 2.0 * ua * gate);
+                // Full gradient of wei*ua^2*gate(z - h(x,y)):
+                //   d/dz = wei*(2*ua*gate + ua^2*dgate)
+                //   d/dx = wei*ua^2*dgate*(-dh/dx),  d/dy likewise.
+                // dgate = 0 outside the transition band, so this reduces to the
+                // plain capped gradient there.
+                const double gg = wei_alt_ * ua * ua * dgate;
+                Eigen::Vector3d grad_a(-gg * gdhx, -gg * gdhy,
+                                       wei_alt_ * 2.0 * ua * gate + gg);
                 gradViolaPc = beta0 * grad_a.transpose();
                 gradViolaPt = alpha * grad_a.transpose() * vel;
                 jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;

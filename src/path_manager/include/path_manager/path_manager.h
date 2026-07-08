@@ -116,16 +116,80 @@ namespace path_manager
 
       const float e00 = at(col0, row0),     e10 = at(col0 + 1, row0);
       const float e01 = at(col0, row0 + 1), e11 = at(col0 + 1, row0 + 1);
-      if (e00 != kInv && e10 != kInv && e01 != kInv && e11 != kInv) {
-        const double tx = fx - col0, ty = fy - row0;
-        return static_cast<float>(
-            (1.0 - tx) * (1.0 - ty) * e00 + tx * (1.0 - ty) * e10 +
-            (1.0 - tx) * ty         * e01 + tx * ty         * e11);
-      }
-      // Water / map edge: nearest in-range cell (clamped), else invalid.
-      const int cc = col0 < 0 ? 0 : (col0 >= cols ? cols - 1 : col0);
-      const int rc = row0 < 0 ? 0 : (row0 >= rows ? rows - 1 : row0);
-      return at(cc, rc);
+      // Blend invalid corners (water NaN / map edge) as SEA LEVEL 0 — exactly
+      // like the RViz panel's sampler — so the surface is C0-continuous across
+      // coastlines. The first version fell back to the nearest CELL value
+      // there, which JUMPS by the full land height as a query crosses a cell
+      // boundary at the coast; the optimizer's terrain term (weight 1e4) fed
+      // on that discontinuity and killed the line search (-1005/-1008) on
+      // island-dotted maps. Pure water (all four invalid) stays -inf so
+      // "water = no terrain" semantics are unchanged for the F-build and the
+      // terrain term alike.
+      const bool n00 = (e00 == kInv), n10 = (e10 == kInv);
+      const bool n01 = (e01 == kInv), n11 = (e11 == kInv);
+      if (n00 && n10 && n01 && n11) return kInv;
+      const double f00 = n00 ? 0.0 : e00;
+      const double f10 = n10 ? 0.0 : e10;
+      const double f01 = n01 ? 0.0 : e01;
+      const double f11 = n11 ? 0.0 : e11;
+      const double tx = fx - col0, ty = fy - row0;
+      return static_cast<float>(
+          (1.0 - tx) * (1.0 - ty) * f00 + tx * (1.0 - ty) * f10 +
+          (1.0 - tx) * ty         * f01 + tx * ty         * f11);
+    }
+
+    // Bilinear elevation + the ANALYTIC gradient of that same 0-blended
+    // surface, in WORLD (planning) coordinates. The optimizer's terrain term
+    // needs cost and gradient from the SAME surface: a smoothed central-diff
+    // slope estimate disagrees with the bilinear cost near DEM-cell edges,
+    // and on steep (cliff) cells the mismatch kills the L-BFGS line search
+    // (-1008 rounding error at near-optimal points). Analytic-per-patch
+    // gradients are the same smoothness class the battle-tested SDF term had
+    // (trilinear value + its exact gradient). Returns false over pure water /
+    // outside the DEM (no terrain there).
+    bool getElevationAndGrad(double world_x, double world_y,
+                             float *h, float *dhdx, float *dhdy) const {
+      if (!valid) return false;
+      // world -> terrain-grid coords (same transform as getElevation):
+      //   twx = (cx + cy) - wy,  twy = (cx + cy) - wx
+      const double rel_x = world_x - center_x;
+      const double rel_y = world_y - center_y;
+      const double rot_x = center_x + rel_y;
+      const double rot_y = center_y - rel_x;
+      const double twx = 2.0 * center_x - rot_x;
+      const double twy = rot_y;
+      const double fx = (twx - origin_x) / resolution;
+      const double fy = (twy - origin_y) / resolution;
+      const int col0 = static_cast<int>(std::floor(fx));
+      const int row0 = static_cast<int>(std::floor(fy));
+      constexpr float kInv = -std::numeric_limits<float>::infinity();
+      auto at = [&](int c, int r) -> float {
+        if (c < 0 || c >= cols || r < 0 || r >= rows) return kInv;
+        const int index = c * rows + r;
+        if (index < 0 || index >= static_cast<int>(elevation.size())) return kInv;
+        const float e = elevation[index];
+        return std::isnan(e) ? kInv : e;
+      };
+      const float e00 = at(col0, row0),     e10 = at(col0 + 1, row0);
+      const float e01 = at(col0, row0 + 1), e11 = at(col0 + 1, row0 + 1);
+      const bool n00 = (e00 == kInv), n10 = (e10 == kInv);
+      const bool n01 = (e01 == kInv), n11 = (e11 == kInv);
+      if (n00 && n10 && n01 && n11) return false;
+      const double f00 = n00 ? 0.0 : e00;
+      const double f10 = n10 ? 0.0 : e10;
+      const double f01 = n01 ? 0.0 : e01;
+      const double f11 = n11 ? 0.0 : e11;
+      const double tx = fx - col0, ty = fy - row0;
+      *h = static_cast<float>(
+          (1.0 - tx) * (1.0 - ty) * f00 + tx * (1.0 - ty) * f10 +
+          (1.0 - tx) * ty         * f01 + tx * ty         * f11);
+      // Patch-analytic slopes in terrain-grid axes, then chain rule through
+      // the transform above (dtwx/dwy = -1, dtwy/dwx = -1, rest 0):
+      const double dHdtwx = ((1.0 - ty) * (f10 - f00) + ty * (f11 - f01)) / resolution;
+      const double dHdtwy = ((1.0 - tx) * (f01 - f00) + tx * (f11 - f10)) / resolution;
+      *dhdx = static_cast<float>(-dHdtwy);
+      *dhdy = static_cast<float>(-dHdtwx);
+      return true;
     }
 
     // Convert terrain grid cell to world (planning) coordinate (for obstacle_points_)

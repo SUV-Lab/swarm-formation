@@ -156,6 +156,13 @@ namespace ego_planner
     // the finer DEM the clearance panel shows. When set, this term is the
     // authoritative terrain-collision check.
     std::function<float(double, double)> terrain_height_;
+    // Heightmap value + ANALYTIC gradient of the same surface (world coords).
+    // The terrain term and the alt-cap gate MUST take cost and gradient from
+    // one consistent surface — a smoothed slope estimate paired with the
+    // bilinear value made them disagree near DEM-cell edges and the line
+    // search died (-1008) on cliff cells. Signature: (x, y, &h, &dhdx, &dhdy)
+    // -> false over pure water / outside the DEM.
+    std::function<bool(double, double, float *, float *, float *)> terrain_hgrad_;
 
     // Hard half-space constraints applied outside the SDF so the clearance
     // band does not contaminate them. Sentinel: ≤ -0.5 disables the plane.
@@ -204,6 +211,7 @@ namespace ego_planner
     void setGroundHeight(double h)      { ground_height_ = h; }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
     void setTerrainHeightmap(std::function<float(double, double)> f) { terrain_height_ = std::move(f); }
+    void setTerrainHeightGrad(std::function<bool(double, double, float *, float *, float *)> f) { terrain_hgrad_ = std::move(f); }
     void setControlPoints(const Eigen::MatrixXd &points);
     void setSwarmTrajs(SwarmTrajData *swarm_trajs_ptr);
     void setDroneId(const int drone_id);
