@@ -94,8 +94,6 @@ namespace ego_planner
     std::string result_fn_;
     std::fstream result_file_;
 
-    double collision_check_time_end_ = 0.0;
-
     enum FORCE_STOP_OPTIMIZE_TYPE
     {
       DONT_STOP,
@@ -251,7 +249,6 @@ namespace ego_planner
     inline const poly_traj::MinJerkOpt *getMinJerkOptPtr(void) { return &jerkOpt_; }
     inline int get_cps_num_prePiece_() { return cps_num_prePiece_; };
     inline double getSwarmClearance(void) { return swarm_clearance_; }
-    double getCollisionCheckTimeEnd() { return collision_check_time_end_; }
 
     bool OptimizeTrajectory_lbfgs(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                   const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,

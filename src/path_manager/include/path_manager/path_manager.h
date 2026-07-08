@@ -347,9 +347,11 @@ namespace path_manager
     //   save: if set, write the freshly built ESDF after first build.
     // When either is set, the ESDF covers the full loaded terrain (not the
     // per-mission bbox) so the cached map is reusable across missions.
-    std::string save_terrain_esdf_path_;
-    std::string load_terrain_esdf_path_;
-    bool sdf_loaded_from_file_ = false;
+    // Boxes-only SDF grid built once over the full-terrain bbox. Guard, not
+    // cache: a rebuild would drop every dynamic-obstacle patch (they clip to
+    // this grid). The old <world>.esdf disk cache members are gone with the
+    // cache mechanism itself.
+    bool sdf_built_ = false;
 
     // Full-terrain bbox used when save/load is active. Computed once from
     // terrain_data_ metadata on first use.

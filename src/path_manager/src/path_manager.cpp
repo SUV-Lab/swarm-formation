@@ -122,28 +122,17 @@ namespace path_manager
                                       Eigen::Vector3d(9.972, 42.275, 10.234) };
 
         // ESDF cache resolution:
-        //   manager/world  : map name (default "dokdo"); derives the .esdf path.
-        //   manager/esdf_dir : .esdf read/write dir (relative to process CWD).
-        //   manager/{save,load}_terrain_esdf : explicit path overrides (win over world).
+        //   manager/world  : map name (default "dokdo"); RViz MapSelector overrides.
+        // The old <world>.esdf disk cache is GONE: with terrain in the 2.5D
+        // heightmap the static SDF is empty, so caching wrote ~3.6 GB of
+        // constant free-space per world — and loading a PRE-heightmap cache
+        // silently resurrected voxel terrain (double-count vs the heightmap
+        // term). The boxes-only grid now builds instantly when terrain arrives.
         node_->declare_parameter("manager/world", std::string("dokdo"));
-        node_->declare_parameter("manager/esdf_dir", std::string("src/mmp_terrain/data"));
-        node_->declare_parameter("manager/save_terrain_esdf", std::string());
-        node_->declare_parameter("manager/load_terrain_esdf", std::string());
-
         std::string world_name;
-        std::string esdf_dir;
         node_->get_parameter("manager/world", world_name);
-        node_->get_parameter("manager/esdf_dir", esdf_dir);
-        node_->get_parameter("manager/save_terrain_esdf", save_terrain_esdf_path_);
-        node_->get_parameter("manager/load_terrain_esdf", load_terrain_esdf_path_);
-
-        const std::string auto_path = esdf_dir + "/" + world_name + ".esdf";
-        if (save_terrain_esdf_path_.empty()) save_terrain_esdf_path_ = auto_path;
-        if (load_terrain_esdf_path_.empty()) load_terrain_esdf_path_ = auto_path;
-        log_manager_->infof("ESDF cache for world='%s': load='%s' save='%s'",
-                            world_name.c_str(),
-                            load_terrain_esdf_path_.c_str(),
-                            save_terrain_esdf_path_.c_str());
+        log_manager_->infof("world='%s' (no ESDF disk cache; boxes-only SDF builds on demand)",
+                            world_name.c_str());
 
         // Parse risk zones: [cx, cy, cz, sensing_range, max_risk_level, ...]
         node_->declare_parameter("risk_zones", std::vector<double>{});
@@ -251,20 +240,9 @@ namespace path_manager
             terrain_status_pub_ = node_->create_publisher<std_msgs::msg::String>(
                 "/planning/terrain_status", status_qos);
 
-            // Startup check: warn if load path is set but the cache file is missing.
-            // path_manager builds the ESDF lazily on the first plan, so this is
-            // a heads-up that the first plan will take a while.
-            if (!load_terrain_esdf_path_.empty()) {
-                std::ifstream f(load_terrain_esdf_path_);
-                if (!f.good()) {
-                    publishTerrainStatus(
-                        "ESDF cache missing: " + load_terrain_esdf_path_ +
-                        " — will build from TIF on first plan (this may take "
-                        "several minutes; subsequent runs load instantly).");
-                } else {
-                    publishTerrainStatus("ESDF cache ready: " + load_terrain_esdf_path_);
-                }
-            }
+            // (The old "ESDF cache missing/ready" startup check is gone with
+            // the cache itself — the boxes-only SDF builds instantly when
+            // terrain arrives; see setTerrainData.)
         }
     }
 
@@ -480,97 +458,33 @@ namespace path_manager
             map_lower_bound_.x(), map_lower_bound_.y(), map_lower_bound_.z(),
             map_upper_bound_.x(), map_upper_bound_.y(), map_upper_bound_.z());
 
-        // If save or load is requested, use the full-terrain bbox so the
-        // cached ESDF is reusable across missions.
-        // Load/save of a precomputed terrain ESDF only makes sense when a
-        // terrain GridMap has actually been received. Without terrain data,
-        // fall back to mission-bbox voxelization and skip file I/O entirely.
-        const bool has_terrain = terrain_data_.valid;
-        const bool want_cache =
-            !load_terrain_esdf_path_.empty() || !save_terrain_esdf_path_.empty();
-        const bool use_cache = want_cache && has_terrain;
-        if (want_cache && !has_terrain) {
-            log_manager_->warnf("save/load_terrain_esdf set but no terrain loaded; "
-                                "skipping ESDF file I/O for this plan.");
-        }
-
-        Eigen::Vector3d sdf_lo = map_lower_bound_;
-        Eigen::Vector3d sdf_hi = map_upper_bound_;
-        if (use_cache) {
+        // Build the boxes-only SDF grid ONCE over the full-terrain bbox (or
+        // the mission bbox when no terrain exists). The static layer is empty
+        // — terrain lives in the 2.5D heightmap — so this is instant and
+        // allocation-free. Building once matters beyond speed: dynamic
+        // obstacle patches clip against this grid, so a per-plan rebuild
+        // would drop every box spawned so far. The old <world>.esdf disk
+        // cache (load/save + resolution guards) is gone: it persisted 3.6 GB
+        // of constant free space per world, and a pre-heightmap cache
+        // silently resurrected voxel terrain (double-count vs the heightmap
+        // term).
+        if (!sdf_built_) {
+            Eigen::Vector3d sdf_lo = map_lower_bound_;
+            Eigen::Vector3d sdf_hi = map_upper_bound_;
             Eigen::Vector3d tlo, thi;
-            if (computeTerrainBBox(&tlo, &thi)) {
-                sdf_lo = tlo;
+            const bool full_world =
+                terrain_data_.valid && computeTerrainBBox(&tlo, &thi);
+            if (full_world) {
+                sdf_lo = tlo;  // world-wide grid: valid for every later mission
                 sdf_hi = thi;
-                log_manager_->infof("Using full-terrain bbox for SDF: lo=(%.2f,%.2f,%.2f) hi=(%.2f,%.2f,%.2f)",
-                    sdf_lo.x(), sdf_lo.y(), sdf_lo.z(),
-                    sdf_hi.x(), sdf_hi.y(), sdf_hi.z());
-            } else {
-                log_manager_->warnf("Terrain bbox unavailable; falling back to mission bbox for SDF");
-            }
-        }
-
-        // Try loading a precomputed ESDF on the first plan (terrain must exist).
-        if (use_cache && !sdf_loaded_from_file_ && !load_terrain_esdf_path_.empty()) {
-            if (sdf_manager_.loadFromFile(load_terrain_esdf_path_, sdf_lo, sdf_hi)) {
-                // Resolution guard: a cache built at different voxel sizes
-                // (e.g. a legacy isotropic v1 file) would silently defeat the
-                // anisotropic-z setup — rebuild and overwrite instead.
-                const Eigen::Vector3d v = sdf_manager_.voxelSizes();
-                if (std::abs(v.x() - sdf_voxel_size_) > 1e-6 ||
-                    std::abs(v.z() - sdf_voxel_z_) > 1e-6) {
-                    log_manager_->warnf(
-                        "ESDF cache voxel (%.3f,%.3f,%.3f) != configured (%.3f,%.3f,%.3f)"
-                        " — ignoring cache, rebuilding",
-                        v.x(), v.y(), v.z(), sdf_voxel_size_, sdf_voxel_size_, sdf_voxel_z_);
-                    sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_);
-                } else {
-                    sdf_loaded_from_file_ = true;
-                    log_manager_->infof("SDF loaded from %s (skipping voxelization)",
-                                        load_terrain_esdf_path_.c_str());
-                    publishTerrainStatus("ESDF loaded: " + load_terrain_esdf_path_);
-                }
-            } else {
-                log_manager_->warnf("SDF load failed from %s; falling back to build",
-                                    load_terrain_esdf_path_.c_str());
-            }
-        }
-
-        // Build SDF (fallback or no cache).
-        if (!sdf_loaded_from_file_) {
-            const bool will_persist = use_cache && !save_terrain_esdf_path_.empty();
-            if (will_persist) {
-                publishTerrainStatus(
-                    "Building ESDF cache → " + save_terrain_esdf_path_ +
-                    " (this may take several minutes; please wait)...");
             }
             if (!buildSDFForBounds(sdf_lo, sdf_hi)) {
                 RCLCPP_ERROR(node_->get_logger(), "SDF build failed");
-                if (will_persist) {
-                    publishTerrainStatus("ESDF build failed (see path_manager log)");
-                }
                 return false;
             }
-            // A successful full-terrain build is valid in memory whether or
-            // not it can be persisted — gating the skip-rebuild flag on the
-            // file save meant an unwritable esdf_dir forced the multi-minute
-            // rebuild on EVERY plan.
-            if (use_cache) sdf_loaded_from_file_ = true;
-            // Persist on first successful build if requested (terrain must exist).
-            if (will_persist) {
-                if (sdf_manager_.saveToFile(save_terrain_esdf_path_)) {
-                    log_manager_->infof("SDF saved to %s",
-                                        save_terrain_esdf_path_.c_str());
-                    publishTerrainStatus("ESDF cache ready: " + save_terrain_esdf_path_);
-                } else {
-                    log_manager_->warnf(
-                        "SDF save FAILED to %s (permissions? root-owned legacy "
-                        "file?) — cache kept in memory; NEXT BOOT WILL REBUILD",
-                        save_terrain_esdf_path_.c_str());
-                    publishTerrainStatus(
-                        "ESDF build done but save failed (cache kept in memory) → " +
-                        save_terrain_esdf_path_);
-                }
-            }
+            // A mission-bbox grid (no terrain yet) stays rebuildable so a
+            // later mission with terrain gets the world-wide grid.
+            if (full_world) sdf_built_ = true;
         }
 
 
@@ -592,10 +506,16 @@ namespace path_manager
                 const double r = (obs.param1 > 0) ? obs.param1 : 0.5;
                 const double sx = (obs.shape == ObstacleShape::CIRCLE) ? 2.0 * r : obs.param1;
                 const double sy = (obs.shape == ObstacleShape::CIRCLE) ? 2.0 * r : obs.param2;
-                // z_extent == 0 means "infinite column" (full map span).
-                const double z0 = (obs.z_extent > 0.0) ? obs.center.z() : sdf_lo.z();
+                // z_extent == 0 means "infinite column" (full span of the
+                // BUILT grid — read it from the SDF itself, since the grid
+                // may be world-wide rather than mission-scoped).
+                const Eigen::Vector3d grid_lo = sdf_manager_.origin();
+                const Eigen::Vector3d grid_hi =
+                    grid_lo + sdf_manager_.shape().cast<double>().cwiseProduct(
+                                  sdf_manager_.voxelSizes());
+                const double z0 = (obs.z_extent > 0.0) ? obs.center.z() : grid_lo.z();
                 const double z1 = (obs.z_extent > 0.0) ? obs.center.z() + obs.z_extent
-                                                       : sdf_hi.z();
+                                                       : grid_hi.z();
                 spec.center = Eigen::Vector3d(obs.center.x(), obs.center.y(),
                                               0.5 * (z0 + z1));
                 spec.size = Eigen::Vector3d(sx, sy, std::max(z1 - z0, sdf_voxel_z_));
@@ -1313,33 +1233,19 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
         terrain_data_.origin_x, terrain_data_.origin_y,
         terrain_data_.center_x, terrain_data_.center_y);
 
-    // Eager-load the cached terrain ESDF as soon as terrain arrives, so the
-    // dynamic-obstacle layer can accept clicks before any mission runs. Without
-    // this, addDynamicSphere rejects with "SDF not built yet" until the first
-    // planGlobalTraj() is invoked.
-    if (!sdf_loaded_from_file_ && !load_terrain_esdf_path_.empty()) {
+    // Eagerly build the (boxes-only, empty-static) SDF grid as soon as
+    // terrain arrives, so the dynamic-obstacle layer can accept clicks before
+    // any mission runs — patches need the grid to clip against. This replaced
+    // the old eager cache LOAD: the build is now instant (the static layer
+    // allocates nothing; terrain lives in the 2.5D heightmap).
+    if (!sdf_built_) {
         Eigen::Vector3d lo, hi;
         if (computeTerrainBBox(&lo, &hi)) {
-            if (!sdf_manager_.isInitialized())
-                sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_);
-            if (sdf_manager_.loadFromFile(load_terrain_esdf_path_, lo, hi)) {
-                // A cache built at a different resolution (e.g. a legacy v1
-                // isotropic file) silently defeats the anisotropic-z setup —
-                // rebuild instead of planning on stale voxels.
-                const Eigen::Vector3d v = sdf_manager_.voxelSizes();
-                if (std::abs(v.x() - sdf_voxel_size_) > 1e-6 ||
-                    std::abs(v.z() - sdf_voxel_z_) > 1e-6) {
-                    log_manager_->warnf(
-                        "ESDF cache voxel (%.3f,%.3f,%.3f) != configured (%.3f,%.3f,%.3f)"
-                        " — ignoring cache, will rebuild and overwrite",
-                        v.x(), v.y(), v.z(), sdf_voxel_size_, sdf_voxel_size_, sdf_voxel_z_);
-                    sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_);
-                } else {
-                    sdf_loaded_from_file_ = true;
-                    log_manager_->infof("SDF eagerly loaded from %s",
-                                        load_terrain_esdf_path_.c_str());
-                    flushPendingObstacles();
-                }
+            if (buildSDFForBounds(lo, hi)) {
+                sdf_built_ = true;
+                publishTerrainStatus(
+                    "SDF ready (boxes-only grid; terrain via heightmap)");
+                flushPendingObstacles();
             }
         }
     }

@@ -105,6 +105,13 @@ struct SDFManagerImpl {
   // Flat layout: ((x * ny) + y) * nz + z.
   std::vector<float> distance_cache;
 
+  // Fully-free static layer (the common case now that terrain lives in the
+  // 2.5D heightmap): no grid is allocated — queries return the scalar
+  // static_free_dist instead of sampling. On a 300 km world the old
+  // assign(N, kLargeFree) held 3.6 GB of a single constant.
+  bool static_empty = false;
+  float static_free_dist = std::numeric_limits<float>::infinity();
+
   bool initialized = false;
   bool has_data = false;
 
@@ -181,14 +188,20 @@ bool SDFManager::buildFromVoxels(const uint8_t* occupancy,
   if (!any_occupied) {
     const float kLargeFree = static_cast<float>(
         std::max({nx * res.x(), ny * res.y(), nz * res.z()}));
-    impl_->distance_cache.assign(N, kLargeFree);
+    // Allocation-free: keep only the scalar. Queries short-circuit on
+    // static_empty (see getDistance / getDistanceAndGradient).
+    impl_->distance_cache.clear();
+    impl_->distance_cache.shrink_to_fit();
+    impl_->static_empty = true;
+    impl_->static_free_dist = kLargeFree;
     impl_->has_data = true;
     std::cerr << "[SDFManager] built (no obstacles): shape=(" << nx << ","
               << ny << "," << nz << ") voxel=(" << res.x() << "," << res.y()
-              << "," << res.z() << ") voxels=" << N
+              << "," << res.z() << ") static layer EMPTY (0 bytes),"
               << " free_distance=" << kLargeFree << "\n";
     return true;
   }
+  impl_->static_empty = false;
 
   // Positive DT on the occupied set (obstacles = 0, free = +inf).
   std::vector<double> tmp1(N), tmp2(N);
@@ -317,6 +330,12 @@ bool SDFManager::saveToFile(const std::string& path) const {
     std::cerr << "[SDFManager] saveToFile: no data\n";
     return false;
   }
+  if (impl_->static_empty) {
+    // Nothing worth persisting: the layer is one scalar. Refusing here also
+    // prevents recreating multi-GB constant-value cache files.
+    std::cerr << "[SDFManager] saveToFile: static layer empty — nothing to cache\n";
+    return false;
+  }
 
   std::ofstream f(path, std::ios::binary);
   if (!f) {
@@ -413,6 +432,7 @@ bool SDFManager::loadFromFile(const std::string& path,
     return false;
   }
 
+  impl_->static_empty = false;  // a real grid is resident now
   impl_->has_data = true;
   std::cerr << "[SDFManager] loaded " << path << " (v" << version
             << ") shape=(" << nx_h << "," << ny_h << "," << nz_h
@@ -658,13 +678,19 @@ float SDFManager::getDistance(const Eigen::Vector3d& pos) const {
   const Eigen::Vector3d vf = impl_->worldToVoxelF(pos) -
                              Eigen::Vector3d(0.5, 0.5, 0.5);
 
-  // Static layer.
+  // Static layer. Empty (all-free) layer holds no grid — use the scalar so
+  // the front-end's "non-finite = outside map = blocked" rule never fires
+  // in free space.
   float best = std::numeric_limits<float>::infinity();
-  float d_static;
-  if (sampleTrilinear<false>(impl_->distance_cache.data(),
-                             impl_->nx, impl_->ny, impl_->nz,
-                             impl_->voxel, vf, &d_static, nullptr)) {
-    best = d_static;
+  if (impl_->static_empty) {
+    best = impl_->static_free_dist;
+  } else {
+    float d_static;
+    if (sampleTrilinear<false>(impl_->distance_cache.data(),
+                               impl_->nx, impl_->ny, impl_->nz,
+                               impl_->voxel, vf, &d_static, nullptr)) {
+      best = d_static;
+    }
   }
 
   // Dynamic layer: min over patches that contain pos.
@@ -711,14 +737,21 @@ bool SDFManager::getDistanceAndGradient(const Eigen::Vector3d& pos,
   Eigen::Vector3d best_grad = Eigen::Vector3d::Zero();
   bool any = false;
 
-  float d_static;
-  Eigen::Vector3d g_static;
-  if (sampleTrilinear<true>(impl_->distance_cache.data(),
-                            impl_->nx, impl_->ny, impl_->nz,
-                            impl_->voxel, vf, &d_static, &g_static)) {
-    best = d_static;
-    best_grad = g_static;
+  if (impl_->static_empty) {
+    // All-free static layer: scalar distance, zero gradient (no grid).
+    best = impl_->static_free_dist;
+    best_grad = Eigen::Vector3d::Zero();
     any = true;
+  } else {
+    float d_static;
+    Eigen::Vector3d g_static;
+    if (sampleTrilinear<true>(impl_->distance_cache.data(),
+                              impl_->nx, impl_->ny, impl_->nz,
+                              impl_->voxel, vf, &d_static, &g_static)) {
+      best = d_static;
+      best_grad = g_static;
+      any = true;
+    }
   }
 
   for (const auto& patch : impl_->patches) {

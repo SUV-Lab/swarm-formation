@@ -1406,7 +1406,12 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
     // zone-neutral; but the window only moves z by a fraction of a cell,
     // while the cap sits hundreds of metres above any flown path.)
     if (path.size() > 8) {
-        const int W = 4;  // half-window, in samples (step = 0.6*cres)
+        // Half-window sized to ONE coarse cell (the sawtooth's actual scale):
+        // W = 4 was ±4*0.6*cres = ±2.4 CELLS of horizontal averaging — at
+        // fm2_coarse_k=1 that planed narrow ridge crests down ~30 m (observed
+        // 7.73 -> 7.43), which the alt-cap headroom then had to absorb. W = 2
+        // (±1.2 cells) removes cell-scale sawtooth without carving crests.
+        const int W = 2;  // half-window, in samples (step = 0.6*cres)
         std::vector<double> zs(path.size());
         for (size_t n = 0; n < path.size(); ++n) zs[n] = path[n].z();
         for (size_t n = 1; n + 1 < path.size(); ++n) {

@@ -258,14 +258,13 @@ namespace ego_planner
     // clearance +0.087" while the RViz panel showed a -12.5 m dip in the
     // unswept goal-approach segment (a coverage hole, not a measurement
     // disagreement). Nothing consumes the 2/3 semantic: the verdict is
-    // debug-only and getCollisionCheckTimeEnd() has no callers.
+    // debug-only (the old time-end getter had no callers and is gone).
     const double T_end = traj.getDurations().sum();
 
     bool occ = false;
     double dt = 0.01;
     int i_end = std::max(1, (int)floor(T_end / dt));
     double t = 0.0;
-    collision_check_time_end_ = T_end;
 
     // Terrain sweep via the heightmap: terrain is no longer voxelised into the
     // SDF, so the SDF pass below is boxes-only and terrain-BLIND — without this
@@ -544,7 +543,9 @@ namespace ego_planner
         // obstacle_clearance band. Purely vertical (the horizontal ∂h term is
         // second-order; the obstacle/FM2 layers own lateral avoidance) — Step 1
         // proves the heightmap SEES the penetration the SDF misses.
-        if (terrain_hgrad_ || terrain_height_) {
+        // Gated on enable_obstacles_ like the SDF term: the "ignore obstacles"
+        // debug flag must silence ALL collision geometry, terrain included.
+        if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_)) {
             float h = 0.f, dhx = 0.f, dhy = 0.f;
             bool have = false;
             if (terrain_hgrad_) {

@@ -477,6 +477,12 @@ inline double PathSearcher::getHeuInadmis(const Eigen::Vector3i &i1, const Eigen
     return tie_breaker_ * smha_w_ * getDiagHeu(i1, i2);
 }
 
+// KNOWN LIMITATION (astar ablation/fallback path only): the A* grid is
+// ISOTROPIC — step_size_ applies to z too, so with step_size 1.0 vertical
+// moves quantize to ~100 m, far coarser than the 30-38 m terrain berths.
+// The FM2 front end (the production path) uses per-axis resolutions and is
+// unaffected. Fixing this means per-axis steps here, in Coord2Index and in
+// the neighbour costs — deliberate scope, not an oversight.
 inline Eigen::Vector3d PathSearcher::Index2Coord(const Eigen::Vector3i &index) const
 {
     return ((index - CENTER_IDX_).cast<double>() * step_size_) + center_;
