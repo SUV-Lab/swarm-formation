@@ -16,11 +16,12 @@ bool fm2CudaAvailable();
 //
 //   F    : speed map, length nx*ny*nz, flat index = i + nx*(j + ny*k).
 //          F <= 0 marks a blocked cell (infinite arrival time there).
-//   cres : grid spacing (same value for all axes, matching the CPU FMM).
+//   hx/hy/hz : per-axis grid spacing (anisotropic voxels; matches CPU FMM).
 //   gi/gj/gk : goal cell (wave source, T = 0).
 //   T    : output arrival times (same layout); the function initialises it.
 bool fm2EikonalGPU(const float* F, int nx, int ny, int nz,
-                   float cres, int gi, int gj, int gk, float* T);
+                   float hx, float hy, float hz,
+                   int gi, int gj, int gk, float* T);
 
 }  // namespace path_planner
 

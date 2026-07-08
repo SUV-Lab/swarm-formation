@@ -58,8 +58,14 @@ class SDFManager : public IDistanceField {
   SDFManager(const SDFManager&) = delete;
   SDFManager& operator=(const SDFManager&) = delete;
 
-  // voxel_size in meters.
+  // Isotropic voxels (all axes = voxel_size, frame units).
   bool initialize(double voxel_size);
+  // ANISOTROPIC voxels: the terrain frame compresses z (1 z-unit >> 1 xy
+  // metre-equivalent), so a cubic voxel is wastefully fine in xy (the DEM
+  // itself is coarser) while quantizing altitude in ~half-cell steps that
+  // dwarf real terrain features. A thin-z voxel fixes the vertical
+  // quantization at unchanged memory.
+  bool initialize(double voxel_xy, double voxel_z);
 
   // occupancy layout: ((x * ny) + y) * nz + z (numpy C-order).
   // 0 = free, nonzero = occupied.
@@ -112,7 +118,8 @@ class SDFManager : public IDistanceField {
 
   bool isInitialized() const;
   bool hasData() const override;
-  double voxelSize() const;
+  double voxelSize() const;            // x-axis size (legacy callers)
+  Eigen::Vector3d voxelSizes() const;  // per-axis (vx, vy, vz)
   size_t numAllocatedBlocks() const;
 
   // Grid extent in cells along x/y/z. Zero if no data.

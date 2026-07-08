@@ -89,19 +89,43 @@ namespace path_manager
       double terrain_world_x = 2.0 * center_x - rot_x;
       double terrain_world_y = rot_y;
 
-      // Step 3: World coord → grid index
-      int col = static_cast<int>((terrain_world_x - origin_x) / resolution);
-      int row = static_cast<int>((terrain_world_y - origin_y) / resolution);
+      // Step 3: World coord → fractional grid coordinate (same fx/fy convention
+      // as the RViz panel's getElevationAt) then BILINEAR sample.
+      // WHY bilinear (was nearest-cell): the SDF the optimizer plans against is
+      // voxelised from THIS function; nearest-cell made it a piecewise-constant,
+      // ~cell-coarse (~230 m DEM cell) terrain, so a trajectory that only grazed
+      // that blocky surface looked like it PENETRATED the finer bilinear terrain
+      // the altitude/clearance panels display. Interpolating here makes the
+      // optimizer's terrain match the panels' terrain, so grazes stop reading as
+      // pass-throughs. Water/edge (any NaN or out-of-range corner) keeps the old
+      // nearest-cell + invalid rule so the "water = no terrain" voxelisation is
+      // unchanged.
+      constexpr float kInv = -std::numeric_limits<float>::infinity();
+      const double fx = (terrain_world_x - origin_x) / resolution;
+      const double fy = (terrain_world_y - origin_y) / resolution;
+      const int col0 = static_cast<int>(std::floor(fx));
+      const int row0 = static_cast<int>(std::floor(fy));
 
-      if (col < 0 || col >= cols || row < 0 || row >= rows) {
-        return -std::numeric_limits<float>::infinity();
+      auto at = [&](int c, int r) -> float {
+        if (c < 0 || c >= cols || r < 0 || r >= rows) return kInv;
+        const int index = c * rows + r;  // Column-major
+        if (index < 0 || index >= static_cast<int>(elevation.size())) return kInv;
+        const float e = elevation[index];
+        return std::isnan(e) ? kInv : e;
+      };
+
+      const float e00 = at(col0, row0),     e10 = at(col0 + 1, row0);
+      const float e01 = at(col0, row0 + 1), e11 = at(col0 + 1, row0 + 1);
+      if (e00 != kInv && e10 != kInv && e01 != kInv && e11 != kInv) {
+        const double tx = fx - col0, ty = fy - row0;
+        return static_cast<float>(
+            (1.0 - tx) * (1.0 - ty) * e00 + tx * (1.0 - ty) * e10 +
+            (1.0 - tx) * ty         * e01 + tx * ty         * e11);
       }
-      int index = col * rows + row;  // Column-major
-      if (index < 0 || index >= static_cast<int>(elevation.size())) {
-        return -std::numeric_limits<float>::infinity();
-      }
-      float elev = elevation[index];
-      return std::isnan(elev) ? -std::numeric_limits<float>::infinity() : elev;
+      // Water / map edge: nearest in-range cell (clamped), else invalid.
+      const int cc = col0 < 0 ? 0 : (col0 >= cols ? cols - 1 : col0);
+      const int rc = row0 < 0 ? 0 : (row0 >= rows ? rows - 1 : row0);
+      return at(cc, rc);
     }
 
     // Convert terrain grid cell to world (planning) coordinate (for obstacle_points_)
@@ -212,6 +236,9 @@ namespace path_manager
     double dyn_obstacle_margin_{3.0};  // berth around dynamic obstacles
     double opt_obstacle_clearance_{0.7};  // optimizer penalty onset (< front-end margin)
     double weight_altitude_{1000.0};      // optimizer z-cap weight above mission band
+    double alt_cap_headroom_{5.0};        // z-cap slack above the geodesic max; must fit sparse-piece quintic swell (~ FM2 coarse-cell band tolerance)
+    double alt_floor_headroom_{0.5};      // z-floor slack below min(start,goal) z; stops min-jerk sags bouncing off the water/terrain clearance
+    double min_goal_agl_{1.0};            // waypoints get z >= terrain elevation + this (frame z units); kills underground goals from fixed-z mission sources
     double corner_fillet_radius_{0.0};    // legacy geometric fallback; 0 = off
     uint64_t esdf_viz_revision_{~0ull};   // last SDF revision published as cubes
     double esdf_viz_step_{4.0};           // ESDF occupancy-viz sample step [m]; coarse = cheap
@@ -239,6 +266,7 @@ namespace path_manager
     // Built from terrain + obstacle_centers_ inside planGlobalTraj.
     path_planner::sdf::SDFManager sdf_manager_;
     double sdf_voxel_size_ = 1.0;  // m
+    double sdf_voxel_z_{0.0};             // vertical voxel size; <=0 -> isotropic (= sdf_voxel_size_)
     // A* search step size (meters between neighboring path nodes). Kept
     // independent of sdf_voxel_size_ so we can coarsen A* path density
     // without touching SDF resolution. Must be a multiple of voxel size
@@ -308,8 +336,10 @@ namespace path_manager
     std::vector<Eigen::Vector3d> dyn_patch_sizes_;   // full extents [m]: box=(sx,sy,sz), sphere=(2r,2r,2r)
     std::vector<uint8_t> dyn_patch_is_box_;          // 1=box (collision==visual), 0=sphere
     std::vector<std::string> dyn_patch_models_;      // visual mesh catalog key per patch
-    std::vector<double> dyn_patch_yaws_;             // per-spawn random yaw [rad] (visual only)
-    std::mt19937 yaw_rng_{std::random_device{}()};   // RNG for spawn orientations
+    std::vector<double> dyn_patch_yaws_;             // per-spawn yaw [rad]. NOT visual-only: oriented
+                                                     // boxes go into the SDF (samplePatch), so yaw
+                                                     // changes the FM2 route. Seed via manager/dyn_yaw_seed.
+    std::mt19937 yaw_rng_;   // spawn-orientation RNG; seeded from manager/dyn_yaw_seed (fixed=reproducible, <0=random)
 
     // Dynamic obstacles requested before the SDF exists (e.g. no ESDF cache on a
     // fresh run) are deferred here, then added once the SDF is built.

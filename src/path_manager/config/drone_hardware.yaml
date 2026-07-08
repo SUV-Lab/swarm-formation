@@ -24,7 +24,7 @@
     # z-overshoot to be capped and costs/convergence to fall toward rest levels.
     # Set lead_in_time=0 (optimizer_params.yaml) to reproduce the blowup.
     test/inject_init_state: false
-    test/init_vel: [-1.0, -1.0, 0.0]   # [x, y, z] m/s   VERTICAL ⊥ (worst case)
+    test/init_vel: [-1.0, -2.0, 0.0]   # [x, y, z] m/s   VERTICAL ⊥ (worst case)
     test/init_acc: [0.0, 0.0, 0.0]   # [x, y, z] m/s^2 (map frame)
 
     # Drone hardware mapping

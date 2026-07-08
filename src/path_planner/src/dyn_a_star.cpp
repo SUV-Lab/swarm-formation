@@ -1,6 +1,7 @@
 #include "path_planner/dyn_a_star.h"
 #ifdef PP_HAVE_CUDA
 #include "path_planner/fm2_gpu.h"
+#include "path_planner/eikonal_godunov.h"
 #endif
 #include <cmath>
 #include <cstdlib>
@@ -1062,10 +1063,12 @@ void PathSearcher::fm2BuildSpeedMap()
     if (map_size_.minCoeff() <= 0.0) { fcnx_ = fcny_ = fcnz_ = 0; return; }
 
     const double fine_res = map_resolution_ > 1e-6 ? map_resolution_ : 1.0;
+    const double fine_res_z = map_resolution_z_ > 1e-6 ? map_resolution_z_ : fine_res;
     const double cres = fine_res * static_cast<double>(fm2_coarse_k_);
+    const double cres_z = fine_res_z * static_cast<double>(fm2_coarse_k_);
     fcnx_ = std::max(1, (int)std::ceil(map_size_.x() / cres));
     fcny_ = std::max(1, (int)std::ceil(map_size_.y() / cres));
-    fcnz_ = std::max(1, (int)std::ceil(map_size_.z() / cres));
+    fcnz_ = std::max(1, (int)std::ceil(map_size_.z() / cres_z));
     const size_t N = (size_t)fcnx_ * fcny_ * fcnz_;
     if (N == 0 || N > fm2_max_cells_) { fcnx_ = fcny_ = fcnz_ = 0; return; }
 
@@ -1077,7 +1080,7 @@ void PathSearcher::fm2BuildSpeedMap()
       for (int j = 0; j < fcny_; ++j)
         for (int i = 0; i < fcnx_; ++i) {
             const Eigen::Vector3d w = map_origin_ + Eigen::Vector3d(
-                (i + 0.5) * cres, (j + 0.5) * cres, (k + 0.5) * cres);
+                (i + 0.5) * cres, (j + 0.5) * cres, (k + 0.5) * cres_z);
             bool blocked = false;
             if (ground_height_ > -0.5 && w.z() < ground_height_) blocked = true;
             else if (virtual_ceil_height_ > -0.5 && w.z() > virtual_ceil_height_) blocked = true;
@@ -1108,9 +1111,12 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
     const size_t N = (size_t)fcnx_ * fcny_ * fcnz_;
     if (fm2_F_.empty() || fm2_F_.size() != N) return;
     const double fine_res = map_resolution_ > 1e-6 ? map_resolution_ : 1.0;
+    const double fine_res_z = map_resolution_z_ > 1e-6 ? map_resolution_z_ : fine_res;
     const double cres = fine_res * static_cast<double>(fm2_coarse_k_);
+    const double cres_z = fine_res_z * static_cast<double>(fm2_coarse_k_);
+    const Eigen::Vector3d cellv(cres, cres, cres_z);
 
-    Eigen::Vector3d rel = (goal_world - map_origin_) / cres;
+    Eigen::Vector3d rel = (goal_world - map_origin_).cwiseQuotient(cellv);
     int gi = (int)std::floor(rel.x());
     int gj = (int)std::floor(rel.y());
     int gk = (int)std::floor(rel.z());
@@ -1130,7 +1136,8 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
       const int gpu_gflat = fm2Flat(gi, gj, gk);
       if (fm2_F_[gpu_gflat] <= kFMin) fm2_F_[gpu_gflat] = 0.5f;
       if (fm2EikonalGPU(fm2_F_.data(), fcnx_, fcny_, fcnz_,
-                        static_cast<float>(cres), gi, gj, gk, fm2_T_.data())) {
+                        static_cast<float>(cres), static_cast<float>(cres),
+                        static_cast<float>(cres_z), gi, gj, gk, fm2_T_.data())) {
         const float inf = std::numeric_limits<float>::infinity();
         for (float &t : fm2_T_) if (t >= 1e17f) t = inf;
         fm2_valid_ = true;
@@ -1156,7 +1163,7 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
     // T+h freeze order would corrupt the full field (FMM is order-
     // dependent: solveQuad reads frozen neighbours). When fm2_star_ is
     // false (plain FM2) sflat is unused and the wave runs to completion.
-    Eigen::Vector3d srel = (start_world - map_origin_) / cres;
+    Eigen::Vector3d srel = (start_world - map_origin_).cwiseQuotient(cellv);
     int si = (int)std::floor(srel.x());
     int sj = (int)std::floor(srel.y());
     int sk = (int)std::floor(srel.z());
@@ -1178,7 +1185,7 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
         const int j = r / fcnx_;
         const int i = r - j * fcnx_;
         const Eigen::Vector3d w = map_origin_ + Eigen::Vector3d(
-            (i + 0.5) * cres, (j + 0.5) * cres, (k + 0.5) * cres);
+            (i + 0.5) * cres, (j + 0.5) * cres, (k + 0.5) * cres_z);
         return (float)(w - start_world).norm();
     };
 
@@ -1186,54 +1193,26 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
     std::priority_queue<HItem, std::vector<HItem>, std::greater<HItem>> pq;
     pq.push({heur(gflat), gflat});
 
-    // Godunov upwind solve of (T-Tx)^2+(T-Ty)^2+(T-Tz)^2 = (cres/F)^2.
+    // Weighted Godunov upwind solve, shared with the GPU FIM
+    // (eikonal_godunov.h): sum_i ((T - m_i)/h_i)^2 = (1/F)^2 with
+    // anisotropic spacings (hx = hy = cres, hz = cres_z).
     auto solveQuad = [&](int i, int j, int k) -> float {
         const int flat = fm2Flat(i, j, k);
         const float Fv = fm2_F_[flat];
-        const double rhs = (cres / std::max((double)Fv, 1e-6)); // (h/F)
-        // Per-axis minimum frozen neighbour.
-        double m[3] = {1e30, 1e30, 1e30};
+        const float slow = 1.0f / std::max(Fv, 1e-6f);
+        float m[3] = {kEikInf, kEikInf, kEikInf};
         auto consider = [&](int ax, int ni, int nj, int nk) {
             if (ni < 0 || ni >= fcnx_ || nj < 0 || nj >= fcny_ ||
                 nk < 0 || nk >= fcnz_) return;
             const int nf = fm2Flat(ni, nj, nk);
-            if (frozen[nf]) m[ax] = std::min(m[ax], (double)fm2_T_[nf]);
+            if (frozen[nf]) m[ax] = std::min(m[ax], fm2_T_[nf]);
         };
         consider(0, i-1, j, k); consider(0, i+1, j, k);
         consider(1, i, j-1, k); consider(1, i, j+1, k);
         consider(2, i, j, k-1); consider(2, i, j, k+1);
-
-        // Collect the available axis minima, then sort ascending. Fixed
-        // 3-slot array + branch sort: no heap allocation in the FMM hot
-        // loop. Result is identical to the previous vector+std::sort.
-        double a[3];
-        int na = 0;
-        for (int ax = 0; ax < 3; ++ax) if (m[ax] < 1e29) a[na++] = m[ax];
-        if (na == 0) return INF;
-        if (na == 2) {
-            if (a[0] > a[1]) std::swap(a[0], a[1]);
-        } else if (na == 3) {
-            if (a[0] > a[1]) std::swap(a[0], a[1]);
-            if (a[1] > a[2]) std::swap(a[1], a[2]);
-            if (a[0] > a[1]) std::swap(a[0], a[1]);
-        }
-
-        double T = a[0] + rhs;          // 1-D update
-        if (na >= 2 && T > a[1]) {
-            // 2-D: (T-a0)^2 + (T-a1)^2 = rhs^2
-            const double s = a[0] + a[1];
-            const double q = a[0]*a[0] + a[1]*a[1] - rhs*rhs;
-            const double disc = s*s - 2.0*q;
-            if (disc >= 0.0) T = 0.5 * (s + std::sqrt(disc));
-            if (na >= 3 && T > a[2]) {
-                // 3-D quadratic.
-                const double S = a[0] + a[1] + a[2];
-                const double Q = a[0]*a[0]+a[1]*a[1]+a[2]*a[2] - rhs*rhs;
-                const double D = S*S - 3.0*Q;
-                if (D >= 0.0) T = (S + std::sqrt(D)) / 3.0;
-            }
-        }
-        return (float)T;
+        const float T = eikSolve(m[0], m[1], m[2], (float)cres, (float)cres,
+                                 (float)cres_z, slow);
+        return (T >= kEikInf) ? INF : T;
     };
 
     while (!pq.empty()) {
@@ -1275,9 +1254,12 @@ double PathSearcher::fm2SampleT(const Eigen::Vector3d &world) const
 {
     if (!fm2_valid_) return std::numeric_limits<double>::infinity();
     const double fine_res = map_resolution_ > 1e-6 ? map_resolution_ : 1.0;
+    const double fine_res_z = map_resolution_z_ > 1e-6 ? map_resolution_z_ : fine_res;
     const double cres = fine_res * static_cast<double>(fm2_coarse_k_);
+    const double cres_z = fine_res_z * static_cast<double>(fm2_coarse_k_);
     const Eigen::Vector3d c =
-        (world - map_origin_) / cres - Eigen::Vector3d(0.5, 0.5, 0.5);
+        (world - map_origin_).cwiseQuotient(Eigen::Vector3d(cres, cres, cres_z))
+        - Eigen::Vector3d(0.5, 0.5, 0.5);
     const int i0 = (int)std::floor(c.x());
     const int j0 = (int)std::floor(c.y());
     const int k0 = (int)std::floor(c.z());
@@ -1307,29 +1289,33 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
     std::vector<Eigen::Vector3d> path;
     if (!fm2_valid_) return path;
     const double fine_res = map_resolution_ > 1e-6 ? map_resolution_ : 1.0;
+    const double fine_res_z = map_resolution_z_ > 1e-6 ? map_resolution_z_ : fine_res;
     const double cres = fine_res * static_cast<double>(fm2_coarse_k_);
+    const double cres_z = fine_res_z * static_cast<double>(fm2_coarse_k_);
     const double step = 0.6 * cres;        // geodesic step length
     const double goal_tol = 1.5 * cres;
     const int max_iter = (int)((map_size_.norm() / step) * 4.0) + 1000;
 
     auto gradT = [&](const Eigen::Vector3d &p, Eigen::Vector3d &g) -> bool {
-        const double e = cres;
-        double tx0 = fm2SampleT(p - Eigen::Vector3d(e,0,0));
-        double tx1 = fm2SampleT(p + Eigen::Vector3d(e,0,0));
-        double ty0 = fm2SampleT(p - Eigen::Vector3d(0,e,0));
-        double ty1 = fm2SampleT(p + Eigen::Vector3d(0,e,0));
-        double tz0 = fm2SampleT(p - Eigen::Vector3d(0,0,e));
-        double tz1 = fm2SampleT(p + Eigen::Vector3d(0,0,e));
+        // Per-axis probe distance = one grid cell of THAT axis, so the fine
+        // z-structure of an anisotropic grid is not blurred by xy-sized probes.
+        const double ex = cres, ez = cres_z;
+        double tx0 = fm2SampleT(p - Eigen::Vector3d(ex,0,0));
+        double tx1 = fm2SampleT(p + Eigen::Vector3d(ex,0,0));
+        double ty0 = fm2SampleT(p - Eigen::Vector3d(0,ex,0));
+        double ty1 = fm2SampleT(p + Eigen::Vector3d(0,ex,0));
+        double tz0 = fm2SampleT(p - Eigen::Vector3d(0,0,ez));
+        double tz1 = fm2SampleT(p + Eigen::Vector3d(0,0,ez));
         double tc  = fm2SampleT(p);
         if (!std::isfinite(tc)) return false;
-        auto fb = [&](double a, double b, double c) {
+        auto fb = [&](double a, double b, double c, double e) {
             // one-sided fallback if a neighbour is unreachable
             if (std::isfinite(a) && std::isfinite(b)) return (b - a) / (2*e);
             if (std::isfinite(b)) return (b - c) / e;
             if (std::isfinite(a)) return (c - a) / e;
             return 0.0;
         };
-        g = Eigen::Vector3d(fb(tx0,tx1,tc), fb(ty0,ty1,tc), fb(tz0,tz1,tc));
+        g = Eigen::Vector3d(fb(tx0,tx1,tc,ex), fb(ty0,ty1,tc,ex), fb(tz0,tz1,tc,ez));
         return g.norm() > 1e-9;
     };
 
@@ -1349,7 +1335,7 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         ok = false;
         for (auto &o : OFF) {
             const Eigen::Vector3d q =
-                pp + Eigen::Vector3d(o[0]*cres, o[1]*cres, o[2]*cres);
+                pp + Eigen::Vector3d(o[0]*cres, o[1]*cres, o[2]*cres_z);
             const double tq = fm2SampleT(q);
             if (std::isfinite(tq) && tq < bestT) {
                 bestT = tq; bdir = Eigen::Vector3d(o[0], o[1], o[2]); ok = true;
@@ -1360,8 +1346,8 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
     // Keep z inside the grid (outside, the trilinear sample clamps and the
     // z-gradient degenerates to 0, so the path could drift below the floor).
     auto clampZ = [&](Eigen::Vector3d q) {
-        q.z() = std::clamp(q.z(), map_origin_.z() + 0.5 * cres,
-                           map_origin_.z() + map_size_.z() - 0.5 * cres);
+        q.z() = std::clamp(q.z(), map_origin_.z() + 0.5 * cres_z,
+                           map_origin_.z() + map_size_.z() - 0.5 * cres_z);
         return q;
     };
 

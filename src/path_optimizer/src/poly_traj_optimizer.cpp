@@ -21,8 +21,10 @@ namespace ego_planner
   {
     // Barrier exemptions for this plan (same start/goal rule as the
     // front-end): must be recomputed per plan since zones and endpoints
-    // both change at runtime.
+    // both change at runtime. Zones the front-end route itself crosses are
+    // exempt too — the crossing is a committed front-end decision.
     prepareRiskBarrier(start_pos, waypoints.back());
+    markFrontEndCrossings(clean_path);
 
     // === MINCO initial trajectory from clean_path ===
     // Each shortcut vertex becomes one MINCO piece boundary directly;
@@ -158,19 +160,38 @@ namespace ego_planner
 
     t1 = node_->get_clock()->now();
 
-    result = lbfgs::lbfgs_optimize(
-        variable_num_,
-        q.data(),
-        &final_cost,
-        PolyTrajOptimizer::costFunctionCallback,
-        NULL,
-        PolyTrajOptimizer::earlyExitCallback,
-        this,
-        &lbfgs_params);
+    // Line-search stalls (-1005) usually mean the accumulated curvature
+    // memory has gone inconsistent near a stiff feature (clearance band /
+    // barrier ramp / z-corridor tug-of-war), not that the point is optimal:
+    // q still holds the best accepted iterate, so re-entering from it with
+    // FRESH memory (first step = steepest descent) routinely makes progress
+    // again. Bounded retries keep the worst case cheap.
+    int restarts = 0;
+    for (;;) {
+        result = lbfgs::lbfgs_optimize(
+            variable_num_,
+            q.data(),
+            &final_cost,
+            PolyTrajOptimizer::costFunctionCallback,
+            NULL,
+            PolyTrajOptimizer::earlyExitCallback,
+            this,
+            &lbfgs_params);
+        // 4 restarts: observed hard instances were still DESCENDING fast
+        // (risk 9.5M -> 7.9M and accelerating) when 2 restarts ran out, and
+        // the published mid-iterate carried needle-spike artifacts.
+        if (result != lbfgs::LBFGSERR_MAXIMUMLINESEARCH || restarts >= 4 ||
+            force_stop_type_ != DONT_STOP) {
+            break;
+        }
+        ++restarts;
+        LOG_WARN("[L-BFGS] line-search stall (-1005) at cost=%.1f — restart %d/4 "
+                 "from current iterate with fresh curvature memory", final_cost, restarts);
+    }
 
     if (log_manager_ && enable_debug_logs_) {
         const char* result_str = lbfgs::lbfgs_strerror(result);
-        log_manager_->infof("L-BFGS Result: %d (%s)", result, result_str);
+        log_manager_->infof("L-BFGS Result: %d (%s), restarts=%d", result, result_str, restarts);
         log_manager_->infof("Iteration info: costFunction calls=%d, max_iterations=%d", iter_num_, lbfgs_params.max_iterations);
     }
 
@@ -280,8 +301,10 @@ namespace ego_planner
     Eigen::VectorXd gradT(opt->piece_num_);
     double smoo_cost = 0, time_cost = 0;
     // Slots: 0 obstacle, 1 swarm, 2 formation, 3 risk (moat+barrier),
-    //        4 feasibility, 5 sqrvariance, 6 altitude band.
-    Eigen::VectorXd obs_swarm_feas_qvar_costs(7);
+    //        4 feasibility, 5 sqrvariance, 6 altitude band, 7 cruise dynamics.
+    // Slots: 0 obstacle(SDF), 1 swarm, 2 formation, 3 risk, 4 feasibility,
+    //        5 sqrvariance, 6 altitude, 7 dynamics, 8 terrain(heightmap 2.5D).
+    Eigen::VectorXd obs_swarm_feas_qvar_costs(9);
 
     // High-performance timing for debugging (similar to con code)
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -331,13 +354,15 @@ namespace ego_planner
     if (opt->enable_lbfgs_detail_logs_ && opt->log_manager_ && opt->iter_num_ % 10 == 0) {
         double total_cost = smoo_cost + obs_swarm_feas_qvar_costs.sum() + time_cost;
         opt->log_manager_->infof("[L-BFGS DETAIL] iter=%d, total_cost=%.6f", opt->iter_num_, total_cost);
-        opt->log_manager_->infof("  smoothness_cost=%.6f (weight=implicit)", smoo_cost);
+        opt->log_manager_->infof("  smoothness_cost=%.6f (weight=%.1f)", smoo_cost, opt->wei_smooth_);
         opt->log_manager_->infof("  obstacle_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(0), opt->wei_obs_);
         opt->log_manager_->infof("  swarm_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(1), opt->wei_swarm_);
         opt->log_manager_->infof("  formation_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(2), opt->wei_formation_);
         opt->log_manager_->infof("  risk_cost=%.6f (weight=%.3f, barrier=%.3f)", obs_swarm_feas_qvar_costs(3), opt->wei_risk_, opt->wei_risk_barrier_);
-        opt->log_manager_->infof("  altitude_cost=%.6f (weight=%.3f, z_hi=%.2f)", obs_swarm_feas_qvar_costs(6), opt->wei_alt_, opt->alt_zhi_);
+        opt->log_manager_->infof("  altitude_cost=%.6f (weight=%.3f, band=[%.2f, %.2f])", obs_swarm_feas_qvar_costs(6), opt->wei_alt_, opt->alt_zlo_, opt->alt_zhi_);
         opt->log_manager_->infof("  feasibility_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(4), opt->wei_feas_);
+        opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, n_lat=%.1f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, opt->dyn_n_lat_, opt->dynamics_enable_ ? "on" : "off");
+        opt->log_manager_->infof("  terrain_cost=%.6f (weight=%.3f, heightmap 2.5D, %s)", obs_swarm_feas_qvar_costs(8), opt->wei_obs_, opt->terrain_height_ ? "on" : "off");
         opt->log_manager_->infof("  time_cost=%.6f (weight=%.3f)", time_cost, opt->wei_time_);
 
         // Store formation cost for final logging
@@ -417,6 +442,14 @@ namespace ego_planner
   void PolyTrajOptimizer::initAndGetSmoothnessGradCost2PT(EIGENVEC &gdT, double &cost)
   {
     jerkOpt_.initGradCost(gdT, cost);
+    // Explicit smoothness weight (see header). Safe to scale gdC here:
+    // initGradCost just seeded it with ONLY the jerk-energy gradients;
+    // every other term accumulates afterwards in addPVAGradCost2CT.
+    if (wei_smooth_ != 1.0) {
+      cost *= wei_smooth_;
+      gdT *= wei_smooth_;
+      jerkOpt_.get_gdC() *= wei_smooth_;
+    }
   }
 
   template <typename EIGENVEC>
@@ -474,6 +507,46 @@ namespace ego_planner
             }
         }
 
+        // 2.5D TERRAIN penalty from the heightmap (exact z, matches the panel/DEM).
+        // The 3D SDF above voxelises terrain z at 10 m and under-sees it, so the
+        // trajectory reads "clear" to it yet penetrates the finer DEM. Here terrain
+        // clearance = pos.z - h(x,y) exactly; cubic push-up when within the same
+        // obstacle_clearance band. Purely vertical (the horizontal ∂h term is
+        // second-order; the obstacle/FM2 layers own lateral avoidance) — Step 1
+        // proves the heightmap SEES the penetration the SDF misses.
+        if (terrain_height_) {
+            const float h = terrain_height_(pos.x(), pos.y());  // frame units; -inf = water/invalid
+            if (std::isfinite(h)) {
+                const double terr_clear = pos.z() - static_cast<double>(h);  // >0 above terrain
+                const double viol = obstacle_clearance_ - terr_clear;
+                if (viol > 0.0) {
+                    const double costt = wei_obs_ * viol * viol * viol;
+                    const double dcoef = wei_obs_ * 3.0 * viol * viol;  // d(cost)/d(viol)
+                    // SURFACE-NORMAL push. viol = clearance - z + h(x,y), so
+                    //   d(viol)/dz = -1, d(viol)/dx = ∂h/∂x, d(viol)/dy = ∂h/∂y.
+                    // -> the trajectory moves +z AND down-slope (away from the
+                    // rising terrain) instead of straight up, so a steep slope is
+                    // skirted, not spiked over. Central-difference the heightmap
+                    // (bilinear -> exact slope within a DEM cell); a water/invalid
+                    // neighbour leaves that axis' slope at 0 (vertical-only there).
+                    const double p = 1.0;  // probe (frame units ~100 m; < DEM cell)
+                    double dhdx = 0.0, dhdy = 0.0;
+                    const float hxp = terrain_height_(pos.x() + p, pos.y());
+                    const float hxm = terrain_height_(pos.x() - p, pos.y());
+                    if (std::isfinite(hxp) && std::isfinite(hxm)) dhdx = (hxp - hxm) / (2.0 * p);
+                    const float hyp = terrain_height_(pos.x(), pos.y() + p);
+                    const float hym = terrain_height_(pos.x(), pos.y() - p);
+                    if (std::isfinite(hyp) && std::isfinite(hym)) dhdy = (hyp - hym) / (2.0 * p);
+                    Eigen::Vector3d gradt3(dcoef * dhdx, dcoef * dhdy, -dcoef);
+                    gradViolaPc = beta0 * gradt3.transpose();
+                    gradViolaPt = alpha * gradt3.transpose() * vel;
+                    jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
+                    gdT(i) += omg * (costt / K + step * gradViolaPt);
+                    costs(8) += omg * step * costt;
+                }
+            }
+        }
+
         double gradt, grad_prev_t;
 
         // Swarm collision cost calculation - now computed for every point for maximum accuracy
@@ -517,14 +590,62 @@ namespace ego_planner
         // (front-end leaves the band only where terrain demands it) was the
         // real contributor. Down-side is covered by ground/obstacle terms.
         if (wei_alt_ > 0.0 && alt_zhi_ >= 0.0 && pos.z() > alt_zhi_) {
-            // QUADRATIC, not cubic: ridge crossings sit several units above
-            // the band, and a cubic down-force there outgrows the obstacle
-            // penalty's cubic (which works on the SMALL violation depth) —
-            // the cap then presses the trajectory into terrain. Quadratic
-            // shapes the swell but can never win against the clearance wall.
-            const double ua = pos.z() - alt_zhi_;
+            // TERRAIN-AWARE GATE — root fix for cap-vs-terrain penetration.
+            // alt_zhi_ is a single SCALAR (front-end geodesic max z + headroom),
+            // but the sparse-piece back-end corner-cuts across terrain HIGHER
+            // than that scalar. There the cap ("come down to alt_zhi_") and the
+            // obstacle penalty ("stay clear of terrain") are physically
+            // unsatisfiable: L-BFGS stalls (-1004) and the crest is pressed into
+            // the DEM. Gate the cap by the SAME SDF clearance the obstacle term
+            // keys on, so the two are mutually exclusive by construction. Within
+            // obstacle_clearance_ of terrain the cap is OFF (terrain rules; the
+            // obstacle term lifts the crest); a smoothstep hands control back to
+            // the cap once the point is safely in free space (>= 2*clearance),
+            // where its only job — stopping the quintic ballooning above the
+            // committed profile — still applies unchanged. Nothing is given up:
+            // the scalar cap, the front-end profile, and islet balloon-control
+            // are identical in free space; only the impossible down-press over
+            // taller-than-cap terrain is removed.
+            double gate = 1.0;
+            if (sdf_manager_ && sdf_manager_->hasData()) {
+                const float d = sdf_manager_->getDistance(pos);
+                if (std::isfinite(d)) {
+                    const double lo = obstacle_clearance_;        // cap OFF at/below clearance
+                    const double hi = 2.0 * obstacle_clearance_;  // cap fully ON above
+                    double t = (hi > lo) ? (static_cast<double>(d) - lo) / (hi - lo) : 1.0;
+                    t = std::max(0.0, std::min(1.0, t));
+                    gate = t * t * (3.0 - 2.0 * t);               // smoothstep, C1
+                }
+            }
+            if (gate > 0.0) {
+                // QUADRATIC, not cubic: ridge crossings sit several units above
+                // the band, and a cubic down-force there outgrows the obstacle
+                // penalty's cubic (which works on the SMALL violation depth) —
+                // the cap then presses the trajectory into terrain. Quadratic
+                // shapes the swell but can never win against the clearance wall.
+                const double ua = pos.z() - alt_zhi_;
+                const double costa_z = wei_alt_ * ua * ua * gate;
+                // Purely vertical, as before: the gate is evaluated at this
+                // sample's clearance but its spatial derivative is frozen — the
+                // horizontal terrain-avoidance force is the obstacle term's job
+                // (and dominates here). The cost VALUE stays exact.
+                Eigen::Vector3d grad_a(0.0, 0.0, wei_alt_ * 2.0 * ua * gate);
+                gradViolaPc = beta0 * grad_a.transpose();
+                gradViolaPt = alpha * grad_a.transpose() * vel;
+                jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
+                gdT(i) += omg * (costa_z / K + step * gradViolaPt);
+                costs(6) += omg * step * costa_z;
+            }
+        }
+
+        // Altitude-band floor: mirror of the cap. Nothing terrain-forced
+        // ever requires diving BELOW the mission altitude, so this is
+        // always safe to enforce; it stops the min-jerk z-sags that
+        // otherwise bounce off the collision clearance floor.
+        if (wei_alt_ > 0.0 && pos.z() < alt_zlo_) {
+            const double ua = alt_zlo_ - pos.z();
             const double costa_z = wei_alt_ * ua * ua;
-            Eigen::Vector3d grad_a(0.0, 0.0, wei_alt_ * 2.0 * ua);
+            Eigen::Vector3d grad_a(0.0, 0.0, -wei_alt_ * 2.0 * ua);
             gradViolaPc = beta0 * grad_a.transpose();
             gradViolaPt = alpha * grad_a.transpose() * vel;
             jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -546,6 +667,19 @@ namespace ego_planner
             jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaAc;
             gdT(i) += omg * (costa / K + step * gradViolaAt);
             costs(4) += omg * step * costa;
+        }
+
+        // Cruise dynamics (lateral-g / curvature limit): couples v AND a.
+        double costdyn;
+        if (dynamics_enable_ && wei_dynamics_ > 0.0 &&
+            cruiseDynamicsGradCostVA(vel, acc, gradv, grada, costdyn)) {
+            gradViolaVc = beta1 * gradv.transpose();
+            gradViolaAc = beta2 * grada.transpose();
+            gradViolaVt = alpha * (gradv.dot(acc) + grada.dot(jer));
+            jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) +=
+                omg * step * (gradViolaVc + gradViolaAc);
+            gdT(i) += omg * (costdyn / K + step * gradViolaVt);
+            costs(7) += omg * step * costdyn;
         }
 
         s1 += step;
@@ -833,6 +967,60 @@ namespace ego_planner
     return false;
   }
 
+  // Cruise dynamics: normal (lateral) acceleration limit. The magnitude
+  // feasibility terms bound |v| and |a| separately, but a high-speed
+  // airframe is really limited in the CURVATURE it can pull: a_n = |v x a|
+  // / |v| must stay under n_lat * g. Evaluated in physical metres (v_m =
+  // S v, a_m = S a); gradients map back through S^T (S diagonal). The
+  // violation is NORMALIZED by (n_lat*g)^2 before cubing — the spec's raw
+  // (m/s^2)^2 cubic reaches ~1e18 on a 51 g corner and destroys the cost
+  // balance (time ~1e6); the normalized form keeps the same zero-contact
+  // cubic shape at sane magnitudes.
+  bool PolyTrajOptimizer::cruiseDynamicsGradCostVA(const Eigen::Vector3d &v,
+                                                   const Eigen::Vector3d &a,
+                                                   Eigen::Vector3d &gradv,
+                                                   Eigen::Vector3d &grada,
+                                                   double &cost)
+  {
+    const Eigen::Vector3d S(dyn_unit_xy_m_, dyn_unit_xy_m_, dyn_unit_z_m_);
+    const Eigen::Vector3d vm = S.cwiseProduct(v);
+    const Eigen::Vector3d am = S.cwiseProduct(a);
+    const double v2 = vm.squaredNorm();
+    // Below the cruise regime curvature is ill-defined (v -> 0) and the
+    // vehicle model does not apply; skip.
+    if (v2 < dyn_min_speed_mps_ * dyn_min_speed_mps_) return false;
+
+    const Eigen::Vector3d c = vm.cross(am);
+    const double c2 = c.squaredNorm();
+    const double A2 = (dyn_n_lat_ * dyn_g_) * (dyn_n_lat_ * dyn_g_);
+    // Dimensionless relative violation: a_n^2 / A^2 - 1.
+    const double f = c2 / (v2 * A2) - 1.0;
+    if (f <= 0.0) return false;
+
+    // Cubic near the limit, LINEAR beyond f=1 (C1 continuation g=3f-2):
+    // the raw cubic hit ~2e8 on the initial guess's sharp corners (200x the
+    // time cost) and its unbounded gradient thrashed the line search into
+    // -1005; the linear tail keeps a steady push with gradient capped at
+    // 3*w while preserving the zero-contact cubic in the enforcement band.
+    double g_f, dg_f;
+    if (f <= 1.0) {
+      g_f = f * f * f;
+      dg_f = 3.0 * f * f;
+    } else {
+      g_f = 3.0 * f - 2.0;
+      dg_f = 3.0;
+    }
+    cost = wei_dynamics_ * g_f;
+    const double coef = wei_dynamics_ * dg_f;
+    // d(c2)/da_m = 2 (c x v_m), d(c2)/dv_m = 2 (a_m x c), d(v2)/dv_m = 2 v_m.
+    const Eigen::Vector3d df_dam = 2.0 * c.cross(vm) / (v2 * A2);
+    const Eigen::Vector3d df_dvm =
+        (2.0 * am.cross(c) * v2 - 2.0 * c2 * vm) / (v2 * v2 * A2);
+    gradv = S.cwiseProduct(coef * df_dvm);
+    grada = S.cwiseProduct(coef * df_dam);
+    return true;
+  }
+
   // Same must-enter rule as the front-end's prepareBarrier (dyn_a_star.h):
   // a zone containing the plan start or goal cannot be avoided, so its
   // barrier is dropped and only the shared moat prices the crossing.
@@ -850,6 +1038,27 @@ namespace ego_planner
       if (in_zone(start, risk_zones_[i]) || in_zone(goal, risk_zones_[i])) {
         zone_barrier_exempt_[i] = 1;
         LOG_INFO("[RISK] zone %zu contains start/goal -> barrier exempt (moat only)", i);
+      }
+    }
+  }
+
+  void PolyTrajOptimizer::markFrontEndCrossings(
+      const std::vector<Eigen::Vector3d> &path)
+  {
+    if (zone_barrier_exempt_.size() != risk_zones_.size()) return;
+    for (size_t i = 0; i < risk_zones_.size(); ++i) {
+      if (zone_barrier_exempt_[i]) continue;
+      const auto &tz = risk_zones_[i];
+      for (const auto &p : path) {
+        if (std::abs(p.z() - tz.center.z()) >= tz.reach) continue;
+        const double dx = p.x() - tz.center.x();
+        const double dy = p.y() - tz.center.y();
+        if (dx * dx + dy * dy < tz.reach * tz.reach) {
+          zone_barrier_exempt_[i] = 1;
+          LOG_INFO("[RISK] front-end route crosses zone %zu -> barrier exempt (moat only)",
+                   i);
+          break;
+        }
       }
     }
   }
@@ -942,12 +1151,14 @@ namespace ego_planner
       if (wei_risk_barrier_ > 0.0 && !exempt) {
         const double w = tz.reach * kBarrierRampFrac;       // ramp width
         const double t = std::min((reach_b - d) / w, 1.0);  // 0 at reach_b, 1 at rim
-        const double s = t * t;
+        // Smoothstep ramp: C1 at BOTH ends. (t^2 had a derivative kink at the
+        // saturation circle d = reach — exactly the kind of stiff feature
+        // L-BFGS line searches die on.) Saturated interior stays flat by
+        // design — chord shortening via ||v|| still applies.
+        const double s = t * t * (3.0 - 2.0 * t);
         Sb *= (1.0 - s);
-        // Saturated (t=1, at/inside the rim) is flat by design — chord
-        // shortening via ||v|| still applies. Skip the 1-s underflow annulus.
         if (t < 1.0 && (1.0 - s) > 1e-9 && d > 1e-9) {
-          Gb += (2.0 * t * (-1.0 / w) / (1.0 - s)) * dir_h;
+          Gb += (6.0 * t * (1.0 - t) * (-1.0 / w) / (1.0 - s)) * dir_h;
         }
       }
     }
@@ -1029,10 +1240,27 @@ namespace ego_planner
     node_->get_parameter("optimization/weight_formation", wei_formation_);
     wei_formation_base_ = wei_formation_;  // Store base weight for adaptive adjustment
 
+    node_->declare_parameter("optimization/weight_smoothness", 1.0);
+    node_->get_parameter("optimization/weight_smoothness", wei_smooth_);
     node_->declare_parameter("optimization/weight_Risk", 0.0);
     node_->get_parameter("optimization/weight_Risk", wei_risk_);
     node_->declare_parameter("optimization/weight_Risk_barrier", 0.0);
     node_->get_parameter("optimization/weight_Risk_barrier", wei_risk_barrier_);
+
+    node_->declare_parameter("optimization/dynamics_enable", true);
+    node_->get_parameter("optimization/dynamics_enable", dynamics_enable_);
+    node_->declare_parameter("optimization/weight_dynamics", 0.0);
+    node_->get_parameter("optimization/weight_dynamics", wei_dynamics_);
+    node_->declare_parameter("optimization/dynamics_unit_xy_m", 100.0);
+    node_->get_parameter("optimization/dynamics_unit_xy_m", dyn_unit_xy_m_);
+    node_->declare_parameter("optimization/dynamics_unit_z_m", 100.0);
+    node_->get_parameter("optimization/dynamics_unit_z_m", dyn_unit_z_m_);
+    node_->declare_parameter("optimization/dynamics_n_lat", 30.0);
+    node_->get_parameter("optimization/dynamics_n_lat", dyn_n_lat_);
+    node_->declare_parameter("optimization/dynamics_g", 9.81);
+    node_->get_parameter("optimization/dynamics_g", dyn_g_);
+    node_->declare_parameter("optimization/dynamics_min_speed_mps", 1.0);
+    node_->get_parameter("optimization/dynamics_min_speed_mps", dyn_min_speed_mps_);
 
     node_->declare_parameter("optimization/swarm_clearance", 0.5);
     node_->get_parameter("optimization/swarm_clearance", swarm_clearance_);

@@ -9,25 +9,60 @@
     manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
     manager/risk_smha_w: 2.0            # SMHA* suboptimality bound (astar front-end only)
+    manager/dyn_yaw_seed: 0             # dynamic-obstacle spawn-orientation RNG seed. FIXED int =
+                                        # reproducible obstacle layout (same mission -> same plan);
+                                        # <0 = randomize each run. Sweep 0,1,2,... to find a hard config.
 
     # Altitude band: wave slowed outside [min,max](start_z,goal_z); 0 = off.
     manager/fm2_alt_penalty: 2.0
-    manager/fm2_alt_zscale: 10.0        # up ramp; keep >=10 (5 deadlocks the extraction at walls)
-    manager/fm2_alt_zscale_down: 2.0    # down ramp (stiff: never dive below mission alt)
+    manager/fm2_alt_zscale: 4.0         # up ramp, ~400 m/w (was 10 in 43.7 m z-units = 437 m; below
+                                        # ~half of this the extraction deadlocks at terrain walls)
+    manager/fm2_alt_zscale_down: 0.9    # down ramp ~90 m/w (stiff: never dive below mission alt)
 
-    # ---- Clearances (frame units: 1 ~ 100 m horizontal / 44 m vertical) ----
-    manager/obstacle_clearance: 1.0     # front-end blocked threshold (route-to-terrain distance)
-    manager/dyn_obstacle_margin: 10.0   # wider berth around RUNTIME obstacles only; <= clearance disables
-    optimization/obstacle_clearance: 0.5  # optimizer penalty onset; MUST be < manager/obstacle_clearance
-                                          # (equal -> path sits on the penalty edge and can't be smoothed)
+    # ---- Clearances (ISOTROPIC frame: 1 unit = 100 m on every axis since the
+    # publisher z-scale fix; SDF distances are finally physical) ----
+    manager/obstacle_clearance: 0.2     # front-end blocked threshold = 20 m in ANY direction.
+                                        # MUST stay > optimization/obstacle_clearance (0.12).
+                                        # Was 1.0 back when z-units were 43.7 m: that demanded ~44 m of
+                                        # vertical berth, so metre-scale islets forced 50+ m hops.
+    manager/dyn_obstacle_margin: 10.0   # 1 km berth around RUNTIME obstacles (ships); <= clearance disables
+    optimization/obstacle_clearance: 0.12 # optimizer penalty onset (12 m); MUST be < manager/obstacle_clearance
+                                          # (equal -> path sits on the penalty edge and can't be smoothed).
+                                          # KNOWN-GOOD (converges). Raising it for crest margin (tried 0.18,
+                                          # 0.30) destabilizes HARD missions: the trajectory balloons past
+                                          # the altitude cap and altitude_cost explodes (200-300k) -> L-BFGS
+                                          # -1005/-1008. Real margin needs the CAP fixed first, not a bigger
+                                          # clearance. Panel TERRAIN_GRAZE_MARGIN_M mirrors this (12 m).
 
     # ---- Shortcut / MINCO input ----
     manager/astar_bypass_shortcut: false  # true = raw front-end path straight to MINCO (debug)
-    manager/length_per_piece: 50.0      # piece scale; segments subdivided to max 4x this
+    manager/length_per_piece: 12.5     # piece scale; segments subdivided to max 4x this (=max_seg).
+                                       # DO NOT shrink below this: finer pieces (tried 6.25) let the
+                                       # obstacle term balloon individual crests into free space where
+                                       # the deliberately-weak cap (200 << obstacle 1e4) can't pull them
+                                       # back -> altitude_cost explodes to ~200k -> L-BFGS -1005/-1008.
+                                       # Sparse pieces are load-bearing for optimizer stability here.
+                                       # THE wave-wavelength knob: a quintic piece cannot express any
+                                       # z-feature narrower than itself, so 50 (=20 km pieces) turned a
+                                       # 100 m islet into a 20-40 km, 200 m-tall hill. 12.5 -> 5 km
+                                       # pieces: bumps narrow to ~5 km and amplitude drops toward the
+                                       # islet+clearance height. Piece count ~30 -> ~70 (opt still <1 s).
     manager/astar_step_size: 1.0        # A* raw path spacing, frame units (astar front-end)
 
     # ---- Optimizer weights ----
-    optimization/constrain_points_perPiece: 200
+    optimization/constrain_points_perPiece: 200  # penalty-integral samples per piece. Spacing must
+                                       # resolve the violation band (islet + 0.5 clearance, a few
+                                       # units wide): at 200-unit pieces that needed 400+ (100 m->50 m
+                                       # spacing) — the "less wavy at 400" effect. With 50-unit pieces
+                                       # 200 gives 25 m spacing; more just burns CPU (13 GB/iter of
+                                       # samples resolve nothing below the 2.288-unit SDF voxel).
+    optimization/weight_smoothness: 10000.0  # explicit jerk-energy weight. The jerk integral scales
+                                       # ~1/T^5, so at mission scale (km routes, 50-100 s pieces) the
+                                       # implicit weight 1 collapses it 6-7 orders below time_cost and
+                                       # z-ringing through noisy front-end pins never gets ironed out.
+                                       # CEILING: weighted smoothness must stay << time_cost/5, or it
+                                       # inflates durations (jerk decreases with T). At 1e4 it lands
+                                       # ~1e3-5e3 vs time ~1e6 — shaping force without duration creep.
     optimization/weight_obstacle: 10000.0
     optimization/weight_swarm: 0.0
     optimization/weight_feasibility: 10000.0
@@ -43,16 +78,53 @@
                                        # Derivation: K * weight_time / cruise = 100*500/2. Without it
                                        # MINCO re-litigates the rim standoff: the moat's zero contact
                                        # slope makes skirt-cutting profitable ~tens of metres deep.
-    optimization/weight_altitude: 200.0  # z-cap above mission band (quadratic); keep << weight_obstacle or it presses into terrain
+    optimization/weight_altitude: 2400.0  # z-cap above mission band (quadratic); keep << weight_obstacle or it presses into terrain
+    optimization/alt_cap_headroom: 0.4   # z-cap slack above the front-end geodesic max. Must leave the
+                                         # sparse-piece quintic a workable corridor above the obstacle
+                                         # clearance floor: +1 over a sea-level route made a ~4 m band and
+                                         # L-BFGS bought z-compliance with duration until -1005. ~ one FM2
+                                         # coarse cell (the front-end's own alt band tolerance).
+                                         # 0.4 = 40 m above the GEODESIC max. 2.0 (200 m) let the
+                                         # optimizer legally balloon a 250 m dome over islet fields the
+                                         # front-end threads at 47 m: sparse pieces cut the lateral
+                                         # weave's corners, the obstacle term lifts those cut corners
+                                         # OVER the islets, and smoothness spreads the lift to the cap.
+                                         # A snug cap forces the back-end to weave in xy like the
+                                         # front-end instead of escaping upward.
+    optimization/alt_floor_headroom: 0.2 # z-floor slack below min(start,goal) z. The missing lower half of
+                                         # the FM2 alt band: without it z is only bounded below by the 0.5
+                                         # collision clearance, so min-jerk pieces sag in long smooth waves
+                                         # and bounce off the water/valley floor instead of holding the
+                                         # mission altitude.
+    manager/min_goal_agl: 0.15           # waypoints get z >= terrain elevation + 15 m.
+                                         # Fixed-z mission sources (yaml / RViz panel) can put a goal
+                                         # INSIDE the DEM -> infeasible pinned tail -> L-BFGS -1005 with
+                                         # frozen obstacle cost. xy is kept; only z is lifted (warned).
     optimization/swarm_clearance: 0.5
     optimization/formation_type: 2
 
-    # ---- Dynamics (units/s, units/s^2; 1 unit = 100 m horizontal) ----
+    # ---- Dynamics (units/s, units/s^2; isotropic frame: 1 unit = 100 m) ----
     # Corner radius ~ v^2/a: with 2.0/5.0 turns are tight; lower max_acc for wider arcs.
     optimization/max_vel: 2.0
     optimization/max_acc: 5.0
     manager/max_vel: 2.0
     manager/max_acc: 5.0
+
+    # ---- Cruise dynamics: lateral-g (curvature) limit ----
+    # a_normal = |v x a| / |v| in PHYSICAL m/s^2 must stay under n_lat * g.
+    # Separate from the magnitude feasibility terms: those allow |a| up to
+    # 5 u/s^2 = 500 m/s^2 (~51 g) in ANY direction; this term caps the
+    # component that actually turns the velocity vector. R_min = V^2/(n*g):
+    # at 200 m/s cruise with n_lat=30 -> ~136 m. Violation is normalized by
+    # (n_lat*g)^2 before the cubic (the raw spec form overflows to ~1e18 on
+    # a 51 g corner and destroys the cost balance).
+    optimization/dynamics_enable: true
+    optimization/weight_dynamics: 1000.0
+    optimization/dynamics_unit_xy_m: 100.0  # frame->metres; isotropic since the
+    optimization/dynamics_unit_z_m: 100.0   # 2026-07 z-scale fix (44 was the bug era)
+    optimization/dynamics_n_lat: 30.0       # lateral load-factor ceiling (a_n <= n_lat*g)
+    optimization/dynamics_g: 9.81
+    optimization/dynamics_min_speed_mps: 1.0
 
     # Initial-velocity lead-in horizon (seconds). On an in-flight replan, plant a
     # short path point along start_vel so the min-jerk head piece coasts out in the
@@ -62,7 +134,13 @@
     optimization/lead_in_time: 0.0   # dormant on main: enable after lead-in validation
 
     # ---- Map / SDF ----
-    manager/sdf_voxel_size: 1.0
+    # Anisotropic ESDF/FM2 voxels. xy matches the DEM cell (finer only burns
+    # memory, the data has no more detail); z is ~10 m real so terrain heights
+    # and climbs resolve at platform scale instead of quantizing to one
+    # xy-sized (tens of metres) step — the cause of huge hops over tiny
+    # islets. Legacy v1 .esdf caches mismatch this and are auto-rebuilt.
+    manager/sdf_voxel_size: 0.0   # xy voxel; <=0 = auto (DEM cell size, per world)
+    manager/sdf_voxel_z: 0.1      # z voxel = 10 m real (isotropic frame /100)
     manager/ground_height: -0.01        # <= -0.5 disables
     manager/virtual_ceil_height: -1.0   # <= -0.5 disables
     manager/world: "dokdo"              # fallback; RViz MapSelector overrides

@@ -37,13 +37,18 @@ namespace path_manager
         node_->declare_parameter("manager/fm2_alt_zscale_down", 2.0);
         node_->declare_parameter("manager/astar_bypass_shortcut", false);
         node_->declare_parameter("manager/astar_step_size", 1.0);
+        node_->declare_parameter("manager/dyn_yaw_seed", 42);  // fixed = reproducible obstacle orientations; <0 = randomize each run
         node_->declare_parameter("manager/sdf_voxel_size", 1.0);
+        node_->declare_parameter("manager/sdf_voxel_z", 0.0);
         node_->declare_parameter("manager/ground_height", -0.1);
         node_->declare_parameter("manager/virtual_ceil_height", -0.1);
         node_->declare_parameter("manager/obstacle_clearance", 0.3);
         node_->declare_parameter("manager/dyn_obstacle_margin", 3.0);
         node_->declare_parameter("optimization/obstacle_clearance", 0.7);
         node_->declare_parameter("optimization/weight_altitude", 1000.0);
+        node_->declare_parameter("optimization/alt_cap_headroom", 5.0);
+        node_->declare_parameter("optimization/alt_floor_headroom", 0.5);
+        node_->declare_parameter("manager/min_goal_agl", 1.0);
         node_->declare_parameter("manager/corner_fillet_radius", 0.0);
         // ESDF occupancy overlay (RViz debug aid). step=1.0m re-queries the SDF
         // hundreds of millions of times per (re)load — tens of seconds on the
@@ -66,15 +71,34 @@ namespace path_manager
         node_->get_parameter("manager/astar_bypass_shortcut", astar_bypass_shortcut_);
         node_->get_parameter("manager/astar_step_size", astar_step_size_);
         node_->get_parameter("manager/sdf_voxel_size", sdf_voxel_size_);
+        node_->get_parameter("manager/sdf_voxel_z", sdf_voxel_z_);
+        // sdf_voxel_size <= 0 resolves to the DEM cell size once terrain
+        // arrives (setTerrainData) — finer only burns memory, coarser loses
+        // data, and the right value differs per world.
+        if (sdf_voxel_z_ <= 0.0) sdf_voxel_z_ = 0.1;  // 10 m real (frame /100)
         node_->get_parameter("manager/ground_height", ground_height_);
         node_->get_parameter("manager/virtual_ceil_height", virtual_ceil_height_);
         node_->get_parameter("manager/obstacle_clearance", obstacle_clearance_);
         node_->get_parameter("manager/dyn_obstacle_margin", dyn_obstacle_margin_);
         node_->get_parameter("optimization/obstacle_clearance", opt_obstacle_clearance_);
         node_->get_parameter("optimization/weight_altitude", weight_altitude_);
+        node_->get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_);
+        node_->get_parameter("optimization/alt_floor_headroom", alt_floor_headroom_);
+        node_->get_parameter("manager/min_goal_agl", min_goal_agl_);
         node_->get_parameter("manager/corner_fillet_radius", corner_fillet_radius_);
         node_->get_parameter("manager/esdf_viz_step", esdf_viz_step_);
         node_->get_parameter("manager/esdf_viz_enable", esdf_viz_enable_);
+        // Dynamic-obstacle spawn-orientation RNG seed. FIXED by default so the
+        // SAME mission spawns the SAME oriented obstacles -> reproducible plans.
+        // (The box yaw is NOT "visual only": oriented boxes change the SDF and
+        // hence the FM2 route, so a random seed made identical missions plan
+        // differently each run.) Set < 0 to randomize per run for robustness tests.
+        {
+          int yaw_seed = 42;
+          node_->get_parameter("manager/dyn_yaw_seed", yaw_seed);
+          if (yaw_seed >= 0) yaw_rng_.seed(static_cast<std::mt19937::result_type>(yaw_seed));
+          else               yaw_rng_.seed(std::random_device{}());
+        }
         // Patches must extend at least as far as the dynamic berth, or the
         // distance query reads +inf before the margin is reached.
         if (dyn_obstacle_margin_ > sdf_manager_.influenceRadius())
@@ -301,6 +325,15 @@ namespace path_manager
                 std::min(opt_obstacle_clearance_, obstacle_clearance_));
             poly_traj_opt_->setGroundHeight(ground_height_);
             poly_traj_opt_->setVirtualCeilHeight(virtual_ceil_height_);
+            // 2.5D terrain heightmap: the optimizer queries the DEM elevation
+            // directly (exact z) instead of the coarse voxelised SDF, so terrain
+            // clearance matches the panel/DEM. terrain_data_ outlives the optimizer.
+            poly_traj_opt_->setTerrainHeightmap(
+                [this](double x, double y) -> float {
+                    return terrain_data_.valid
+                             ? terrain_data_.getElevation(x, y)
+                             : -std::numeric_limits<float>::infinity();
+                });
 
             // Pass risk zones to optimizer for trajectory fine-tuning (2nd stage)
             if (!risk_zones_.empty()) {
@@ -344,11 +377,36 @@ namespace path_manager
             return false;
         }
 
+        // Waypoint z is HEIGHT ABOVE TERRAIN (AGL), not absolute: mission
+        // sources cannot know the DEM, so an absolute z routinely ended up
+        // inside a hill (SDF probe < 0 -> infeasible pinned tail -> -1005
+        // with the obstacle cost frozen). z_abs = elevation(x,y) + max(z,
+        // min_goal_agl). Over water / outside the DEM the elevation is 0-ish
+        // by construction (getElevation invalid), so AGL == ASL there and
+        // legacy over-water missions behave identically.
+        std::vector<Eigen::Vector3d> wps = waypoints;
+        if (terrain_data_.valid) {
+            for (auto &wp : wps) {
+                const double agl = std::max(wp.z(), min_goal_agl_);
+                const float elev = terrain_data_.getElevation(wp.x(), wp.y());
+                const double base =
+                    (elev > -1e9f) ? static_cast<double>(elev) : 0.0;
+                const double z_abs = base + agl;
+                if (std::abs(z_abs - wp.z()) > 1e-9) {
+                    log_manager_->infof(
+                        "[GOAL AGL] waypoint (%.1f, %.1f) z=%.2f AGL "
+                        "-> absolute %.2f (terrain %.2f + agl %.2f)",
+                        wp.x(), wp.y(), wp.z(), z_abs, base, agl);
+                }
+                wp.z() = z_abs;
+            }
+        }
+
         // === STEP 1: Build waypoint sequence ===
         // Build segment list: start -> wp1 -> wp2 -> ... -> wpN
         std::vector<Eigen::Vector3d> all_points;
         all_points.push_back(start_pos);
-        for (const auto& wp : waypoints) {
+        for (const auto& wp : wps) {
             all_points.push_back(wp);
         }
 
@@ -447,10 +505,23 @@ namespace path_manager
         // Try loading a precomputed ESDF on the first plan (terrain must exist).
         if (use_cache && !sdf_loaded_from_file_ && !load_terrain_esdf_path_.empty()) {
             if (sdf_manager_.loadFromFile(load_terrain_esdf_path_, sdf_lo, sdf_hi)) {
-                sdf_loaded_from_file_ = true;
-                log_manager_->infof("SDF loaded from %s (skipping voxelization)",
-                                    load_terrain_esdf_path_.c_str());
-                publishTerrainStatus("ESDF loaded: " + load_terrain_esdf_path_);
+                // Resolution guard: a cache built at different voxel sizes
+                // (e.g. a legacy isotropic v1 file) would silently defeat the
+                // anisotropic-z setup — rebuild and overwrite instead.
+                const Eigen::Vector3d v = sdf_manager_.voxelSizes();
+                if (std::abs(v.x() - sdf_voxel_size_) > 1e-6 ||
+                    std::abs(v.z() - sdf_voxel_z_) > 1e-6) {
+                    log_manager_->warnf(
+                        "ESDF cache voxel (%.3f,%.3f,%.3f) != configured (%.3f,%.3f,%.3f)"
+                        " — ignoring cache, rebuilding",
+                        v.x(), v.y(), v.z(), sdf_voxel_size_, sdf_voxel_size_, sdf_voxel_z_);
+                    sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_);
+                } else {
+                    sdf_loaded_from_file_ = true;
+                    log_manager_->infof("SDF loaded from %s (skipping voxelization)",
+                                        load_terrain_esdf_path_.c_str());
+                    publishTerrainStatus("ESDF loaded: " + load_terrain_esdf_path_);
+                }
             } else {
                 log_manager_->warnf("SDF load failed from %s; falling back to build",
                                     load_terrain_esdf_path_.c_str());
@@ -484,6 +555,10 @@ namespace path_manager
                                         save_terrain_esdf_path_.c_str());
                     publishTerrainStatus("ESDF cache ready: " + save_terrain_esdf_path_);
                 } else {
+                    log_manager_->warnf(
+                        "SDF save FAILED to %s (permissions? root-owned legacy "
+                        "file?) — cache kept in memory; NEXT BOOT WILL REBUILD",
+                        save_terrain_esdf_path_.c_str());
                     publishTerrainStatus(
                         "ESDF build done but save failed (cache kept in memory) → " +
                         save_terrain_esdf_path_);
@@ -516,7 +591,7 @@ namespace path_manager
                                                        : sdf_hi.z();
                 spec.center = Eigen::Vector3d(obs.center.x(), obs.center.y(),
                                               0.5 * (z0 + z1));
-                spec.size = Eigen::Vector3d(sx, sy, std::max(z1 - z0, sdf_voxel_size_));
+                spec.size = Eigen::Vector3d(sx, sy, std::max(z1 - z0, sdf_voxel_z_));
                 if (sdf_manager_.addObstacle(spec) >= 0) ++applied;
                 else log_manager_->warnf("static obstacle patch failed at (%.1f,%.1f)",
                                          obs.center.x(), obs.center.y());
@@ -529,7 +604,7 @@ namespace path_manager
         // SDF sanity probe at start/goal.
         {
             float d_start = sdf_manager_.getDistance(start_pos);
-            float d_goal  = sdf_manager_.getDistance(waypoints.back());
+            float d_goal  = sdf_manager_.getDistance(wps.back());
             log_manager_->infof("SDF probe: start=%.3f m, goal=%.3f m (margin=%.2f)",
                                 d_start, d_goal, obstacle_clearance_);
         }
@@ -579,13 +654,13 @@ namespace path_manager
 
         // === STEP 2~3: front-end search + densification ===
         std::vector<Eigen::Vector3d> full_route, clean_path;
-        if (!planFrontEnd(start_pos, waypoints, full_route, clean_path)) {
+        if (!planFrontEnd(start_pos, wps, full_route, clean_path)) {
             return false;
         }
 
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===
         bool opt_ok = optimizeStage(clean_path, full_route,
-                                    start_pos, start_vel, start_acc, waypoints);
+                                    start_pos, start_vel, start_acc, wps);
 
         auto t_total_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] === TOTAL planGlobalTraj: %.1f ms ===",
@@ -617,7 +692,8 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         }
         Eigen::Vector3d map_size = map_upper_bound_ - map_lower_bound_;
         searcher_.setLogManager(log_manager_);
-        searcher_.setSDF(&sdf_manager_, map_lower_bound_, map_size, sdf_voxel_size_);
+        searcher_.setSDF(&sdf_manager_, map_lower_bound_, map_size,
+                         sdf_voxel_size_, sdf_voxel_z_);
         const std::vector<path_planner::search::RiskZoneLite> *astar_tz_ptr =
             astar_risks.empty() ? nullptr : &astar_risks;
         searcher_.setRiskZones(astar_tz_ptr);
@@ -654,6 +730,15 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         searcher_.setSearchIgnoresObstacles(false);
         searcher_.setGroundHeight(ground_height_);
         searcher_.setVirtualCeilHeight(virtual_ceil_height_);
+        // 2.5D terrain heightmap for the front end (FM2 speed map / A* / shortcut):
+        // exact terrain z, so the route no longer cuts through hills the coarse
+        // voxel SDF under-saw. Same source as the optimizer's terrain term.
+        searcher_.setTerrainHeightmap(
+            [this](double x, double y) -> float {
+                return terrain_data_.valid
+                         ? terrain_data_.getElevation(x, y)
+                         : -std::numeric_limits<float>::infinity();
+            });
         searcher_.setRiskAlpha(risk_weight_);
         searcher_.setRiskBarrier(risk_barrier_);
         searcher_.setSmhaW(risk_smha_w_);
@@ -907,6 +992,72 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             search_path_pub_->publish(dots);
         }
 
+        // === STEP 2.5: z-denoise of the shortcut vertices ===
+        // The FM2 grid has only a few dozen z-cells over the whole map, so
+        // the geodesic's z carries quantization noise on the order of a full
+        // cell — comparable to the mission altitude band itself. The long
+        // min-jerk pieces (50-100 s) RING through those jittery pins,
+        // amplifying tens of metres of noise into slow z-waves that bounce
+        // off the clearance floor (the jerk term is T^5 scale-starved at
+        // mission scale and cannot iron them out — see
+        // optimization/weight_smoothness). Smooth z ONLY — xy is real
+        // geometry (obstacle/risk avoidance). Terrain-forced climbs survive
+        // via the elevation clamp; a smoothed vertex that would lose
+        // obstacle clearance keeps its original z. Endpoints stay fixed.
+        if (full_route.size() >= 3) {
+            const size_t n = full_route.size();
+            std::vector<double> zs(n);
+            for (size_t i = 0; i < n; ++i) zs[i] = full_route[i].z();
+            double z_lo0 = zs[0], z_hi0 = zs[0];
+            for (double z : zs) { z_lo0 = std::min(z_lo0, z); z_hi0 = std::max(z_hi0, z); }
+
+            size_t adjusted = 0;
+            const int W = 2;  // +-2 vertex moving average
+            for (size_t i = 1; i + 1 < n; ++i) {
+                double acc = 0.0;
+                int cnt = 0;
+                for (int k = -W; k <= W; ++k) {
+                    const long j = static_cast<long>(i) + k;
+                    if (j < 0 || j >= static_cast<long>(n)) continue;
+                    acc += zs[j];
+                    ++cnt;
+                }
+                double z_new = acc / cnt;
+                if (terrain_data_.valid) {
+                    const float elev = terrain_data_.getElevation(
+                        full_route[i].x(), full_route[i].y());
+                    // Land: hold terrain + full clearance. Water (invalid
+                    // elev): sea level + half clearance is the floor — the
+                    // geodesic extraction can dip BELOW z=0 (observed -0.40,
+                    // its z-clamp is the grid bottom) and an underwater pin
+                    // sets the optimizer fighting the ground plane from the
+                    // start. Half clearance so 10 m-cruise missions are not
+                    // distorted upward.
+                    if (elev > -1e9f) {
+                        z_new = std::max(z_new,
+                                         static_cast<double>(elev) + obstacle_clearance_);
+                    } else {
+                        z_new = std::max(z_new, 0.5 * obstacle_clearance_);
+                    }
+                }
+                const Eigen::Vector3d cand(full_route[i].x(), full_route[i].y(), z_new);
+                if (sdf_manager_.hasData()) {
+                    const float d = sdf_manager_.getDistance(cand);
+                    if (!(std::isfinite(d) && d >= obstacle_clearance_)) continue;  // keep raw z
+                }
+                if (std::abs(z_new - zs[i]) > 1e-9) ++adjusted;
+                full_route[i].z() = z_new;
+            }
+            double z_lo1 = full_route[0].z(), z_hi1 = z_lo1;
+            for (const auto &p : full_route) {
+                z_lo1 = std::min(z_lo1, p.z());
+                z_hi1 = std::max(z_hi1, p.z());
+            }
+            log_manager_->infof(
+                "[Z-DENOISE] shortcut z: %zu/%zu vertices smoothed, range [%.2f, %.2f] -> [%.2f, %.2f]",
+                adjusted, n, z_lo0, z_hi0, z_lo1, z_hi1);
+        }
+
         // === STEP 3: Sparse piece boundaries (reference-style). ===
         // The shortcut vertices ARE the geometry; we only subdivide long
         // segments so the optimizer's per-piece obstacle sampling stays dense
@@ -991,10 +1142,48 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         // profile — same no-re-litigation rule as the shared risk field.
         {
             double path_max_z = std::max(start_pos.z(), waypoints.back().z());
-            for (const auto &p : clean_path) path_max_z = std::max(path_max_z, p.z());
-            const double z_hi = path_max_z + 1.0;
-            poly_traj_opt_->setAltitudeBand(z_hi, weight_altitude_);
-            log_manager_->infof("[ALT] optimizer z-cap z_hi=%.2f (geodesic max z + 1.0)", z_hi);
+            double path_min_z = std::min(start_pos.z(), waypoints.back().z());
+            for (const auto &p : clean_path) {
+                path_max_z = std::max(path_max_z, p.z());
+                path_min_z = std::min(path_min_z, p.z());
+            }
+            // Headroom must leave the quintic a workable vertical corridor
+            // above the obstacle-clearance floor: a +1 slack over a sea-level
+            // route squeezed the trajectory into a ~4 m band, and the
+            // optimizer bought z-compliance with duration (1.8x) until the
+            // line search died (-1005). Default 5 ~ the front-end's own alt
+            // band tolerance (one FM2 coarse cell).
+            const double z_hi = path_max_z + alt_cap_headroom_;
+            // Floor: mirror of the cap, and the missing LOWER half of the
+            // FM2 alt band ("stiff down-side: nothing ever requires diving
+            // below mission altitude"). Without it z is only bounded below
+            // by the 0.5 collision clearance, so min-jerk pieces sag in big
+            // smooth waves and bounce off the water/valley floor. Nothing
+            // terrain-forced ever needs to go BELOW the mission endpoints,
+            // so a global soft floor is always safe.
+            // Floor inherits the GEODESIC MIN, symmetric with the cap: FM2's
+            // own down-side band is soft, so its committed profile can dip
+            // below the mission endpoints (observed 0.53 vs mission 1.0). A
+            // floor pinned to the endpoints then sits ABOVE front-end pins
+            // and fights them together with obstacle/risk — a multi-way
+            // tug-of-war that killed the line search on high-altitude
+            // missions (low-z missions hid it: their floor was < 0).
+            // Keep the soft floor ABOVE the hard ground half-space: for a
+            // low mission (cruise 0.1) path_min - headroom went negative, so
+            // z in [0, cruise] was penalty-free and the first soft thing a
+            // sagging iterate met was the ground plane's unit-gradient CLIFF
+            // at z ~ 0 — line searches die on that kink (-1005) and the
+            // published mid-iterate shows waves "bouncing off" sea level.
+            // A quadratic cushion from half a headroom above the plane
+            // catches sag softly before the cliff.
+            double z_lo = path_min_z - alt_floor_headroom_;
+            if (ground_height_ > -0.5) {
+                z_lo = std::max(z_lo, ground_height_ + 0.5 * alt_floor_headroom_);
+            }
+            poly_traj_opt_->setAltitudeBand(z_lo, z_hi, weight_altitude_);
+            log_manager_->infof(
+                "[ALT] optimizer z-band [%.2f, %.2f] (mission min - %.2f, geodesic max %.2f + %.2f)",
+                z_lo, z_hi, alt_floor_headroom_, path_max_z, alt_cap_headroom_);
         }
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
@@ -1056,6 +1245,11 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
 }
 
 void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg) {
+    if (sdf_voxel_size_ <= 0.0 && msg->info.resolution > 1e-6) {
+        sdf_voxel_size_ = msg->info.resolution;
+        log_manager_->infof("[SDF] xy voxel auto-set to DEM cell: %.3f units",
+                            sdf_voxel_size_);
+    }
     if (!msg || msg->layers.empty()) {
         log_manager_->warnf("Received empty terrain GridMap");
         return;
@@ -1104,12 +1298,26 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
     if (!sdf_loaded_from_file_ && !load_terrain_esdf_path_.empty()) {
         Eigen::Vector3d lo, hi;
         if (computeTerrainBBox(&lo, &hi)) {
-            if (!sdf_manager_.isInitialized()) sdf_manager_.initialize(sdf_voxel_size_);
+            if (!sdf_manager_.isInitialized())
+                sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_);
             if (sdf_manager_.loadFromFile(load_terrain_esdf_path_, lo, hi)) {
-                sdf_loaded_from_file_ = true;
-                log_manager_->infof("SDF eagerly loaded from %s",
-                                    load_terrain_esdf_path_.c_str());
-                flushPendingObstacles();
+                // A cache built at a different resolution (e.g. a legacy v1
+                // isotropic file) silently defeats the anisotropic-z setup —
+                // rebuild instead of planning on stale voxels.
+                const Eigen::Vector3d v = sdf_manager_.voxelSizes();
+                if (std::abs(v.x() - sdf_voxel_size_) > 1e-6 ||
+                    std::abs(v.z() - sdf_voxel_z_) > 1e-6) {
+                    log_manager_->warnf(
+                        "ESDF cache voxel (%.3f,%.3f,%.3f) != configured (%.3f,%.3f,%.3f)"
+                        " — ignoring cache, will rebuild and overwrite",
+                        v.x(), v.y(), v.z(), sdf_voxel_size_, sdf_voxel_size_, sdf_voxel_z_);
+                    sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_);
+                } else {
+                    sdf_loaded_from_file_ = true;
+                    log_manager_->infof("SDF eagerly loaded from %s",
+                                        load_terrain_esdf_path_.c_str());
+                    flushPendingObstacles();
+                }
             }
         }
     }
@@ -1323,6 +1531,7 @@ bool PathManager::buildSDFForBounds(const Eigen::Vector3d &lo,
                                     const Eigen::Vector3d &hi)
 {
     const double res = sdf_voxel_size_;
+    const double res_z = sdf_voxel_z_;
     Eigen::Vector3d ext = hi - lo;
     if ((ext.array() <= 0.0).any()) {
         log_manager_->warnf("buildSDFForBounds: invalid bounds");
@@ -1330,52 +1539,20 @@ bool PathManager::buildSDFForBounds(const Eigen::Vector3d &lo,
     }
     int nx = std::max(8, (int)std::ceil(ext.x() / res));
     int ny = std::max(8, (int)std::ceil(ext.y() / res));
-    int nz = std::max(8, (int)std::ceil(ext.z() / res));
+    int nz = std::max(8, (int)std::ceil(ext.z() / res_z));
 
     std::vector<uint8_t> occ((size_t)nx * ny * nz, 0);
-    auto idx = [&](int xi, int yi, int zi) {
-        return ((size_t)xi * ny + yi) * nz + zi;
-    };
 
-    // Terrain: voxels strictly below the surface are occupied.
-    size_t terrain_occupied_voxels = 0;
-    size_t terrain_valid_queries = 0;
-    size_t terrain_invalid_queries = 0;
-    float terrain_max_elev = -1e30f;
-    float terrain_min_elev = 1e30f;
-    if (terrain_data_.valid) {
-        for (int xi = 0; xi < nx; ++xi) {
-            double wx = lo.x() + (xi + 0.5) * res;
-            for (int yi = 0; yi < ny; ++yi) {
-                double wy = lo.y() + (yi + 0.5) * res;
-                float elev = terrain_data_.getElevation(wx, wy);
-                if (elev <= -1e10) { ++terrain_invalid_queries; continue; }
-                ++terrain_valid_queries;
-                terrain_max_elev = std::max(terrain_max_elev, elev);
-                terrain_min_elev = std::min(terrain_min_elev, elev);
-                int zi_max = std::min(nz, (int)std::ceil((elev - lo.z()) / res));
-                for (int zi = 0; zi < zi_max; ++zi) {
-                    occ[idx(xi, yi, zi)] = 1;
-                    ++terrain_occupied_voxels;
-                }
-            }
-        }
-        log_manager_->infof(
-            "Terrain → SDF: valid_xy=%zu, invalid_xy=%zu, occupied_voxels=%zu, "
-            "elev_range=[%.2f, %.2f]",
-            terrain_valid_queries, terrain_invalid_queries, terrain_occupied_voxels,
-            terrain_min_elev, terrain_max_elev);
-
-        // Probe a few world points on the A* straight-line path (y≈78.5).
-        const std::array<std::pair<double,double>, 5> probes = {{
-            {100.0, 78.5}, {120.0, 78.5}, {141.4, 78.5}, {160.0, 78.5}, {180.0, 78.5}
-        }};
-        for (auto [px, py] : probes) {
-            float e = terrain_data_.getElevation(px, py);
-            log_manager_->infof("  terrain probe (%.1f, %.1f) -> elev=%.3f", px, py, e);
-        }
-    } else {
-        log_manager_->infof("Terrain → SDF: terrain_data_ INVALID (not applied)");
+    // Terrain is NOT voxelised into the SDF any more. It is handled as a 2.5D
+    // heightmap (terrain_data_.getElevation, EXACT z) directly by the front end
+    // (checkOccupancy_esdf) and the optimizer (heightmap terrain term). Baking
+    // the DEM into 3D voxels quantised terrain z to sdf_voxel_z (~10 m) so it
+    // under-saw hills, AND double-counted terrain against the heightmap term
+    // (SDF-terrain + heightmap both firing -> line-search blowup on tall maps).
+    // So the static SDF now holds ONLY geometry obstacles (added as patches
+    // after the build): small, box-only, and terrain-precise everywhere.
+    if (!terrain_data_.valid) {
+        log_manager_->infof("SDF: terrain_data_ INVALID (heightmap terrain unavailable)");
     }
 
     // Geometry obstacles (obstacle_centers_) are NOT voxelised here any more.
@@ -1395,12 +1572,12 @@ bool PathManager::buildSDFForBounds(const Eigen::Vector3d &lo,
     // crosses the plane — no clearance band, no lateral contamination.
 
     if (!sdf_manager_.isInitialized()) {
-        sdf_manager_.initialize(res);
+        sdf_manager_.initialize(res, res_z);
     }
     bool ok = sdf_manager_.buildFromVoxels(occ.data(), nx, ny, nz, lo);
     if (ok) {
-        log_manager_->infof("SDF built: shape=(%d,%d,%d) voxel=%.2fm blocks=%zu",
-            nx, ny, nz, res, sdf_manager_.numAllocatedBlocks());
+        log_manager_->infof("SDF built: shape=(%d,%d,%d) voxel=(%.2f,%.2f,%.2f) blocks=%zu",
+            nx, ny, nz, res, res, res_z, sdf_manager_.numAllocatedBlocks());
     }
     return ok;
 }

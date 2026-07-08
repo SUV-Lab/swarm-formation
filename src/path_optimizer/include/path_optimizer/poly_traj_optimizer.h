@@ -5,6 +5,7 @@
 #include <thread>
 #include <chrono>
 #include <fstream>
+#include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <swarm_graph/swarm_graph.hpp>
 #include "../../common/log_manager.hpp"
@@ -108,6 +109,13 @@ namespace ego_planner
     double wei_feas_;
     double wei_sqrvar_;
     double wei_time_;
+    // Explicit smoothness (jerk-energy) weight. The jerk integral scales as
+    // ~1/T^5, so at mission scale (km routes, 50-100 s pieces) it collapses
+    // 6-7 orders of magnitude below the time cost and stops ironing out
+    // z-ringing through noisy front-end pins. Keep the weighted smoothness
+    // cost well below time_cost/5 or it inflates durations (jerk decreases
+    // with T). 1.0 = legacy implicit weight.
+    double wei_smooth_{1.0};
     double wei_formation_;
     double wei_formation_base_;  // Base formation weight (from config)
     double wei_risk_;          // Risk zone cost weight for trajectory optimization
@@ -141,6 +149,14 @@ namespace ego_planner
     const path_planner::sdf::IDistanceField *sdf_manager_{nullptr};
     double obstacle_clearance_{0.5};  // safety margin used by SDF penalty
 
+    // 2.5D terrain heightmap (frame units; -inf over water/invalid). Terrain is a
+    // height FUNCTION, so querying it directly gives an EXACT clearance
+    // (z - h(x,y)) instead of the 3D SDF's 10 m z-quantised approximation — the
+    // SDF under-sees terrain, so trajectories that read "clear" to it penetrate
+    // the finer DEM the clearance panel shows. When set, this term is the
+    // authoritative terrain-collision check.
+    std::function<float(double, double)> terrain_height_;
+
     // Hard half-space constraints applied outside the SDF so the clearance
     // band does not contaminate them. Sentinel: ≤ -0.5 disables the plane.
     double ground_height_{-1.0};
@@ -152,11 +168,29 @@ namespace ego_planner
     // Per-zone: 1 = contains the plan start/goal, barrier OFF (moat only).
     // Same must-enter exemption rule as the front-end's prepareBarrier.
     std::vector<char> zone_barrier_exempt_;
-    // Altitude band cap: cubic penalty on z above alt_zhi_ (mission altitude
-    // + allowance). Keeps the sparse-piece quintic from ballooning hundreds
-    // of metres above ridge crossings; 0 weight disables.
+    // Altitude band: quadratic penalty on z above alt_zhi_ (geodesic max +
+    // headroom — keeps the sparse-piece quintic from ballooning above the
+    // front-end's committed profile) and below alt_zlo_ (mission min −
+    // slack — stops min-jerk sags bouncing off the water/terrain clearance
+    // floor; the lower half of the FM2 alt band). 0 weight disables both;
+    // a floor <= 0 simply never binds.
     double wei_alt_{0.0};
     double alt_zhi_{-1.0};
+    double alt_zlo_{-1e9};
+
+    // Cruise dynamics (lateral/normal-acceleration limit). Evaluated in
+    // PHYSICAL metres: v_m = S*v with S = diag(unit_xy, unit_xy, unit_z);
+    // since the 2026-07 frame fix the frame is isotropic (1 unit = 100 m on
+    // every axis), so both units default to 100. The limit is n_lat * g as the
+    // normal-acceleration ceiling. (The old "reserved" speed_mps / n_lon params
+    // were never used by any term and were removed.)
+    bool dynamics_enable_{true};
+    double wei_dynamics_{0.0};
+    double dyn_unit_xy_m_{100.0};
+    double dyn_unit_z_m_{100.0};
+    double dyn_n_lat_{30.0};
+    double dyn_g_{9.81};
+    double dyn_min_speed_mps_{1.0};
 
   public:
     PolyTrajOptimizer() {}
@@ -169,6 +203,7 @@ namespace ego_planner
     void setObstacleClearance(double c) { obstacle_clearance_ = c; }
     void setGroundHeight(double h)      { ground_height_ = h; }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
+    void setTerrainHeightmap(std::function<float(double, double)> f) { terrain_height_ = std::move(f); }
     void setControlPoints(const Eigen::MatrixXd &points);
     void setSwarmTrajs(SwarmTrajData *swarm_trajs_ptr);
     void setDroneId(const int drone_id);
@@ -187,7 +222,18 @@ namespace ego_planner
     // Call once per plan, after setRiskZones, before optimizing.
     void prepareRiskBarrier(const Eigen::Vector3d &start, const Eigen::Vector3d &goal);
 
-    void setAltitudeBand(double z_hi, double weight) {
+    // Extend the exemption to zones the FRONT-END ROUTE already crosses: the
+    // front-end's finite barrier permits crossing when every alternative is
+    // worse (e.g. randomly-oriented ships walling the good corridor), and a
+    // back-end barrier on that zone would fight the committed crossing —
+    // the observed failure was a 1M-scale risk/obstacle tug-of-war ending in
+    // a -1005 line-search death with an unfinished iterate published. Point
+    // sampling of the densified path is intentional: deep crossings exempt,
+    // shallow corner-clips stay barred (the ramp SHOULD push those out).
+    void markFrontEndCrossings(const std::vector<Eigen::Vector3d> &path);
+
+    void setAltitudeBand(double z_lo, double z_hi, double weight) {
+        alt_zlo_ = z_lo;
         alt_zhi_ = z_hi;
         wei_alt_ = std::max(0.0, weight);
     }
@@ -278,6 +324,12 @@ namespace ego_planner
     bool feasibilityGradCostA(const Eigen::Vector3d &a,
                               Eigen::Vector3d &grada,
                               double &costa);
+
+    bool cruiseDynamicsGradCostVA(const Eigen::Vector3d &v,
+                                  const Eigen::Vector3d &a,
+                                  Eigen::Vector3d &gradv,
+                                  Eigen::Vector3d &grada,
+                                  double &cost);
 
     void distanceSqrVarianceWithGradCost2p(const Eigen::MatrixXd &ps,
                                            Eigen::MatrixXd &gdp,

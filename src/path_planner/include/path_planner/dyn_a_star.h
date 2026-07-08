@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <cmath>
+#include <functional>
 #include <rclcpp/rclcpp.hpp>
 
 #include <Eigen/Eigen>
@@ -80,6 +81,10 @@ private:
     // SDF query backend. We do not need a separate occupancy map: a voxel is
     // considered blocked when sdf_distance < obstacle_margin_.
     const path_planner::sdf::IDistanceField *sdf_ = nullptr;
+    // 2.5D terrain heightmap (frame units; -inf over water/invalid). Authoritative
+    // terrain-collision source for the front end (see checkOccupancy_esdf) — the
+    // SDF's voxel terrain is coarse/z-quantised.
+    std::function<float(double, double)> terrain_height_;
     const std::vector<RiskZoneLite> *risk_zones_ = nullptr;
     double obstacle_margin_ = 0.5;  // meters
     double dyn_obstacle_margin_ = 0.0;  // dynamic-obstacle berth; 0 = off
@@ -192,6 +197,7 @@ private:
     // verify front-end behavior independent of the shortcut filter.
     bool bypass_shortcut_ = false;
     double map_resolution_ = 1.0;
+    double map_resolution_z_ = 1.0;  // vertical grid spacing (anisotropic)
     Eigen::Vector3d map_origin_ = Eigen::Vector3d::Zero();
     Eigen::Vector3d map_size_ = Eigen::Vector3d::Zero();
 
@@ -211,6 +217,17 @@ private:
 
     // Collision / risk queries backed by SDF.
     inline bool checkOccupancy_esdf(const Eigen::Vector3d &pos) {
+        // 2.5D TERRAIN via the DEM heightmap (exact z). The SDF's voxelised
+        // terrain is z-quantised (~10 m) and under-sees it, so the FM2 speed
+        // map / A* / shortcut (all route through here) cut through hills the
+        // heightmap catches. Authoritative terrain check; blocked within
+        // obstacle_margin_ of the surface. -inf = water/invalid -> skip (SDF
+        // below then handles box obstacles).
+        if (terrain_height_) {
+            const float h = terrain_height_(pos.x(), pos.y());
+            if (std::isfinite(h) &&
+                pos.z() - static_cast<double>(h) < obstacle_margin_) return true;
+        }
         if (!sdf_ || !sdf_->hasData()) return false;
         float d = sdf_->getDistance(pos);
         if (!std::isfinite(d)) return true;  // outside map = blocked
@@ -356,14 +373,19 @@ public:
 
     void setLogManager(swarm_formation::LogManager::Ptr log_manager) { log_manager_ = log_manager; }
 
+    // resolution_z <= 0 keeps the legacy isotropic behaviour (z = xy). A
+    // finer z lets the FM2 grid resolve altitude at real-terrain scale
+    // instead of quantizing every climb to one xy-sized cell.
     void setSDF(const path_planner::sdf::IDistanceField *sdf,
                 const Eigen::Vector3d &origin,
                 const Eigen::Vector3d &size,
-                double resolution) {
+                double resolution,
+                double resolution_z = -1.0) {
         sdf_ = sdf;
         map_origin_ = origin;
         map_size_ = size;
         map_resolution_ = resolution;
+        map_resolution_z_ = (resolution_z > 0.0) ? resolution_z : resolution;
     }
     void setRiskZones(const std::vector<RiskZoneLite> *zones) { risk_zones_ = zones; }
     void setObstacleMargin(double m) { obstacle_margin_ = m; }
@@ -371,6 +393,7 @@ public:
     void setDynObstacleMargin(double m) { dyn_obstacle_margin_ = m; }
     void setSearchIgnoresObstacles(bool b) { search_ignores_obstacles_ = b; }
     void setGroundHeight(double h)      { ground_height_ = h; }
+    void setTerrainHeightmap(std::function<float(double, double)> f) { terrain_height_ = std::move(f); }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
     void setRiskAlpha(double a) { risk_alpha_ = a; }
     void setRiskBarrier(double k) { risk_barrier_ = (k > 0.0 ? k : 0.0); }

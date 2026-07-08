@@ -39,7 +39,7 @@ static std::vector<float> cpuFMM(const std::vector<float>& F,
     float mx = std::min(i > 0 ? fz(c - 1) : kEikInf, i < nx - 1 ? fz(c + 1) : kEikInf);
     float my = std::min(j > 0 ? fz(c - nx) : kEikInf, j < ny - 1 ? fz(c + nx) : kEikInf);
     float mz = std::min(k > 0 ? fz(c - pxy) : kEikInf, k < nz - 1 ? fz(c + pxy) : kEikInf);
-    return eikSolve(mx, my, mz, cres / std::max(Fl[c], 1e-6f));
+    return eikSolve(mx, my, mz, cres, cres, cres, 1.0f / std::max(Fl[c], 1e-6f));
   };
 
   while (!pq.empty()) {
@@ -71,7 +71,7 @@ int main() {
   // ---- case 1: uniform F=1, GPU vs CPU FMM ----
   std::vector<float> F(N, 1.0f), Tg(N, 0.0f);
   auto t0 = std::chrono::high_resolution_clock::now();
-  bool ok = fm2EikonalGPU(F.data(), nx, ny, nz, cres, 0, 0, 0, Tg.data());
+  bool ok = fm2EikonalGPU(F.data(), nx, ny, nz, cres, cres, cres, 0, 0, 0, Tg.data());
   auto t1 = std::chrono::high_resolution_clock::now();
   if (!ok) { printf("GPU FIM failed (uniform)\n"); return 1; }
   std::vector<float> Tc = cpuFMM(F, nx, ny, nz, cres, gflat);
@@ -91,7 +91,7 @@ int main() {
   for (int k = 0; k < nz; ++k)
     for (int j = 0; j < 100; ++j) F[(long)64 + nx * (j + (long)ny * k)] = -1.0f;
   std::fill(Tg.begin(), Tg.end(), 0.0f);
-  ok = fm2EikonalGPU(F.data(), nx, ny, nz, cres, 0, 0, 0, Tg.data());
+  ok = fm2EikonalGPU(F.data(), nx, ny, nz, cres, cres, cres, 0, 0, 0, Tg.data());
   if (!ok) { printf("GPU FIM failed (wall)\n"); return 1; }
   Tc = cpuFMM(F, nx, ny, nz, cres, gflat);
   double maxabs2 = 0.0;
@@ -111,7 +111,7 @@ int main() {
         if (i >= 40 && i < 110 && j >= 80 && j < 100) F[idx(i, j, k)] = 1e-3f;    // near-blocked
       }
   std::fill(Tg.begin(), Tg.end(), 0.0f);
-  ok = fm2EikonalGPU(F.data(), nx, ny, nz, cres, 0, 0, 0, Tg.data());
+  ok = fm2EikonalGPU(F.data(), nx, ny, nz, cres, cres, cres, 0, 0, 0, Tg.data());
   if (!ok) { printf("GPU FIM failed (varyF)\n"); return 1; }
   Tc = cpuFMM(F, nx, ny, nz, cres, gflat);
   double maxabsV = 0.0; long cmp = 0;
@@ -129,7 +129,7 @@ int main() {
     const long LN = (long)LX * LY * LZ;
     std::vector<float> Fl(LN, 1.0f), Tl(LN);
     auto g0 = std::chrono::high_resolution_clock::now();
-    bool lok = fm2EikonalGPU(Fl.data(), LX, LY, LZ, 1.0f, 0, 0, 0, Tl.data());
+    bool lok = fm2EikonalGPU(Fl.data(), LX, LY, LZ, 1.0f, 1.0f, 1.0f, 0, 0, 0, Tl.data());
     auto g1 = std::chrono::high_resolution_clock::now();
     long lreached = 0; bool lnan = false;
     for (long c = 0; c < LN; ++c) { if (std::isnan(Tl[c])) lnan = true; if (Tl[c] < 1e17f) ++lreached; }
