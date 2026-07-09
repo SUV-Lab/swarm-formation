@@ -314,9 +314,25 @@ namespace ego_planner
         const Eigen::Vector3d pos = traj.getPos(std::min(tt, T_end - 1e-6));
         float hh, gx, gy;
         const bool land = terrain_hgrad_(pos.x(), pos.y(), &hh, &gx, &gy);
-        LOG_INFO("[TERRAIN-PROFILE] %3d%% t=%7.1f xy=(%7.1f,%7.1f) z=%6.3f terrain=%s clr=%s",
+        // Lateral column: max terrain within +-4 units (400 m) of the sample —
+        // tests the "underfoot is water but the NEIGHBOURING terrain forces
+        // the climb" hypothesis (bilinear coastal blend spreads island height
+        // ~1 DEM cell sideways; the FM2 coarse grid blocks whole 229 m cells
+        // by their centre). If climbs coincide with rows where terrain=water
+        // but near>0, the lateral halo is confirmed as the driver.
+        float hnear = std::numeric_limits<float>::quiet_NaN();
+        for (int dx = -4; dx <= 4; ++dx) {
+          for (int dy = -4; dy <= 4; ++dy) {
+            float hn, gnx, gny;
+            if (terrain_hgrad_(pos.x() + dx, pos.y() + dy, &hn, &gnx, &gny)) {
+              if (std::isnan(hnear) || hn > hnear) hnear = hn;
+            }
+          }
+        }
+        LOG_INFO("[TERRAIN-PROFILE] %3d%% t=%7.1f xy=(%7.1f,%7.1f) z=%6.3f terrain=%s near4=%s clr=%s",
                  pct, tt, pos.x(), pos.y(), pos.z(),
                  land ? std::to_string(hh).substr(0, 6).c_str() : "water",
+                 std::isnan(hnear) ? "water" : std::to_string(hnear).substr(0, 6).c_str(),
                  land ? std::to_string(pos.z() - hh).substr(0, 6).c_str() : "-");
       }
     }
