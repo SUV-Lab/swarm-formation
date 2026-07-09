@@ -69,8 +69,21 @@ namespace ego_planner
       time_vec(i) = std::max(0.05, seg_len / des_vel);
     }
 
+    // Arrival contract: full cruise speed at the goal (a separate control
+    // planner takes over there) — but LEVEL. Pinning the tail's velocity to
+    // the last chord's 3D direction gave it a DESCENT component whenever the
+    // goal sits below a just-cleared spike, so the quintic had to thread an
+    // S-curve at full speed and rang through the final kilometres. The
+    // horizontal projection keeps the speed contract, hands the next planner
+    // a level entry state, and lets the tail flare out of the final descent.
     Eigen::Vector3d approach_dir =
-        (clean_path.back() - clean_path[clean_path.size() - 2]).normalized();
+        clean_path.back() - clean_path[clean_path.size() - 2];
+    approach_dir.z() = 0.0;
+    if (approach_dir.norm() < 1e-6) {
+        // Degenerate (near-vertical final chord): keep the 3D direction.
+        approach_dir = clean_path.back() - clean_path[clean_path.size() - 2];
+    }
+    approach_dir.normalize();
     Eigen::Vector3d traj_end_vel = approach_dir * max_vel;
     Eigen::Vector3d traj_end_acc = Eigen::Vector3d::Zero();
 

@@ -9,9 +9,12 @@
     manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
     manager/risk_smha_w: 2.0            # SMHA* suboptimality bound (astar front-end only)
-    manager/dyn_yaw_seed: 0             # dynamic-obstacle spawn-orientation RNG seed. FIXED int =
-                                        # reproducible obstacle layout (same mission -> same plan);
-                                        # <0 = randomize each run. Sweep 0,1,2,... to find a hard config.
+    manager/dyn_yaw_seed: -1                    # dynamic-obstacle (ship) spawn-orientation RNG seed.
+                                        # <0 = RANDOM each run (operational default: varied headings).
+                                        # Any fixed int = reproducible layout — the debugging tool that
+                                        # cracked the "same mission, different result" hunt: if a run
+                                        # ever misbehaves, note the yaws from the 'Dynamic box added'
+                                        # log lines, pin a seed here, and the failure replays exactly.
 
     # Altitude band: wave slowed outside [min,max](start_z,goal_z); 0 = off.
     manager/fm2_alt_penalty: 2.0

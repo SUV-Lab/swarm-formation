@@ -826,6 +826,57 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         }
     }
 
+    // Corner-cut guard: the MINCO back-end smooths ACROSS kept corners,
+    // flying near the midpoint->midpoint "inner chord" of adjacent chords
+    // rather than the polyline itself. Chords are occupancy-checked above,
+    // but the corner region between them is not — a sub-piece islet the
+    // polyline detours around can sit exactly there. Observed: FM2 rounded a
+    // 96 m spike (geodesic max z 88 m), the shortcut collapsed that detour to
+    // a single corner between km-long chords, and the smoothed trajectory
+    // crossed the spike crest at ~0 clearance, ringing the whole goal
+    // approach. If an inner chord crosses occupied space, re-insert the
+    // original-path vertex at the middle of the longer adjacent span:
+    // shorter chords hug the detour, and locally shorter chords also mean
+    // locally shorter pieces (smaller corner-cut depth) after subdivision.
+    {
+        const size_t kept_before_guard = kept.size();
+        auto innerChordBlocked = [&](size_t a, size_t b, size_t c) -> bool {
+            const Vector3d m0 = 0.5 * (path[a] + path[b]);
+            const Vector3d m1 = 0.5 * (path[b] + path[c]);
+            const double len = (m1 - m0).norm();
+            const int n = std::max(1, (int)std::ceil(len / 0.5));
+            for (int s = 0; s <= n; ++s) {
+                if (checkOccupancy_esdf(m0 + (double(s) / n) * (m1 - m0)))
+                    return true;
+            }
+            return false;
+        };
+        bool refined = true;
+        int rounds = 0;
+        while (refined && rounds++ < 8) {
+            refined = false;
+            for (size_t n = 0; n + 2 < kept.size(); ++n) {
+                if (!innerChordBlocked(kept[n], kept[n + 1], kept[n + 2]))
+                    continue;
+                const size_t a = kept[n], b = kept[n + 1], c = kept[n + 2];
+                const bool can_l = (b > a + 1), can_r = (c > b + 1);
+                if (!can_l && !can_r) continue;  // already maximally dense here
+                if (can_r && (!can_l || (c - b) >= (b - a))) {
+                    kept.insert(kept.begin() + n + 2, b + (c - b) / 2);
+                } else {
+                    kept.insert(kept.begin() + n + 1, a + (b - a) / 2);
+                }
+                refined = true;
+            }
+        }
+        if (log_manager_ && kept.size() != kept_before_guard) {
+            log_manager_->infof(
+                "[A* SHORTCUT] corner-cut guard re-inserted %zu vertex(es) "
+                "(inner chord crossed occupied space)",
+                kept.size() - kept_before_guard);
+        }
+    }
+
     vector<Vector3d> simple_path;
     simple_path.reserve(kept.size());
     for (size_t n : kept) simple_path.push_back(path[n]);

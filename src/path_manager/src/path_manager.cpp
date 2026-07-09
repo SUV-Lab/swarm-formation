@@ -96,8 +96,20 @@ namespace path_manager
         {
           int yaw_seed = 42;
           node_->get_parameter("manager/dyn_yaw_seed", yaw_seed);
-          if (yaw_seed >= 0) yaw_rng_.seed(static_cast<std::mt19937::result_type>(yaw_seed));
-          else               yaw_rng_.seed(std::random_device{}());
+          std::mt19937::result_type applied;
+          if (yaw_seed >= 0) {
+            applied = static_cast<std::mt19937::result_type>(yaw_seed);
+            log_manager_->infof("dyn_yaw_seed: FIXED %u", applied);
+          } else {
+            // Random mode still logs the drawn seed so ANY run is
+            // reproducible after the fact: pin manager/dyn_yaw_seed to the
+            // logged value and the obstacle layout replays exactly.
+            applied = std::random_device{}();
+            log_manager_->infof(
+                "dyn_yaw_seed: RANDOM -> %u (pin manager/dyn_yaw_seed to this "
+                "to reproduce)", applied);
+          }
+          yaw_rng_.seed(applied);
         }
         // Patches must extend at least as far as the dynamic berth, or the
         // distance query reads +inf before the margin is reached.
