@@ -1461,6 +1461,30 @@ void PathManager::publishDynamicObstacles()
         m.scale.y = foot_y / mi.native_size.y();
         m.scale.z = height / mi.native_size.z();
         arr.markers.push_back(m);
+
+        // Companion GEOMETRY marker: the exact collision primitive (center /
+        // size / yaw), fully transparent so RViz shows only the mesh above.
+        // Panels cannot recover the collision box from a MESH_RESOURCE marker
+        // (its scale is relative to unknown native mesh dims), and without
+        // this the altitude profile cannot explain box-avoidance climbs —
+        // "why is it climbing over open water" turned out to be invisible
+        // ships more than once.
+        visualization_msgs::msg::Marker g;
+        g.header = m.header;
+        g.ns = "dynamic_obstacles_geom";
+        g.id = dyn_patch_ids_[i];
+        g.type = visualization_msgs::msg::Marker::CUBE;
+        g.action = visualization_msgs::msg::Marker::ADD;
+        g.pose.position.x = c.x();
+        g.pose.position.y = c.y();
+        g.pose.position.z = c.z();
+        g.pose.orientation = m.pose.orientation;
+        g.scale.x = dyn_patch_is_box_[i] ? dyn_patch_sizes_[i].x() : foot_x;
+        g.scale.y = dyn_patch_is_box_[i] ? dyn_patch_sizes_[i].y() : foot_y;
+        g.scale.z = dyn_patch_is_box_[i] ? dyn_patch_sizes_[i].z()
+                                         : dyn_patch_sizes_[i].x();
+        g.color.a = 0.0f;  // invisible in RViz; geometry carrier only
+        arr.markers.push_back(g);
     }
     dyn_obstacle_pub_->publish(arr);
 }
