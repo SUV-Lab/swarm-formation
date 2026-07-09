@@ -880,6 +880,28 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     vector<Vector3d> simple_path;
     simple_path.reserve(kept.size());
     for (size_t n : kept) simple_path.push_back(path[n]);
+
+    // z-profile logger: 21 rows (5% steps) of z + terrain-under, so the raw
+    // geodesic and the shortcut output can be compared directly from the log
+    // ("does FM2 dip into the band over water, and does the shortcut cut the
+    // dip away?").
+    auto logZProfileS = [&](const char *tag, const std::vector<Eigen::Vector3d> &pp) {
+        if (!log_manager_ || pp.size() < 2) return;
+        for (int pct = 0; pct <= 100; pct += 5) {
+            const size_t idx = static_cast<size_t>(pct) * (pp.size() - 1) / 100;
+            const Eigen::Vector3d &q = pp[idx];
+            float hh = std::numeric_limits<float>::quiet_NaN();
+            if (terrain_height_) hh = terrain_height_(q.x(), q.y());
+            if (std::isfinite(hh)) {
+                log_manager_->infof("[%s] %3d%% xy=(%7.1f,%7.1f) z=%6.3f terrain=%.3f",
+                                    tag, pct, q.x(), q.y(), q.z(), hh);
+            } else {
+                log_manager_->infof("[%s] %3d%% xy=(%7.1f,%7.1f) z=%6.3f terrain=water",
+                                    tag, pct, q.x(), q.y(), q.z());
+            }
+        }
+    };
+    logZProfileS("SIMPLE-PROFILE", simple_path);
     if (log_manager_) {
         double max_risk_simple = 0.0;
         for (size_t k = 1; k < simple_path.size(); ++k) {
@@ -1411,6 +1433,27 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
     };
 
     int n_recover = 0;   // steps that fell back to monotone discrete descent
+    int n_grad_fail = 0, n_mono_rej = 0;  // why smooth steps failed (diagnosis)
+    // Per-axis-aware step length: -grad(T) carries a z-component comparable to
+    // xy wherever flying above the mission band (T prices the eventual
+    // descent), so a FIXED step of 0.6*cres (~1.4 units) moved ~1 unit in z —
+    // 10x the z-cell — punching through the whole free band into the blocked
+    // sea in ONE step. The monotone guard then rejected it, every time: 96%
+    // of steps ran the discrete recovery, whose 6-neighbour argmin can never
+    // prefer a 0.1-unit z gain over a 2.3-unit xy gain — so altitude only
+    // ratcheted UP at walls and never came back down over open water. Capping
+    // |dz| per step at 0.6*cres_z lets the smooth follower actually integrate
+    // the small persistent descent component; no artificial down-force, the
+    // field itself decides. (Twin of the discreteStep anisotropy fix.)
+    auto anisoStep = [&](const Eigen::Vector3d &from,
+                         const Eigen::Vector3d &dir_unit,
+                         double max_len) {
+        double slen = max_len;
+        if (std::abs(dir_unit.z()) > 1e-12) {
+            slen = std::min(slen, 0.6 * cres_z / std::abs(dir_unit.z()));
+        }
+        return clampZ(from - slen * dir_unit);
+    };
     for (int it = 0; it < max_iter; ++it) {
         if ((p - goal_world).norm() < goal_tol) break;
         const double tp = fm2SampleT(p);
@@ -1419,15 +1462,18 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         if (gradT(p, g1)) {
             // RK2 (midpoint) smooth descent on the trilinear field.
             Eigen::Vector3d g2;
-            const Eigen::Vector3d pmid = p - 0.5 * step * g1.normalized();
+            const Eigen::Vector3d pmid = anisoStep(p, g1.normalized(), 0.5 * step);
             const Eigen::Vector3d g = gradT(pmid, g2) ? g2 : g1;
-            p_next = clampZ(p - step * g.normalized());
+            p_next = anisoStep(p, g.normalized(), step);
             // Monotonicity guard: T strictly decreases along a geodesic. A step
             // that does NOT lower T overshot a narrow valley — the interp-gradient
             // zigzag that otherwise burns the whole iteration budget and then
             // forces a straight line-to-goal THROUGH zones at the end. Reject it.
             const double tn = fm2SampleT(p_next);
             ok = std::isfinite(tn) && tn < tp - 1e-9;
+            if (!ok) ++n_mono_rej;
+        } else {
+            ++n_grad_fail;
         }
         if (!ok) {
             bool dok;
@@ -1444,8 +1490,9 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         p = p_next;
         path.push_back(p);
     }
-    fprintf(stderr, "[GEODESIC] points=%zu recover_steps=%d reached_goal=%s\n",
-            path.size(), n_recover,
+    fprintf(stderr,
+            "[GEODESIC] points=%zu recover_steps=%d (grad_fail=%d mono_rej=%d) reached_goal=%s\n",
+            path.size(), n_recover, n_grad_fail, n_mono_rej,
             ((p - goal_world).norm() < goal_tol ? "yes" : "NO(timeout!)"));
     path.push_back(goal_world);
 
@@ -1473,6 +1520,28 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
             path[n].z() = acc / double(hi - lo + 1);
         }
     }
+
+    // z-profile logger: 21 rows (5% steps) of z + terrain-under, so the raw
+    // geodesic and the shortcut output can be compared directly from the log
+    // ("does FM2 dip into the band over water, and does the shortcut cut the
+    // dip away?").
+    auto logZProfile = [&](const char *tag, const std::vector<Eigen::Vector3d> &pp) {
+        if (!log_manager_ || pp.size() < 2) return;
+        for (int pct = 0; pct <= 100; pct += 5) {
+            const size_t idx = static_cast<size_t>(pct) * (pp.size() - 1) / 100;
+            const Eigen::Vector3d &q = pp[idx];
+            float hh = std::numeric_limits<float>::quiet_NaN();
+            if (terrain_height_) hh = terrain_height_(q.x(), q.y());
+            if (std::isfinite(hh)) {
+                log_manager_->infof("[%s] %3d%% xy=(%7.1f,%7.1f) z=%6.3f terrain=%.3f",
+                                    tag, pct, q.x(), q.y(), q.z(), hh);
+            } else {
+                log_manager_->infof("[%s] %3d%% xy=(%7.1f,%7.1f) z=%6.3f terrain=water",
+                                    tag, pct, q.x(), q.y(), q.z());
+            }
+        }
+    };
+    logZProfile("GEO-PROFILE", path);
     return path;
 }
 

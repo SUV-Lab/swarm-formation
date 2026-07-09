@@ -305,6 +305,20 @@ namespace ego_planner
                    worst, wt, wp.x(), wp.y(), wp.z());
         }
       }
+      // Terrain profile under the path, 5% steps: answers "what is it
+      // climbing over?" directly from the log — the altitude panel cannot
+      // show sub-pixel islets or the front-end berth, so climbs over
+      // "open water" kept looking unmotivated.
+      for (int pct = 0; pct <= 100; pct += 5) {
+        const double tt = T_end * pct / 100.0;
+        const Eigen::Vector3d pos = traj.getPos(std::min(tt, T_end - 1e-6));
+        float hh, gx, gy;
+        const bool land = terrain_hgrad_(pos.x(), pos.y(), &hh, &gx, &gy);
+        LOG_INFO("[TERRAIN-PROFILE] %3d%% t=%7.1f xy=(%7.1f,%7.1f) z=%6.3f terrain=%s clr=%s",
+                 pct, tt, pos.x(), pos.y(), pos.z(),
+                 land ? std::to_string(hh).substr(0, 6).c_str() : "water",
+                 land ? std::to_string(pos.z() - hh).substr(0, 6).c_str() : "-");
+      }
     }
 
     if (sdf_manager_ && sdf_manager_->hasData())
