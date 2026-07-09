@@ -21,6 +21,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <fstream>
@@ -396,6 +397,16 @@ namespace path_manager
     // Only drone_0's PathManager owns this publisher to avoid duplicate writes.
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr terrain_status_pub_;
     void publishTerrainStatus(const std::string &msg);
+    // The hard floor the FRONT-END actually saw along the final trajectory:
+    // per arc-length sample, the lowest free altitude of the FM2 speed-field
+    // column containing it (read from fm2_F_, so terrain+berth, box
+    // obstacles+margins and the ground plane are all captured exactly; NaN
+    // where nothing blocks). The altitude panel draws this as the "planner
+    // floor" ridgeline — terrain-only or disk-max guesses kept leaving climbs
+    // unexplained (invisible ships, coarse-column quantisation).
+    // Flat [s0,z0, s1,z1, ...] frame units.
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr terrain_influence_pub_;
+    void publishTerrainInfluence(const poly_traj::Trajectory &traj);
     // Tracks live patch ids so clearObstacles + visualization stay in sync.
     std::vector<int> dyn_patch_ids_;
     std::vector<Eigen::Vector3d> dyn_patch_centers_;
@@ -416,12 +427,23 @@ namespace path_manager
     void flushPendingObstacles();
     // Visual mesh catalog: model name -> mesh resource + rendered native size [m]
     // (convention: mesh base at z=0, XY centered). Collision is independent (SDF).
-    struct ObstacleMeshInfo { std::string resource; Eigen::Vector3d native_size; };
+    struct ObstacleMeshInfo {
+        std::string resource;
+        Eigen::Vector3d native_size;
+        double viz_scale{1.0};  // per-model mesh magnification (visual only)
+    };
     std::map<std::string, ObstacleMeshInfo> mesh_catalog_;
     const ObstacleMeshInfo& meshFor(const std::string& model) const;
     // /viz/dynamic_obstacles rendering. obstacle_mesh_resource_ = default ("building").
     std::string obstacle_mesh_resource_;
     double obstacle_mesh_height_{60.0};   // fixed building height [m] (spheres only)
+    double obstacle_viz_scale_{1.0};      // mesh-only magnification (see decl site)
+    bool obstacle_ground_snap_{true};     // base obstacles on terrain/sea surface
+    double floor_swath_halfwidth_{5.0};   // FE-floor swath radius, frame units
+    // Grounded center for a dynamic obstacle: base at max(terrain, sea level)
+    // under (x, y), center half_height above it. Falls back to the given
+    // center when snapping is disabled.
+    Eigen::Vector3d groundedCenter(const Eigen::Vector3d& center, double half_height) const;
     void publishDynamicObstacles();
 
     std::shared_ptr<swarm_formation::LogManager> log_manager_;

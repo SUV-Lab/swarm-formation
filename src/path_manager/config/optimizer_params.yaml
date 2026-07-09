@@ -30,6 +30,16 @@
                                         # Was 1.0 back when z-units were 43.7 m: that demanded ~44 m of
                                         # vertical berth, so metre-scale islets forced 50+ m hops.
     manager/dyn_obstacle_margin: 10.0   # 1 km berth around RUNTIME obstacles (ships); <= clearance disables
+    obstacle_viz_scale: 100.0           # RViz MESH magnification ONLY (SDF collision, geometry companion
+                                        # marker and altitude-panel overlay stay exact). Since the scenario
+                                        # unit fix ships render true-size — 160 m is sub-pixel at peninsula
+                                        # zoom, which read as "ships disappeared". 1.0 = true size.
+    obstacle_viz_scale_ship: 130.0      # per-model overrides; <= 0 (or absent) inherits the global above
+    obstacle_viz_scale_car: 100.0
+    obstacle_viz_scale_building: 80.0
+    manager/floor_swath_halfwidth: 10.0  # altitude-panel "Swath" channel: max FE floor within this lateral
+                                        # radius (units; 5 = 500 m). Shows what the route DODGED — a clean
+                                        # lateral dodge leaves its cause beside the path, invisible underfoot.
     optimization/obstacle_clearance: 0.30 # optimizer penalty onset (30 m); MUST be < manager/obstacle_clearance
                                           # (equal -> path sits on the penalty edge and can't be smoothed).
                                           # SIZED TO THE SOFT-PENALTY EQUILIBRIUM: under opposing costs the

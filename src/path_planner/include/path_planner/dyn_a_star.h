@@ -455,6 +455,74 @@ public:
 
     Eigen::Vector3d getOrigin() const { return map_origin_; }
     Eigen::Vector3d getMapSize() const { return map_size_; }
+
+    // Lowest free altitude in the FM2 speed-field column containing world
+    // (wx, wy): the bottom edge of the first non-blocked coarse z-layer.
+    // Read straight from fm2_F_, so it captures EVERY hard blocker exactly
+    // as the front-end saw it — terrain + obstacle_margin, box obstacles
+    // (+ dyn margin), the ground plane — with no re-derivation. This is the
+    // floor the geodesic could not go below in that column. NaN when the fm2
+    // grid is empty/stale, xy is outside its span, or the whole column is
+    // free from layer 0 (no blocker: nothing to explain).
+    float fm2ColumnFloor(double wx, double wy) const {
+        const size_t N = (size_t)fcnx_ * fcny_ * fcnz_;
+        if (fcnx_ <= 0 || fcny_ <= 0 || fcnz_ <= 0 || fm2_F_.size() != N)
+            return std::numeric_limits<float>::quiet_NaN();
+        const double fine = map_resolution_ > 1e-6 ? map_resolution_ : 1.0;
+        const double fine_z = map_resolution_z_ > 1e-6 ? map_resolution_z_ : fine;
+        const double cres = fine * static_cast<double>(fm2_coarse_k_);
+        const double cres_z = fine_z * static_cast<double>(fm2_coarse_k_);
+        const int i = static_cast<int>(std::floor((wx - map_origin_.x()) / cres));
+        const int j = static_cast<int>(std::floor((wy - map_origin_.y()) / cres));
+        if (i < 0 || i >= fcnx_ || j < 0 || j >= fcny_)
+            return std::numeric_limits<float>::quiet_NaN();
+        // Blocked cells hold kFMin (1e-3); free cells 1/(1+risk) which stays
+        // well above it except inside barrier zones — which ARE walls.
+        for (int k = 0; k < fcnz_; ++k) {
+            if (fm2_F_[fm2Flat(i, j, k)] > 2e-3f) {
+                if (k == 0) return std::numeric_limits<float>::quiet_NaN();
+                return static_cast<float>(map_origin_.z() + k * cres_z);
+            }
+        }
+        return std::numeric_limits<float>::quiet_NaN();  // fully blocked column
+    }
+
+    // Max column floor within lateral radius `halfwidth` (world units) of
+    // (wx, wy) — the corridor/swath view. A successful lateral dodge leaves
+    // the causal column NEXT TO the path, never under it, so an underfoot
+    // profile systematically hides exactly the constraints that shaped the
+    // route; the swath max puts them back. Same exact fm2_F_ source.
+    float fm2SwathFloor(double wx, double wy, double halfwidth) const {
+        const size_t N = (size_t)fcnx_ * fcny_ * fcnz_;
+        if (fcnx_ <= 0 || fcny_ <= 0 || fcnz_ <= 0 || fm2_F_.size() != N)
+            return std::numeric_limits<float>::quiet_NaN();
+        const double fine = map_resolution_ > 1e-6 ? map_resolution_ : 1.0;
+        const double fine_z = map_resolution_z_ > 1e-6 ? map_resolution_z_ : fine;
+        const double cres = fine * static_cast<double>(fm2_coarse_k_);
+        const double cres_z = fine_z * static_cast<double>(fm2_coarse_k_);
+        const int r = std::max(0, (int)std::floor(halfwidth / cres));
+        const int ic = (int)std::floor((wx - map_origin_.x()) / cres);
+        const int jc = (int)std::floor((wy - map_origin_.y()) / cres);
+        const double r2 = (halfwidth / cres) * (halfwidth / cres);
+        float best = std::numeric_limits<float>::quiet_NaN();
+        for (int dj = -r; dj <= r; ++dj) {
+            for (int di = -r; di <= r; ++di) {
+                if ((double)(di * di + dj * dj) > r2) continue;
+                const int i = ic + di, j = jc + dj;
+                if (i < 0 || i >= fcnx_ || j < 0 || j >= fcny_) continue;
+                for (int k = 0; k < fcnz_; ++k) {
+                    if (fm2_F_[fm2Flat(i, j, k)] > 2e-3f) {
+                        if (k > 0) {
+                            const float f = (float)(map_origin_.z() + k * cres_z);
+                            if (std::isnan(best) || f > best) best = f;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        return best;
+    }
 };
 
 inline double PathSearcher::getHeuAnchor(const Eigen::Vector3i &i1, const Eigen::Vector3i &i2)

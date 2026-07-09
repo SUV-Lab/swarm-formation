@@ -120,8 +120,29 @@ namespace path_manager
         node_->declare_parameter("obstacle_mesh_resource",
                                  std::string("package://mmp_visualization/meshes/building.dae"));
         node_->declare_parameter("obstacle_mesh_height", 60.0);
+        // VISUAL-ONLY mesh magnification. Since the scenario-yaml unit fix,
+        // obstacles render at true physical size — a 160 m ship is sub-pixel
+        // at peninsula zoom, so scenario loads looked like "ships vanished".
+        // Scales the MESH about the obstacle center only; the SDF primitive,
+        // the invisible geometry companion marker and the altitude-panel
+        // overlay all keep the exact collision size.
+        node_->declare_parameter("obstacle_viz_scale", 1.0);
+        // Rest every dynamic obstacle's BASE on the surface under it (terrain
+        // elevation on land, sea level over water), ignoring the yaml z.
+        // Scenario files carried center-z values that buried boxes (building:
+        // center 0.35 with sz 1.6 -> 45 m underground, collision included).
+        node_->declare_parameter("manager/obstacle_ground_snap", true);
+        // Half-width (frame units) of the FE-floor swath published alongside
+        // the underfoot floor: max floor within this lateral radius. Shows
+        // the constraints the route DODGED (a clean dodge leaves its cause
+        // beside the path, invisible to an underfoot profile).
+        node_->declare_parameter("manager/floor_swath_halfwidth", 5.0);
         node_->get_parameter("obstacle_mesh_resource", obstacle_mesh_resource_);
         node_->get_parameter("obstacle_mesh_height", obstacle_mesh_height_);
+        node_->get_parameter("obstacle_viz_scale", obstacle_viz_scale_);
+        node_->get_parameter("manager/obstacle_ground_snap", obstacle_ground_snap_);
+        node_->get_parameter("manager/floor_swath_halfwidth", floor_swath_halfwidth_);
+        if (obstacle_viz_scale_ < 1.0) obstacle_viz_scale_ = 1.0;
 
         // Visual mesh catalog: model name -> mesh resource + rendered native size [m]
         // (mesh base at z=0, XY centered). Add a model = drop a .dae in
@@ -132,6 +153,15 @@ namespace path_manager
                                       Eigen::Vector3d(17.679, 10.093, 4.620) };
         mesh_catalog_["ship"]     = { "package://mmp_visualization/meshes/simple_ship.dae",
                                       Eigen::Vector3d(9.972, 42.275, 10.234) };
+
+        // Per-model override of obstacle_viz_scale (<= 0 inherits the global).
+        for (auto & kv : mesh_catalog_) {
+            const std::string pname = "obstacle_viz_scale_" + kv.first;
+            node_->declare_parameter(pname, -1.0);
+            double v = -1.0;
+            node_->get_parameter(pname, v);
+            kv.second.viz_scale = (v > 0.0) ? v : obstacle_viz_scale_;
+        }
 
         // ESDF cache resolution:
         //   manager/world  : map name (default "dokdo"); RViz MapSelector overrides.
@@ -229,8 +259,11 @@ namespace path_manager
             }
         }
 
+        // Latched so a late-joining altitude panel still gets the last
+        // front-end route (transient_local pub serves volatile subs fine).
         simple_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
-            "/planning/front_end_path", 10);
+            "/planning/front_end_path",
+            rclcpp::QoS(1).reliable().transient_local());
         search_path_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
             "/viz/debug/search_path", 10);
         shorten_path_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
@@ -243,6 +276,9 @@ namespace path_manager
         dyn_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
         dyn_obstacle_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/viz/dynamic_obstacles", dyn_qos);
+        // Same latched QoS: the altitude panel may (re)join after the plan.
+        terrain_influence_pub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/viz/terrain_influence", dyn_qos);
 
         // Terrain ESDF cache status (drone_0 only, latched).
         if (drone_id == 0) {
@@ -1154,12 +1190,54 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         traj_.setLocalTraj(local_traj, local_time, traj_.local_traj.drone_id);
         simple_path_ = full_route;
 
+        publishTerrainInfluence(global_traj);
+
         auto t_opt_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] trajectory optimization: %.1f ms, duration=%.3f max_vel=%.3f",
             std::chrono::duration<double, std::milli>(t_opt_end - t_opt_start).count(),
             local_traj.getTotalDuration(), local_traj.getMaxVelRate());
 
         return true;
+}
+
+void PathManager::publishTerrainInfluence(const poly_traj::Trajectory &traj)
+{
+    if (!terrain_influence_pub_) return;
+    const double T = traj.getTotalDuration();
+    if (!(T > 0.0) || !std::isfinite(T)) return;
+
+    // ~2 samples per FM2 coarse column (~2.3 u) at cruise speed so the
+    // staircase edges resolve; capped for pathological durations.
+    const double est_len = std::max(1.0, T * max_vel_);
+    const int K = std::clamp(static_cast<int>(est_len / 1.0), 256, 16384);
+
+    // Triples [s, floor_underfoot, floor_swath]: the underfoot column floor
+    // plus the max floor within floor_swath_halfwidth_ — constraints the
+    // route dodged laterally never appear underfoot (that is what dodging
+    // means), so the swath channel is what explains avoidance climbs.
+    std_msgs::msg::Float64MultiArray msg;
+    msg.data.reserve(3 * (K + 1));
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    double s = 0.0;
+    Eigen::Vector3d prev = traj.getPos(0.0);
+    for (int k = 0; k <= K; ++k) {
+        const double t = T * static_cast<double>(k) / K;
+        const Eigen::Vector3d p = traj.getPos(t);
+        s += (p - prev).head<2>().norm();
+        prev = p;
+        const float h = searcher_.fm2ColumnFloor(p.x(), p.y());
+        const float w = searcher_.fm2SwathFloor(p.x(), p.y(), floor_swath_halfwidth_);
+        msg.data.push_back(s);
+        msg.data.push_back(std::isfinite(h) ? static_cast<double>(h) : nan);
+        msg.data.push_back(std::isfinite(w) ? static_cast<double>(w) : nan);
+    }
+    terrain_influence_pub_->publish(msg);
+    size_t floored = 0;
+    for (size_t i = 1; i < msg.data.size(); i += 3)
+        if (!std::isnan(msg.data[i])) ++floored;
+    log_manager_->infof("[TERRAIN-INFLUENCE] %d samples, %zu floored columns, "
+                        "swath=%.1f u, len=%.1f u",
+                        K + 1, floored, floor_swath_halfwidth_, s);
 }
 
 bool PathManager::isMapReady(const Eigen::Vector3d& /*start_pos*/) const {
@@ -1270,6 +1348,20 @@ const PathManager::ObstacleMeshInfo& PathManager::meshFor(const std::string& mod
     return it->second;
 }
 
+Eigen::Vector3d PathManager::groundedCenter(const Eigen::Vector3d& center,
+                                            double half_height) const
+{
+    if (!obstacle_ground_snap_) return center;
+    double base = 0.0;  // sea level
+    if (terrain_data_.valid) {
+        const float h = terrain_data_.getElevation(center.x(), center.y());
+        if (std::isfinite(h) && h > 0.0f) base = static_cast<double>(h);
+    }
+    Eigen::Vector3d out = center;
+    out.z() = base + half_height;
+    return out;
+}
+
 int PathManager::addDynamicSphere(const Eigen::Vector3d& center, double radius,
                                   const std::string& model)
 {
@@ -1283,9 +1375,10 @@ int PathManager::addDynamicSphere(const Eigen::Vector3d& center, double radius,
                             center.x(), center.y(), center.z(), radius);
         return -2;  // deferred (not an error)
     }
+    const Eigen::Vector3d gcenter = groundedCenter(center, radius);
     path_planner::sdf::PrimitiveSpec spec;
     spec.kind = path_planner::sdf::PrimitiveKind::kSphere;
-    spec.center = center;
+    spec.center = gcenter;
     const double d = 2.0 * radius;
     spec.size = Eigen::Vector3d(d, d, d);
 
@@ -1297,15 +1390,16 @@ int PathManager::addDynamicSphere(const Eigen::Vector3d& center, double radius,
         return -1;
     }
     dyn_patch_ids_.push_back(id);
-    dyn_patch_centers_.push_back(center);
+    dyn_patch_centers_.push_back(gcenter);
     dyn_patch_sizes_.push_back(Eigen::Vector3d(d, d, d));  // sphere stored as (2r,2r,2r)
     dyn_patch_is_box_.push_back(0);
     dyn_patch_models_.push_back(model);
     dyn_patch_yaws_.push_back(
         std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_));
-    log_manager_->infof("Dynamic sphere added: id=%d center=(%.2f,%.2f,%.2f) r=%.2f, total=%zu",
-                        id, center.x(), center.y(), center.z(), radius,
-                        sdf_manager_.numActiveObstacles());
+    log_manager_->infof("Dynamic sphere added: id=%d center=(%.2f,%.2f,%.2f) r=%.2f "
+                        "(request z=%.2f), total=%zu",
+                        id, gcenter.x(), gcenter.y(), gcenter.z(), radius,
+                        center.z(), sdf_manager_.numActiveObstacles());
     publishDynamicObstacles();
     return id;
 }
@@ -1327,9 +1421,10 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
     // volume and trajectories legally clipped the bow/stern.
     const double yaw =
         std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_);
+    const Eigen::Vector3d gcenter = groundedCenter(center, 0.5 * size.z());
     path_planner::sdf::PrimitiveSpec spec;
     spec.kind = path_planner::sdf::PrimitiveKind::kCube;
-    spec.center = center;
+    spec.center = gcenter;
     spec.size = size;  // full extents (sx, sy, sz)
     spec.yaw = yaw;
 
@@ -1337,20 +1432,21 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
     if (id < 0) {
         log_manager_->warnf("addDynamicBox: addObstacle failed "
                             "(center=%.2f,%.2f,%.2f size=%.2f,%.2f,%.2f)",
-                            center.x(), center.y(), center.z(),
+                            gcenter.x(), gcenter.y(), gcenter.z(),
                             size.x(), size.y(), size.z());
         return -1;
     }
     dyn_patch_ids_.push_back(id);
-    dyn_patch_centers_.push_back(center);
+    dyn_patch_centers_.push_back(gcenter);
     dyn_patch_sizes_.push_back(size);
     dyn_patch_is_box_.push_back(1);
     dyn_patch_models_.push_back(model);
     dyn_patch_yaws_.push_back(yaw);
-    log_manager_->infof("Dynamic box added: id=%d center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f) yaw=%.2f, total=%zu",
-                        id, center.x(), center.y(), center.z(),
+    log_manager_->infof("Dynamic box added: id=%d center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f) "
+                        "yaw=%.2f (request z=%.2f), total=%zu",
+                        id, gcenter.x(), gcenter.y(), gcenter.z(),
                         size.x(), size.y(), size.z(), yaw,
-                        sdf_manager_.numActiveObstacles());
+                        center.z(), sdf_manager_.numActiveObstacles());
     publishDynamicObstacles();
     return id;
 }
@@ -1449,6 +1545,13 @@ void PathManager::publishDynamicObstacles()
             base_z = c.z() - radius;
         }
 
+        // Visual-only magnification: grows the mesh about the BASE (xy about
+        // the center, z upward from the bottom face) so magnified obstacles
+        // keep resting on the surface — center-anchored scaling pushed half
+        // of every magnified hull underground/underwater. Per-model via
+        // obstacle_viz_scale_<model>, global via obstacle_viz_scale.
+        // Collision, companion geometry marker and panel overlay untouched.
+        const double vs = std::max(1.0, mi.viz_scale);
         m.pose.position.x = c.x();
         m.pose.position.y = c.y();
         m.pose.position.z = base_z;
@@ -1457,9 +1560,9 @@ void PathManager::publishDynamicObstacles()
         const double yaw = (i < dyn_patch_yaws_.size()) ? dyn_patch_yaws_[i] : 0.0;
         m.pose.orientation.z = std::sin(0.5 * yaw);
         m.pose.orientation.w = std::cos(0.5 * yaw);
-        m.scale.x = foot_x / mi.native_size.x();
-        m.scale.y = foot_y / mi.native_size.y();
-        m.scale.z = height / mi.native_size.z();
+        m.scale.x = vs * foot_x / mi.native_size.x();
+        m.scale.y = vs * foot_y / mi.native_size.y();
+        m.scale.z = vs * height / mi.native_size.z();
         arr.markers.push_back(m);
 
         // Companion GEOMETRY marker: the exact collision primitive (center /
