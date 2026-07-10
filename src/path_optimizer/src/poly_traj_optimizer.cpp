@@ -1,4 +1,5 @@
 #include "path_optimizer/poly_traj_optimizer.h"
+#include <algorithm>
 #include <iomanip>
 #include <ctime>
 #include <sys/resource.h>
@@ -423,23 +424,45 @@ namespace ego_planner
     {
       const Eigen::Vector3d S(dyn_unit_xy_m_, dyn_unit_xy_m_, dyn_unit_z_m_);
       const double a_limit = dyn_n_lat_ * dyn_g_;
-      double an_peak = 0.0, an_peak_t = 0.0;
+      double an_peak = 0.0, an_peak_t = 0.0, an_sum = 0.0;
       int n_samp = 0, n_viol = 0;
-      for (double tt = 0.0; tt < T_end; tt += 0.1) {
+      std::vector<double> an_all;
+      an_all.reserve(static_cast<size_t>(T_end / 0.01) + 2);
+      // dt matches the metrics panel's dynamics-violation row (100 Hz) so the
+      // two report identical peaks — 10 Hz missed short spikes the panel saw.
+      for (double tt = 0.0; tt < T_end; tt += 0.01) {
         const Eigen::Vector3d vm = S.cwiseProduct(traj.getVel(tt));
         const Eigen::Vector3d am = S.cwiseProduct(traj.getAcc(tt));
         const double vn = vm.norm();
         if (vn < dyn_min_speed_mps_) continue;
         const double an = vm.cross(am).norm() / vn;
         ++n_samp;
+        an_sum += an;
+        an_all.push_back(an);
         if (an > a_limit) ++n_viol;
         if (an > an_peak) { an_peak = an; an_peak_t = tt; }
       }
       if (n_samp > 0) {
-        LOG_INFO("[DYNAMICS] peak a_n=%.1f m/s^2 (%.2f g, limit %.1f g) at t=%.1f; "
-                 "violations %d/%d samples (%s)",
-                 an_peak, an_peak / dyn_g_, dyn_n_lat_, an_peak_t,
-                 n_viol, n_samp, dynamics_enable_ ? "term on" : "term OFF");
+        // ENVELOPE UTILISATION ("부담율"): a_n as a fraction of the n_lat*g
+        // limit. The binary violation count saturates at 0% for any legal
+        // path; utilisation grades HOW DEMANDING a legal path is (a 40%- vs
+        // 15%-envelope route are both violation-free but not equally
+        // comfortable), and >100% degenerates to the old violation notion.
+        std::nth_element(an_all.begin(), an_all.begin() + (an_all.size() * 95) / 100,
+                         an_all.end());
+        const double an_p95 = an_all[(an_all.size() * 95) / 100];
+        // "term on" must mirror the ACTUAL cost gate (enable AND weight>0):
+        // enable=true with weight=0 used to log "on" while the term was dead.
+        LOG_INFO("[DYNAMICS] peak a_n=%.1f m/s^2 (%.2f g) | envelope use "
+                 "peak=%.1f%% mean=%.1f%% p95=%.1f%% (limit %.1f g) at t=%.1f; "
+                 "violations %d/%d samples (%s, min_vel=%.2f u/s)",
+                 an_peak, an_peak / dyn_g_,
+                 100.0 * an_peak / a_limit,
+                 100.0 * (an_sum / n_samp) / a_limit,
+                 100.0 * an_p95 / a_limit,
+                 dyn_n_lat_, an_peak_t, n_viol, n_samp,
+                 (dynamics_enable_ && wei_dynamics_ > 0.0) ? "term on" : "term OFF",
+                 min_vel_);
       }
     }
 
@@ -873,7 +896,8 @@ namespace ego_planner
         opt->log_manager_->infof("  risk_cost=%.6f (weight=%.3f, barrier=%.3f)", obs_swarm_feas_qvar_costs(3), opt->wei_risk_, opt->wei_risk_barrier_);
         opt->log_manager_->infof("  altitude_cost=%.6f (weight=%.3f, band=[%.2f, %.2f])", obs_swarm_feas_qvar_costs(6), opt->wei_alt_, opt->alt_zlo_, opt->alt_zhi_);
         opt->log_manager_->infof("  feasibility_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(4), opt->wei_feas_);
-        opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, n_lat=%.1f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, opt->dyn_n_lat_, opt->dynamics_enable_ ? "on" : "off");
+        opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, n_lat=%.1f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, opt->dyn_n_lat_,
+                                 (opt->dynamics_enable_ && opt->wei_dynamics_ > 0.0) ? "on" : "off");
         opt->log_manager_->infof("  terrain_cost=%.6f (weight=%.3f, heightmap 2.5D, %s)", obs_swarm_feas_qvar_costs(8), opt->wei_obs_, opt->terrain_height_ ? "on" : "off");
         opt->log_manager_->infof("  time_cost=%.6f (weight=%.3f)", time_cost, opt->wei_time_);
 
@@ -1501,6 +1525,27 @@ namespace ego_planner
       costv = wei_feas_ * vpen * vpen * vpen;
       return true;
     }
+    // MINIMUM speed (stall) floor — mirror of the max side, DEFAULT OFF
+    // (min_vel_ = 0). A fixed-wing-class platform cannot loiter below stall,
+    // yet without this floor the optimizer resolves every tight corner by
+    // braking to ~zero and pivoting (verified: a pinned 200 m/s head with a
+    // reversal goal produced a 1-D stop-and-reverse with a_n literally 0),
+    // which makes the lateral-g term structurally unreachable. Enable per
+    // platform once a stall spec exists; missions that legitimately start or
+    // end at rest must keep it off (the spin-up phase would be penalized).
+    // Gradient note: d/dv (m^2 - |v|^2)^3 = -6 (m^2 - |v|^2)^2 v — the push
+    // vanishes AT v = 0 (saddle); acceptable because the floor is only
+    // enabled on missions that start at speed.
+    if (min_vel_ > 0.0)
+    {
+      const double lpen = min_vel_ * min_vel_ - v.squaredNorm();
+      if (lpen > 0)
+      {
+        gradv = -wei_feas_ * 6.0 * lpen * lpen * v;
+        costv = wei_feas_ * lpen * lpen * lpen;
+        return true;
+      }
+    }
     return false;
   }
 
@@ -1833,6 +1878,9 @@ namespace ego_planner
     node_->get_parameter("optimization/max_vel", max_vel_);
     node_->declare_parameter("optimization/max_acc", 1.0);
     node_->get_parameter("optimization/max_acc", max_acc_);
+    // Stall floor (frame units/s); 0 disables. See feasibilityGradCostV.
+    node_->declare_parameter("optimization/min_vel", 0.0);
+    node_->get_parameter("optimization/min_vel", min_vel_);
 
     // Initial-velocity lead-in horizon in seconds (0 = disabled/legacy behavior).
     node_->declare_parameter("optimization/lead_in_time", 1.0);

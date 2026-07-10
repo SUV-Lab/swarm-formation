@@ -214,6 +214,12 @@ namespace ego_planner
     // every axis), so both units default to 100. The limit is n_lat * g as the
     // normal-acceleration ceiling. (The old "reserved" speed_mps / n_lon params
     // were never used by any term and were removed.)
+    // Minimum-speed (stall) floor, frame units/s. 0 = OFF (default: platform
+    // stall spec undecided; also must stay off for rest-start missions).
+    // Companion of the lateral-g term below: without a speed floor the
+    // optimizer escapes every curvature limit by braking to ~zero.
+    double min_vel_{0.0};
+
     bool dynamics_enable_{true};
     double wei_dynamics_{0.0};
     double dyn_unit_xy_m_{100.0};

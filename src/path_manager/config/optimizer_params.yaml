@@ -146,6 +146,14 @@
     # Corner radius ~ v^2/a: with 2.0/5.0 turns are tight; lower max_acc for wider arcs.
     optimization/max_vel: 2.0
     optimization/max_acc: 5.0
+    optimization/min_vel: 0.0   # STALL floor (units/s); 0 = OFF. Platform stall spec
+                                # undecided — keep off for rest-start missions (the
+                                # spin-up phase would be penalized). Companion of the
+                                # lateral-g term: without a speed floor every tight
+                                # corner is escaped by braking to ~zero (verified:
+                                # pinned 200 m/s head + reversal goal -> 1-D
+                                # stop-and-reverse, a_n identically 0). For A/B
+                                # experiments: 1.0 (=100 m/s, ~50% cruise).
     manager/max_vel: 2.0
     manager/max_acc: 5.0
 
@@ -158,10 +166,20 @@
     # (n_lat*g)^2 before the cubic (the raw spec form overflows to ~1e18 on
     # a 51 g corner and destroys the cost balance).
     optimization/dynamics_enable: true
-    optimization/weight_dynamics: 1000.0
+    optimization/weight_dynamics: 1000.0   # NB: verified too weak vs the 1e4-class terms to bite
+                                            # hard — raise toward 10000 when a real platform limit
+                                            # (n_lat below) makes this term load-bearing.
     optimization/dynamics_unit_xy_m: 100.0  # frame->metres; isotropic since the
     optimization/dynamics_unit_z_m: 100.0   # 2026-07 z-scale fix (44 was the bug era)
-    optimization/dynamics_n_lat: 30.0       # lateral load-factor ceiling (a_n <= n_lat*g)
+    optimization/dynamics_n_lat: 30.0       # ENFORCED lateral load-factor ceiling (a_n <= n_lat*g).
+                                            # Soft cubic equilibrium overshoots the ceiling by ~4%
+                                            # (same class as the terrain-band equilibrium), so set
+                                            # this ~10-15% BELOW the platform's true limit when a
+                                            # hard guarantee is needed (verified A/B: enforcing 1.3
+                                            # held a true 1.5 g limit with 0% over-limit time).
+                                            # 30 = missile-class placeholder; unreachable at km-piece
+                                            # geometry, so the term is dormant until a platform spec
+                                            # lands (utilisation shows ~3% on current missions).
     optimization/dynamics_g: 9.81
     optimization/dynamics_min_speed_mps: 1.0
 
