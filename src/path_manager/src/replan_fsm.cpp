@@ -810,6 +810,19 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
         msg->target_position.z
     );
 
+    // Waypoint-less command: the TARGET is the mission. Without this,
+    // publishFormationTarget's empty-waypoint fallback silently substituted
+    // current_formation_center_ — (0,0,0) on a fresh node — so a valid
+    // headless/CLI command (target set, waypoints omitted) planned a flight
+    // to the map corner while logging success. The RViz panel always fills
+    // waypoints[], which is why this stayed dormant.
+    if (waypoints.empty()) {
+        waypoints.push_back(target_position);
+        FSM_LOG_INFO("Trajectory command has no waypoints — using target_position "
+                     "(%.2f, %.2f, %.2f) as the single waypoint",
+                     target_position.x(), target_position.y(), target_position.z());
+    }
+
     // Extract formation offset (for reference/logging)
     Eigen::Vector3d formation_offset(
         msg->formation_offset.x,

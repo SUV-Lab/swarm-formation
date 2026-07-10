@@ -10,6 +10,8 @@
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
     manager/risk_smha_w: 2.0            # SMHA* suboptimality bound (astar front-end only)
     manager/dyn_yaw_seed: -1                    # dynamic-obstacle (ship) spawn-orientation RNG seed.
+                                        # (seed 60978556 reproduces the 2026-07-10 start-hump case
+                                        # that led to the arc-varying cap — kept for regression.)
                                         # <0 = RANDOM each run (operational default: varied headings).
                                         # Any fixed int = reproducible layout — the debugging tool that
                                         # cracked the "same mission, different result" hunt: if a run
@@ -84,7 +86,11 @@
     optimization/weight_obstacle: 10000.0
     optimization/weight_swarm: 0.0
     optimization/weight_feasibility: 10000.0
-    optimization/weight_sqrvariance: 10000.0
+    optimization/weight_sqrvariance: 10000.0  # even HORIZONTAL progression (xy-scoped since the
+                                       # start-hump fix: the 3D version bought "equal spacing" by
+                                       # bulging short over-water head pieces 68 m upward — z is
+                                       # penalty-free between the alt floor and cap. xy scoping keeps
+                                       # the anti-loitering force, closes the vertical loophole.
     optimization/weight_time: 500.0     # too low -> duration blow-up (loops/loitering knots)
     optimization/weight_formation: 0.0
     optimization/weight_Risk: 10000.0  # arc-length integral of the FM2-shared OR-moat field:
@@ -114,6 +120,16 @@
                                          # OVER the islets, and smoothness spreads the lift to the cap.
                                          # A snug cap forces the back-end to weave in xy like the
                                          # front-end instead of escaping upward.
+    optimization/alt_cap_slope: 0.10     # ARC-VARYING cap cone slope [z-units per xy-unit]. The per-piece
+                                         # ceiling = slope-cone envelope over the FE committed z profile
+                                         # + alt_cap_headroom: high values bleed sideways at this grade,
+                                         # licensing climb/descent anticipation ahead of committed ramps.
+                                         # Sized above observed FE ramp grades (~0.08 on the tall map).
+                                         # Restores the z trust-region the SFC corridor's bounded
+                                         # inflation used to provide (removed with SFC): over open water
+                                         # z was ungoverned between floor and GLOBAL-max cap (~100 m dead
+                                         # band) and optimization slosh left 60-80 m humps there that
+                                         # T^5-starved smoothness never cleared.
     optimization/alt_floor_headroom: 0.2 # z-floor slack below min(start,goal) z. The missing lower half of
                                          # the FM2 alt band: without it z is only bounded below by the 0.5
                                          # collision clearance, so min-jerk pieces sag in long smooth waves
@@ -155,6 +171,12 @@
     # first waypoint. d_lead = |start_vel| * this. 0.0 = legacy (no lead-in).
     # Toggle/tune here for A/B without rebuild.
     optimization/lead_in_time: 0.0   # dormant on main: enable after lead-in validation
+
+    # Post-convergence per-term VERTICAL-force attribution sweep (one-shot,
+    # verbose). Diagnoses "trajectory climbs over open water" humps: logs
+    # [VDIAG]/[VDIAG-HUMP] naming the lifting cost term, or proving the hump is
+    # intrinsic min-jerk overshoot (no spatial cause). Leave false in normal use.
+    optimization/diag_vertical: false
 
     # ---- Map / SDF ----
     # Anisotropic ESDF/FM2 voxels. xy matches the DEM cell (finer only burns

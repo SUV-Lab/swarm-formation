@@ -19,9 +19,10 @@ constexpr double inf = 1e20;
 namespace path_planner { namespace search {
 
 struct RiskZoneLite {
-    Eigen::Vector3d center;
-    double reach;   // meters; risk is exactly zero outside this ball
-    double peak;    // dimensionless in (0, 1]
+    Eigen::Vector3d center; // frame units (1 unit = 100 m)
+    double reach;   // FRAME UNITS (not metres!); vertical-cylinder radius,
+                    // risk exactly zero outside (typical scenario ~90 = 9 km)
+    double peak;    // dimensionless in (0, 1]; >1 saturates to a flat disc
 };
 
 struct GridNode
@@ -86,8 +87,8 @@ private:
     // SDF's voxel terrain is coarse/z-quantised.
     std::function<float(double, double)> terrain_height_;
     const std::vector<RiskZoneLite> *risk_zones_ = nullptr;
-    double obstacle_margin_ = 0.5;  // meters
-    double dyn_obstacle_margin_ = 0.0;  // dynamic-obstacle berth; 0 = off
+    double obstacle_margin_ = 0.5;  // frame units (1 unit = 100 m)
+    double dyn_obstacle_margin_ = 0.0;  // dynamic-obstacle berth, frame units; 0 = off
     // When true, the A* graph expansion ignores obstacles (every voxel is
     // traversable); shortcut / downstream checks still use obstacle_margin_.
     bool search_ignores_obstacles_ = false;

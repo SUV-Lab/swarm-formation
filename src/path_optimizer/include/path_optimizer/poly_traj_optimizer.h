@@ -140,6 +140,12 @@ namespace ego_planner
     bool enable_obstacles_;
     bool enable_debug_logs_;
     bool enable_lbfgs_detail_logs_;
+    // Post-convergence per-term VERTICAL-force attribution sweep. Answers
+    // "which cost term (if any) lifts the trajectory HERE" for every hump,
+    // and flags humps with NO spatial vertical force as intrinsic
+    // smoothness/variance (min-jerk) overshoot. Opt-in (heavy log), off in
+    // production. See logVerticalAttribution().
+    bool diag_vertical_{false};
 
     rclcpp::Node::SharedPtr node_;
 
@@ -182,6 +188,25 @@ namespace ego_planner
     double wei_alt_{0.0};
     double alt_zhi_{-1.0};
     double alt_zlo_{-1e9};
+    // ARC-VARYING cap: per-piece ceiling built in optimizeFromPath from the
+    // front-end's committed z profile (cap reference) + a slope-cone envelope
+    // + alt_cap_headroom. Restores the z trust-region that the SFC corridor's
+    // bounded inflation used to provide for free: over open water z is
+    // otherwise ungoverned between the scalar floor and the GLOBAL-max cap
+    // (a ~100 m dead band at mission scale where T^5-starved smoothness
+    // cannot clear optimization debris — observed 60-80 m start humps).
+    // Each entry is CONSTANT w.r.t. the decision variables, so gradients keep
+    // their form (cost/gradient stay a consistent pair). Size piece_num when
+    // active; empty -> scalar alt_zhi_ fallback. Rebuilt/cleared per plan.
+    Eigen::VectorXd alt_zhi_pieces_;
+    // Cone slope [z-units per xy-unit] licensing climb/descent anticipation:
+    // high cap values bleed sideways at this grade, so the back-end may lead
+    // a committed ramp without penalty. Sized above observed FE ramp grades
+    // (~0.08 on the tall map). Yaml: optimization/alt_cap_slope.
+    double alt_cap_slope_{0.10};
+    // Headroom added on top of the envelope (same value path_manager uses
+    // for the scalar cap). Yaml: optimization/alt_cap_headroom (shared).
+    double alt_cap_headroom_opt_{0.4};
 
     // Cruise dynamics (lateral/normal-acceleration limit). Evaluated in
     // PHYSICAL metres: v_m = S*v with S = diag(unit_xy, unit_xy, unit_z);
@@ -258,6 +283,13 @@ namespace ego_planner
     // path, then optimize it. This is the single replaceable seam — a custom
     // optimizer backend reimplements this and never exposes MINCO internals.
     // clean_path may be modified (a midpoint is inserted for degenerate input).
+    //
+    // cap_ref_z: the front-end's COMMITTED z per clean_path vertex (pre-
+    // z-denoise profile, elementwise-maxed with the safety-clamped one; built
+    // by path_manager alongside clean_path). Drives the arc-varying altitude
+    // cap. Must be the same size as clean_path on entry — a mismatch logs a
+    // warning and falls back to the scalar cap (never silently mis-indexed).
+    // Empty = scalar cap only.
     bool optimizeFromPath(std::vector<Eigen::Vector3d> &clean_path,
                           const Eigen::Vector3d &start_pos,
                           const Eigen::Vector3d &start_vel,
@@ -265,7 +297,8 @@ namespace ego_planner
                           const std::vector<Eigen::Vector3d> &waypoints,
                           double max_vel,
                           poly_traj::Trajectory &out_global,
-                          poly_traj::Trajectory &out_local);
+                          poly_traj::Trajectory &out_local,
+                          const std::vector<double> &cap_ref_z = {});
 
     void setDesiredFormation(int type);
 
@@ -341,6 +374,14 @@ namespace ego_planner
                                            double &var);
 
     bool checkCollision(void);
+
+    // Per-term VERTICAL-force attribution over the final trajectory.
+    // For each sample logs fz (= -d(cost)/dz; fz>0 pushes altitude UP) of
+    // every z-affecting cost term, terrain height/clearance, the active
+    // alt band, and the trajectory's own vz/az. Ends with an automatic
+    // hump scan that classifies each z-peak as term-driven or intrinsic
+    // (smoothness/variance min-jerk overshoot). Gated on diag_vertical_.
+    void logVerticalAttribution(void);
 
     double computeTotalJerk(const poly_traj::Trajectory &traj);
     double computeMaxJerk(const poly_traj::Trajectory &traj);

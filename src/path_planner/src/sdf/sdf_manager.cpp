@@ -99,7 +99,7 @@ struct SDFManagerImpl {
   Eigen::Vector3d origin = Eigen::Vector3d::Zero();
   int nx = 0, ny = 0, nz = 0;
 
-  // Static-layer signed distance in meters. +inf for out-of-map queries.
+  // Static-layer signed distance in frame units. +inf for out-of-map queries.
   // Flat layout: ((x * ny) + y) * nz + z.
   std::vector<float> distance_cache;
 
@@ -231,7 +231,7 @@ bool SDFManager::buildFromVoxels(const uint8_t* occupancy,
           0, ny - 1, res.y());
     }
   }
-  // Sweep X (final, take sqrt in meters)
+  // Sweep X (final, take sqrt — world/frame units)
 #pragma omp parallel for collapse(2) schedule(static) if(use_par)
   for (int y = 0; y < ny; ++y) {
     for (int z = 0; z < nz; ++z) {

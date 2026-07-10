@@ -17,7 +17,8 @@ namespace ego_planner
                                            const std::vector<Eigen::Vector3d> &waypoints,
                                            double max_vel,
                                            poly_traj::Trajectory &out_global,
-                                           poly_traj::Trajectory &out_local)
+                                           poly_traj::Trajectory &out_local,
+                                           const std::vector<double> &cap_ref_z)
   {
     // Barrier exemptions for this plan (same start/goal rule as the
     // front-end): must be recomputed per plan since zones and endpoints
@@ -25,6 +26,18 @@ namespace ego_planner
     // exempt too — the crossing is a committed front-end decision.
     prepareRiskBarrier(start_pos, waypoints.back());
     markFrontEndCrossings(clean_path);
+
+    // Arc-varying cap reference: mirror EVERY clean_path insertion below on
+    // this copy so vertex<->reference index correspondence holds by
+    // construction. A size mismatch on entry means the caller's pairing is
+    // broken — fall back to the scalar cap loudly rather than mis-index.
+    std::vector<double> cap_ref = cap_ref_z;
+    if (!cap_ref.empty() && cap_ref.size() != clean_path.size()) {
+      LOG_WARN("[ALT-CAP] cap_ref size %zu != clean_path size %zu — "
+               "falling back to scalar cap",
+               cap_ref.size(), clean_path.size());
+      cap_ref.clear();
+    }
 
     // === MINCO initial trajectory from clean_path ===
     // Each shortcut vertex becomes one MINCO piece boundary directly;
@@ -34,6 +47,10 @@ namespace ego_planner
     if (static_cast<int>(clean_path.size()) < 3) {
       Eigen::Vector3d mid = 0.5 * (clean_path.front() + clean_path.back());
       clean_path.insert(clean_path.begin() + 1, mid);
+      if (!cap_ref.empty()) {
+        // max(neighbours): erring permissive keeps the cap an upper bound.
+        cap_ref.insert(cap_ref.begin() + 1, std::max(cap_ref[0], cap_ref[1]));
+      }
     }
 
     // --- Initial-velocity lead-in ---
@@ -50,6 +67,9 @@ namespace ego_planner
       double d_lead = start_vel.norm() * lead_in_time_;  // distance travelled while redirecting
       Eigen::Vector3d p_lead = clean_path.front() + v_hat * d_lead;
       clean_path.insert(clean_path.begin() + 1, p_lead);
+      if (!cap_ref.empty()) {
+        cap_ref.insert(cap_ref.begin() + 1, std::max(cap_ref[0], cap_ref[1]));
+      }
       if (log_manager_) {
         log_manager_->infof("[LEAD-IN] start_vel=%.2f m/s -> lead point +%.2f m along (%.2f,%.2f,%.2f)",
                             start_vel.norm(), d_lead, v_hat.x(), v_hat.y(), v_hat.z());
@@ -57,6 +77,96 @@ namespace ego_planner
     }
 
     int piece_num = static_cast<int>(clean_path.size()) - 1;
+
+    // === Arc-varying altitude cap (per-piece ceiling) ===
+    // Restores the z trust-region lost with the SFC corridor: the committed
+    // FE profile governs the ceiling LOCALLY instead of one global scalar
+    // licensing 100 m of dead band over open water. Steps:
+    //  1. slope-cone envelope over the reference profile (1-D grayscale
+    //     dilation, exact in two passes): env[i] = max_j(ref[j] −
+    //     slope * dist_xy(i, j)). High values bleed sideways at
+    //     alt_cap_slope_, licensing the physically necessary climb/descent
+    //     anticipation; the envelope never clips the profile itself
+    //     (env >= ref by the j = i term).
+    //  2. per-piece cap = max of the piece's two boundary envelopes +
+    //     headroom. Constant per piece w.r.t. decision variables, so the
+    //     cap block's gradients keep their exact form.
+    // Inner points can drift along the route during optimization; the cone's
+    // sideways bleed is what makes a piece-index correspondence tolerant to
+    // that drift (a hard window would cliff).
+    alt_zhi_pieces_.resize(0);
+    if (!cap_ref.empty() && piece_num >= 1 &&
+        static_cast<int>(cap_ref.size()) == piece_num + 1) {
+      std::vector<double> env = cap_ref;
+      for (int i = 1; i <= piece_num; ++i) {   // forward pass
+        const double d = (clean_path[i] - clean_path[i - 1]).head<2>().norm();
+        env[i] = std::max(env[i], env[i - 1] - alt_cap_slope_ * d);
+      }
+      for (int i = piece_num - 1; i >= 0; --i) { // backward pass
+        const double d = (clean_path[i + 1] - clean_path[i]).head<2>().norm();
+        env[i] = std::max(env[i], env[i + 1] - alt_cap_slope_ * d);
+      }
+      // SWATH-TERRAIN FLOOR on the cap reference. The FE-profile envelope
+      // alone under-caps where the back-end deviates LATERALLY from the FE
+      // route (risk-zone moats bend the trajectory off the committed xy):
+      // if the FE dodged a hill sideways, its z at that arc is LOW, and the
+      // cap then pins the water pieces FLANKING the hill so hard that the
+      // hill-crossing piece cannot arch between its low endpoints — observed
+      // as a converged 0.6-0.8 m graze on the serpentine mission (terrain
+      // gate protects points NEAR terrain, not flank pins over water).
+      // Contract completion: never cap below what terrain within the
+      // corridor's lateral slack demands — cap_ref floor = max terrain
+      // within kSwathR of the piece chord + the clearance band. Computed
+      // once from clean_path (decision-variable independent, gradients keep
+      // their exact form); over open water it adds nothing, so the hump
+      // suppression is untouched, and the lift is LOCAL (a tall islet no
+      // longer raises the whole route's ceiling — only its own +-kSwathR).
+      const double kSwathR = 25.0;      // ~ one piece length of deviation slack
+      const double kStepS = 2.3, kStepL = 2.3;  // ~ DEM cell sampling
+      auto swath_terr = [&](const Eigen::Vector3d &a,
+                            const Eigen::Vector3d &b) -> double {
+        double hmax = -1e30;
+        const Eigen::Vector2d ab(b.x() - a.x(), b.y() - a.y());
+        const double L = ab.norm();
+        const Eigen::Vector2d u = (L > 1e-9) ? Eigen::Vector2d(ab / L)
+                                             : Eigen::Vector2d(1.0, 0.0);
+        const Eigen::Vector2d n(-u.y(), u.x());
+        for (double s = 0.0; s <= L + 1e-9; s += kStepS) {
+          for (double l = -kSwathR; l <= kSwathR + 1e-9; l += kStepL) {
+            const double x = a.x() + u.x() * s + n.x() * l;
+            const double y = a.y() + u.y() * s + n.y() * l;
+            if (terrain_hgrad_) {
+              float h, gx, gy;
+              if (terrain_hgrad_(x, y, &h, &gx, &gy) && h > hmax) hmax = h;
+            } else if (terrain_height_) {
+              const float h = terrain_height_(x, y);
+              if (std::isfinite(h) && h > hmax) hmax = h;
+            }
+          }
+        }
+        return hmax;   // -1e30 over pure water
+      };
+
+      alt_zhi_pieces_.resize(piece_num);
+      double cap_min = 1e30, cap_max = -1e30;
+      for (int i = 0; i < piece_num; ++i) {
+        double ref = std::max(env[i], env[i + 1]);
+        const double terr = swath_terr(clean_path[i], clean_path[i + 1]);
+        if (terr > -1e29) {
+          ref = std::max(ref, terr + obstacle_clearance_);
+        }
+        alt_zhi_pieces_(i) = ref + alt_cap_headroom_opt_;
+        cap_min = std::min(cap_min, alt_zhi_pieces_(i));
+        cap_max = std::max(cap_max, alt_zhi_pieces_(i));
+      }
+      LOG_INFO("[ALT-CAP] arc-varying cap active: %d pieces, cap=[%.3f, %.3f] "
+               "(slope=%.2f, headroom=%.2f; scalar fallback %.3f)",
+               piece_num, cap_min, cap_max, alt_cap_slope_,
+               alt_cap_headroom_opt_, alt_zhi_);
+    } else if (!cap_ref.empty()) {
+      LOG_WARN("[ALT-CAP] cap_ref/piece mismatch after insertions (%zu vs %d)"
+               " — scalar cap only", cap_ref.size(), piece_num + 1);
+    }
     Eigen::MatrixXd innerPts(3, piece_num - 1);
     for (int i = 0; i < piece_num - 1; ++i) {
       innerPts.col(i) = clean_path[i + 1];
@@ -98,6 +208,27 @@ namespace ego_planner
 
     // === L-BFGS optimization with SDF gradient penalty ===
     poly_traj::Trajectory initTraj = globalMJO.getTraj();
+
+    // [INIT-PROFILE]: z of the INITIAL MINCO guess (pre-L-BFGS), same 5%-step
+    // format as GEO/SIMPLE/TERRAIN-PROFILE. Splits head/tail transients on
+    // sight: a hump already HERE was born in the min-jerk boundary/time
+    // allocation (at-rest head + cruise-assumed seg_len/v times); a hump only
+    // in the final trajectory was made by the optimizer's cost terms. Head
+    // rows get finer 1% steps — the intermittent start hump lives in the
+    // first few pieces and 5% (~20 km) steps straddle it.
+    if (log_manager_) {
+      const double T = initTraj.getTotalDuration();
+      auto row = [&](double frac) {
+        const double tt = std::min(frac * T, T - 1e-6);
+        const Eigen::Vector3d p = initTraj.getPos(tt);
+        const Eigen::Vector3d v = initTraj.getVel(tt);
+        log_manager_->infof(
+            "[INIT-PROFILE] %5.1f%% t=%7.1f xy=(%7.1f,%7.1f) z=%6.3f vz=%+.4f",
+            100.0 * frac, tt, p.x(), p.y(), p.z(), v.z());
+      };
+      for (int pc = 0; pc < 5; ++pc) row(0.01 * pc);   // head, 1% steps
+      for (int pc = 1; pc <= 20; ++pc) row(0.05 * pc); // rest, 5% steps
+    }
     Eigen::MatrixXd cps = globalMJO.getInitConstrainPoints(cps_num_prePiece_);
     setControlPoints(cps);
 
@@ -219,6 +350,11 @@ namespace ego_planner
     // DEBUG: run check for logging but ignore the verdict so we can visualise
     // the optimized trajectory even when it clips obstacles.
     if (enable_obstacles_) (void)checkCollision();
+
+    // Per-term vertical-force attribution on the converged trajectory —
+    // the ground-truth answer to "what lifts the path over open water".
+    if (diag_vertical_) logVerticalAttribution();
+
     bool occ = false;
     // bool occ = enable_obstacles_ ? checkCollision() : false;
 
@@ -278,6 +414,34 @@ namespace ego_planner
     double dt = 0.01;
     int i_end = std::max(1, (int)floor(T_end / dt));
     double t = 0.0;
+
+    // [DYNAMICS] peak normal (lateral) acceleration audit — the headless twin
+    // of the metrics panel's dynamics-violation row. MUST MATCH
+    // cruiseDynamicsGradCostVA's model: physical units via S =
+    // diag(unit_xy, unit_xy, unit_z), a_n = |v_m x a_m| / |v_m|, limit
+    // n_lat * g, evaluated only above the same min-speed gate.
+    {
+      const Eigen::Vector3d S(dyn_unit_xy_m_, dyn_unit_xy_m_, dyn_unit_z_m_);
+      const double a_limit = dyn_n_lat_ * dyn_g_;
+      double an_peak = 0.0, an_peak_t = 0.0;
+      int n_samp = 0, n_viol = 0;
+      for (double tt = 0.0; tt < T_end; tt += 0.1) {
+        const Eigen::Vector3d vm = S.cwiseProduct(traj.getVel(tt));
+        const Eigen::Vector3d am = S.cwiseProduct(traj.getAcc(tt));
+        const double vn = vm.norm();
+        if (vn < dyn_min_speed_mps_) continue;
+        const double an = vm.cross(am).norm() / vn;
+        ++n_samp;
+        if (an > a_limit) ++n_viol;
+        if (an > an_peak) { an_peak = an; an_peak_t = tt; }
+      }
+      if (n_samp > 0) {
+        LOG_INFO("[DYNAMICS] peak a_n=%.1f m/s^2 (%.2f g, limit %.1f g) at t=%.1f; "
+                 "violations %d/%d samples (%s)",
+                 an_peak, an_peak / dyn_g_, dyn_n_lat_, an_peak_t,
+                 n_viol, n_samp, dynamics_enable_ ? "term on" : "term OFF");
+      }
+    }
 
     // Terrain sweep via the heightmap: terrain is no longer voxelised into the
     // SDF, so the SDF pass below is boxes-only and terrain-BLIND — without this
@@ -354,6 +518,282 @@ namespace ego_planner
     }
 
     return occ;
+  }
+
+  // ==========================================================================
+  //  Per-term VERTICAL-force attribution on the FINAL trajectory.
+  //
+  //  Motivation: the altitude panel shows the path climbing 40-80 m over what
+  //  reads as open water (no terrain fill, no FE floor). The panel can only
+  //  draw terrain; it CANNOT show which cost term (if any) pushed z up, nor
+  //  can it show a min-jerk/MINCO smoothing overshoot (which has no spatial
+  //  cause to draw). This sweep closes that gap directly from the log:
+  //
+  //   - For every sample along the converged trajectory it recomputes the
+  //     VERTICAL component of each z-affecting cost term's force, using the
+  //     EXACT same code paths / formulas as addPVAGradCost2CT (sdfGradCostP
+  //     and RiskGradCostP are reused verbatim; the terrain / alt-cap / alt-
+  //     floor blocks are replicated with "MUST MATCH" markers).
+  //   - Sign convention: fz = -d(cost)/dz. fz > 0 pushes altitude UP,
+  //     fz < 0 pushes it DOWN. So a lifting term shows fz > 0; the cap shows
+  //     fz < 0; risk shows fz == 0 by construction (horizontal-only gradient).
+  //   - It then auto-detects z-humps (local maxima over horizontal distance)
+  //     and classifies each: if any spatial term exerts a real up-force on the
+  //     ascending flank it is TERM-DRIVEN (and names the term); if every
+  //     spatial fz is ~0 the hump is INTRINSIC — pure smoothness/variance
+  //     min-jerk overshoot, which is exactly the "climb over nothing" case.
+  //
+  //  Opt-in (optimization/diag_vertical) — one-shot, but verbose.
+  // ==========================================================================
+  void PolyTrajOptimizer::logVerticalAttribution(void)
+  {
+    poly_traj::Trajectory traj = jerkOpt_.getTraj();
+    const double T_end = traj.getDurations().sum();
+    if (T_end <= 1e-6) { LOG_WARN("[VDIAG] empty trajectory, skipping"); return; }
+
+    const int N = 500;                                    // one-shot: fine is ok
+    const double dt = T_end / N;
+    const double m_xy = (dyn_unit_xy_m_ > 0.0) ? dyn_unit_xy_m_ : 100.0;  // unit->m
+    // Noise gate: a term "exerts vertical force" only above a small fraction of
+    // a 1-unit violation's force (push terms scale with wei_* and a lever^2).
+    const double eps_obs = 1e-3 * std::max(1.0, wei_obs_);
+    const double eps_alt = 1e-3 * std::max(1.0, wei_alt_);
+
+    // ---- Pass 1: sample the trajectory, recompute every term's fz ----------
+    std::vector<double> S, Z, VZ, AZ;                      // s(km), z, vz, az
+    std::vector<double> Fobs, Fterr, Frisk, Fcap, Ffloor;  // vertical forces
+    std::vector<double> Hh, Clr, Near;                     // terrain h / clr / halo
+    std::vector<char>   Land;
+    std::vector<Eigen::Vector2d> XY;
+    S.reserve(N + 1); Z.reserve(N + 1);
+
+    double s_units = 0.0;
+    Eigen::Vector3d prev = traj.getPos(0.0);
+
+    // Piece lookup for the ARC-VARYING cap (MUST MATCH addPVAGradCost2CT):
+    // cumulative piece end-times; tt increases monotonically so a walking
+    // index suffices.
+    const Eigen::VectorXd durs = traj.getDurations();
+    int piece_idx = 0;
+    double piece_end = (durs.size() > 0) ? durs(0) : T_end;
+
+    for (int k = 0; k <= N; ++k) {
+      const double tt = std::min(k * dt, T_end - 1e-6);
+      while (tt > piece_end && piece_idx + 1 < durs.size()) {
+        ++piece_idx;
+        piece_end += durs(piece_idx);
+      }
+      // Same per-piece-or-scalar selection as the optimization loop.
+      const double zhi_i = (alt_zhi_pieces_.size() == durs.size())
+                               ? alt_zhi_pieces_(piece_idx)
+                               : alt_zhi_;
+      const Eigen::Vector3d pos = traj.getPos(tt);
+      const Eigen::Vector3d vel = traj.getVel(tt);
+      const Eigen::Vector3d acc = traj.getAcc(tt);
+
+      // cumulative HORIZONTAL arc-length — matches the panel's x-axis (km).
+      const double dxs = pos.x() - prev.x(), dys = pos.y() - prev.y();
+      s_units += std::sqrt(dxs * dxs + dys * dys);
+      prev = pos;
+
+      // terrain height / clearance under the foot (exact bilinear, as the term)
+      double h = 0.0; bool land = false;
+      float hh = 0.f, gx = 0.f, gy = 0.f;
+      if (terrain_hgrad_) {
+        land = terrain_hgrad_(pos.x(), pos.y(), &hh, &gx, &gy);
+        if (land) h = static_cast<double>(hh);
+      } else if (terrain_height_) {
+        const float hv = terrain_height_(pos.x(), pos.y());
+        if (std::isfinite(hv)) { h = hv; land = true; }
+      }
+      // clearance is over the surface if land, else over sea level (z itself).
+      const double clr = land ? (pos.z() - h) : pos.z();
+
+      // lateral terrain halo: max terrain within +-4 units (like TERRAIN-PROFILE)
+      // — proves whether NEIGHBOURING land (not underfoot) could be the driver.
+      double near = std::numeric_limits<double>::quiet_NaN();
+      if (terrain_hgrad_) {
+        for (int dx = -4; dx <= 4; ++dx)
+          for (int dy = -4; dy <= 4; ++dy) {
+            float hn, gnx, gny;
+            if (terrain_hgrad_(pos.x() + dx, pos.y() + dy, &hn, &gnx, &gny))
+              if (std::isnan(near) || hn > near) near = hn;
+          }
+      }
+
+      // ---- fz per term (fz>0 pushes altitude UP; fz = -d(cost)/dz) --------
+      // OBSTACLE (SDF boxes + hard ground/ceiling half-spaces): reuse verbatim.
+      double fz_obs = 0.0;
+      if (enable_obstacles_) {
+        Eigen::Vector3d gradp; double costp;
+        if (sdfGradCostP(0, pos, gradp, costp)) fz_obs = -gradp.z();
+      }
+      // TERRAIN (2.5D heightmap cubic). MUST MATCH addPVAGradCost2CT terrain
+      // block: viol = clearance - (z - h); d(cost)/dz = -wei_obs*3*viol^2, so
+      // the up-force fz = +wei_obs*3*viol^2 (never negative — terrain lifts).
+      double fz_terr = 0.0;
+      if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_) && land) {
+        const double viol = obstacle_clearance_ - (pos.z() - h);
+        if (viol > 0.0) fz_terr = wei_obs_ * 3.0 * viol * viol;
+      }
+      // RISK (moat/barrier arc-length integral). gradp uses only the horizontal
+      // dir_h (z==0) by construction, so fz_risk is ALWAYS 0 — logged to prove
+      // the zone term cannot be the lifter. MUST MATCH RiskGradCostP.
+      double fz_risk = 0.0;
+      if (use_risk_zones_) {
+        Eigen::Vector3d gradp, gradv; double costp;
+        if (RiskGradCostP(0, pos, vel, gradp, gradv, costp)) fz_risk = -gradp.z();
+      }
+      // ALT-CAP (quadratic down-force above the band, terrain-aware gate;
+      // arc-varying zhi_i, see piece lookup above).
+      // MUST MATCH the alt-cap block incl. the smoothstep gate. fz < 0 (down).
+      double fz_cap = 0.0; bool cap_on = false;
+      if (wei_alt_ > 0.0 && zhi_i >= 0.0 && pos.z() > zhi_i) {
+        double gate = 1.0, dgate = 0.0;
+        const double glo = obstacle_clearance_, ghi = 2.0 * obstacle_clearance_;
+        bool gated = false;
+        if (terrain_hgrad_) {
+          float hg = 0.f, hx = 0.f, hy = 0.f;
+          if (terrain_hgrad_(pos.x(), pos.y(), &hg, &hx, &hy)) {
+            const double tc = pos.z() - static_cast<double>(hg);
+            double t = (ghi > glo) ? (tc - glo) / (ghi - glo) : 1.0;
+            t = std::max(0.0, std::min(1.0, t));
+            gate = t * t * (3.0 - 2.0 * t);
+            if (t > 0.0 && t < 1.0) dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
+            gated = true;
+          }
+        }
+        if (!gated && sdf_manager_ && sdf_manager_->hasData()) {
+          const float d = sdf_manager_->getDistance(pos);
+          if (std::isfinite(d)) {
+            double t = (ghi > glo) ? (static_cast<double>(d) - glo) / (ghi - glo) : 1.0;
+            t = std::max(0.0, std::min(1.0, t));
+            gate = t * t * (3.0 - 2.0 * t);
+          }
+        }
+        if (gate > 0.0) {
+          const double ua = pos.z() - zhi_i;
+          const double gg = wei_alt_ * ua * ua * dgate;
+          fz_cap = -(wei_alt_ * 2.0 * ua * gate + gg);  // d(cost)/dz>0 -> fz<0
+          cap_on = true;
+        }
+      }
+      // ALT-FLOOR (quadratic up-force below the band). MUST MATCH the floor
+      // block: d(cost)/dz = -wei_alt*2*ua, so fz = +wei_alt*2*ua (lifts).
+      double fz_floor = 0.0; bool floor_on = false;
+      if (wei_alt_ > 0.0 && pos.z() < alt_zlo_) {
+        const double ua = alt_zlo_ - pos.z();
+        fz_floor = wei_alt_ * 2.0 * ua;
+        floor_on = true;
+      }
+
+      S.push_back(s_units * m_xy / 1000.0);
+      Z.push_back(pos.z()); VZ.push_back(vel.z()); AZ.push_back(acc.z());
+      Fobs.push_back(fz_obs); Fterr.push_back(fz_terr); Frisk.push_back(fz_risk);
+      Fcap.push_back(fz_cap); Ffloor.push_back(fz_floor);
+      Hh.push_back(h); Clr.push_back(clr); Near.push_back(near);
+      Land.push_back(land ? 1 : 0);
+      XY.emplace_back(pos.x(), pos.y());
+      (void)cap_on; (void)floor_on;   // computed for clarity; fz carries the sign
+    }
+
+    const int M = static_cast<int>(Z.size());
+
+    // ---- Pass 2: detect z-humps (local maxima over horizontal distance) ----
+    // Window ~2% of the samples; a hump must rise PROM units above its flanks
+    // and clear ALT_MIN (skip sea-level ripple). Tuned to catch the 40-80 m
+    // (~0.4-0.8 unit) climbs the panel shows.
+    const int W = std::max(3, M / 50);
+    const double PROM = 0.06;      // ~6 m prominence
+    const double ALT_MIN = 0.12;   // ~12 m above baseline
+    std::vector<int> peaks;
+    for (int i = W; i < M - W; ++i) {
+      if (Z[i] < ALT_MIN) continue;
+      bool is_max = true; double lo = Z[i];
+      for (int j = i - W; j <= i + W; ++j) {
+        if (Z[j] > Z[i]) { is_max = false; break; }
+        if (Z[j] < lo) lo = Z[j];
+      }
+      if (is_max && (Z[i] - lo) >= PROM) {
+        // de-dup flat tops: keep only if strictly the first of a plateau
+        if (peaks.empty() || (i - peaks.back()) > W) peaks.push_back(i);
+      }
+    }
+
+    // ---- Emit: legend + coarse table -------------------------------------
+    LOG_INFO("[VDIAG] ===== vertical-force attribution on final trajectory "
+             "(fz>0 => term pushes altitude UP; fz = -d(cost)/dz) =====");
+    LOG_INFO("[VDIAG] band[alt_zlo=%.4f alt_zhi=%.4f] wei_alt=%.1f | "
+             "wei_obs=%.1f clearance=%.4f | risk_zones=%s | unit_xy=%.1fm | "
+             "samples=%d humps=%d",
+             alt_zlo_, alt_zhi_, wei_alt_, wei_obs_, obstacle_clearance_,
+             use_risk_zones_ ? "on" : "off", m_xy, M, (int)peaks.size());
+    LOG_INFO("[VDIAG] cols: idx s_km xy z | land h clr near | "
+             "fz[obs terr risk cap floor] | vz az");
+    const int stride = std::max(1, M / 60);   // ~60 baseline rows
+    for (int i = 0; i < M; i += stride) {
+      LOG_INFO("[VDIAG] %3d %7.2f (%8.1f,%8.1f) z=%6.3f | l=%d h=%6.3f clr=%6.3f "
+               "near=%s | %+8.1f %+8.1f %+6.2f %+8.1f %+8.1f | vz=%+.4f az=%+.4f",
+               i, S[i], XY[i].x(), XY[i].y(), Z[i], (int)Land[i], Hh[i], Clr[i],
+               std::isnan(Near[i]) ? "water" : std::to_string(Near[i]).substr(0, 6).c_str(),
+               Fobs[i], Fterr[i], Frisk[i], Fcap[i], Ffloor[i], VZ[i], AZ[i]);
+    }
+
+    // ---- Emit: per-hump fine window + classification ----------------------
+    for (size_t p = 0; p < peaks.size(); ++p) {
+      const int i = peaks[p];
+      const int a = std::max(0, i - W), b = std::min(M - 1, i + W);
+      // dominant spatial up-force over the ASCENDING flank [a, i].
+      double up_terr = 0, up_floor = 0, up_obs = 0, dn_cap = 0, mx_risk = 0;
+      double near_max = std::numeric_limits<double>::quiet_NaN();
+      for (int j = a; j <= i; ++j) {
+        up_terr  = std::max(up_terr,  Fterr[j]);
+        up_floor = std::max(up_floor, Ffloor[j]);
+        up_obs   = std::max(up_obs,   Fobs[j]);       // >0 = ground/obstacle push
+        dn_cap   = std::min(dn_cap,   Fcap[j]);       // <0
+        mx_risk  = std::max(mx_risk,  std::abs(Frisk[j]));
+        if (!std::isnan(Near[j]) && (std::isnan(near_max) || Near[j] > near_max))
+          near_max = Near[j];
+      }
+      // classify
+      const char *verdict; const char *driver;
+      double drive_mag = 0.0;
+      if (up_terr > eps_obs && up_terr >= up_floor && up_terr >= up_obs) {
+        verdict = "TERM-DRIVEN"; driver = "terrain(8)"; drive_mag = up_terr;
+      } else if (up_obs > eps_obs && up_obs >= up_floor) {
+        verdict = "TERM-DRIVEN"; driver = "obstacle/ground(0)"; drive_mag = up_obs;
+      } else if (up_floor > eps_alt) {
+        verdict = "TERM-DRIVEN"; driver = "alt-floor cushion(6)"; drive_mag = up_floor;
+      } else {
+        verdict = "INTRINSIC";   driver = "smoothness/variance min-jerk overshoot";
+        drive_mag = 0.0;
+      }
+      LOG_INFO("[VDIAG-HUMP] #%zu @ s=%.2fkm idx=%d z=%.3f (rose from flank) | "
+               "underfoot: land=%d h=%.3f clr=%.3f | halo_max=%s | "
+               "flank up-force[terr=%.1f floor=%.1f obs=%.1f] down[cap=%.1f] "
+               "risk=%.3f | peak vz=%+.4f az=%+.4f",
+               p, S[i], i, Z[i], (int)Land[i], Hh[i], Clr[i],
+               std::isnan(near_max) ? "water" : std::to_string(near_max).substr(0, 6).c_str(),
+               up_terr, up_floor, up_obs, dn_cap, mx_risk, VZ[i], AZ[i]);
+      LOG_INFO("[VDIAG-HUMP] #%zu VERDICT: %s -- driver=%s (mag=%.1f). %s",
+               p, verdict, driver, drive_mag,
+               (std::string(verdict) == "INTRINSIC")
+                 ? "No spatial term lifts this hump: it is the quintic relaxing "
+                   "(min-jerk overshoot / variance smoothing), NOT terrain. "
+                   "Panel is truthful; fix is boundary/smoothing, not viz."
+                 : "A spatial cost term lifts this hump; check that term's "
+                   "radius/gain/band if the climb is unwanted.");
+      // fine window around the peak for eyeball confirmation
+      for (int j = a; j <= b; ++j) {
+        LOG_INFO("[VDIAG-FINE] #%zu %3d s=%7.2f z=%6.3f | fz[obs=%+7.1f "
+                 "terr=%+7.1f risk=%+5.2f cap=%+7.1f flr=%+7.1f] vz=%+.4f az=%+.4f",
+                 p, j, S[j], Z[j], Fobs[j], Fterr[j], Frisk[j], Fcap[j],
+                 Ffloor[j], VZ[j], AZ[j]);
+      }
+    }
+    if (peaks.empty())
+      LOG_INFO("[VDIAG-HUMP] no z-humps above prominence %.2f / min-alt %.2f "
+               "detected — trajectory is flat within tolerance.", PROM, ALT_MIN);
   }
 
   double PolyTrajOptimizer::costFunctionCallback(void *func_data, const double *x, double *grad, const int n)
@@ -663,7 +1103,13 @@ namespace ego_planner
         // and made zone-risk diagnosis impossible when a terrain-forced climb
         // (front-end leaves the band only where terrain demands it) was the
         // real contributor. Down-side is covered by ground/obstacle terms.
-        if (wei_alt_ > 0.0 && alt_zhi_ >= 0.0 && pos.z() > alt_zhi_) {
+        // ARC-VARYING: per-piece ceiling when alt_zhi_pieces_ is populated
+        // (see optimizeFromPath), scalar alt_zhi_ otherwise. zhi_i is constant
+        // w.r.t. the decision variables, so the gradients below are exact
+        // either way. MUST MATCH logVerticalAttribution's cap recompute.
+        const double zhi_i =
+            (alt_zhi_pieces_.size() == N) ? alt_zhi_pieces_(i) : alt_zhi_;
+        if (wei_alt_ > 0.0 && zhi_i >= 0.0 && pos.z() > zhi_i) {
             // TERRAIN-AWARE GATE — root fix for cap-vs-terrain penetration.
             // alt_zhi_ is a single SCALAR (front-end geodesic max z + headroom),
             // but the sparse-piece back-end corner-cuts across terrain HIGHER
@@ -726,7 +1172,7 @@ namespace ego_planner
                 // penalty's cubic (which works on the SMALL violation depth) —
                 // the cap then presses the trajectory into terrain. Quadratic
                 // shapes the swell but can never win against the clearance wall.
-                const double ua = pos.z() - alt_zhi_;
+                const double ua = pos.z() - zhi_i;
                 const double costa_z = wei_alt_ * ua * ua * gate;
                 // Full gradient of wei*ua^2*gate(z - h(x,y)):
                 //   d/dz = wei*(2*ua*gate + ua^2*dgate)
@@ -1280,12 +1726,25 @@ namespace ego_planner
     return true;
   }
 
+  // Even-progression term: variance of squared HORIZONTAL spacing between
+  // consecutive constraint points. Its job is to keep waypoint PROGRESSION
+  // along the route uniform (degenerate short pieces make the MINCO time
+  // allocation loiter — looping knots). Progression is a horizontal notion;
+  // the 3D version had a loophole: over open water z is penalty-free (between
+  // the alt floor and cap), so the cheapest way to "equalize" a short head
+  // piece was to BULGE IT VERTICALLY — reproducible 68 m humps at the start
+  // of over-water missions (seed 60978556; initial guess flat, all spatial
+  // gradients zero, hump vanished with wei_sqrvar=0). Measuring xy spacing
+  // closes the loophole while keeping the anti-loitering force intact; z
+  // geometry stays owned by terrain/band/smoothness. Gradient z-component is
+  // zero by construction (cost does not depend on z).
   void PolyTrajOptimizer::distanceSqrVarianceWithGradCost2p(const Eigen::MatrixXd &ps,
                                                             Eigen::MatrixXd &gdp,
                                                             double &var)
   {
     int N = ps.cols() - 1;
     Eigen::MatrixXd dps = ps.rightCols(N) - ps.leftCols(N);
+    dps.row(2).setZero();  // horizontal spacing only (see block comment)
     Eigen::VectorXd dsqrs = dps.colwise().squaredNorm().transpose();
     double dsqrsum = dsqrs.sum();
     double dquarsum = dsqrs.squaredNorm();
@@ -1378,6 +1837,23 @@ namespace ego_planner
     // Initial-velocity lead-in horizon in seconds (0 = disabled/legacy behavior).
     node_->declare_parameter("optimization/lead_in_time", 1.0);
     node_->get_parameter("optimization/lead_in_time", lead_in_time_);
+
+    // Post-convergence per-term vertical-force attribution sweep (heavy log,
+    // one-shot on the final trajectory). Turn on to diagnose "trajectory
+    // climbs over open water" humps: it names the lifting term or proves the
+    // hump is intrinsic min-jerk overshoot. Default OFF.
+    node_->declare_parameter("optimization/diag_vertical", false);
+    node_->get_parameter("optimization/diag_vertical", diag_vertical_);
+
+    // Arc-varying cap: cone slope + headroom. alt_cap_headroom is DECLARED by
+    // path_manager on this same node (shared value: scalar cap and the
+    // envelope must use one headroom), so only read it here; declaring twice
+    // throws ParameterAlreadyDeclared.
+    node_->declare_parameter("optimization/alt_cap_slope", 0.10);
+    node_->get_parameter("optimization/alt_cap_slope", alt_cap_slope_);
+    if (node_->has_parameter("optimization/alt_cap_headroom")) {
+      node_->get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_opt_);
+    }
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {

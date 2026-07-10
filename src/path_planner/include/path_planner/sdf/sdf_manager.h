@@ -78,7 +78,7 @@ class SDFManager : public IDistanceField {
                     const Eigen::Vector3d& bbox_lo,
                     const Eigen::Vector3d& bbox_hi);
 
-  // Returns signed distance in meters: min(static, dynamic patches).
+  // Returns signed distance in FRAME UNITS (1 unit = 100 m): min(static, dynamic).
   // +inf if outside map or unobserved by any layer.
   uint64_t revision() const override { return revision_; }
 
@@ -95,7 +95,7 @@ class SDFManager : public IDistanceField {
 
   // ----- dynamic obstacle layer -----
   //
-  // Patches extend influenceRadius() meters beyond the primitive AABB so
+  // Patches extend influenceRadius() frame units beyond the primitive AABB so
   // gradient is well defined out to that radius. Outside the patch AABB the
   // patch's contribution is +inf (i.e. only the static layer matters there).
 

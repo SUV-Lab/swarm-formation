@@ -629,13 +629,15 @@ namespace path_manager
 
         // === STEP 2~3: front-end search + densification ===
         std::vector<Eigen::Vector3d> full_route, clean_path;
-        if (!planFrontEnd(start_pos, wps, full_route, clean_path)) {
+        std::vector<double> cap_ref;
+        if (!planFrontEnd(start_pos, wps, full_route, clean_path, cap_ref)) {
             return false;
         }
 
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===
         bool opt_ok = optimizeStage(clean_path, full_route,
-                                    start_pos, start_vel, start_acc, wps);
+                                    start_pos, start_vel, start_acc, wps,
+                                    cap_ref);
 
         auto t_total_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] === TOTAL planGlobalTraj: %.1f ms ===",
@@ -647,7 +649,8 @@ namespace path_manager
 bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                                const std::vector<Eigen::Vector3d> &waypoints,
                                std::vector<Eigen::Vector3d> &full_route,
-                               std::vector<Eigen::Vector3d> &clean_path)
+                               std::vector<Eigen::Vector3d> &clean_path,
+                               std::vector<double> &cap_ref)
 {
         // Segment list: start -> wp1 -> ... -> wpN
         std::vector<Eigen::Vector3d> all_points;
@@ -979,6 +982,25 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         // geometry (obstacle/risk avoidance). Terrain-forced climbs survive
         // via the elevation clamp; a smoothed vertex that would lose
         // obstacle clearance keeps its original z. Endpoints stay fixed.
+        // Cap reference = the PRE-denoise COMMITTED profile. The altitude
+        // cap's contract is "no ballooning above the FRONT-END'S COMMITTED
+        // profile"; the z-denoise below is a numerical filter (FM2 grid
+        // sawtooth), not a commitment change — yet its moving average planes
+        // the profile's defining features (crest max: observed 11.90 -> 11.56,
+        // i.e. the cap reference lost 34 m). Snapshot the raw z PER VERTEX
+        // before the filter; after it, take the elementwise max with the
+        // filtered value (the filter's terrain/water CLAMPS may legitimately
+        // RAISE z — that lift is part of the commitment too). This vector
+        // becomes the arc-varying cap's reference through the subdivision
+        // below; its max feeds the scalar fallback.
+        std::vector<double> raw_z;
+        raw_z.reserve(full_route.size());
+        fe_raw_max_z_ = -1e9;
+        for (const auto &p : full_route) {
+            raw_z.push_back(p.z());
+            fe_raw_max_z_ = std::max(fe_raw_max_z_, p.z());
+        }
+
         if (full_route.size() >= 3) {
             const size_t n = full_route.size();
             std::vector<double> zs(n);
@@ -987,6 +1009,22 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             for (double z : zs) { z_lo0 = std::min(z_lo0, z); z_hi0 = std::max(z_hi0, z); }
 
             size_t adjusted = 0;
+            // Water-pin floor = the MISSION's own minimum altitude (not a
+            // clearance multiple). The old 0.5*obstacle_clearance floor was
+            // tuned when clearance was 0.2 (= 10 m, "so 10 m-cruise missions
+            // are not distorted upward"); the ridge-graze retune to 0.38
+            // silently raised it to 19 m and every low-altitude over-water
+            // mission grew a mid-route hump to 19 m between its 10 m
+            // endpoints. Anchoring to min(start, goal/waypoints) restores the
+            // intent for ANY altitude and matches the system-wide rule
+            // ("nothing ever requires diving below the mission altitude" —
+            // FM2 stiff down-side, optimizer alt floor): over water, a pin
+            // below the mission minimum is grid noise by definition. The 2 m
+            // absolute guard only defends against underwater start inputs.
+            double mission_min_z = start_pos.z();
+            for (const auto &wp : waypoints)
+                mission_min_z = std::min(mission_min_z, wp.z());
+            const double water_pin_floor = std::max(0.02, mission_min_z);
             const int W = 2;  // +-2 vertex moving average
             for (size_t i = 1; i + 1 < n; ++i) {
                 double acc = 0.0;
@@ -1002,17 +1040,15 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                     const float elev = terrain_data_.getElevation(
                         full_route[i].x(), full_route[i].y());
                     // Land: hold terrain + full clearance. Water (invalid
-                    // elev): sea level + half clearance is the floor — the
-                    // geodesic extraction can dip BELOW z=0 (observed -0.40,
-                    // its z-clamp is the grid bottom) and an underwater pin
-                    // sets the optimizer fighting the ground plane from the
-                    // start. Half clearance so 10 m-cruise missions are not
-                    // distorted upward.
+                    // elev): the mission-min floor (see water_pin_floor
+                    // above) — keeps the geodesic's z-noise pins (observed
+                    // -0.40, fighting the ground plane) above water WITHOUT
+                    // distorting low-altitude cruises upward.
                     if (elev > -1e9f) {
                         z_new = std::max(z_new,
                                          static_cast<double>(elev) + obstacle_clearance_);
                     } else {
-                        z_new = std::max(z_new, 0.5 * obstacle_clearance_);
+                        z_new = std::max(z_new, water_pin_floor);
                     }
                 }
                 const Eigen::Vector3d cand(full_route[i].x(), full_route[i].y(), z_new);
@@ -1032,6 +1068,11 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                 "[Z-DENOISE] shortcut z: %zu/%zu vertices smoothed, range [%.2f, %.2f] -> [%.2f, %.2f]",
                 adjusted, n, z_lo0, z_hi0, z_lo1, z_hi1);
         }
+        // Committed profile = elementwise max(raw, filtered): neither the
+        // filter's crest planing nor its safety clamps may LOWER the cap
+        // reference (see the raw_z snapshot comment above).
+        for (size_t i = 0; i < raw_z.size() && i < full_route.size(); ++i)
+            raw_z[i] = std::max(raw_z[i], full_route[i].z());
 
         // === STEP 3: Sparse piece boundaries (reference-style). ===
         // The shortcut vertices ARE the geometry; we only subdivide long
@@ -1044,14 +1085,25 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         clean_path.clear();
         clean_path.reserve(full_route.size() * 4);
         clean_path.push_back(full_route.front());
+        // cap_ref mirrors clean_path vertex-for-vertex (SAME skip rule, SAME
+        // interpolation) so the optimizer's index pairing holds by
+        // construction — it hard-checks sizes and falls back to the scalar
+        // cap on mismatch.
+        cap_ref.clear();
+        cap_ref.reserve(full_route.size() * 4);
+        cap_ref.push_back(raw_z.empty() ? full_route.front().z() : raw_z.front());
         for (size_t i = 0; i + 1 < full_route.size(); ++i) {
             const Eigen::Vector3d &a = full_route[i];
             const Eigen::Vector3d &b = full_route[i + 1];
             const double seg_len = (b - a).norm();
             if (seg_len < 1e-6) continue;
             const int n_sub = std::max(1, (int)std::ceil(seg_len / max_seg));
+            const double ra = (i < raw_z.size()) ? raw_z[i] : a.z();
+            const double rb = (i + 1 < raw_z.size()) ? raw_z[i + 1] : b.z();
             for (int kk = 1; kk <= n_sub; ++kk) {
-                clean_path.push_back(a + (b - a) * ((double)kk / n_sub));
+                const double t = (double)kk / n_sub;
+                clean_path.push_back(a + (b - a) * t);
+                cap_ref.push_back(ra + (rb - ra) * t);
             }
         }
         log_manager_->infof(
@@ -1091,7 +1143,8 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                                 const Eigen::Vector3d &start_pos,
                                 const Eigen::Vector3d &start_vel,
                                 const Eigen::Vector3d &start_acc,
-                                const std::vector<Eigen::Vector3d> &waypoints)
+                                const std::vector<Eigen::Vector3d> &waypoints,
+                                const std::vector<double> &cap_ref)
 {
         // Stage 2 = trajectory optimization. The optimizer owns the MINCO
         // initial-trajectory build + L-BFGS; we only pass the front-end path
@@ -1121,6 +1174,21 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             for (const auto &p : clean_path) {
                 path_max_z = std::max(path_max_z, p.z());
                 path_min_z = std::min(path_min_z, p.z());
+            }
+            // Restore the PRE-denoise committed max (see planFrontEnd): the
+            // z-denoise filter planes crests (~0.34 u observed), and a cap
+            // referenced to the planed value under-caps the crossing the
+            // front-end actually committed to — shoulder grind vs the terrain
+            // band, -1004. The filter smooths the PINS; the CAP keeps the
+            // committed ceiling. (No symmetric fix for the floor: min-side
+            // denoise error only makes the floor laxer, never a conflict.)
+            const double path_max_z_denoised = path_max_z;
+            path_max_z = std::max(path_max_z, fe_raw_max_z_);
+            if (path_max_z - path_max_z_denoised > 1e-6) {
+                log_manager_->infof(
+                    "[ALT] cap reference restored to pre-denoise max: "
+                    "%.3f (denoised profile max %.3f)",
+                    path_max_z, path_max_z_denoised);
             }
             // Headroom must leave the quintic a workable vertical corridor
             // above the obstacle-clearance floor: a +1 slack over a sea-level
@@ -1177,7 +1245,7 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         }
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
-            global_traj, local_traj);
+            global_traj, local_traj, cap_ref);
         if (!opt_success) {
             log_manager_->errorf("Trajectory optimization failed");
             return false;
@@ -1322,6 +1390,34 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
         terrain_data_.cols, terrain_data_.rows, terrain_data_.resolution,
         terrain_data_.origin_x, terrain_data_.origin_y,
         terrain_data_.center_x, terrain_data_.center_y);
+
+    // ALIGNMENT SELF-CHECK: terrainToWorld uses the cell-CENTRE convention,
+    // which provably matches the grid_map_rviz_plugin mesh (wx = L-(row+.5)res).
+    // Sampling the peak cell's world position back through getElevation must
+    // therefore return the peak value exactly (bilinear at an exact node).
+    // Before the half-cell fix this read the average of the 4 shifted
+    // neighbours instead (delta up to the full cell-to-cell relief, ~114 m
+    // horizontal displacement) — a nonzero delta here means the sampled
+    // surface is offset from the rendered terrain.
+    {
+        int pc = -1, pr = -1;
+        float peak = -std::numeric_limits<float>::infinity();
+        for (int c = 0; c < terrain_data_.cols; ++c) {
+            for (int r = 0; r < terrain_data_.rows; ++r) {
+                const float e = terrain_data_.elevation[c * terrain_data_.rows + r];
+                if (std::isfinite(e) && e > peak) { peak = e; pc = c; pr = r; }
+            }
+        }
+        if (pc >= 0) {
+            const Eigen::Vector3d w = terrain_data_.terrainToWorld(pc, pr, peak);
+            const float back = terrain_data_.getElevation(w.x(), w.y());
+            log_manager_->infof(
+                "[TERRAIN-ALIGN] peak cell (c=%d,r=%d) h=%.4f -> world (%.2f,%.2f) "
+                "-> getElevation=%.4f delta=%.4f %s",
+                pc, pr, peak, w.x(), w.y(), back, back - peak,
+                std::abs(back - peak) < 1e-3 ? "(ALIGNED)" : "(MISALIGNED!)");
+        }
+    }
 
     // Eagerly build the (boxes-only, empty-static) SDF grid as soon as
     // terrain arrives, so the dynamic-obstacle layer can accept clicks before

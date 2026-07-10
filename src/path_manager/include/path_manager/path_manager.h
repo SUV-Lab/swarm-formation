@@ -53,9 +53,10 @@ namespace path_manager
   // V3 risk zone: quadratic moat with compact support.
   // moat(x) = peak * (1 - ||x - center|| / reach)^2 for d < reach, else 0.
   struct RiskZone {
-    Eigen::Vector3d center;
-    double reach;   // meters; risk is exactly zero outside this ball
-    double peak;    // dimensionless in (0, 1]
+    Eigen::Vector3d center; // frame units (1 unit = 100 m)
+    double reach;   // FRAME UNITS (not metres!); vertical-cylinder radius,
+                    // risk exactly zero outside (typical scenario ~90 = 9 km)
+    double peak;    // dimensionless in (0, 1]; >1 saturates to a flat disc
   };
 
   // Terrain elevation data extracted from GridMap
@@ -92,6 +93,14 @@ namespace path_manager
 
       // Step 3: World coord → fractional grid coordinate (same fx/fy convention
       // as the RViz panel's getElevationAt) then BILINEAR sample.
+      // CELL-CENTER convention (the -0.5): elevation[col*rows+row] is the
+      // height AT the cell centre — that is where terrainToWorld places it
+      // and where the grid_map_rviz_plugin renders its mesh vertex. Without
+      // the shift the bilinear nodes sit on cell corners, displacing the
+      // whole sampled surface by +half a cell (~114 m at 2.288-unit DEM
+      // cells) in BOTH world axes relative to the rendered terrain: every
+      // consumer (FM2 occupancy, optimizer terrain term, panel) shared the
+      // shift, so layers agreed with each other but not with the mesh.
       // WHY bilinear (was nearest-cell): the SDF the optimizer plans against is
       // voxelised from THIS function; nearest-cell made it a piecewise-constant,
       // ~cell-coarse (~230 m DEM cell) terrain, so a trajectory that only grazed
@@ -102,8 +111,8 @@ namespace path_manager
       // nearest-cell + invalid rule so the "water = no terrain" voxelisation is
       // unchanged.
       constexpr float kInv = -std::numeric_limits<float>::infinity();
-      const double fx = (terrain_world_x - origin_x) / resolution;
-      const double fy = (terrain_world_y - origin_y) / resolution;
+      const double fx = (terrain_world_x - origin_x) / resolution - 0.5;
+      const double fy = (terrain_world_y - origin_y) / resolution - 0.5;
       const int col0 = static_cast<int>(std::floor(fx));
       const int row0 = static_cast<int>(std::floor(fy));
 
@@ -159,8 +168,10 @@ namespace path_manager
       const double rot_y = center_y - rel_x;
       const double twx = 2.0 * center_x - rot_x;
       const double twy = rot_y;
-      const double fx = (twx - origin_x) / resolution;
-      const double fy = (twy - origin_y) / resolution;
+      // Cell-centre convention (-0.5), same as getElevation — cost and
+      // gradient must come from the SAME surface.
+      const double fx = (twx - origin_x) / resolution - 0.5;
+      const double fy = (twy - origin_y) / resolution - 0.5;
       const int col0 = static_cast<int>(std::floor(fx));
       const int row0 = static_cast<int>(std::floor(fy));
       constexpr float kInv = -std::numeric_limits<float>::infinity();
@@ -309,6 +320,11 @@ namespace path_manager
     double esdf_viz_step_{4.0};           // ESDF occupancy-viz sample step [m]; coarse = cheap
     bool   esdf_viz_enable_{true};        // publish the ESDF occupancy overlay at all
     bool astar_bypass_shortcut_{false};
+    // Max z of the front-end route BEFORE the z-denoise filter (per plan, set
+    // in planFrontEnd). The altitude cap must reference the COMMITTED profile,
+    // not the filtered one — the moving average planes crest maxima (~34 m
+    // observed) and an under-referenced cap grinds against the terrain band.
+    double fe_raw_max_z_{-1e9};
     Eigen::Vector3d map_lower_bound_;
     Eigen::Vector3d map_upper_bound_;
     std::vector<LocalTrajData> swarm_traj_;
@@ -323,20 +339,20 @@ namespace path_manager
     // the default -0.1) disables that plane. Without these, L-BFGS can
     // drift the trajectory below the start altitude to dodge obstacles,
     // which is non-physical.
-    double ground_height_ = -0.1;    // m (absolute world z)
-    double virtual_ceil_height_ = -0.1;  // m (absolute world z)
+    double ground_height_ = -0.1;    // frame units (absolute world z; 1 u = 100 m)
+    double virtual_ceil_height_ = -0.1;  // frame units (absolute world z)
     TerrainData terrain_data_;
 
     // ESDF map for SDF-based RRT* queries (phase 3).
     // Built from terrain + obstacle_centers_ inside planGlobalTraj.
     path_planner::sdf::SDFManager sdf_manager_;
-    double sdf_voxel_size_ = 1.0;  // m
+    double sdf_voxel_size_ = 1.0;  // frame units
     double sdf_voxel_z_{0.0};             // vertical voxel size; <=0 -> isotropic (= sdf_voxel_size_)
-    // A* search step size (meters between neighboring path nodes). Kept
+    // A* search step size (frame units between neighboring path nodes). Kept
     // independent of sdf_voxel_size_ so we can coarsen A* path density
     // without touching SDF resolution. Must be a multiple of voxel size
     // for the grid-aligned neighbor set to make sense.
-    double astar_step_size_ = 1.0;  // m
+    double astar_step_size_ = 1.0;  // frame units
 
     // 3D A* front-end. Uses ESDF for collision, risk_zones_ for soft cost.
     path_planner::search::PathSearcher searcher_;
@@ -367,11 +383,15 @@ namespace path_manager
 
     // Stage 1 (front-end): A*/FM2 search + corner-adaptive densification.
     // Produces the route (full_route) and densified path (clean_path) the
-    // optimizer consumes. SDF must already be built. Returns true on success.
+    // optimizer consumes, plus cap_ref: the COMMITTED z per clean_path vertex
+    // (pre-z-denoise profile elementwise-maxed with the safety-clamped one,
+    // interpolated through the same subdivision) — the arc-varying altitude
+    // cap's reference. SDF must already be built. Returns true on success.
     bool planFrontEnd(const Eigen::Vector3d &start_pos,
                       const std::vector<Eigen::Vector3d> &waypoints,
                       std::vector<Eigen::Vector3d> &full_route,
-                      std::vector<Eigen::Vector3d> &clean_path);
+                      std::vector<Eigen::Vector3d> &clean_path,
+                      std::vector<double> &cap_ref);
 
     // Stage 2 (trajectory optimization): MINCO initial trajectory + L-BFGS.
     // Takes the front-end path; sets traj_ global/local. Returns true on success.
@@ -380,7 +400,8 @@ namespace path_manager
                        const Eigen::Vector3d &start_pos,
                        const Eigen::Vector3d &start_vel,
                        const Eigen::Vector3d &start_acc,
-                       const std::vector<Eigen::Vector3d> &waypoints);
+                       const std::vector<Eigen::Vector3d> &waypoints,
+                       const std::vector<double> &cap_ref);
 
     ego_planner::PolyTrajOptimizer::Ptr poly_traj_opt_;
     bool is_optimizer_initialized_;
