@@ -4,10 +4,10 @@
 #include <Eigen/Eigen>
 #include <thread>
 #include <chrono>
-#include <fstream>
 #include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <swarm_graph/swarm_graph.hpp>
+#include <mmp_vehicle_dynamics/flight_dynamics.hpp>
 #include "../../common/log_manager.hpp"
 
 // Forward declaration for LogManager
@@ -46,9 +46,9 @@ namespace ego_planner
   // risk zone (shared definition with path_manager / front-end RiskZoneLite).
   struct RiskZone {
     Eigen::Vector3d center;
-    double reach;   // meters; risk is exactly zero outside the vertical cylinder
-    double peak;    // raw yaml max_risk_level; values >= 1 saturate the moat
-                    // at the shared cap (1-1e-3) over most of the cylinder
+    double reach;            // horizontal semi-axis, frame units
+    double peak;             // raw yaml max_risk_level
+    double vertical_reach{0.0}; // vertical semi-axis; <=0 falls back to reach
   };
 
   enum FORMATION_TYPE
@@ -89,20 +89,10 @@ namespace ego_planner
     int variable_num_;
     int piece_num_;
     int iter_num_;
-    double min_ellip_dist2_;
-
-    std::string result_fn_;
-    std::fstream result_file_;
-
-    enum FORCE_STOP_OPTIMIZE_TYPE
-    {
-      DONT_STOP,
-      STOP_FOR_REBOUND,
-      STOP_FOR_ERROR
-    } force_stop_type_;
 
 
     double wei_obs_;
+    double wei_ground_barrier_;  // crash-plane half-space (>> any soft term)
     double wei_swarm_;
     double wei_feas_;
     double wei_sqrvar_;
@@ -119,7 +109,7 @@ namespace ego_planner
     double wei_risk_;          // Risk zone cost weight for trajectory optimization
     // Smoothed trajectory-level equivalent of the front-end's finite barrier
     // K (manager/risk_barrier): per-length cost on NON-exempt zones so MINCO
-    // keeps the same standoff at the cylinder rim that FM2 planned with.
+    // keeps the same standoff at the ellipsoid rim that FM2 planned with.
     // 0 disables (moat-only sharing).
     double wei_risk_barrier_{0.0};
 
@@ -167,15 +157,51 @@ namespace ego_planner
     // search died (-1008) on cliff cells. Signature: (x, y, &h, &dhdx, &dhdy)
     // -> false over pure water / outside the DEM.
     std::function<bool(double, double, float *, float *, float *)> terrain_hgrad_;
+    // DEM cell size in frame units (0 = unknown). The SWATH-TERRAIN FLOOR
+    // sampling pitch tracks this: 2.3 u was sized for the 250 m korea grid
+    // and skips 6-8 cells at a stride on the 30-40 m corridor crops, so a
+    // one-cell ridge inside the swath went unseen and the cap floor it exists
+    // to provide silently vanished.
+    double terrain_cell_u_{0.0};
 
     // Hard half-space constraints applied outside the SDF so the clearance
     // band does not contaminate them. Sentinel: ≤ -0.5 disables the plane.
     double ground_height_{-1.0};
     double virtual_ceil_height_{-1.0};
 
+    // [TERRAIN-TAPER] An endpoint PINNED closer to terrain than the clearance
+    // band (e.g. an 18 m-AGL goal against the 30 m band) makes the terrain
+    // penalty and the hard end-constraint mutually unsatisfiable: the gradient
+    // around the pinned point never vanishes and L-BFGS burns its budget
+    // (-1004) or the line search dies (-1005). Fix: near such an endpoint the
+    // DEMANDED clearance tapers linearly from the band down to the endpoint's
+    // own commanded AGL — the mission stays untouched, the cost contradiction
+    // disappears. Set per-plan from ini/finState in OptimizeTrajectory_lbfgs.
+    bool terr_taper_on_[2] = {false, false};      // [0]=start, [1]=goal
+    Eigen::Vector2d terr_taper_xy_[2];
+    double terr_taper_agl_[2] = {0.0, 0.0};
+    // Same disease, altitude-floor edition: the scalar floor (ground cushion)
+    // may sit above a pinned endpoint (NOE start 0.05 < cushion 0.09). The
+    // scalar must stay (it cushions sag off the ground-plane cliff), so the
+    // floor tapers POINTWISE to just under the pinned z near that endpoint.
+    bool floor_taper_on_[2] = {false, false};
+    double floor_taper_z_[2] = {0.0, 0.0};
+    double terrain_taper_len_{30.0};              // taper radius (units)
+
+    void setupTerrainTaper(const Eigen::Vector3d &start, const Eigen::Vector3d &goal);
+    // targets + their analytic d/dxy (cost and gradient from one surface)
+    double terrainClearanceTarget(const Eigen::Vector3d &pos, Eigen::Vector2d *grad_xy) const;
+    double altitudeFloorTarget(const Eigen::Vector3d &pos, Eigen::Vector2d *grad_xy) const;
+
     // Risk zone data for trajectory optimization.
     std::vector<RiskZone> risk_zones_;
     bool use_risk_zones_{false};
+    // Per-zone terrain LOS mask and spatial gradient. PathManager owns the
+    // precomputed radial-horizon field; this callback lets the optimizer use
+    // exactly the same effective risk support as FM2/A* without copying a DEM.
+    // Return value is visibility in [0,1]. grad may be null.
+    std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)>
+        risk_visibility_;
     // Per-zone: 1 = contains the plan start/goal, barrier OFF (moat only).
     // Same must-enter exemption rule as the front-end's prepareBarrier.
     std::vector<char> zone_barrier_exempt_;
@@ -208,25 +234,18 @@ namespace ego_planner
     // for the scalar cap). Yaml: optimization/alt_cap_headroom (shared).
     double alt_cap_headroom_opt_{0.4};
 
-    // Cruise dynamics (lateral/normal-acceleration limit). Evaluated in
-    // PHYSICAL metres: v_m = S*v with S = diag(unit_xy, unit_xy, unit_z);
-    // since the 2026-07 frame fix the frame is isotropic (1 unit = 100 m on
-    // every axis), so both units default to 100. The limit is n_lat * g as the
-    // normal-acceleration ceiling. (The old "reserved" speed_mps / n_lon params
-    // were never used by any term and were removed.)
-    // Minimum-speed (stall) floor, frame units/s. 0 = OFF (default: platform
-    // stall spec undecided; also must stay off for rest-start missions).
-    // Companion of the lateral-g term below: without a speed floor the
-    // optimizer escapes every curvature limit by braking to ~zero.
+    // Generic fixed-wing inverse dynamics. MINCO provides physical r/v/a after
+    // frame scaling; the shared model recovers required lift, load factor,
+    // drag, thrust, dynamic pressure, bank angle, and flight-path angle. This
+    // replaces the old |v x a|/|v| curvature-only proxy, which omitted gravity
+    // and therefore reported zero load in straight level flight.
     double min_vel_{0.0};
 
     bool dynamics_enable_{true};
     double wei_dynamics_{0.0};
     double dyn_unit_xy_m_{100.0};
     double dyn_unit_z_m_{100.0};
-    double dyn_n_lat_{30.0};
-    double dyn_g_{9.81};
-    double dyn_min_speed_mps_{1.0};
+    mmp_vehicle_dynamics::Parameters dynamics_params_;
 
   public:
     PolyTrajOptimizer() {}
@@ -239,19 +258,28 @@ namespace ego_planner
     void setObstacleClearance(double c) { obstacle_clearance_ = c; }
     void setGroundHeight(double h)      { ground_height_ = h; }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
-    void setTerrainHeightmap(std::function<float(double, double)> f) { terrain_height_ = std::move(f); }
+    // cell_u > 0 = DEM cell size in frame units (scales the swath-floor
+    // sampling pitch; see terrain_cell_u_).
+    void setTerrainHeightmap(std::function<float(double, double)> f,
+                             double cell_u = 0.0) {
+        terrain_height_ = std::move(f);
+        terrain_cell_u_ = cell_u;
+    }
     void setTerrainHeightGrad(std::function<bool(double, double, float *, float *, float *)> f) { terrain_hgrad_ = std::move(f); }
     void setControlPoints(const Eigen::MatrixXd &points);
     void setSwarmTrajs(SwarmTrajData *swarm_trajs_ptr);
     void setDroneId(const int drone_id);
     void setFormation(const std::vector<Eigen::Vector3d>& formation_positions, int formation_size);
-    void setMaxVel(double vel) { max_vel_ = vel; }
     void setRiskZones(const std::vector<RiskZone> &zones) {
         risk_zones_ = zones;
         use_risk_zones_ = !zones.empty();
         // Stale exemptions must not outlive the zone list they were computed
         // for; prepareRiskBarrier() recomputes them per plan.
         zone_barrier_exempt_.clear();
+    }
+    void setRiskVisibility(
+        std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)> f) {
+        risk_visibility_ = std::move(f);
     }
 
     // Mark zones containing the plan start/goal as barrier-exempt (they must
@@ -275,10 +303,6 @@ namespace ego_planner
         wei_alt_ = std::max(0.0, weight);
     }
 
-    inline ConstrainPoints getControlPoints() { return cps_; }
-    inline const ConstrainPoints *getControlPointsPtr(void) { return &cps_; }
-    inline const poly_traj::MinJerkOpt *getMinJerkOptPtr(void) { return &jerkOpt_; }
-    inline int get_cps_num_prePiece_() { return cps_num_prePiece_; };
     inline double getSwarmClearance(void) { return swarm_clearance_; }
 
     bool OptimizeTrajectory_lbfgs(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
@@ -369,11 +393,13 @@ namespace ego_planner
                               Eigen::Vector3d &grada,
                               double &costa);
 
-    bool cruiseDynamicsGradCostVA(const Eigen::Vector3d &v,
-                                  const Eigen::Vector3d &a,
-                                  Eigen::Vector3d &gradv,
-                                  Eigen::Vector3d &grada,
-                                  double &cost);
+    bool fixedWingDynamicsGradCostPVA(const Eigen::Vector3d &p,
+                                      const Eigen::Vector3d &v,
+                                      const Eigen::Vector3d &a,
+                                      Eigen::Vector3d &gradp,
+                                      Eigen::Vector3d &gradv,
+                                      Eigen::Vector3d &grada,
+                                      double &cost);
 
     void distanceSqrVarianceWithGradCost2p(const Eigen::MatrixXd &ps,
                                            Eigen::MatrixXd &gdp,

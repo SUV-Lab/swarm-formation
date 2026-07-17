@@ -20,7 +20,9 @@ using path_planner::eikSolve;
 
 // Reference CPU FMM (priority-queue, frozen-set) — same Godunov as the GPU.
 static std::vector<float> cpuFMM(const std::vector<float>& F,
-                                 int nx, int ny, int nz, float cres, long gflat) {
+                                 int nx, int ny, int nz, float cres, long gflat,
+                                 float hz = -1.0f) {
+  if (hz <= 0.0f) hz = cres;
   const long N = (long)nx * ny * nz;
   const long pxy = (long)nx * ny;
   std::vector<float> T(N, kEikInf);
@@ -39,7 +41,7 @@ static std::vector<float> cpuFMM(const std::vector<float>& F,
     float mx = std::min(i > 0 ? fz(c - 1) : kEikInf, i < nx - 1 ? fz(c + 1) : kEikInf);
     float my = std::min(j > 0 ? fz(c - nx) : kEikInf, j < ny - 1 ? fz(c + nx) : kEikInf);
     float mz = std::min(k > 0 ? fz(c - pxy) : kEikInf, k < nz - 1 ? fz(c + pxy) : kEikInf);
-    return eikSolve(mx, my, mz, cres, cres, cres, 1.0f / std::max(Fl[c], 1e-6f));
+    return eikSolve(mx, my, mz, cres, cres, hz, 1.0f / std::max(Fl[c], 1e-6f));
   };
 
   while (!pq.empty()) {
@@ -121,27 +123,43 @@ int main() {
     }
   printf("[varyF] max|GPU-CPU|=%.4f (over %ld path-region cells)\n", maxabsV, cmp);
 
+  // ---- case 2c: ANISOTROPIC spacing (hz != hx) — the planner's actual
+  //      regime (every fm2SolveEikonal call passes cres_z != cres). ----
+  std::fill(F.begin(), F.end(), 1.0f);
+  std::fill(Tg.begin(), Tg.end(), 0.0f);
+  ok = fm2EikonalGPU(F.data(), nx, ny, nz, cres, cres, cres * 0.1f, 0, 0, 0, Tg.data());
+  if (!ok) { printf("GPU FIM failed (aniso)\n"); return 1; }
+  Tc = cpuFMM(F, nx, ny, nz, cres, gflat, cres * 0.1f);
+  double maxabsA = 0.0;
+  for (long c = 0; c < N; ++c)
+    maxabsA = std::max(maxabsA, (double)std::fabs(Tg[c] - Tc[c]));
+  printf("[aniso hz=0.1h] max|GPU-CPU|=%.4f\n", maxabsA);
+
   // ---- case 3: real k=1 scale (3410x3410x40 = 466M cells), GPU timing ----
-  // The CPU FMM took ~192 s on this size; here we just confirm the GPU solves
-  // it and how fast. Uniform F is the worst case (wave crosses the full grid).
+  // The CPU FMM took ~192 s on this size; confirm the GPU solves it, and
+  // include the flags in the PASS verdict (a broken production-scale path
+  // must not report green).
+  bool lok = false, lnan = false; long lreached = 0, LNg = 0;
   {
     const int LX = 3410, LY = 3410, LZ = 40;
     const long LN = (long)LX * LY * LZ;
+    LNg = LN;
     std::vector<float> Fl(LN, 1.0f), Tl(LN);
     auto g0 = std::chrono::high_resolution_clock::now();
-    bool lok = fm2EikonalGPU(Fl.data(), LX, LY, LZ, 1.0f, 1.0f, 1.0f, 0, 0, 0, Tl.data());
+    lok = fm2EikonalGPU(Fl.data(), LX, LY, LZ, 1.0f, 1.0f, 1.0f, 0, 0, 0, Tl.data());
     auto g1 = std::chrono::high_resolution_clock::now();
-    long lreached = 0; bool lnan = false;
     for (long c = 0; c < LN; ++c) { if (std::isnan(Tl[c])) lnan = true; if (Tl[c] < 1e17f) ++lreached; }
     printf("[large 3410x3410x40=%ldM] GPU %.0f ms  reached=%ld/%ld  nan=%d  ok=%d\n",
            LN / 1000000, std::chrono::duration<double, std::milli>(g1 - g0).count(),
            lreached, LN, (int)lnan, (int)lok);
   }
 
-  // The float-precision residual accumulates along long waves (~0.05% of T);
-  // the geodesic (gradient of T) is insensitive to it, so the extracted path is
-  // identical. Tolerance is generous (absolute, T values reach ~200).
-  bool pass = (reached == N) && !nan && (maxabs < 0.3) && (maxabs2 < 0.3) && (maxabsV < 0.3);
+  // The shifted-form eikSolve keeps per-update error O(eps*slow*h), so GPU
+  // and CPU stay within float ulps of each other even at mission-scale T.
+  bool pass = (reached == N) && !nan &&
+              (maxabs < 0.3) && (maxabs2 < 0.3) && (maxabsV < 0.3) &&
+              (maxabsA < 0.3) &&
+              lok && !lnan && (lreached == LNg);
   printf("%s\n", pass ? "PASS (GPU == CPU FMM to float precision)" : "FAIL");
   return pass ? 0 : 1;
 }

@@ -4,10 +4,36 @@
 
     # ---- Front-end (FM2 / A*) ----
     manager/front_end: fm2              # fm2 | astar(ablation baseline)
-    manager/fm2_coarse_k: 1             # eikonal grid downsample; lower = finer/slower
+    manager/fm2_coarse_k: 3             # eikonal grid downsample; lower = finer/slower
     manager/fm2_max_cells: 1640000000   # OOM guard; over this -> straight-line fallback
     manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
+    # DEM radial-horizon/viewshed mask. center.z of each risk zone is the
+    # emitter altitude; risk is removed below the highest intervening terrain
+    # LOS and reappears if the vehicle climbs above that horizon.
+    manager/risk_terrain_mask_enable: true
+    # Zone center.z semantics: true = AGL mast height (effective emitter z =
+    # DEM terrain at (x,y) + center.z; z=0 sits ON the ground — author x,y and
+    # the zone can never end up underground/floating). Scenario yamls were
+    # bulk-converted 2026-07-16 (legacy absolute z=25 -> mast 0.1 = 10 m).
+    manager/risk_zone_agl: true
+                                        # altitude. Set true only when every zone z is an
+                                        # actual mast height above its local DEM.
+    manager/risk_vertical_ratio: 0.35   # vertical/horizontal semi-axis ratio of the
+                                        # engagement ellipsoid (Rv = ratio * Rh)
+    manager/risk_mask_radial_step: 0.0  # <=0: use DEM resolution
+    manager/risk_mask_softness: 0.10    # smooth LOS edge in z-units (0.10 = 10 m)
+    manager/risk_mask_viz_step: 0.0     # <=0: auto; RViz cell size
+    manager/risk_mask_viz_slice_offset: 0.0  # planar mode only: slice z offset
+    manager/risk_mask_viz_threshold: 0.50    # visible side of horizon boundary
+    manager/risk_mask_viz_mode: heatmap # heatmap | volume | fixed_agl | fixed_msl
+    manager/risk_heatmap_agl_max: 2.0   # heatmap ramp saturates at this detection-floor AGL (frame units)
+    manager/risk_heatmap_max_dim: 768   # heatmap grid cells along the longer AABB side
+    manager/risk_heatmap_offset: 1.0   # drape height above DEM in frame units (1.0 = 100 m; must clear the rendered mesh on slopes)
+    manager/risk_heatmap_safe_transparent: true  # floor >= agl_max cells stay transparent (imagery visible); shadow stays blue
+    manager/risk_mask_viz_contours: 5   # clipped altitude contours in volume mode
+    manager/risk_mask_viz_volume_alpha: 0.54
+    manager/risk_mask_viz_agl: 0.15     # fixed_agl diagnostic height (15 m)
     manager/risk_smha_w: 2.0            # SMHA* suboptimality bound (astar front-end only)
     manager/dyn_yaw_seed: -1                    # dynamic-obstacle (ship) spawn-orientation RNG seed.
                                         # (seed 60978556 reproduces the 2026-07-10 start-hump case
@@ -84,6 +110,18 @@
                                        # inflates durations (jerk decreases with T). At 1e4 it lands
                                        # ~1e3-5e3 vs time ~1e6 — shaping force without duration creep.
     optimization/weight_obstacle: 10000.0
+    optimization/weight_ground_barrier: 4000000.0  # crash-plane half-space below
+                                       # manager/ground_height. BARRIER class, not a
+                                       # preference: the equilibrium dip below the
+                                       # plane is sqrt(F_opposing/(81 W)). The
+                                       # sub-stall recovery dive of a (0,0,+50 m/s)
+                                       # stress start pushes F ~ 30k/sample (measured
+                                       # bottoms: -0.093 at W=10k, -0.029 at 250k,
+                                       # +0.002 at 1e6, +0.010 at 4e6); with the 0.02
+                                       # plane offset, 4e6 stays dry up to ~4x that
+                                       # pressure (F ~ 130k). Line search verified
+                                       # stable at 4e6 (no -1005/-1008; weirdvz50/100
+                                       # + pin005 regression all clean)
     optimization/weight_swarm: 0.0
     optimization/weight_feasibility: 10000.0
     optimization/weight_sqrvariance: 10000.0  # even HORIZONTAL progression (xy-scoped since the
@@ -146,42 +184,88 @@
     # Corner radius ~ v^2/a: with 2.0/5.0 turns are tight; lower max_acc for wider arcs.
     optimization/max_vel: 2.0
     optimization/max_acc: 5.0
-    optimization/min_vel: 0.0   # STALL floor (units/s); 0 = OFF. Platform stall spec
-                                # undecided — keep off for rest-start missions (the
-                                # spin-up phase would be penalized). Companion of the
-                                # lateral-g term: without a speed floor every tight
-                                # corner is escaped by braking to ~zero (verified:
-                                # pinned 200 m/s head + reversal goal -> 1-D
-                                # stop-and-reverse, a_n identically 0). For A/B
-                                # experiments: 1.0 (=100 m/s, ~50% cruise).
+    optimization/min_vel: 0.0   # Legacy frame-unit floor; keep off. The physical
+                                # minimum-speed envelope is enforced below by the
+                                # shared dynamics model and handles rest starts with
+                                # a finite smooth penalty.
     manager/max_vel: 2.0
     manager/max_acc: 5.0
+    manager/initial_speed_unit_m: 0.0  # TrajectoryCommand m/s -> frame units/s
 
-    # ---- Cruise dynamics: lateral-g (curvature) limit ----
-    # a_normal = |v x a| / |v| in PHYSICAL m/s^2 must stay under n_lat * g.
-    # Separate from the magnitude feasibility terms: those allow |a| up to
-    # 5 u/s^2 = 500 m/s^2 (~51 g) in ANY direction; this term caps the
-    # component that actually turns the velocity vector. R_min = V^2/(n*g):
-    # at 200 m/s cruise with n_lat=30 -> ~136 m. Violation is normalized by
-    # (n_lat*g)^2 before the cubic (the raw spec form overflows to ~1e18 on
-    # a 51 g corner and destroys the cost balance).
+    # ---- Subsonic fixed-wing inverse dynamics ----
+    # The MINCO position polynomial is converted to physical r/v/a and checked
+    # against lift, load factor, drag/thrust, dynamic pressure, bank angle,
+    # flight-path angle, and speed limits. Gravity is part of the required
+    # specific force, so straight level flight correctly requires L ~= m*g.
     optimization/dynamics_enable: true
-    optimization/weight_dynamics: 1000.0   # NB: verified too weak vs the 1e4-class terms to bite
-                                            # hard — raise toward 10000 when a real platform limit
-                                            # (n_lat below) makes this term load-bearing.
-    optimization/dynamics_unit_xy_m: 100.0  # frame->metres; isotropic since the
-    optimization/dynamics_unit_z_m: 100.0   # 2026-07 z-scale fix (44 was the bug era)
-    optimization/dynamics_n_lat: 30.0       # ENFORCED lateral load-factor ceiling (a_n <= n_lat*g).
-                                            # Soft cubic equilibrium overshoots the ceiling by ~4%
-                                            # (same class as the terrain-band equilibrium), so set
-                                            # this ~10-15% BELOW the platform's true limit when a
-                                            # hard guarantee is needed (verified A/B: enforcing 1.3
-                                            # held a true 1.5 g limit with 0% over-limit time).
-                                            # 30 = missile-class placeholder; unreachable at km-piece
-                                            # geometry, so the term is dormant until a platform spec
-                                            # lands (utilisation shows ~3% on current missions).
-    optimization/dynamics_g: 9.81
-    optimization/dynamics_min_speed_mps: 1.0
+    optimization/weight_dynamics: 10000.0
+    optimization/dynamics_unit_xy_m: 100.0
+    optimization/dynamics_unit_z_m: 100.0
+
+    # Publicly reproducible representative high-subsonic fixed-wing baseline.
+    # These are explicit assumptions, not a claim of an exact proprietary
+    # coefficient/thrust data set. See mmp_vehicle_dynamics/MODEL.md.
+    optimization/dynamics_mass_kg: 1300.0
+    optimization/dynamics_wing_area_m2: 1.0
+    optimization/dynamics_g: 9.80665
+    optimization/dynamics_rho0_kgpm3: 1.225
+    optimization/dynamics_density_scale_height_m: 8500.0
+    optimization/dynamics_altitude_reference_m: 0.0
+    optimization/dynamics_cd0: 0.035
+    optimization/dynamics_induced_drag_factor: 0.080
+    optimization/dynamics_cl_min: -0.40
+    optimization/dynamics_cl_max: 1.40
+    optimization/dynamics_load_factor_max: 2.50
+    optimization/dynamics_thrust_min_n: 0.0
+    optimization/dynamics_thrust_max_n: 3200.0
+    optimization/dynamics_speed_min_mps: 122.0  # >= aero stall from CL_max 1.40
+                                        # (v_stall = 121.9 m/s @ 1300 kg): the old
+                                        # 120 declared an envelope with NO feasible
+                                        # level-flight state at its own minimum —
+                                        # every 120-122 m/s crossing logged
+                                        # unavoidable CL violations + a permanent
+                                        # startup consistency warning.
+    optimization/dynamics_speed_max_mps: 230.0    # margined 211.6 m/s; SHADOWED by
+                                        # the frame feasibility cap (max_vel 2.0 u/s
+                                        # = 200 m/s) unless max_vel is raised — cruise
+                                        # settles ~201 m/s, so this ceiling does not
+                                        # bind today. See max_vel note above.
+    optimization/dynamics_activation_speed_mps: 40.0  # REPORTING/BUCKETING ONLY,
+                                        # vestigial after the q-floor fix: it no
+                                        # longer gates any penalty (the old sigma
+                                        # speed-gate is gone). Now used only to split
+                                        # the audit/panel sub-stall vs cruise buckets
+                                        # and as the envelopeUtilization low-speed
+                                        # guard. Changing it has no trajectory effect.
+    optimization/dynamics_dynamic_pressure_max_pa: 45000.0  # DEAD in the live config:
+                                        # needs >= 260 m/s at sea level to reach the
+                                        # margined 41.4 kPa, but cruise is pinned ~201
+                                        # m/s. A dominated structural backstop, not a
+                                        # binding limit — kept for completeness.
+    optimization/dynamics_bank_max_deg: 65.0
+    optimization/dynamics_flight_path_max_deg: 30.0
+    optimization/dynamics_margin: 0.08  # penalty onset backoff. 0.02 put the
+                                        # soft-penalty EQUILIBRIUM slightly ABOVE the
+                                        # hard limit (measured: zone-slalom converged at
+                                        # peak 105.7%, 336 violations); 0.08 moves the
+                                        # onset to 92% and the same mission lands at
+                                        # 98.0% / 0 violations (same lesson as the 0.30
+                                        # terrain band vs its ~0.21 equilibrium)
+
+    # Relative weights within optimization/weight_dynamics.
+    optimization/dynamics_penalty_speed: 5.0
+    optimization/dynamics_penalty_lift: 2.0
+    optimization/dynamics_penalty_load: 2.0
+    optimization/dynamics_penalty_thrust: 2.0
+    optimization/dynamics_penalty_dynamic_pressure: 1.0
+    optimization/dynamics_penalty_bank: 1.0
+    optimization/dynamics_penalty_flight_path: 1.0
+
+    # 3DOF tracking simulator (same atmosphere/aero/propulsion parameters).
+    simulation/integration_step_s: 0.02
+    simulation/position_gain: 0.04
+    simulation/velocity_gain: 0.80
+    simulation/max_commanded_acceleration_mps2: 30.0
 
     # Initial-velocity lead-in horizon (seconds). On an in-flight replan, plant a
     # short path point along start_vel so the min-jerk head piece coasts out in the
@@ -204,12 +288,19 @@
     # islets. Legacy v1 .esdf caches mismatch this and are auto-rebuilt.
     manager/sdf_voxel_size: 0.0   # xy voxel; <=0 = auto (DEM cell size, per world)
     manager/sdf_voxel_z: 0.1      # z voxel = 10 m real (isotropic frame /100)
-    manager/ground_height: -0.01        # <= -0.5 disables
+    manager/ground_height: 0.02         # crash-plane onset 2 m ABOVE the sea
+                                        # (= the FSM water_pin_floor, so pinned
+                                        # endpoints never sit inside it). The C²
+                                        # cubic barrier has ZERO gradient at its
+                                        # plane, so under opposing pressure F the
+                                        # equilibrium sits sqrt(F/(81 W)) BELOW it —
+                                        # a plane at 0.0 therefore ALWAYS submerges
+                                        # slightly (measured -0.029 at W=250k under
+                                        # a sub-stall recovery dive). The offset puts
+                                        # that dip inside the margin, above the true
+                                        # surface. <= -0.5 disables
     manager/virtual_ceil_height: -1.0   # <= -0.5 disables
     manager/world: "dokdo"              # fallback; RViz MapSelector overrides
-    manager/esdf_dir: "src/mmp_terrain/data"
-    manager/save_terrain_esdf: ""       # override path; empty = <esdf_dir>/<world>.esdf
-    manager/load_terrain_esdf: ""
     manager/dynamic_obstacle_radius: 50.0  # RViz "Publish Point" sphere radius, FRAME units (50 = 5 km; use 0.5 for 50 m)
     manager/esdf_viz_step: 4.0             # ESDF occupancy overlay sample step [m]; 1.0 = fine but ~30 s per (re)load
     manager/esdf_viz_enable: true          # false = skip the overlay entirely (fastest planning)

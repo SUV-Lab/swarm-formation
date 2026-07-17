@@ -123,7 +123,16 @@ namespace ego_planner
       // suppression is untouched, and the lift is LOCAL (a tall islet no
       // longer raises the whole route's ceiling — only its own +-kSwathR).
       const double kSwathR = 25.0;      // ~ one piece length of deviation slack
-      const double kStepS = 2.3, kStepL = 2.3;  // ~ DEM cell sampling
+      // Sampling pitch = one DEM cell (2.3 u matched the 250 m korea grid;
+      // corridor crops are 30-40 m, and a coarser-than-cell stride can step
+      // clean over a one-cell ridge — the exact failure this floor guards).
+      // Runs once per plan on a decision-variable-independent quantity, so
+      // the finer pitch costs ~0.1-0.2 s worst case, not per-iteration time.
+      const double kStepMax = 2.3;
+      const double step = (terrain_cell_u_ > 0.0)
+                              ? std::min(kStepMax, terrain_cell_u_)
+                              : kStepMax;
+      const double kStepS = step, kStepL = step;
       auto swath_terr = [&](const Eigen::Vector3d &a,
                             const Eigen::Vector3d &b) -> double {
         double hmax = -1e30;
@@ -194,6 +203,12 @@ namespace ego_planner
         // Degenerate (near-vertical final chord): keep the 3D direction.
         approach_dir = clean_path.back() - clean_path[clean_path.size() - 2];
     }
+    if (approach_dir.norm() < 1e-9) {
+        // Coincident final points (e.g. start == goal): normalize() on a
+        // zero vector would send NaN into the MINCO tail state silently.
+        // Any level heading serves a zero-length approach.
+        approach_dir = Eigen::Vector3d::UnitX();
+    }
     approach_dir.normalize();
     Eigen::Vector3d traj_end_vel = approach_dir * max_vel;
     Eigen::Vector3d traj_end_acc = Eigen::Vector3d::Zero();
@@ -250,6 +265,112 @@ namespace ego_planner
     return true;
   }
 
+  void PolyTrajOptimizer::setupTerrainTaper(
+      const Eigen::Vector3d &start, const Eigen::Vector3d &goal)
+  {
+    const Eigen::Vector3d ends[2] = {start, goal};
+    for (int e = 0; e < 2; ++e) {
+      terr_taper_on_[e] = false;
+      floor_taper_on_[e] = false;
+      terr_taper_xy_[e] = ends[e].head<2>();
+
+      // terrain-band taper (land endpoints pinned inside the clearance band)
+      if (terrain_hgrad_ || terrain_height_) {
+        float h = 0.f, gx = 0.f, gy = 0.f;
+        bool land = false;
+        if (terrain_hgrad_) {
+          land = terrain_hgrad_(ends[e].x(), ends[e].y(), &h, &gx, &gy);
+        } else {
+          const float hv = terrain_height_(ends[e].x(), ends[e].y());
+          if (std::isfinite(hv)) { h = hv; land = true; }
+        }
+        if (land) {
+          const double agl = ends[e].z() - static_cast<double>(h);
+          if (agl < obstacle_clearance_) {
+            terr_taper_on_[e] = true;
+            terr_taper_agl_[e] = std::max(0.0, agl);  // underground request -> 0
+            if (log_manager_) {
+              log_manager_->infof(
+                  "[TERRAIN-TAPER] %s pinned at %.3f u AGL < band %.2f u — "
+                  "demanded clearance tapers to the commanded AGL within %.0f u",
+                  e == 0 ? "start" : "goal", agl, obstacle_clearance_,
+                  terrain_taper_len_);
+            }
+          }
+        }
+      }
+
+      // altitude-floor taper (endpoint pinned below the scalar floor/cushion)
+      if (wei_alt_ > 0.0 && ends[e].z() < alt_zlo_) {
+        floor_taper_on_[e] = true;
+        floor_taper_z_[e] = ends[e].z();
+        if (log_manager_) {
+          log_manager_->infof(
+              "[TERRAIN-TAPER] %s pinned at z %.3f < altitude floor %.3f — "
+              "floor tapers to the pin within %.0f u",
+              e == 0 ? "start" : "goal", ends[e].z(), alt_zlo_,
+              terrain_taper_len_);
+        }
+      }
+    }
+  }
+
+  // Shared taper ramp: low at the endpoint, high beyond `len`, smoothstep in
+  // between. COST AND GRADIENT FROM THE SAME SURFACE (project hard rule — a
+  // frozen approximation of a spatially-varying target de-syncs cost from
+  // gradient and the line search dies, -1005/-1008): the analytic
+  // d(target)/dxy is returned alongside. smoothstep has zero slope at BOTH
+  // ends, so the taper adds no kinks of its own.
+  static double taperedTarget(
+      const Eigen::Vector2d &pos_xy, const Eigen::Vector2d &end_xy,
+      double low, double high, double len, Eigen::Vector2d *grad_xy)
+  {
+    const Eigen::Vector2d dv = pos_xy - end_xy;
+    const double d = dv.norm();
+    if (d >= len) { grad_xy->setZero(); return high; }
+    const double t = d / len;
+    const double s = t * t * (3.0 - 2.0 * t);
+    const double dsdt = 6.0 * t * (1.0 - t);
+    if (d > 1e-9) {
+      *grad_xy = (high - low) * dsdt / len * (dv / d);
+    } else {
+      grad_xy->setZero();
+    }
+    return low + (high - low) * s;
+  }
+
+  double PolyTrajOptimizer::altitudeFloorTarget(
+      const Eigen::Vector3d &pos, Eigen::Vector2d *grad_xy) const
+  {
+    double floor_t = alt_zlo_;
+    grad_xy->setZero();
+    for (int e = 0; e < 2; ++e) {
+      if (!floor_taper_on_[e]) continue;
+      Eigen::Vector2d g;
+      const double v = taperedTarget(pos.head<2>(), terr_taper_xy_[e],
+                                     floor_taper_z_[e] - 0.02, alt_zlo_,
+                                     terrain_taper_len_, &g);
+      if (v < floor_t) { floor_t = v; *grad_xy = g; }
+    }
+    return floor_t;
+  }
+
+  double PolyTrajOptimizer::terrainClearanceTarget(
+      const Eigen::Vector3d &pos, Eigen::Vector2d *grad_xy) const
+  {
+    double target = obstacle_clearance_;
+    grad_xy->setZero();
+    for (int e = 0; e < 2; ++e) {
+      if (!terr_taper_on_[e]) continue;
+      Eigen::Vector2d g;
+      const double v = taperedTarget(pos.head<2>(), terr_taper_xy_[e],
+                                     terr_taper_agl_[e], obstacle_clearance_,
+                                     terrain_taper_len_, &g);
+      if (v < target) { target = v; *grad_xy = g; }
+    }
+    return target;
+  }
+
   bool PolyTrajOptimizer::OptimizeTrajectory_lbfgs(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
@@ -266,6 +387,9 @@ namespace ego_planner
     jerkOpt_.reset(iniState, finState, piece_num_);
 
     Eigen::Vector3d start_pos = iniState.col(0);
+
+    // [TERRAIN-TAPER] arm the per-endpoint clearance taper (see header).
+    setupTerrainTaper(iniState.col(0), finState.col(0));
 
     double final_cost;
 
@@ -300,7 +424,6 @@ namespace ego_planner
     }
 
     iter_num_ = 0;
-    force_stop_type_ = DONT_STOP;
 
     int result;
 
@@ -333,8 +456,7 @@ namespace ego_planner
         // 4 restarts: observed hard instances were still DESCENDING fast
         // (risk 9.5M -> 7.9M and accelerating) when 2 restarts ran out, and
         // the published mid-iterate carried needle-spike artifacts.
-        if (result != lbfgs::LBFGSERR_MAXIMUMLINESEARCH || restarts >= 4 ||
-            force_stop_type_ != DONT_STOP) {
+        if (result != lbfgs::LBFGSERR_MAXIMUMLINESEARCH || restarts >= 4) {
             break;
         }
         ++restarts;
@@ -348,16 +470,14 @@ namespace ego_planner
         log_manager_->infof("Iteration info: costFunction calls=%d, max_iterations=%d", iter_num_, lbfgs_params.max_iterations);
     }
 
-    // DEBUG: run check for logging but ignore the verdict so we can visualise
-    // the optimized trajectory even when it clips obstacles.
-    if (enable_obstacles_) (void)checkCollision();
+    // Run the final trajectory audit unconditionally. Besides collision and
+    // terrain checks it now contains the shared flight-envelope audit, which
+    // must still run in obstacle-free ablations.
+    (void)checkCollision();
 
     // Per-term vertical-force attribution on the converged trajectory —
     // the ground-truth answer to "what lifts the path over open water".
     if (diag_vertical_) logVerticalAttribution();
-
-    bool occ = false;
-    // bool occ = enable_obstacles_ ? checkCollision() : false;
 
     t2 = node_->get_clock()->now();
     double time_ms = (t2 - t1).seconds() * 1000;
@@ -393,10 +513,9 @@ namespace ego_planner
     }
     optimal_points = cps_.points;
 
-    if (occ)
-      return false;
-    else
-      return true;
+    // Collision verdicts are reported via logs only (checkCollision above);
+    // failing the plan here would need an FSM-consequences decision first.
+    return true;
   }
   bool PolyTrajOptimizer::checkCollision(void)
   {
@@ -416,53 +535,84 @@ namespace ego_planner
     int i_end = std::max(1, (int)floor(T_end / dt));
     double t = 0.0;
 
-    // [DYNAMICS] peak normal (lateral) acceleration audit — the headless twin
-    // of the metrics panel's dynamics-violation row. MUST MATCH
-    // cruiseDynamicsGradCostVA's model: physical units via S =
-    // diag(unit_xy, unit_xy, unit_z), a_n = |v_m x a_m| / |v_m|, limit
-    // n_lat * g, evaluated only above the same min-speed gate.
+    // [DYNAMICS] full fixed-wing flight-envelope audit. This is the same
+    // inverse model used by the optimizer term and the dynamics simulator.
     {
       const Eigen::Vector3d S(dyn_unit_xy_m_, dyn_unit_xy_m_, dyn_unit_z_m_);
-      const double a_limit = dyn_n_lat_ * dyn_g_;
-      double an_peak = 0.0, an_peak_t = 0.0, an_sum = 0.0;
+      // DUAL-DOMAIN stats. The inverse point-mass model is only meaningful
+      // for steady flight (v >= speed_min): below stall the required CL/T
+      // explode by construction (a rest-start mission BEGINS below stall),
+      // and a peak taken over the spin-up ramp reads 1700%+ while the cruise
+      // portion is clean — a misleading headline. So: CRUISE domain
+      // (v >= speed_min) is the headline; the sub-stall ramp is reported
+      // separately as a duration + its own peak, never mixed in.
+      double util_peak = 0.0, util_peak_t = 0.0, util_sum = 0.0;
+      double ramp_peak = 0.0, ramp_s = 0.0;
+      mmp_vehicle_dynamics::EnvelopeLimit peak_limit =
+          mmp_vehicle_dynamics::EnvelopeLimit::None;
+      mmp_vehicle_dynamics::Evaluation peak_eval;
       int n_samp = 0, n_viol = 0;
-      std::vector<double> an_all;
-      an_all.reserve(static_cast<size_t>(T_end / 0.01) + 2);
+      std::vector<double> utilization_all;
+      utilization_all.reserve(static_cast<size_t>(T_end / 0.01) + 2);
       // dt matches the metrics panel's dynamics-violation row (100 Hz) so the
-      // two report identical peaks — 10 Hz missed short spikes the panel saw.
+      // two report identical peaks.
       for (double tt = 0.0; tt < T_end; tt += 0.01) {
+        const Eigen::Vector3d pm = S.cwiseProduct(traj.getPos(tt));
         const Eigen::Vector3d vm = S.cwiseProduct(traj.getVel(tt));
         const Eigen::Vector3d am = S.cwiseProduct(traj.getAcc(tt));
-        const double vn = vm.norm();
-        if (vn < dyn_min_speed_mps_) continue;
-        const double an = vm.cross(am).norm() / vn;
+        const auto eval = mmp_vehicle_dynamics::evaluateInverseDynamics(
+            dynamics_params_, pm, vm, am);
+        if (!eval.valid) continue;
+        // Below activation speed the model outputs are still finite (q-floor)
+        // but not meaningful as envelope demands — count the TIME into the
+        // ramp so the reported spin-up duration covers 0 -> speed_min, not
+        // just activation -> speed_min (the old skip under-reported a
+        // rest-start ramp by the 0-40 m/s third), while keeping such samples
+        // out of ramp_peak/utilization.
+        if (eval.speed_mps < dynamics_params_.model_activation_speed_mps) {
+          ramp_s += 0.01;
+          continue;
+        }
+        mmp_vehicle_dynamics::EnvelopeLimit limit;
+        const double util = mmp_vehicle_dynamics::envelopeUtilization(
+            dynamics_params_, eval, &limit);
+        if (eval.speed_mps < dynamics_params_.speed_min_mps) {
+          ramp_s += 0.01;
+          if (util > ramp_peak) ramp_peak = util;
+          continue;
+        }
         ++n_samp;
-        an_sum += an;
-        an_all.push_back(an);
-        if (an > a_limit) ++n_viol;
-        if (an > an_peak) { an_peak = an; an_peak_t = tt; }
+        util_sum += util;
+        utilization_all.push_back(util);
+        if (!mmp_vehicle_dynamics::isWithinEnvelope(dynamics_params_, eval)) {
+          ++n_viol;
+        }
+        if (util > util_peak) {
+          util_peak = util;
+          util_peak_t = tt;
+          peak_limit = limit;
+          peak_eval = eval;
+        }
       }
       if (n_samp > 0) {
-        // ENVELOPE UTILISATION ("부담율"): a_n as a fraction of the n_lat*g
-        // limit. The binary violation count saturates at 0% for any legal
-        // path; utilisation grades HOW DEMANDING a legal path is (a 40%- vs
-        // 15%-envelope route are both violation-free but not equally
-        // comfortable), and >100% degenerates to the old violation notion.
-        std::nth_element(an_all.begin(), an_all.begin() + (an_all.size() * 95) / 100,
-                         an_all.end());
-        const double an_p95 = an_all[(an_all.size() * 95) / 100];
-        // "term on" must mirror the ACTUAL cost gate (enable AND weight>0):
-        // enable=true with weight=0 used to log "on" while the term was dead.
-        LOG_INFO("[DYNAMICS] peak a_n=%.1f m/s^2 (%.2f g) | envelope use "
-                 "peak=%.1f%% mean=%.1f%% p95=%.1f%% (limit %.1f g) at t=%.1f; "
-                 "violations %d/%d samples (%s, min_vel=%.2f u/s)",
-                 an_peak, an_peak / dyn_g_,
-                 100.0 * an_peak / a_limit,
-                 100.0 * (an_sum / n_samp) / a_limit,
-                 100.0 * an_p95 / a_limit,
-                 dyn_n_lat_, an_peak_t, n_viol, n_samp,
-                 (dynamics_enable_ && wei_dynamics_ > 0.0) ? "term on" : "term OFF",
-                 min_vel_);
+        const size_t p95_index = (utilization_all.size() * 95) / 100;
+        std::nth_element(utilization_all.begin(),
+                         utilization_all.begin() + p95_index,
+                         utilization_all.end());
+        const double util_p95 = utilization_all[p95_index];
+        LOG_INFO("[DYNAMICS] envelope(cruise) peak=%.1f%% (%s) mean=%.1f%% "
+                 "p95=%.1f%% at t=%.1f; state V=%.1f m/s n=%.2f CL=%.2f "
+                 "T=%.0f N q=%.0f Pa bank=%.1f deg; violations %d/%d; "
+                 "sub-stall ramp %.1f s (peak %.0f%%) (%s)",
+                 100.0 * util_peak,
+                 mmp_vehicle_dynamics::envelopeLimitName(peak_limit),
+                 100.0 * util_sum / n_samp, 100.0 * util_p95,
+                 util_peak_t, peak_eval.speed_mps, peak_eval.load_factor,
+                 peak_eval.signed_lift_coefficient, peak_eval.thrust_required_n,
+                 peak_eval.dynamic_pressure_pa,
+                 peak_eval.bank_angle_rad * 180.0 / M_PI,
+                 n_viol, n_samp, ramp_s, 100.0 * ramp_peak,
+                 (dynamics_enable_ && wei_dynamics_ > 0.0) ? "term on" : "term OFF");
       }
     }
 
@@ -656,7 +806,8 @@ namespace ego_planner
       // the up-force fz = +wei_obs*3*viol^2 (never negative — terrain lifts).
       double fz_terr = 0.0;
       if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_) && land) {
-        const double viol = obstacle_clearance_ - (pos.z() - h);
+        Eigen::Vector2d tg_xy;   // fz only needs the z-derivative
+        const double viol = terrainClearanceTarget(pos, &tg_xy) - (pos.z() - h);
         if (viol > 0.0) fz_terr = wei_obs_ * 3.0 * viol * viol;
       }
       // RISK (moat/barrier arc-length integral). gradp uses only the horizontal
@@ -672,7 +823,10 @@ namespace ego_planner
       // MUST MATCH the alt-cap block incl. the smoothstep gate. fz < 0 (down).
       double fz_cap = 0.0; bool cap_on = false;
       if (wei_alt_ > 0.0 && zhi_i >= 0.0 && pos.z() > zhi_i) {
-        double gate = 1.0, dgate = 0.0;
+        // dgz = ∂gate/∂z: heightmap keys on (z − h) so dgz = dgate; the SDF
+        // fallback keys on d(pos) so dgz = dgate·∇d.z. MUST MATCH the cap
+        // block's gate_grad.z.
+        double gate = 1.0, dgz = 0.0;
         const double glo = obstacle_clearance_, ghi = 2.0 * obstacle_clearance_;
         bool gated = false;
         if (terrain_hgrad_) {
@@ -682,21 +836,25 @@ namespace ego_planner
             double t = (ghi > glo) ? (tc - glo) / (ghi - glo) : 1.0;
             t = std::max(0.0, std::min(1.0, t));
             gate = t * t * (3.0 - 2.0 * t);
-            if (t > 0.0 && t < 1.0) dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
+            if (t > 0.0 && t < 1.0) dgz = 6.0 * t * (1.0 - t) / (ghi - glo);
             gated = true;
           }
         }
         if (!gated && sdf_manager_ && sdf_manager_->hasData()) {
-          const float d = sdf_manager_->getDistance(pos);
-          if (std::isfinite(d)) {
+          float d = 0.f;
+          Eigen::Vector3d grad_d = Eigen::Vector3d::Zero();
+          if (sdf_manager_->getDistanceAndGradient(pos, &d, &grad_d) &&
+              std::isfinite(d)) {
             double t = (ghi > glo) ? (static_cast<double>(d) - glo) / (ghi - glo) : 1.0;
             t = std::max(0.0, std::min(1.0, t));
             gate = t * t * (3.0 - 2.0 * t);
+            if (t > 0.0 && t < 1.0)
+              dgz = 6.0 * t * (1.0 - t) / (ghi - glo) * grad_d.z();
           }
         }
         if (gate > 0.0) {
           const double ua = pos.z() - zhi_i;
-          const double gg = wei_alt_ * ua * ua * dgate;
+          const double gg = wei_alt_ * ua * ua * dgz;
           fz_cap = -(wei_alt_ * 2.0 * ua * gate + gg);  // d(cost)/dz>0 -> fz<0
           cap_on = true;
         }
@@ -704,8 +862,10 @@ namespace ego_planner
       // ALT-FLOOR (quadratic up-force below the band). MUST MATCH the floor
       // block: d(cost)/dz = -wei_alt*2*ua, so fz = +wei_alt*2*ua (lifts).
       double fz_floor = 0.0; bool floor_on = false;
-      if (wei_alt_ > 0.0 && pos.z() < alt_zlo_) {
-        const double ua = alt_zlo_ - pos.z();
+      Eigen::Vector2d fg_xy;     // fz only needs the z-derivative
+      const double zlo_t = altitudeFloorTarget(pos, &fg_xy);
+      if (wei_alt_ > 0.0 && pos.z() < zlo_t) {
+        const double ua = zlo_t - pos.z();
         fz_floor = wei_alt_ * 2.0 * ua;
         floor_on = true;
       }
@@ -823,7 +983,6 @@ namespace ego_planner
   {
     PolyTrajOptimizer *opt = reinterpret_cast<PolyTrajOptimizer *>(func_data);
 
-    opt->min_ellip_dist2_ = std::numeric_limits<double>::max();
 
     Eigen::Map<const Eigen::MatrixXd> P(x, 3, opt->piece_num_ - 1);
     Eigen::Map<const Eigen::VectorXd> t(x + (3 * (opt->piece_num_ - 1)), opt->piece_num_);
@@ -896,7 +1055,7 @@ namespace ego_planner
         opt->log_manager_->infof("  risk_cost=%.6f (weight=%.3f, barrier=%.3f)", obs_swarm_feas_qvar_costs(3), opt->wei_risk_, opt->wei_risk_barrier_);
         opt->log_manager_->infof("  altitude_cost=%.6f (weight=%.3f, band=[%.2f, %.2f])", obs_swarm_feas_qvar_costs(6), opt->wei_alt_, opt->alt_zlo_, opt->alt_zhi_);
         opt->log_manager_->infof("  feasibility_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(4), opt->wei_feas_);
-        opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, n_lat=%.1f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, opt->dyn_n_lat_,
+        opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, V=[%.0f,%.0f] m/s, n<=%.2f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, opt->dynamics_params_.speed_min_mps, opt->dynamics_params_.speed_max_mps, opt->dynamics_params_.load_factor_max,
                                  (opt->dynamics_enable_ && opt->wei_dynamics_ > 0.0) ? "on" : "off");
         opt->log_manager_->infof("  terrain_cost=%.6f (weight=%.3f, heightmap 2.5D, %s)", obs_swarm_feas_qvar_costs(8), opt->wei_obs_, opt->terrain_height_ ? "on" : "off");
         opt->log_manager_->infof("  time_cost=%.6f (weight=%.3f)", time_cost, opt->wei_time_);
@@ -914,8 +1073,8 @@ namespace ego_planner
   int PolyTrajOptimizer::earlyExitCallback(void *func_data, const double *x, const double *g, const double fx,
                                            const double xnorm, const double gnorm, const double step, int n, int k, int ls)
   {
-    PolyTrajOptimizer *opt = reinterpret_cast<PolyTrajOptimizer *>(func_data);
-    return (opt->force_stop_type_ == STOP_FOR_ERROR || opt->force_stop_type_ == STOP_FOR_REBOUND);
+    // Never early-exits; kept only as the lbfgs_optimize callback slot.
+    return 0;
   }
 
   template <typename EIGENVEC>
@@ -1067,15 +1226,20 @@ namespace ego_planner
             }
             if (have) {
                 const double terr_clear = pos.z() - static_cast<double>(h);  // >0 above terrain
-                const double viol = obstacle_clearance_ - terr_clear;
+                // [TERRAIN-TAPER] near a below-band pinned endpoint the target
+                // relaxes to the commanded AGL instead of the full band; its
+                // analytic d(target)/dxy joins the gradient below.
+                Eigen::Vector2d tgrad;
+                const double viol = terrainClearanceTarget(pos, &tgrad) - terr_clear;
                 if (viol > 0.0) {
                     const double costt = wei_obs_ * viol * viol * viol;
                     const double dcoef = wei_obs_ * 3.0 * viol * viol;  // d(cost)/d(viol)
-                    // SURFACE-NORMAL push: viol = clearance - z + h(x,y), so
-                    //   d(viol)/dz = -1, d(viol)/dx = ∂h/∂x, d(viol)/dy = ∂h/∂y —
+                    // SURFACE-NORMAL push: viol = target(x,y) - z + h(x,y), so
+                    //   d(viol)/dz = -1, d(viol)/dx = ∂target/∂x + ∂h/∂x, ... —
                     // the trajectory moves +z AND down-slope, skirting steep
                     // slopes instead of spiking over them.
-                    Eigen::Vector3d gradt3(dcoef * dhx, dcoef * dhy, -dcoef);
+                    Eigen::Vector3d gradt3(dcoef * (dhx + tgrad.x()),
+                                           dcoef * (dhy + tgrad.y()), -dcoef);
                     gradViolaPc = beta0 * gradt3.transpose();
                     gradViolaPt = alpha * gradt3.transpose() * vel;
                     jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -1155,8 +1319,10 @@ namespace ego_planner
             // optimum, crest pressed -15.7 m into the DEM). SDF keying remains
             // only as a fallback when no heightmap is wired.
             double gate = 1.0;
-            double dgate = 0.0;                 // d(gate)/d(clearance) — 0 outside the band
-            double gdhx = 0.0, gdhy = 0.0;      // ∂h at pos (for the gate's xy gradient)
+            // ∂gate/∂pos — the heightmap branch keys the gate on (z − h(x,y))
+            // so the slope is dgate·(−hx, −hy, 1); the SDF fallback keys it
+            // on d(pos) so the slope is dgate·∇d. Zero outside the band.
+            Eigen::Vector3d gate_grad = Eigen::Vector3d::Zero();
             const double glo = obstacle_clearance_;        // cap OFF at/below clearance
             const double ghi = 2.0 * obstacle_clearance_;  // cap fully ON above
             bool gated = false;
@@ -1175,19 +1341,28 @@ namespace ego_planner
                     // coarse SDF used to under-read terrain and saturate the
                     // gate), and the line search died (-1005/-1008) there.
                     if (t > 0.0 && t < 1.0) {
-                        dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
-                        gdhx = hx;
-                        gdhy = hy;
+                        const double dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
+                        gate_grad = dgate * Eigen::Vector3d(-hx, -hy, 1.0);
                     }
                     gated = true;
                 }
             }
             if (!gated && sdf_manager_ && sdf_manager_->hasData()) {
-                const float d = sdf_manager_->getDistance(pos);
-                if (std::isfinite(d)) {
+                // Same cost/gradient-pair rule as above: the cost carries
+                // gate(d(pos)), so the gradient carries dgate·∇d — the frozen
+                // (dgate = 0) legacy form disagreed with the cost inside the
+                // band whenever this no-heightmap fallback was active.
+                float d = 0.f;
+                Eigen::Vector3d grad_d = Eigen::Vector3d::Zero();
+                if (sdf_manager_->getDistanceAndGradient(pos, &d, &grad_d) &&
+                    std::isfinite(d)) {
                     double t = (ghi > glo) ? (static_cast<double>(d) - glo) / (ghi - glo) : 1.0;
                     t = std::max(0.0, std::min(1.0, t));
-                    gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1 (legacy: frozen grad)
+                    gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1
+                    if (t > 0.0 && t < 1.0) {
+                        const double dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
+                        gate_grad = dgate * grad_d;
+                    }
                 }
             }
             if (gate > 0.0) {
@@ -1198,14 +1373,13 @@ namespace ego_planner
                 // shapes the swell but can never win against the clearance wall.
                 const double ua = pos.z() - zhi_i;
                 const double costa_z = wei_alt_ * ua * ua * gate;
-                // Full gradient of wei*ua^2*gate(z - h(x,y)):
-                //   d/dz = wei*(2*ua*gate + ua^2*dgate)
-                //   d/dx = wei*ua^2*dgate*(-dh/dx),  d/dy likewise.
-                // dgate = 0 outside the transition band, so this reduces to the
-                // plain capped gradient there.
-                const double gg = wei_alt_ * ua * ua * dgate;
-                Eigen::Vector3d grad_a(-gg * gdhx, -gg * gdhy,
-                                       wei_alt_ * 2.0 * ua * gate + gg);
+                // Full gradient of wei*ua^2*gate(·):
+                //   ∂/∂pos = wei*ua^2*gate_grad + (0,0, wei*2*ua*gate).
+                // gate_grad = 0 outside the transition band, so this reduces
+                // to the plain capped gradient there.
+                Eigen::Vector3d grad_a =
+                    wei_alt_ * ua * ua * gate_grad +
+                    Eigen::Vector3d(0.0, 0.0, wei_alt_ * 2.0 * ua * gate);
                 gradViolaPc = beta0 * grad_a.transpose();
                 gradViolaPt = alpha * grad_a.transpose() * vel;
                 jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -1218,10 +1392,16 @@ namespace ego_planner
         // ever requires diving BELOW the mission altitude, so this is
         // always safe to enforce; it stops the min-jerk z-sags that
         // otherwise bounce off the collision clearance floor.
-        if (wei_alt_ > 0.0 && pos.z() < alt_zlo_) {
-            const double ua = alt_zlo_ - pos.z();
+        // [TERRAIN-TAPER] near a pinned-below-floor endpoint the floor target
+        // relaxes to the pin; elsewhere it is the scalar cushion. Its analytic
+        // d(target)/dxy joins the gradient (cost/gradient one-surface rule).
+        Eigen::Vector2d fgrad;
+        const double zlo_t = altitudeFloorTarget(pos, &fgrad);
+        if (wei_alt_ > 0.0 && pos.z() < zlo_t) {
+            const double ua = zlo_t - pos.z();
             const double costa_z = wei_alt_ * ua * ua;
-            Eigen::Vector3d grad_a(0.0, 0.0, -wei_alt_ * 2.0 * ua);
+            const double dua = wei_alt_ * 2.0 * ua;
+            Eigen::Vector3d grad_a(dua * fgrad.x(), dua * fgrad.y(), -dua);
             gradViolaPc = beta0 * grad_a.transpose();
             gradViolaPt = alpha * grad_a.transpose() * vel;
             jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -1245,15 +1425,19 @@ namespace ego_planner
             costs(4) += omg * step * costa;
         }
 
-        // Cruise dynamics (lateral-g / curvature limit): couples v AND a.
+        // Fixed-wing inverse dynamics: couples position (density), velocity,
+        // and acceleration through lift/drag/thrust and the flight envelope.
         double costdyn;
         if (dynamics_enable_ && wei_dynamics_ > 0.0 &&
-            cruiseDynamicsGradCostVA(vel, acc, gradv, grada, costdyn)) {
+            fixedWingDynamicsGradCostPVA(pos, vel, acc, gradp, gradv, grada,
+                                         costdyn)) {
+            gradViolaPc = beta0 * gradp.transpose();
             gradViolaVc = beta1 * gradv.transpose();
             gradViolaAc = beta2 * grada.transpose();
-            gradViolaVt = alpha * (gradv.dot(acc) + grada.dot(jer));
+            gradViolaVt = alpha *
+                (gradp.dot(vel) + gradv.dot(acc) + grada.dot(jer));
             jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) +=
-                omg * step * (gradViolaVc + gradViolaAc);
+                omg * step * (gradViolaPc + gradViolaVc + gradViolaAc);
             gdT(i) += omg * (costdyn / K + step * gradViolaVt);
             costs(7) += omg * step * costdyn;
         }
@@ -1405,27 +1589,37 @@ namespace ego_planner
     float d = 0.0f;
     Eigen::Vector3d grad_d = Eigen::Vector3d::Zero();
 
-    // Ground / ceiling hard half-spaces. Past the plane we report a
-    // *negative* signed distance equal to the crossing depth, so the
-    // downstream cubic penalty (violation = clearance − d) grows as
-    // (clearance + depth)³. That is strictly larger than staying just
-    // above the plane, so L-BFGS can never trade a shallow dive for a
-    // cheap obstacle escape. The outward-pointing unit gradient keeps
-    // pushing the trajectory back across the plane no matter how deep it
-    // ended up.
+    // Ground / ceiling hard half-spaces. Above the plane they contribute
+    // NOTHING (sea-skim missions may legally fly at any z > ground), so the
+    // penalty below MUST rise from ZERO at the plane — the earlier form
+    // jumped straight to (clearance + depth)³ (≈270 at depth 0⁺), a cost
+    // DISCONTINUITY that line searches die on the moment a low-altitude
+    // iterate grazes the surface (-1005; ordinary missions never flew within
+    // the band so it stayed latent). viol = 3·depth keeps the push steep and
+    // strictly deeper-is-worse (no cheap dive-escapes) while the cubic makes
+    // the crossing C²-continuous.
     if (ground_height_ > -0.5 && p.z() < ground_height_) {
-      const double depth = ground_height_ - p.z();
-      d = static_cast<float>(-depth);
-      grad_d = Eigen::Vector3d(0.0, 0.0, 1.0);  // ∇dist points up
-    } else if (virtual_ceil_height_ > -0.5 && p.z() > virtual_ceil_height_) {
-      const double depth = p.z() - virtual_ceil_height_;
-      d = static_cast<float>(-depth);
-      grad_d = Eigen::Vector3d(0.0, 0.0, -1.0);  // ∇dist points down
-    } else {
-      if (!sdf_manager_ || !sdf_manager_->hasData()) return false;
-      if (!sdf_manager_->getDistanceAndGradient(p, &d, &grad_d)) return false;
-      if (!std::isfinite(d)) return false;
+      // BARRIER-grade weight, not wei_obs_: the surface is a crash plane, so
+      // no soft term may buy its way below it. At wei_obs_ (10000) the
+      // sub-stall recovery dive of an envelope-infeasible start state
+      // (0,0,+50 m/s commanded) out-pushed this half-space and converged at
+      // z = -0.093 (9 m SUBMERGED); the dynamics min-speed hinge scales with
+      // wei_dynamics_*penalty_speed = 50000, so the plane must sit above
+      // every purchasable gradient. Same C² cubic form (line-search safe).
+      const double viol = 3.0 * (ground_height_ - p.z());
+      costp = wei_ground_barrier_ * viol * viol * viol;
+      gradp = Eigen::Vector3d(0.0, 0.0, -wei_ground_barrier_ * 9.0 * viol * viol);
+      return true;
     }
+    if (virtual_ceil_height_ > -0.5 && p.z() > virtual_ceil_height_) {
+      const double viol = 3.0 * (p.z() - virtual_ceil_height_);
+      costp = wei_obs_ * viol * viol * viol;
+      gradp = Eigen::Vector3d(0.0, 0.0, wei_obs_ * 9.0 * viol * viol);
+      return true;
+    }
+    if (!sdf_manager_ || !sdf_manager_->hasData()) return false;
+    if (!sdf_manager_->getDistanceAndGradient(p, &d, &grad_d)) return false;
+    if (!std::isfinite(d)) return false;
 
     const double violation = obstacle_clearance_ - static_cast<double>(d);
     if (violation <= 0.0) return false;
@@ -1502,11 +1696,6 @@ namespace ego_planner
         gradt += dJ_dP.dot(v - swarm_v);
         grad_prev_t += dJ_dP.dot(-swarm_v);
       }
-
-      if (min_ellip_dist2_ > ellip_dist2)
-      {
-        min_ellip_dist2_ = ellip_dist2;
-      }
     }
     return ret;
   }
@@ -1525,14 +1714,9 @@ namespace ego_planner
       costv = wei_feas_ * vpen * vpen * vpen;
       return true;
     }
-    // MINIMUM speed (stall) floor — mirror of the max side, DEFAULT OFF
-    // (min_vel_ = 0). A fixed-wing-class platform cannot loiter below stall,
-    // yet without this floor the optimizer resolves every tight corner by
-    // braking to ~zero and pivoting (verified: a pinned 200 m/s head with a
-    // reversal goal produced a 1-D stop-and-reverse with a_n literally 0),
-    // which makes the lateral-g term structurally unreachable. Enable per
-    // platform once a stall spec exists; missions that legitimately start or
-    // end at rest must keep it off (the spin-up phase would be penalized).
+    // Legacy frame-unit minimum-speed floor, normally disabled. The shared
+    // physical dynamics model now owns the steady-flight speed envelope and
+    // introduces it smoothly above its activation speed.
     // Gradient note: d/dv (m^2 - |v|^2)^3 = -6 (m^2 - |v|^2)^2 v — the push
     // vanishes AT v = 0 (saddle); acceptable because the floor is only
     // enabled on missions that start at speed.
@@ -1564,57 +1748,27 @@ namespace ego_planner
     return false;
   }
 
-  // Cruise dynamics: normal (lateral) acceleration limit. The magnitude
-  // feasibility terms bound |v| and |a| separately, but a high-speed
-  // airframe is really limited in the CURVATURE it can pull: a_n = |v x a|
-  // / |v| must stay under n_lat * g. Evaluated in physical metres (v_m =
-  // S v, a_m = S a); gradients map back through S^T (S diagonal). The
-  // violation is NORMALIZED by (n_lat*g)^2 before cubing — the spec's raw
-  // (m/s^2)^2 cubic reaches ~1e18 on a 51 g corner and destroys the cost
-  // balance (time ~1e6); the normalized form keeps the same zero-contact
-  // cubic shape at sane magnitudes.
-  bool PolyTrajOptimizer::cruiseDynamicsGradCostVA(const Eigen::Vector3d &v,
-                                                   const Eigen::Vector3d &a,
-                                                   Eigen::Vector3d &gradv,
-                                                   Eigen::Vector3d &grada,
-                                                   double &cost)
+  bool PolyTrajOptimizer::fixedWingDynamicsGradCostPVA(
+      const Eigen::Vector3d &p,
+      const Eigen::Vector3d &v,
+      const Eigen::Vector3d &a,
+      Eigen::Vector3d &gradp,
+      Eigen::Vector3d &gradv,
+      Eigen::Vector3d &grada,
+      double &cost)
   {
     const Eigen::Vector3d S(dyn_unit_xy_m_, dyn_unit_xy_m_, dyn_unit_z_m_);
+    const Eigen::Vector3d pm = S.cwiseProduct(p);
     const Eigen::Vector3d vm = S.cwiseProduct(v);
     const Eigen::Vector3d am = S.cwiseProduct(a);
-    const double v2 = vm.squaredNorm();
-    // Below the cruise regime curvature is ill-defined (v -> 0) and the
-    // vehicle model does not apply; skip.
-    if (v2 < dyn_min_speed_mps_ * dyn_min_speed_mps_) return false;
+    const auto result = mmp_vehicle_dynamics::flightEnvelopePenalty(
+        dynamics_params_, pm, vm, am, wei_dynamics_);
+    if (result.cost <= 0.0) return false;
 
-    const Eigen::Vector3d c = vm.cross(am);
-    const double c2 = c.squaredNorm();
-    const double A2 = (dyn_n_lat_ * dyn_g_) * (dyn_n_lat_ * dyn_g_);
-    // Dimensionless relative violation: a_n^2 / A^2 - 1.
-    const double f = c2 / (v2 * A2) - 1.0;
-    if (f <= 0.0) return false;
-
-    // Cubic near the limit, LINEAR beyond f=1 (C1 continuation g=3f-2):
-    // the raw cubic hit ~2e8 on the initial guess's sharp corners (200x the
-    // time cost) and its unbounded gradient thrashed the line search into
-    // -1005; the linear tail keeps a steady push with gradient capped at
-    // 3*w while preserving the zero-contact cubic in the enforcement band.
-    double g_f, dg_f;
-    if (f <= 1.0) {
-      g_f = f * f * f;
-      dg_f = 3.0 * f * f;
-    } else {
-      g_f = 3.0 * f - 2.0;
-      dg_f = 3.0;
-    }
-    cost = wei_dynamics_ * g_f;
-    const double coef = wei_dynamics_ * dg_f;
-    // d(c2)/da_m = 2 (c x v_m), d(c2)/dv_m = 2 (a_m x c), d(v2)/dv_m = 2 v_m.
-    const Eigen::Vector3d df_dam = 2.0 * c.cross(vm) / (v2 * A2);
-    const Eigen::Vector3d df_dvm =
-        (2.0 * am.cross(c) * v2 - 2.0 * c2 * vm) / (v2 * v2 * A2);
-    gradv = S.cwiseProduct(coef * df_dvm);
-    grada = S.cwiseProduct(coef * df_dam);
+    cost = result.cost;
+    gradp = S.cwiseProduct(result.position);
+    gradv = S.cwiseProduct(result.velocity);
+    grada = S.cwiseProduct(result.acceleration);
     return true;
   }
 
@@ -1625,14 +1779,21 @@ namespace ego_planner
                                              const Eigen::Vector3d &goal)
   {
     zone_barrier_exempt_.assign(risk_zones_.size(), 0);
-    auto in_zone = [](const Eigen::Vector3d &p, const RiskZone &tz) {
-      if (std::abs(p.z() - tz.center.z()) >= tz.reach) return false;
-      const double dx = p.x() - tz.center.x();
-      const double dy = p.y() - tz.center.y();
-      return dx * dx + dy * dy < tz.reach * tz.reach;
+    auto in_zone = [this](const Eigen::Vector3d &p, const RiskZone &tz,
+                          size_t zi) {
+      const double rv = tz.vertical_reach > 0.0
+                            ? tz.vertical_reach : tz.reach;
+      if (!(tz.reach > 0.0) || !(rv > 0.0)) return false;
+      const Eigen::Vector3d d = p - tz.center;
+      const double q2 = d.head<2>().squaredNorm() /
+                            (tz.reach * tz.reach) +
+                        d.z() * d.z() / (rv * rv);
+      if (q2 >= 1.0) return false;
+      return !risk_visibility_ || risk_visibility_(zi, p, nullptr) > 0.5;
     };
     for (size_t i = 0; i < risk_zones_.size(); ++i) {
-      if (in_zone(start, risk_zones_[i]) || in_zone(goal, risk_zones_[i])) {
+      if (in_zone(start, risk_zones_[i], i) ||
+          in_zone(goal, risk_zones_[i], i)) {
         zone_barrier_exempt_[i] = 1;
         LOG_INFO("[RISK] zone %zu contains start/goal -> barrier exempt (moat only)", i);
       }
@@ -1646,11 +1807,17 @@ namespace ego_planner
     for (size_t i = 0; i < risk_zones_.size(); ++i) {
       if (zone_barrier_exempt_[i]) continue;
       const auto &tz = risk_zones_[i];
+      const double rv = tz.vertical_reach > 0.0
+                            ? tz.vertical_reach : tz.reach;
+      if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
       for (const auto &p : path) {
-        if (std::abs(p.z() - tz.center.z()) >= tz.reach) continue;
-        const double dx = p.x() - tz.center.x();
-        const double dy = p.y() - tz.center.y();
-        if (dx * dx + dy * dy < tz.reach * tz.reach) {
+        const Eigen::Vector3d d = p - tz.center;
+        const double q2 = d.head<2>().squaredNorm() /
+                              (tz.reach * tz.reach) +
+                          d.z() * d.z() / (rv * rv);
+        if (q2 < 1.0) {
+          if (risk_visibility_ && risk_visibility_(i, p, nullptr) <= 0.5)
+            continue;
           zone_barrier_exempt_[i] = 1;
           LOG_INFO("[RISK] front-end route crosses zone %zu -> barrier exempt (moat only)",
                    i);
@@ -1662,8 +1829,9 @@ namespace ego_planner
 
   // Risk cost: consumes the SAME continuous risk field as the FM2 front-end
   // (dyn_a_star.h getRiskNorm), so both layers price risk on one shared field:
-  // per zone a vertical-cylinder quadratic moat  m_i = peak_i*(1 - d/R_i)^2
-  // (d = HORIZONTAL distance; z-flat inside |dz| < R_i, zero above/below),
+  // per zone a terrain-masked ellipsoidal quadratic moat
+  // m_i = visibility_i(p) * peak_i*(1 - q_i)^2,
+  // q_i^2 = rho_i^2/Rh_i^2 + dz_i^2/Rv_i^2,
   // OR-composed  r(p) = 1 - prod_i(1 - min(m_i, 1-1e-3))  in [0, 1].
   //
   // Consumption is the ARC-LENGTH integral  ∫ (wei_risk * r + wei_barrier * b)
@@ -1675,7 +1843,7 @@ namespace ego_planner
   // chord — the same "cross at the cheapest transit" the front-end picks.
   //
   // b is the SMOOTHED BARRIER: the front-end adds a flat K inside every
-  // non-exempt cylinder, which makes its geodesic keep a hard standoff at the
+  // non-exempt ellipsoid, which makes its geodesic keep a hard standoff at the
   // rim (observed margins of only metres). A moat-only back-end re-litigates
   // that standoff: near the rim the moat is ~peak*u^2 with ZERO contact
   // slope, so cutting the skirt is net-profitable against the time cost
@@ -1685,7 +1853,7 @@ namespace ego_planner
   // over the outer kBarrierRampFrac band — mirroring how the front-end's
   // coarse grid bleeds its +K one cell past the rim (any cell whose center
   // is inside slows the whole cell). The penetration equilibrium therefore
-  // lands OUTSIDE the true cylinder and the sensing volume stays untouched,
+  // lands OUTSIDE the true ellipsoid and the sensing volume stays untouched,
   // instead of the ~1-2 m designed clip an inside ramp allowed. Zones
   // holding the plan start/goal are exempt — same must-enter rule as
   // prepareBarrier — so the back-end never fights a committed crossing.
@@ -1716,28 +1884,50 @@ namespace ego_planner
       const auto &tz = risk_zones_[zi];
       // AABB pre-filter on the ENLARGED support (barrier ramp lives outside
       // the rim); the moat keeps the exact getRiskNorm support d < reach.
-      // z-gate stays at reach for both, mirroring the front-end cylinder.
+      // The normalized ramp expands every ellipsoid semi-axis equally.
       const double reach_b = tz.reach * (1.0 + kBarrierRampFrac);
-      if (std::abs(p.z() - tz.center.z()) >= tz.reach) continue;
+      const double rv = tz.vertical_reach > 0.0
+                            ? tz.vertical_reach : tz.reach;
+      if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
+      const double rv_b = rv * (1.0 + kBarrierRampFrac);
+      const double dz = p.z() - tz.center.z();
+      if (std::abs(dz) >= rv_b) continue;
       const double dx = p.x() - tz.center.x();
       if (std::abs(dx) >= reach_b) continue;
       const double dy = p.y() - tz.center.y();
       if (std::abs(dy) >= reach_b) continue;
-      const double d = std::sqrt(dx * dx + dy * dy);  // horizontal only
-      if (d >= reach_b) continue;
-      const Eigen::Vector3d dir_h =
-          (d > 1e-9) ? Eigen::Vector3d(dx / d, dy / d, 0.0)
-                     : Eigen::Vector3d::Zero();
+      const double q = std::sqrt(
+          (dx * dx + dy * dy) / (tz.reach * tz.reach) +
+          (dz * dz) / (rv * rv));
+      if (q >= 1.0 + kBarrierRampFrac) continue;
+      Eigen::Vector3d grad_q = Eigen::Vector3d::Zero();
+      if (q > 1e-9) {
+        grad_q = Eigen::Vector3d(
+            dx / (tz.reach * tz.reach),
+            dy / (tz.reach * tz.reach), dz / (rv * rv)) / q;
+      }
 
-      // Shared moat (exact getRiskNorm shape/support).
-      if (d < tz.reach) {
-        const double u = 1.0 - d / tz.reach;
-        const double m = std::min(tz.peak * u * u, kMoatCap);
+      double visibility = 1.0;
+      Eigen::Vector3d grad_visibility = Eigen::Vector3d::Zero();
+      if (risk_visibility_) {
+        visibility = std::clamp(
+            risk_visibility_(zi, p, &grad_visibility), 0.0, 1.0);
+      }
+
+      // Shared terrain-masked moat. Product rule makes the LOS shadow edge
+      // usable by L-BFGS while preserving the old radial gradient.
+      if (q < 1.0) {
+        const double u = 1.0 - q;
+        const double base_m = tz.peak * u * u;
+        const double m = std::min(base_m * visibility, kMoatCap);
         Sm *= (1.0 - m);
-        // Capped zones are locally flat; grad(r) = Sm * sum grad(m_i)/(1-m_i)
-        // with 1-m_i >= 1e-3 guaranteed by the cap.
-        if (m < kMoatCap && d > 1e-9) {
-          Gm += (tz.peak * 2.0 * u * (-1.0 / tz.reach) / (1.0 - m)) * dir_h;
+        Eigen::Vector3d grad_base_m = Eigen::Vector3d::Zero();
+        if (m < kMoatCap && q > 1e-9) {
+          grad_base_m = (tz.peak * 2.0 * u * -1.0) * grad_q;
+        }
+        if (m < kMoatCap && (1.0 - m) > 1e-9) {
+          Gm += (visibility * grad_base_m + base_m * grad_visibility) /
+                (1.0 - m);
         }
       }
 
@@ -1746,16 +1936,25 @@ namespace ego_planner
       const bool exempt =
           zi < zone_barrier_exempt_.size() && zone_barrier_exempt_[zi];
       if (wei_risk_barrier_ > 0.0 && !exempt) {
-        const double w = tz.reach * kBarrierRampFrac;       // ramp width
-        const double t = std::min((reach_b - d) / w, 1.0);  // 0 at reach_b, 1 at rim
+        const double t = std::min(
+            ((1.0 + kBarrierRampFrac) - q) / kBarrierRampFrac,
+            1.0);  // 0 at outer support, 1 at the ellipsoid rim
         // Smoothstep ramp: C1 at BOTH ends. (t^2 had a derivative kink at the
         // saturation circle d = reach — exactly the kind of stiff feature
         // L-BFGS line searches die on.) Saturated interior stays flat by
         // design — chord shortening via ||v|| still applies.
-        const double s = t * t * (3.0 - 2.0 * t);
+        const double base_s = t * t * (3.0 - 2.0 * t);
+        Eigen::Vector3d grad_base_s = Eigen::Vector3d::Zero();
+        if (t < 1.0 && q > 1e-9) {
+          grad_base_s =
+              (6.0 * t * (1.0 - t) *
+               (-1.0 / kBarrierRampFrac)) * grad_q;
+        }
+        const double s = base_s * visibility;
         Sb *= (1.0 - s);
-        if (t < 1.0 && (1.0 - s) > 1e-9 && d > 1e-9) {
-          Gb += (6.0 * t * (1.0 - t) * (-1.0 / w) / (1.0 - s)) * dir_h;
+        if ((1.0 - s) > 1e-9) {
+          Gb += (visibility * grad_base_s + base_s * grad_visibility) /
+                (1.0 - s);
         }
       }
     }
@@ -1838,6 +2037,11 @@ namespace ego_planner
     }
     node_->declare_parameter("optimization/weight_obstacle", 1000.0);
     node_->get_parameter("optimization/weight_obstacle", wei_obs_);
+    // Crash-plane barrier: must dominate the strongest soft gradient
+    // (wei_dynamics_ * penalty_speed = 50000 in the live config) — see the
+    // ground half-space in sdfGradCostP.
+    node_->declare_parameter("optimization/weight_ground_barrier", 250000.0);
+    node_->get_parameter("optimization/weight_ground_barrier", wei_ground_barrier_);
     node_->declare_parameter("optimization/weight_swarm", 0.0);
     node_->get_parameter("optimization/weight_swarm", wei_swarm_);
     node_->declare_parameter("optimization/weight_feasibility", 1.0);
@@ -1865,12 +2069,116 @@ namespace ego_planner
     node_->get_parameter("optimization/dynamics_unit_xy_m", dyn_unit_xy_m_);
     node_->declare_parameter("optimization/dynamics_unit_z_m", 100.0);
     node_->get_parameter("optimization/dynamics_unit_z_m", dyn_unit_z_m_);
-    node_->declare_parameter("optimization/dynamics_n_lat", 30.0);
-    node_->get_parameter("optimization/dynamics_n_lat", dyn_n_lat_);
-    node_->declare_parameter("optimization/dynamics_g", 9.81);
-    node_->get_parameter("optimization/dynamics_g", dyn_g_);
-    node_->declare_parameter("optimization/dynamics_min_speed_mps", 1.0);
-    node_->get_parameter("optimization/dynamics_min_speed_mps", dyn_min_speed_mps_);
+    auto dynamics_param = [this](const char *name, double default_value,
+                                 double &value) {
+      node_->declare_parameter(name, default_value);
+      node_->get_parameter(name, value);
+    };
+    dynamics_param("optimization/dynamics_mass_kg", 1300.0,
+                   dynamics_params_.mass_kg);
+    dynamics_param("optimization/dynamics_wing_area_m2", 1.0,
+                   dynamics_params_.wing_area_m2);
+    dynamics_param("optimization/dynamics_g", 9.80665,
+                   dynamics_params_.gravity_mps2);
+    dynamics_param("optimization/dynamics_rho0_kgpm3", 1.225,
+                   dynamics_params_.sea_level_density_kgpm3);
+    dynamics_param("optimization/dynamics_density_scale_height_m", 8500.0,
+                   dynamics_params_.density_scale_height_m);
+    dynamics_param("optimization/dynamics_altitude_reference_m", 0.0,
+                   dynamics_params_.altitude_reference_m);
+    dynamics_param("optimization/dynamics_cd0", 0.035,
+                   dynamics_params_.zero_lift_drag_coefficient);
+    dynamics_param("optimization/dynamics_induced_drag_factor", 0.080,
+                   dynamics_params_.induced_drag_factor);
+    dynamics_param("optimization/dynamics_cl_min", -0.40,
+                   dynamics_params_.lift_coefficient_min);
+    dynamics_param("optimization/dynamics_cl_max", 1.40,
+                   dynamics_params_.lift_coefficient_max);
+    dynamics_param("optimization/dynamics_load_factor_max", 2.50,
+                   dynamics_params_.load_factor_max);
+    dynamics_param("optimization/dynamics_thrust_min_n", 0.0,
+                   dynamics_params_.thrust_min_n);
+    dynamics_param("optimization/dynamics_thrust_max_n", 3200.0,
+                   dynamics_params_.thrust_max_n);
+    dynamics_param("optimization/dynamics_speed_min_mps", 120.0,
+                   dynamics_params_.speed_min_mps);
+    dynamics_param("optimization/dynamics_speed_max_mps", 230.0,
+                   dynamics_params_.speed_max_mps);
+    dynamics_param("optimization/dynamics_activation_speed_mps", 40.0,
+                   dynamics_params_.model_activation_speed_mps);
+    dynamics_param("optimization/dynamics_dynamic_pressure_max_pa", 45000.0,
+                   dynamics_params_.dynamic_pressure_max_pa);
+    double bank_max_deg = 65.0;
+    double flight_path_max_deg = 30.0;
+    dynamics_param("optimization/dynamics_bank_max_deg", 65.0,
+                   bank_max_deg);
+    dynamics_param("optimization/dynamics_flight_path_max_deg", 30.0,
+                   flight_path_max_deg);
+    dynamics_params_.bank_angle_max_rad = bank_max_deg * M_PI / 180.0;
+    dynamics_params_.flight_path_angle_max_rad =
+        flight_path_max_deg * M_PI / 180.0;
+    dynamics_param("optimization/dynamics_margin", 0.02,
+                   dynamics_params_.constraint_margin);
+    dynamics_param("optimization/dynamics_penalty_speed", 5.0,
+                   dynamics_params_.penalty_speed);
+    dynamics_param("optimization/dynamics_penalty_lift", 2.0,
+                   dynamics_params_.penalty_lift);
+    dynamics_param("optimization/dynamics_penalty_load", 2.0,
+                   dynamics_params_.penalty_load);
+    dynamics_param("optimization/dynamics_penalty_thrust", 2.0,
+                   dynamics_params_.penalty_thrust);
+    dynamics_param("optimization/dynamics_penalty_dynamic_pressure", 1.0,
+                   dynamics_params_.penalty_dynamic_pressure);
+    dynamics_param("optimization/dynamics_penalty_bank", 1.0,
+                   dynamics_params_.penalty_bank);
+    dynamics_param("optimization/dynamics_penalty_flight_path", 1.0,
+                   dynamics_params_.penalty_flight_path);
+    // SELF-CONSISTENCY of the declared envelope (valid != consistent):
+    // level flight at speed v needs CL = 2 m g / (rho v^2 S); the AERO stall
+    // speed implied by CL_max must not exceed the declared speed_min, or the
+    // envelope contains no feasible level-flight state at its own minimum
+    // speed and the audit will report unavoidable lift-coefficient
+    // violations right at cruise entry (observed: CL 1.86 at V=120 when the
+    // implied stall was 122 m/s). Same idea for a sustained turn at
+    // n = load_factor_max: if the required thrust at cruise exceeds
+    // thrust_max the n-limit is INSTANTANEOUS-only — worth knowing when
+    // tuning, not an error.
+    {
+      const auto &dp = dynamics_params_;
+      const double rho0 = dp.sea_level_density_kgpm3;
+      const double wl = dp.mass_kg * dp.gravity_mps2 / dp.wing_area_m2;
+      const double v_stall =
+          std::sqrt(2.0 * wl / (rho0 * dp.lift_coefficient_max));
+      if (v_stall > dp.speed_min_mps) {
+        LOG_WARN("[DYNAMICS] declared speed_min %.0f m/s is BELOW the aero "
+                 "stall implied by CL_max (%.1f m/s): level flight at "
+                 "speed_min needs CL %.2f > CL_max %.2f — raise speed_min "
+                 "or CL_max, else cruise-entry lift violations are "
+                 "unavoidable",
+                 dp.speed_min_mps, v_stall,
+                 2.0 * wl / (rho0 * dp.speed_min_mps * dp.speed_min_mps *
+                             dp.lift_coefficient_max) *
+                     dp.lift_coefficient_max,
+                 dp.lift_coefficient_max);
+      }
+      const double v_c = 0.5 * (dp.speed_min_mps + dp.speed_max_mps);
+      const double q_c = 0.5 * rho0 * v_c * v_c;
+      const double cl_n = dp.mass_kg * dp.load_factor_max *
+          dp.gravity_mps2 / (q_c * dp.wing_area_m2);
+      const double cd_n = dp.zero_lift_drag_coefficient +
+          dp.induced_drag_factor * cl_n * cl_n;
+      const double t_n = q_c * dp.wing_area_m2 * cd_n;
+      if (t_n > dp.thrust_max_n) {
+        LOG_INFO("[DYNAMICS] note: sustained n=%.1f turn at %.0f m/s needs "
+                 "%.0f N > thrust_max %.0f N — the load-factor limit is "
+                 "reachable only transiently (energy-bleeding maneuvers)",
+                 dp.load_factor_max, v_c, t_n, dp.thrust_max_n);
+      }
+    }
+    if (!mmp_vehicle_dynamics::parametersAreValid(dynamics_params_)) {
+      LOG_ERROR("invalid fixed-wing dynamics parameters; disabling dynamics term");
+      dynamics_enable_ = false;
+    }
 
     node_->declare_parameter("optimization/swarm_clearance", 0.5);
     node_->get_parameter("optimization/swarm_clearance", swarm_clearance_);

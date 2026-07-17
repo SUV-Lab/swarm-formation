@@ -1,5 +1,5 @@
-# V3 risk zone (soft cost field, quadratic moat).
-# moat(x) = peak * max(0, 1 - ||x - center|| / reach)^2
+# Terrain-masked air-defence zone (soft quadratic moat).
+# reach is Rh; Rv is derived from manager/risk_vertical_ratio.
 geometry_msgs/Point center
-float64 reach    # meters; risk is exactly zero outside this ball
+float64 reach    # horizontal reach in frame units (1 unit = 100 m)
 float64 peak     # dimensionless in (0, 1]

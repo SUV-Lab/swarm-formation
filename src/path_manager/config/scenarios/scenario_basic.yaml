@@ -1,9 +1,0 @@
-/**:
-  ros__parameters:
-    # Basic scenario - simple obstacles only
-    # Good for testing basic obstacle avoidance
-
-    # Obstacle Format: [x, y, z] in meters
-    obstacles: [
-      0.0,  -8.0, 0.0,    # Obstacle #1 - test object at (0, -8, 0)
-    ]

@@ -10,6 +10,7 @@
 #include <Eigen/Core>
 #include <limits>
 #include <cstdint>
+#include <memory>
 
 namespace path_planner {
 namespace sdf {
@@ -39,6 +40,24 @@ class IDistanceField {
   // cache derived products (e.g. the FM2 arrival-time field) and detect
   // staleness cheaply. Providers that never change may return 0.
   virtual uint64_t revision() const { return 0; }
+
+  // ---- Bulk-read protocol for HOT query loops (hundreds of millions of
+  // calls, e.g. the FM2 speed-map build over the whole grid). Providers that
+  // synchronize per query (SDFManager's dynamic-patch lock) return a guard
+  // that holds the read lock ONCE; while it is alive the *Bulk variants may
+  // be called lock-free from any thread (writers are excluded by the guard).
+  // Measured motivation: per-cell shared_mutex acquisition across OpenMP
+  // threads turned an ~8 s speed-map build into ~60 s on a 686M-cell grid
+  // (two rwlock RMWs per cell bouncing one cacheline). Default provider
+  // needs no guard (nullptr) and Bulk == regular.
+  struct BulkReadGuard { virtual ~BulkReadGuard() = default; };
+  virtual std::unique_ptr<BulkReadGuard> bulkReadGuard() const { return nullptr; }
+  virtual float getDistanceBulk(const Eigen::Vector3d& pos) const {
+    return getDistance(pos);
+  }
+  virtual float getDynamicDistanceBulk(const Eigen::Vector3d& pos) const {
+    return getDynamicDistance(pos);
+  }
 };
 
 }  // namespace sdf

@@ -73,6 +73,12 @@ class SDFManager : public IDistanceField {
                        int nx, int ny, int nz,
                        const Eigen::Vector3d& origin);
 
+  // Grid known to contain NO occupied voxels: identical result to
+  // buildFromVoxels(all-zero) but without materializing the occupancy array —
+  // the boxes-only design always builds empty (obstacles arrive as patches),
+  // yet the zeroed vector alone cost ~5.8 GB transient on a 30 m corridor.
+  bool buildEmpty(int nx, int ny, int nz, const Eigen::Vector3d& origin);
+
   bool saveToFile(const std::string& path) const;
   bool loadFromFile(const std::string& path,
                     const Eigen::Vector3d& bbox_lo,
@@ -92,6 +98,14 @@ class SDFManager : public IDistanceField {
   bool getDistanceAndGradient(const Eigen::Vector3d& pos,
                               float* distance,
                               Eigen::Vector3d* gradient) const override;
+
+  // Bulk-read protocol (see IDistanceField): the guard holds the dynamic-
+  // patch lock in shared mode once; the *Bulk queries then skip per-call
+  // locking. Used by the FM2 speed-map build (per-cell queries over the
+  // whole grid — per-call locking there cost ~60 s of pure rwlock traffic).
+  std::unique_ptr<BulkReadGuard> bulkReadGuard() const override;
+  float getDistanceBulk(const Eigen::Vector3d& pos) const override;
+  float getDynamicDistanceBulk(const Eigen::Vector3d& pos) const override;
 
   // ----- dynamic obstacle layer -----
   //

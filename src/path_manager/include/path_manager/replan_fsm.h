@@ -8,6 +8,7 @@
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <Eigen/Dense>
+#include <atomic>
 #include <mutex>
 #include <map>
 #include "path_manager/msg/poly_traj.hpp"
@@ -68,6 +69,11 @@ public:
 
     ReplanFSM(rclcpp::Node::SharedPtr node);
     ~ReplanFSM() {};
+
+    // [RACE-PROBE] temporary diagnostics: proves/refutes timer-vs-subscription
+    // concurrency on traj_ (set around planGlobalTraj, checked in the timer).
+    std::atomic<bool> plan_writer_active_{false};
+    std::atomic<int> race_overlap_count_{0};
     
     void init();
     void computeAndPublishPaths();
@@ -99,7 +105,6 @@ private:
     // success/FSM transition. No message dependency (uses member state + waypoints).
     void triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints);
     void changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_call);
-    bool isMapReady(const Eigen::Vector3d& start_pos);
     bool callEmergencyStop(const Eigen::Vector3d& stop_pos);
     
     // Formation target publishing (now receives pre-calculated targets)
@@ -123,15 +128,28 @@ private:
 
     FSM_EXEC_STATE exec_state_;
     bool have_target_;
-    bool have_new_target_;
     bool have_local_traj_;
     bool have_recv_pre_agent_;
     bool start_position_received_;  // Track if we received start position from TrajectoryCommand
+    // Commanded seed start z is AGL (same contract as [GOAL AGL]: mission
+    // sources cannot know the DEM). Converted to absolute ONCE at the first
+    // plan; replans continue from trajectory positions, already absolute.
+    bool start_seed_agl_pending_ = false;
+    void resolveCommandedStartAgl();
     int drone_id_;      // Internal index (0,1,2,3...)
     Eigen::Vector3d current_pos_;
     Eigen::Vector3d current_vel_;
     Eigen::Vector3d start_pt_, start_vel_, start_acc_;
     Eigen::Vector3d end_pt_;
+    // Initial speed from TrajectoryCommand is physical m/s. The planner state
+    // uses frame units/s, so convert once and apply it along the first route
+    // chord when there is no preceding trajectory.
+    double commanded_initial_speed_{0.0};
+    double initial_speed_unit_m_{100.0};
+    bool use_commanded_initial_velocity_{false};
+    bool use_commanded_initial_acceleration_{false};
+    Eigen::Vector3d commanded_initial_velocity_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d commanded_initial_acceleration_{Eigen::Vector3d::Zero()};
 
     // --- TEST: inject a non-zero initial velocity/acceleration into the plan's
     // head-state boundary condition, to visualize its effect (e.g. start_vel up
@@ -140,9 +158,6 @@ private:
     bool inject_init_state_;
     Eigen::Vector3d inject_init_vel_;
     Eigen::Vector3d inject_init_acc_;
-    double current_time_;
-    double last_start_time_;
-    bool rviz_simulation_;
     bool flag_escape_emergency_;
     bool enable_debug_logs_;
     bool enable_waypoint_markers_;

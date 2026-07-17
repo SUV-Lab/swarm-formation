@@ -148,7 +148,7 @@ bool PathSearcher::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vect
         return false;
     }
 
-    if (checkOccupancy(Index2Coord(start_idx)))
+    if (checkOccupancy_esdf(Index2Coord(start_idx)))
     {
         if (log_manager_) {
             log_manager_->warnf("시작점이 장애물 내부에 위치 - Idx: (%d,%d,%d), Coord: (%.2f,%.2f,%.2f)", 
@@ -164,14 +164,14 @@ bool PathSearcher::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vect
             start_pt += adj_dir * step_size_;
             if (!Coord2Index(start_pt, start_idx))
                 return false;
-        } while (checkOccupancy(Index2Coord(start_idx)));
+        } while (checkOccupancy_esdf(Index2Coord(start_idx)));
         if (log_manager_) {
             log_manager_->warnf("시작점 조정 완료 - 새로운 시작점: (%.2f,%.2f,%.2f)", start_pt(0), start_pt(1), start_pt(2));
         }
         RCLCPP_WARN(rclcpp::get_logger("astar"), "New start point: (%f,%f,%f)", start_pt(0), start_pt(1), start_pt(2));
     }
 
-    if (checkOccupancy(Index2Coord(end_idx)))
+    if (checkOccupancy_esdf(Index2Coord(end_idx)))
     {
         if (log_manager_) {
             log_manager_->warnf("도착점이 장애물 내부에 위치 - Coord: (%.2f,%.2f,%.2f)", end_pt(0), end_pt(1), end_pt(2));
@@ -184,7 +184,7 @@ bool PathSearcher::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vect
             end_pt += adj_dir * step_size_;
             if (!Coord2Index(end_pt, end_idx))
                 return false;
-        } while (checkOccupancy(Index2Coord(end_idx)));
+        } while (checkOccupancy_esdf(Index2Coord(end_idx)));
         if (log_manager_) {
             log_manager_->warnf("도착점 조정 완료 - 새로운 도착점: (%.2f,%.2f,%.2f)", end_pt(0), end_pt(1), end_pt(2));
         }
@@ -194,14 +194,14 @@ bool PathSearcher::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vect
     return true;
 }
 
-bool PathSearcher::AstarSearch(const double step_size, Vector3d start_pt, Vector3d end_pt, bool use_esdf_check)
+bool PathSearcher::AstarSearch(const double step_size, Vector3d start_pt, Vector3d end_pt)
 {
     auto time_1 = rclcpp::Clock().now();
     ++rounds_;
     
     if (log_manager_) {
         log_manager_->infof("3D A* 검색 시작 - Round: %d, Step size: %.3f, ESDF 사용: %s",
-                           rounds_, step_size, use_esdf_check ? "Yes" : "No");
+                           rounds_, step_size);
         log_manager_->infof("시작점: (%.2f,%.2f,%.2f), 도착점: (%.2f,%.2f,%.2f)",
                            start_pt(0), start_pt(1), start_pt(2), end_pt(0), end_pt(1), end_pt(2));
         // DEBUG: risk binding at entry.
@@ -252,9 +252,6 @@ bool PathSearcher::AstarSearch(const double step_size, Vector3d start_pt, Vector
                     POOL_SIZE_(0), POOL_SIZE_(1), POOL_SIZE_(2), CENTER_IDX_(0), CENTER_IDX_(1), CENTER_IDX_(2));
         return false;
     }
-
-    if ( start_pt(0) > -1 && start_pt(0) < 0 )
-        cout << "start_pt=" << start_pt.transpose() << " end_pt=" << end_pt.transpose() << endl;
 
     int start_flat = flatIdx(start_idx);
     // end_idx is used directly for goal comparison (no need to flatten).
@@ -381,21 +378,13 @@ bool PathSearcher::AstarSearch(const double step_size, Vector3d start_pt, Vector
 
             {
                 const Eigen::Vector3d nw = Index2Coord(neighborIdx);
-                // Hard ground / ceiling gate. Always applied, even when
-                // search_ignores_obstacles_ is set.
+                // Hard ground / ceiling gate.
                 if (ground_height_ > -0.5 && nw.z() < ground_height_) continue;
                 if (virtual_ceil_height_ > -0.5 && nw.z() > virtual_ceil_height_) continue;
             }
 
-            if (!search_ignores_obstacles_) {
-                if(use_esdf_check){
-                    if (checkOccupancy_esdf(Index2Coord(neighborIdx)))
-                        continue;
-                } else {
-                    if (checkOccupancy(Index2Coord(neighborIdx)))
-                        continue;
-                }
-            }
+            if (checkOccupancy_esdf(Index2Coord(neighborIdx)))
+                continue;
 
             double static_cost = neighbor_costs_ordered[i];
 
@@ -572,7 +561,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // start_pt when the start cell was occupied and got adjusted inside
     // AstarSearch, so no distance gate on path[0] — rejecting those cascades
     // to a straight line through the obstacle.
-    if (AstarSearch(step_size, start_pt, end_pt, true)) {
+    if (AstarSearch(step_size, start_pt, end_pt)) {
         path = getPath();
         if (path.size() > 1) {
             if (log_manager_) {
@@ -599,7 +588,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                     "3D A* failed again, trying with elevated end point Z: %.2f -> %.2f",
                     end_pt(2), elevated_end(2));
 
-        if (AstarSearch(step_size, start_pt, elevated_end, true)) {
+        if (AstarSearch(step_size, start_pt, elevated_end)) {
             path = getPath();
             if (path.size() > 1) {
                 if (log_manager_) {
@@ -744,7 +733,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                     if (checkOccupancy_esdf(p)) return false;
                     if (need_risk) mx = std::max(mx, getRiskCost(p));
                 }
-                if (stride <= 0.5) break;
+                if (stride <= terrain_stride_floor_) break;
             }
         }
         if (max_risk_out) *max_risk_out = mx;
@@ -844,7 +833,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
             const Vector3d m0 = 0.5 * (path[a] + path[b]);
             const Vector3d m1 = 0.5 * (path[b] + path[c]);
             const double len = (m1 - m0).norm();
-            const int n = std::max(1, (int)std::ceil(len / 0.5));
+            const int n =
+                std::max(1, (int)std::ceil(len / terrain_stride_floor_));
             for (int s = 0; s <= n; ++s) {
                 if (checkOccupancy_esdf(m0 + (double(s) / n) * (m1 - m0)))
                     return true;
@@ -880,6 +870,57 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     vector<Vector3d> simple_path;
     simple_path.reserve(kept.size());
     for (size_t n : kept) simple_path.push_back(path[n]);
+
+    // Terrain validation sweep over the FINAL polyline. Two holes the chord
+    // machinery above cannot close: (a) chordOk trusts adjacent raw pairs
+    // (b <= a+1) as "feasible by construction", but FM2 vetted those only at
+    // coarse cell centres (fm2_coarse_k * DEM cell apart) — the segment
+    // between them is never terrain-tested; (b) even a failing adjacent pair
+    // would have no repair path, since there is no raw vertex to re-insert
+    // between a and a+1. So instead of rejecting, REPAIR: sample every kept
+    // segment at the DEM-scaled pitch and lift the worst penetration point to
+    // terrain + margin as a new climb vertex, repeating until clean (same
+    // spirit as the corner-cut guard's re-insertion loop above).
+    if (terrain_height_) {
+        int lifted = 0;
+        for (int round = 0; round < 8; ++round) {
+            bool changed = false;
+            for (size_t k = 0; k + 1 < simple_path.size(); ++k) {
+                const Vector3d &p = simple_path[k];
+                const Vector3d &q = simple_path[k + 1];
+                const double len = (q - p).norm();
+                const int n =
+                    std::max(1, (int)std::ceil(len / terrain_stride_floor_));
+                double worst_pen = 0.0;
+                Vector3d worst_pt;
+                for (int s = 1; s < n; ++s) {
+                    const Vector3d x = p + (double(s) / n) * (q - p);
+                    const float h = terrain_height_(x.x(), x.y());
+                    if (!std::isfinite(h)) continue;
+                    const double pen =
+                        (double(h) + obstacle_margin_) - x.z();
+                    if (pen > worst_pen) {
+                        worst_pen = pen;
+                        worst_pt = x;
+                        worst_pt.z() = double(h) + obstacle_margin_ + 0.02;
+                    }
+                }
+                if (worst_pen > 0.0) {
+                    simple_path.insert(simple_path.begin() + k + 1, worst_pt);
+                    ++lifted;
+                    ++k;  // the lifted vertex itself is clear; recheck halves next round
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+        if (log_manager_ && lifted > 0) {
+            log_manager_->infof(
+                "[A* SHORTCUT] terrain sweep lifted %d vertex(es) over "
+                "sub-chord ridges (pitch %.2f u)",
+                lifted, terrain_stride_floor_);
+        }
+    }
 
     // z-profile logger: 21 rows (5% steps) of z + terrain-under, so the raw
     // geodesic and the shortcut output can be compared directly from the log
@@ -1006,7 +1047,7 @@ void PathSearcher::buildCoarseValueField(const Eigen::Vector3d &goal_world)
             if (virtual_ceil_height_ > -0.5 && w.z() > virtual_ceil_height_) {
                 blocked[coarseFlat(ci, cj, ck)] = 1; continue;
             }
-            if (!search_ignores_obstacles_ && checkOccupancy_esdf(w))
+            if (checkOccupancy_esdf(w))
                 blocked[coarseFlat(ci, cj, ck)] = 1;
         }
 
@@ -1148,6 +1189,15 @@ void PathSearcher::fm2BuildSpeedMap()
     fm2_F_.assign(N, 1.0f);
     // Per-cell independent (distinct fm2_F_ writes; getRiskNorm/getDistance are
     // read-only) -> parallelise. On the k=1 grid this is ~8 s single-threaded.
+    //
+    // BULK GUARD: hold the SDF's dynamic-patch read lock ONCE for the whole
+    // build and use the lock-free Bulk queries inside. Per-cell locking here
+    // (2 rwlock RMWs x ~7e8 cells across OpenMP threads, all bouncing one
+    // cacheline) measured ~60 s of pure lock traffic — the "eikonal" phase
+    // went 8 s -> 68 s on the full-map mission. Writers (runtime obstacle
+    // callbacks) simply wait out the build (~seconds), which is the correct
+    // semantic anyway: a mid-build obstacle change would tear the speed map.
+    const auto sdf_bulk_guard = sdf_ ? sdf_->bulkReadGuard() : nullptr;
     #pragma omp parallel for collapse(2) schedule(static)
     for (int k = 0; k < fcnz_; ++k)
       for (int j = 0; j < fcny_; ++j)
@@ -1157,7 +1207,7 @@ void PathSearcher::fm2BuildSpeedMap()
             bool blocked = false;
             if (ground_height_ > -0.5 && w.z() < ground_height_) blocked = true;
             else if (virtual_ceil_height_ > -0.5 && w.z() > virtual_ceil_height_) blocked = true;
-            else if (!search_ignores_obstacles_ && checkOccupancy_esdf(w)) blocked = true;
+            else if (checkOccupancyBulk_esdf(w)) blocked = true;
             if (blocked) {
                 fm2_F_[fm2Flat(i, j, k)] = kFMin;
             } else {
@@ -1454,6 +1504,23 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         }
         return clampZ(from - slen * dir_unit);
     };
+    // Nearest-cell occupancy on the speed map (blocked cells carry F = kFMin;
+    // free cells sit orders above it). Only the last-resort nudge needs this:
+    // every other step is vetted by the monotone T-guard, which blocked cells
+    // fail automatically (their T is huge or INF), but the nudge bypasses
+    // that guard entirely — unchecked, it can tunnel a wall segment into the
+    // seed path, and the shortcut later trusts adjacent raw pairs as
+    // feasible-by-construction (b <= a+1 fast path).
+    auto cellBlocked = [&](const Eigen::Vector3d &q) -> bool {
+        const Eigen::Vector3d c = (q - map_origin_)
+            .cwiseQuotient(Eigen::Vector3d(cres, cres, cres_z));
+        const int i = (int)std::floor(c.x());
+        const int j = (int)std::floor(c.y());
+        const int k = (int)std::floor(c.z());
+        if (i < 0 || i >= fcnx_ || j < 0 || j >= fcny_ ||
+            k < 0 || k >= fcnz_) return true;  // off-grid = not traversable
+        return fm2_F_[fm2Flat(i, j, k)] <= 2.0f * kFMin;
+    };
     for (int it = 0; it < max_iter; ++it) {
         if ((p - goal_world).norm() < goal_tol) break;
         const double tp = fm2SampleT(p);
@@ -1480,10 +1547,21 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
             p_next = clampZ(discreteStep(p, dok));
             if (!dok) {
                 // No lower neighbour anywhere (numerical corner): last-resort
-                // nudge toward the goal.
+                // nudge toward the goal — gated on occupancy. Zones stay
+                // nudgeable (traversable by design); walls/terrain/unreached
+                // pockets abort the descent instead of tunnelling; the
+                // reached_goal=NO warning below keeps the failure loud.
                 const Eigen::Vector3d d = goal_world - p;
                 if (d.norm() < 1e-6) break;
                 p_next = clampZ(p + step * d.normalized());
+                if (cellBlocked(p_next) ||
+                    !std::isfinite(fm2SampleT(p_next))) {
+                    fprintf(stderr,
+                            "[GEODESIC] nudge into blocked/unreached cell at "
+                            "(%.1f,%.1f,%.2f) — aborting descent\n",
+                            p_next.x(), p_next.y(), p_next.z());
+                    break;
+                }
             }
             ++n_recover;
         }

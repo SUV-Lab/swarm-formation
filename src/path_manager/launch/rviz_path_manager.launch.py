@@ -9,20 +9,24 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 def generate_launch_description():
     """
     RViz simulation launch file for path_manager
-    Automatically sets: rviz_simulation=true, enable_visualization=true
+    Automatically sets: enable_visualization=true
 
     Usage:
-        ros2 launch path_manager rviz_path_manager.launch.py scenario:=scenario_basic
+        ros2 launch path_manager rviz_path_manager.launch.py
     """
 
     pkg_share = FindPackageShare('path_manager')
     path_manager_launch = PathJoinSubstitution([pkg_share, 'launch', 'path_manager.launch.py'])
+    optimizer_params = PathJoinSubstitution([pkg_share, 'config', 'optimizer_params.yaml'])
 
     return LaunchDescription([
         DeclareLaunchArgument(
             'scenario',
-            default_value='scenario_basic',
-            description='Scenario configuration file (e.g., scenario_basic, scenario_complex)'
+            # Empty -> path_manager.launch.py falls back to scenario_empty
+            # (no obstacles). The old scenario_basic default planted a legacy
+            # test obstacle at the origin in every RViz-launched run.
+            default_value='',
+            description='Scenario configuration file (default: scenario_empty = none)'
         ),
         DeclareLaunchArgument(
             'drone_id',
@@ -42,14 +46,13 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'world',
             default_value='',
-            description='Map name used to synthesize the ESDF cache path. Leave '
-                        'empty to fall back to optimizer_params.yaml manager/world.'
+            description='Terrain map name. Leave empty to fall back to '
+                        'optimizer_params.yaml manager/world.'
         ),
         # Include base path_manager launch with RViz defaults
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(path_manager_launch),
             launch_arguments={
-                'rviz_simulation': 'true',
                 'enable_visualization': 'true',
                 'scenario': LaunchConfiguration('scenario'),
                 'drone_id': LaunchConfiguration('drone_id'),
@@ -59,13 +62,13 @@ def generate_launch_description():
             }.items()
         ),
 
-        # TEMP follower: samples /planning/trajectory and publishes
-        # /dynamics/sim_state + /dynamics/sim_path + drone_0_base TF so RViz can
-        # show the moving agent. Replace with mmp_dynamics_sim when ready.
+        # Integrates the same fixed-wing model used by the optimizer and
+        # publishes /dynamics/sim_state + /dynamics/sim_path + vehicle TF.
         Node(
-            package='mmp_dummy_follower',
-            executable='dummy_follower_node',
-            name='dummy_follower_node',
+            package='mmp_dynamics_sim',
+            executable='dynamics_sim_node',
+            name='dynamics_sim_node',
             output='screen',
+            parameters=[optimizer_params],
         ),
     ])

@@ -49,6 +49,14 @@ float64 obstacle_clearance
 float64 min_flight_altitude
 
 # Initial speed at trajectory start (m/s)
-# Direction is auto-calculated as start→goal
-# 0 = start from rest. Default: 0.0
+# Direction is auto-calculated from the first route leg.
+# 0 = start from rest. Publishers may choose a non-zero operational default.
 float64 initial_speed
+
+# Optional map-frame initial-state vectors. These are physical SI values,
+# converted to planner-frame units by ReplanFSM. An enabled velocity overrides
+# initial_speed; acceleration can be enabled independently.
+bool use_initial_velocity
+geometry_msgs/Vector3 initial_velocity
+bool use_initial_acceleration
+geometry_msgs/Vector3 initial_acceleration

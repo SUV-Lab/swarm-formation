@@ -10,12 +10,9 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     : node_(node),
       exec_state_(FSM_EXEC_STATE::INIT),
       have_target_(false),
-      have_new_target_(false),
       have_local_traj_(false),
       have_recv_pre_agent_(false),
       drone_id_(0),
-      last_start_time_(0.0),
-      rviz_simulation_ (false),
       flag_escape_emergency_(false),
       num_drones_(4),
       current_formation_type_("square"),
@@ -56,10 +53,6 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     node_->get_parameter("formation_center_z", center_z);
     current_formation_center_ = Eigen::Vector3d(center_x, center_y, center_z);
 
-    node_->declare_parameter("rviz_simulation", false);
-    node_->get_parameter("rviz_simulation", rviz_simulation_);
-    FSM_LOG_INFO("rviz_simulation: %s", rviz_simulation_ ? "true" : "false");
-
     node_->declare_parameter("enable_waypoint_markers", true);
     node_->get_parameter("enable_waypoint_markers", enable_waypoint_markers_);
     FSM_LOG_INFO("enable_waypoint_markers: %s", enable_waypoint_markers_ ? "true" : "false");
@@ -85,6 +78,14 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
         inject_init_vel_ = Eigen::Vector3d(init_vel_vec[0], init_vel_vec[1], init_vel_vec[2]);
     if (init_acc_vec.size() >= 3)
         inject_init_acc_ = Eigen::Vector3d(init_acc_vec[0], init_acc_vec[1], init_acc_vec[2]);
+
+    node_->declare_parameter("manager/initial_speed_unit_m", 100.0);
+    node_->get_parameter("manager/initial_speed_unit_m", initial_speed_unit_m_);
+    if (initial_speed_unit_m_ <= 0.0) {
+        RCLCPP_WARN(node_->get_logger(),
+                    "manager/initial_speed_unit_m must be positive; using 100 m");
+        initial_speed_unit_m_ = 100.0;
+    }
 
     if (inject_init_state_) {
         FSM_LOG_WARN("[TEST] inject_init_state ENABLED: init vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
@@ -151,13 +152,29 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     waypoint_marker_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
         "/viz/waypoints", 10);
 
+    // Every callback that MUTATES PathManager shared state (terrain_data_,
+    // risk_zones_, terrain_risk_masks_, the SDF dynamic layer) must sit on
+    // subscription_callback_group_, the same MutuallyExclusive group that
+    // runs trajectoryCommandCallback (and through it the whole planning
+    // pipeline, which READS that state). A subscription created without a
+    // group lands on the node DEFAULT group, which the MultiThreadedExecutor
+    // runs in parallel with subscription_callback_group_: at startup the
+    // latched /terrain/grid_map and the panel's /risk_zones/load both fired
+    // rebuildTerrainRiskMasks() concurrently, and the two unsynchronized
+    // std::vector reallocations (risk_zones_, terrain_risk_masks_) segfaulted
+    // the node before WAIT_TARGET. None of these are hot paths, so
+    // serializing them costs nothing.
+    rclcpp::SubscriptionOptions state_mutator_options;
+    state_mutator_options.callback_group = subscription_callback_group_;
+
     // Terrain GridMap subscription (TRANSIENT_LOCAL to receive latched message)
     rclcpp::QoS terrain_qos(1);
     terrain_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
     terrain_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
     terrain_sub_ = node_->create_subscription<grid_map_msgs::msg::GridMap>(
         "/terrain/grid_map", terrain_qos,
-        std::bind(&ReplanFSM::terrainCallback, this, std::placeholders::_1));
+        std::bind(&ReplanFSM::terrainCallback, this, std::placeholders::_1),
+        state_mutator_options);
 
     // Dynamic obstacle injection: each click in RViz spawns a fixed-radius sphere.
     if (!node_->has_parameter("manager/dynamic_obstacle_radius")) {
@@ -169,15 +186,18 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // start/goal picking). Sphere-on-click is opt-in via a dedicated topic.
     clicked_point_sub_ = node_->create_subscription<geometry_msgs::msg::PointStamped>(
         "/dynamic_obstacles/click", 10,
-        std::bind(&ReplanFSM::clickedPointCallback, this, std::placeholders::_1));
+        std::bind(&ReplanFSM::clickedPointCallback, this, std::placeholders::_1),
+        state_mutator_options);
     clear_obstacles_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
         "/dynamic_obstacles/clear", 1,
-        std::bind(&ReplanFSM::clearObstaclesCallback, this, std::placeholders::_1));
+        std::bind(&ReplanFSM::clearObstaclesCallback, this, std::placeholders::_1),
+        state_mutator_options);
     load_obstacles_sub_ =
         node_->create_subscription<path_manager::msg::DynamicObstacleArray>(
             "/dynamic_obstacles/load", 1,
             std::bind(&ReplanFSM::loadObstaclesCallback, this,
-                      std::placeholders::_1));
+                      std::placeholders::_1),
+            state_mutator_options);
     // Runtime risk-zone reset. Subscribe on the same MutuallyExclusive
     // subscription_callback_group_ used by trajectoryCommandCallback so
     // that publish-order from the mission panel is preserved: the panel
@@ -195,8 +215,16 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
                 risk_zone_options);
     }
 
-    timer_ = node_->create_wall_timer(10ms, std::bind(&ReplanFSM::computeAndPublishPaths, this), timer_callback_group_);
-    FSM_LOG_INFO("FSM timer created with dedicated callback group (10ms period)");
+    // The FSM timer shares the SUBSCRIPTION group ON PURPOSE (it used to have
+    // its own group "to prevent timer stalls"): with separate MutuallyExclusive
+    // groups the MultiThreadedExecutor runs the 10 ms tick CONCURRENTLY with
+    // trajectoryCommandCallback -> planGlobalTraj, so the tick read traj_ and
+    // exec_state_ while the planner wrote them (data race, proven empirically
+    // by the RACE-PROBE overlap counter). Sharing the group serializes them;
+    // ticks during the multi-second plan are only flag-polling, so delaying
+    // them until the plan finishes costs nothing in single-shot mode.
+    timer_ = node_->create_wall_timer(10ms, std::bind(&ReplanFSM::computeAndPublishPaths, this), subscription_callback_group_);
+    FSM_LOG_INFO("FSM timer created on the subscription callback group (10ms period, serialized with planning)");
 }
 
 void ReplanFSM::init()
@@ -212,6 +240,7 @@ void ReplanFSM::init()
     }
 
     try {
+        resolveCommandedStartAgl();
         Eigen::MatrixXd iniState = Eigen::MatrixXd::Zero(3, 3);
         Eigen::MatrixXd finState = Eigen::MatrixXd::Zero(3, 3);
         iniState.col(0) = start_pt_;
@@ -233,7 +262,6 @@ void ReplanFSM::init()
             FSM_LOG_INFO("Success to generate global trajectory!!!");
             // end_vel_.setZero();
             have_target_ = true;
-            have_new_target_ = true;
 
             if (exec_state_ == WAIT_POSITION)
                 changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
@@ -257,6 +285,14 @@ void ReplanFSM::init()
 }
 
 void ReplanFSM::computeAndPublishPaths() {
+    // [RACE-PROBE] timer tick while the subscription thread is inside
+    // planGlobalTraj == the two callback groups really do run concurrently.
+    if (plan_writer_active_.load(std::memory_order_acquire)) {
+        const int n = ++race_overlap_count_;
+        if (n == 1 || n % 100 == 0) {
+            log_manager_->warnf("[RACE-PROBE] timer executed DURING planGlobalTraj (overlap #%d)", n);
+        }
+    }
     static int fsm_num = 0;
     fsm_num++;
     if (fsm_num == 100) {
@@ -461,7 +497,6 @@ bool ReplanFSM::planFromGlobalTraj(int trial_times) {
         optimized_path_pub_->publish(msg);
 
         have_local_traj_ = true;
-        have_new_target_ = false;
 
         if (enable_global_trajectory_pub_) {
             path_manager::msg::PolyTraj msg2;
@@ -570,10 +605,58 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
                    current_pos_(0), current_pos_(1), current_pos_(2));
     } else {
         start_pt_ = current_pos_;
-        start_vel_ = Eigen::Vector3d::Zero();
-        start_acc_ = Eigen::Vector3d::Zero();
-        log_manager_->infof("Using current position (no trajectory yet): (%.2f, %.2f, %.2f)",
-                   start_pt_(0), start_pt_(1), start_pt_(2));
+        start_vel_.setZero();
+        // Provenance tag for the log below: the derived first-leg velocity
+        // was repeatedly misread as an applied use_initial_velocity vector.
+        const char *vel_src = "rest (zero)";
+        if (use_commanded_initial_velocity_) {
+            start_vel_ = commanded_initial_velocity_;
+            vel_src = "commanded vector (use_initial_velocity)";
+        } else if (commanded_initial_speed_ > 0.0) {
+            // Aim the initial velocity along the FIRST ROUTE LEG, not the
+            // final target: with intermediate waypoints the two differ, and
+            // a target-aimed start manufactured an immediate high-load bank
+            // onto leg 1 (measured: n=1.65 / 52.6 deg / 113.8% thrust at
+            // t=9.3 s on a dogleg whose real corner was 12.8 km away).
+            // First waypoint == target for plain missions, so the simple
+            // case is unchanged.
+            Eigen::Vector3d leg_end(msg->target_position.x,
+                                    msg->target_position.y, 0.0);
+            for (const auto &wp : msg->formation_positions) {
+                const double dx = wp.x - start_pt_.x();
+                const double dy = wp.y - start_pt_.y();
+                if (dx * dx + dy * dy > 1.0e-6) {
+                    leg_end = Eigen::Vector3d(wp.x, wp.y, 0.0);
+                    break;
+                }
+            }
+            Eigen::Vector3d initial_direction(
+                leg_end.x() - start_pt_.x(),
+                leg_end.y() - start_pt_.y(), 0.0);
+            if (initial_direction.head<2>().norm() < 1.0e-9) {
+                initial_direction = Eigen::Vector3d::UnitX();
+            } else {
+                initial_direction.normalize();
+            }
+            start_vel_ = initial_direction * commanded_initial_speed_;
+            vel_src = "initial_speed x first-leg direction (level)";
+        }
+        start_acc_ = use_commanded_initial_acceleration_
+            ? commanded_initial_acceleration_
+            : Eigen::Vector3d::Zero();
+        log_manager_->infof(
+            "Using command start state: pos=(%.2f, %.2f, %.2f), "
+            "speed=%.1f m/s, vel_mps=(%.1f, %.1f, %.1f) [src: %s], "
+            "acc_mps2=(%.1f, %.1f, %.1f)",
+            start_pt_(0), start_pt_(1), start_pt_(2),
+            start_vel_.norm() * initial_speed_unit_m_,
+            start_vel_(0) * initial_speed_unit_m_,
+            start_vel_(1) * initial_speed_unit_m_,
+            start_vel_(2) * initial_speed_unit_m_,
+            vel_src,
+            start_acc_(0) * initial_speed_unit_m_,
+            start_acc_(1) * initial_speed_unit_m_,
+            start_acc_(2) * initial_speed_unit_m_);
     }
 
     // TEST: override the resolved start vel/acc with the injected boundary condition.
@@ -664,16 +747,48 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
                  callback_duration, ros_time_end, (ros_time_end - ros_time_start) * 1000);
 }
 
+// [START AGL] The commanded seed start rides the same AGL contract as
+// [GOAL AGL]: mission yaml / panel z is height above terrain (above sea
+// level over water), because mission sources cannot know the DEM. Applied
+// exactly once, at the first plan attempt — consumed even without terrain
+// (kept absolute then, matching goal behavior) so a DEM arriving mid-flight
+// can never re-shift a trajectory-derived start.
+void ReplanFSM::resolveCommandedStartAgl()
+{
+    if (!start_seed_agl_pending_) return;
+    start_seed_agl_pending_ = false;
+    if (!path_manager_) return;
+    if (!path_manager_->hasTerrainData()) {
+        FSM_LOG_WARN("[START AGL] no terrain at first plan — commanded start "
+                     "z=%.2f kept ABSOLUTE", start_pt_.z());
+        return;
+    }
+    double base = 0.0;  // water / off-DEM: AGL == ASL, same as [GOAL AGL]
+    path_manager_->terrainElevation(start_pt_.x(), start_pt_.y(), &base);
+    const double agl = std::max(start_pt_.z(), path_manager_->minGoalAgl());
+    const double z_abs = base + agl;
+    if (std::abs(z_abs - start_pt_.z()) > 1e-9) {
+        FSM_LOG_INFO("[START AGL] commanded start z=%.2f AGL -> absolute %.2f "
+                     "(terrain %.2f + agl %.2f)",
+                     start_pt_.z(), z_abs, base, agl);
+    }
+    start_pt_.z() = z_abs;
+    current_pos_.z() = z_abs;
+}
+
 void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints) {
+    resolveCommandedStartAgl();
     // Use formation pattern received via TrajectoryCommand
     auto formation_setup_start = std::chrono::high_resolution_clock::now();
     path_manager_->setFormationInfo(drone_id_, current_formation_type_, current_formation_pattern_);
 
     auto global_traj_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TIMING] Starting global trajectory planning");
+    plan_writer_active_.store(true, std::memory_order_release);   // [RACE-PROBE]
     bool success = path_manager_->planGlobalTraj(
         start_pt_, start_vel_, start_acc_,
         waypoints, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    plan_writer_active_.store(false, std::memory_order_release);  // [RACE-PROBE]
 
     auto global_traj_end = std::chrono::high_resolution_clock::now();
     auto global_traj_duration = std::chrono::duration_cast<std::chrono::milliseconds>(global_traj_end - global_traj_start).count();
@@ -698,7 +813,6 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         }
 
         have_target_ = true;
-        have_new_target_ = true;
 
         if (exec_state_ == WAIT_POSITION)
             changeFSMExecState(SEQUENTIAL_START, "formationTargetCallback");
@@ -716,24 +830,6 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         RCLCPP_ERROR(node_->get_logger(), "Unable to generate global trajectory for drone %d!", drone_id_);
         log_manager_->errorf("Unable to generate global trajectory for drone %d!", drone_id_);
     }
-}
-
-bool ReplanFSM::isMapReady(const Eigen::Vector3d& start_pos) {
-    if (!path_manager_) {
-        RCLCPP_WARN(node_->get_logger(), "PathManager not initialized yet");
-        log_manager_->warnf("PathManager not initialized yet");
-        return false;
-    }
-
-    bool map_ready = path_manager_->isMapReady(start_pos);
-    if (!map_ready) {
-        RCLCPP_DEBUG(node_->get_logger(), "Map not ready for position (%f,%f,%f)",
-                    start_pos(0), start_pos(1), start_pos(2));
-        log_manager_->debugf("Map not ready for position (%f,%f,%f)",
-                    start_pos(0), start_pos(1), start_pos(2));
-    }
-
-    return map_ready;
 }
 
 bool ReplanFSM::callEmergencyStop(const Eigen::Vector3d& stop_pos) {
@@ -776,6 +872,28 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
     last_received_sequence_ = msg->sequence;
 
     current_mission_id_ = msg->mission_id;
+    commanded_initial_speed_ =
+        std::max(0.0, msg->initial_speed) / initial_speed_unit_m_;
+    use_commanded_initial_velocity_ = msg->use_initial_velocity;
+    use_commanded_initial_acceleration_ = msg->use_initial_acceleration;
+    commanded_initial_velocity_ = Eigen::Vector3d(
+        msg->initial_velocity.x, msg->initial_velocity.y,
+        msg->initial_velocity.z) / initial_speed_unit_m_;
+    commanded_initial_acceleration_ = Eigen::Vector3d(
+        msg->initial_acceleration.x, msg->initial_acceleration.y,
+        msg->initial_acceleration.z) / initial_speed_unit_m_;
+    if (use_commanded_initial_velocity_ &&
+        !commanded_initial_velocity_.allFinite()) {
+        FSM_LOG_WARN("Ignoring non-finite commanded initial velocity");
+        use_commanded_initial_velocity_ = false;
+        commanded_initial_velocity_.setZero();
+    }
+    if (use_commanded_initial_acceleration_ &&
+        !commanded_initial_acceleration_.allFinite()) {
+        FSM_LOG_WARN("Ignoring non-finite commanded initial acceleration");
+        use_commanded_initial_acceleration_ = false;
+        commanded_initial_acceleration_.setZero();
+    }
 
     // Update start position if this is the first command or if position changed significantly
     if (!start_position_received_) {
@@ -788,6 +906,7 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
         start_pt_ = new_start_pos;
         current_pos_ = new_start_pos;
         start_position_received_ = true;
+        start_seed_agl_pending_ = true;  // z is AGL; resolved at first plan
 
         FSM_LOG_INFO("Received start position from TrajectoryCommand: (%.2f, %.2f, %.2f)",
                     new_start_pos.x(), new_start_pos.y(), new_start_pos.z());

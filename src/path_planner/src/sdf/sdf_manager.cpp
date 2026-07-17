@@ -5,6 +5,7 @@
 #include "path_planner/sdf/sdf_manager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -12,6 +13,8 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <mutex>
+#include <shared_mutex>
 #include <vector>
 
 #ifdef _OPENMP
@@ -113,9 +116,34 @@ struct SDFManagerImpl {
   bool initialized = false;
   bool has_data = false;
 
-  // Dynamic obstacle layer.
+  // Dynamic obstacle layer. Guarded by patches_mutex: runtime obstacle
+  // injection (loadObstacles/clickedPoint/clearObstacles callbacks) runs on
+  // the node default callback group while planning reads patches from the
+  // timer callback group — under the MultiThreadedExecutor these are
+  // concurrent threads, so an unguarded push_back (reallocation) or clear()
+  // would tear the read loop in getDistance*/getDistanceAndGradient. Readers
+  // take a shared lock (many concurrent L-BFGS queries), mutators a unique
+  // lock. mutable so the const query methods can lock.
+  //
+  // PERF: two escape hatches keep the lock OFF the hot paths —
+  //  (1) has_patches (atomic): when no patch exists (the common case) readers
+  //      skip the lock AND the loop entirely. A reader racing a concurrent
+  //      first-add may miss that patch for the in-flight query — identical
+  //      temporal semantics to the query having run just before the add.
+  //  (2) bulkReadGuard(): hot loops (FM2 speed-map build, ~1e8-1e9 queries)
+  //      hold the shared lock ONCE and use the *Bulk lock-free variants.
+  //      Per-call locking there measured ~60 s of pure rwlock cacheline
+  //      traffic on a 686M-cell grid (2 RMWs/cell across OpenMP threads).
   std::vector<DynamicPatch> patches;
+  mutable std::shared_mutex patches_mutex;
+  std::atomic<bool> has_patches{false};
   double influence_radius_m = 2.0;
+
+  // Patch-layer min-distance scan. PRECONDITION: caller holds patches_mutex
+  // (shared or unique) OR is inside a bulkReadGuard scope. `grad` may be
+  // null. Returns true if any patch improved `best`.
+  bool dynMinNoLock(const Eigen::Vector3d& pos, float* best,
+                    Eigen::Vector3d* grad) const;
 
   inline size_t flatIdx(int xi, int yi, int zi) const {
     return ((size_t(xi) * ny) + yi) * nz + zi;
@@ -143,6 +171,36 @@ bool SDFManager::initialize(double voxel_xy, double voxel_z) {
   impl_->initialized = true;
   impl_->has_data = false;
   impl_->distance_cache.clear();
+  return true;
+}
+
+bool SDFManager::buildEmpty(int nx, int ny, int nz,
+                            const Eigen::Vector3d& origin) {
+  ++revision_;
+  if (!impl_->initialized) {
+    std::cerr << "[SDFManager] buildEmpty: not initialized\n";
+    return false;
+  }
+  if (nx <= 0 || ny <= 0 || nz <= 0) {
+    std::cerr << "[SDFManager] buildEmpty: invalid dims\n";
+    return false;
+  }
+  impl_->origin = origin;
+  impl_->nx = nx;
+  impl_->ny = ny;
+  impl_->nz = nz;
+  const Eigen::Vector3d res = impl_->voxel;
+  const float kLargeFree = static_cast<float>(
+      std::max({nx * res.x(), ny * res.y(), nz * res.z()}));
+  impl_->distance_cache.clear();
+  impl_->distance_cache.shrink_to_fit();
+  impl_->static_empty = true;
+  impl_->static_free_dist = kLargeFree;
+  impl_->has_data = true;
+  std::cerr << "[SDFManager] built EMPTY (no occupancy grid materialized): "
+            << "shape=(" << nx << "," << ny << "," << nz << ") voxel=("
+            << res.x() << "," << res.y() << "," << res.z()
+            << ") free_distance=" << kLargeFree << "\n";
   return true;
 }
 
@@ -638,7 +696,28 @@ inline bool samplePatch(const DynamicPatch& patch,
   *out_d = primitiveSignedDistance(patch.spec, p, out_grad);
   return true;
 }
+
 }  // namespace
+
+// See declaration in SDFManagerImpl: patch-layer min-distance scan, lock-free
+// (locking is the caller's responsibility — per-query shared_lock, or a
+// bulkReadGuard held across a hot loop).
+bool SDFManagerImpl::dynMinNoLock(const Eigen::Vector3d& pos, float* best,
+                                  Eigen::Vector3d* grad) const {
+  bool improved = false;
+  for (const auto& patch : patches) {
+    float d_p;
+    Eigen::Vector3d g_p;
+    if (samplePatch(patch, pos, &d_p, grad ? &g_p : nullptr)) {
+      if (d_p < *best) {
+        *best = d_p;
+        if (grad) *grad = g_p;
+        improved = true;
+      }
+    }
+  }
+  return improved;
+}
 
 float SDFManager::getDistance(const Eigen::Vector3d& pos) const {
   if (!impl_->initialized || !impl_->has_data) {
@@ -662,12 +741,36 @@ float SDFManager::getDistance(const Eigen::Vector3d& pos) const {
     }
   }
 
-  // Dynamic layer: min over patches that contain pos.
-  for (const auto& patch : impl_->patches) {
-    float d_p;
-    if (samplePatch(patch, pos, &d_p, nullptr)) {
-      if (d_p < best) best = d_p;
+  // Dynamic layer: min over patches that contain pos. Lock-free fast path
+  // when no patch exists (the common case for pure-terrain missions).
+  if (impl_->has_patches.load(std::memory_order_acquire)) {
+    std::shared_lock<std::shared_mutex> lk(impl_->patches_mutex);
+    impl_->dynMinNoLock(pos, &best, nullptr);
+  }
+  return best;
+}
+
+float SDFManager::getDistanceBulk(const Eigen::Vector3d& pos) const {
+  // Same as getDistance but the caller holds bulkReadGuard(): no per-call
+  // locking. MUST stay behaviourally identical to getDistance.
+  if (!impl_->initialized || !impl_->has_data) {
+    return std::numeric_limits<float>::infinity();
+  }
+  const Eigen::Vector3d vf = impl_->worldToVoxelF(pos) -
+                             Eigen::Vector3d(0.5, 0.5, 0.5);
+  float best = std::numeric_limits<float>::infinity();
+  if (impl_->static_empty) {
+    best = impl_->static_free_dist;
+  } else {
+    float d_static;
+    if (sampleTrilinear<false>(impl_->distance_cache.data(),
+                               impl_->nx, impl_->ny, impl_->nz,
+                               impl_->voxel, vf, &d_static, nullptr)) {
+      best = d_static;
     }
+  }
+  if (impl_->has_patches.load(std::memory_order_acquire)) {
+    impl_->dynMinNoLock(pos, &best, nullptr);
   }
   return best;
 }
@@ -678,13 +781,30 @@ float SDFManager::getDynamicDistance(const Eigen::Vector3d& pos) const {
   // is exactly the range a stand-off margin needs.
   float best = std::numeric_limits<float>::infinity();
   if (!impl_->initialized) return best;
-  for (const auto& patch : impl_->patches) {
-    float d_p;
-    if (samplePatch(patch, pos, &d_p, nullptr)) {
-      if (d_p < best) best = d_p;
-    }
-  }
+  if (!impl_->has_patches.load(std::memory_order_acquire)) return best;
+  std::shared_lock<std::shared_mutex> lk(impl_->patches_mutex);
+  impl_->dynMinNoLock(pos, &best, nullptr);
   return best;
+}
+
+float SDFManager::getDynamicDistanceBulk(const Eigen::Vector3d& pos) const {
+  // Caller holds bulkReadGuard(); no per-call locking.
+  float best = std::numeric_limits<float>::infinity();
+  if (!impl_->initialized) return best;
+  if (!impl_->has_patches.load(std::memory_order_acquire)) return best;
+  impl_->dynMinNoLock(pos, &best, nullptr);
+  return best;
+}
+
+std::unique_ptr<IDistanceField::BulkReadGuard> SDFManager::bulkReadGuard() const {
+  // RAII shared lock on the patch layer: excludes mutators for the guard's
+  // lifetime so *Bulk queries are safe lock-free from any thread (including
+  // OpenMP workers spawned by the guard holder).
+  struct Guard final : BulkReadGuard {
+    std::shared_lock<std::shared_mutex> lk;
+    explicit Guard(std::shared_mutex& m) : lk(m) {}
+  };
+  return std::make_unique<Guard>(impl_->patches_mutex);
 }
 
 bool SDFManager::getDistanceAndGradient(const Eigen::Vector3d& pos,
@@ -721,16 +841,12 @@ bool SDFManager::getDistanceAndGradient(const Eigen::Vector3d& pos,
     }
   }
 
-  for (const auto& patch : impl_->patches) {
-    float d_p;
-    Eigen::Vector3d g_p;
-    if (samplePatch(patch, pos, &d_p, &g_p)) {
-      if (!any || d_p < best) {
-        best = d_p;
-        best_grad = g_p;
-        any = true;
-      }
-    }
+  if (impl_->has_patches.load(std::memory_order_acquire)) {
+    std::shared_lock<std::shared_mutex> lk(impl_->patches_mutex);
+    // dynMinNoLock keeps min semantics; seed with current best. When the
+    // static layer produced nothing (any==false) best is +inf, so any patch
+    // hit still wins — matching the previous (!any || d_p < best) logic.
+    if (impl_->dynMinNoLock(pos, &best, &best_grad)) any = true;
   }
 
   if (!any) return false;
@@ -788,19 +904,24 @@ int SDFManager::addObstacle(const PrimitiveSpec& spec) {
   patch.aabb_hi = whi + inflate;
   patch.active = true;
 
+  // Mutating patches — exclude concurrent query readers (see patches_mutex).
+  std::unique_lock<std::shared_mutex> lk(impl_->patches_mutex);
   // Reuse a freed slot if any to keep ids dense.
   for (size_t i = 0; i < impl_->patches.size(); ++i) {
     if (!impl_->patches[i].active) {
       impl_->patches[i] = std::move(patch);
+      impl_->has_patches.store(true, std::memory_order_release);
       return static_cast<int>(i);
     }
   }
   impl_->patches.push_back(std::move(patch));
+  impl_->has_patches.store(true, std::memory_order_release);
   return static_cast<int>(impl_->patches.size() - 1);
 }
 
 void SDFManager::removeObstacle(int patch_id) {
   ++revision_;
+  std::unique_lock<std::shared_mutex> lk(impl_->patches_mutex);
   if (patch_id < 0 ||
       static_cast<size_t>(patch_id) >= impl_->patches.size()) return;
   impl_->patches[patch_id].active = false;
@@ -808,11 +929,14 @@ void SDFManager::removeObstacle(int patch_id) {
 
 void SDFManager::clearObstacles() {
   ++revision_;
+  std::unique_lock<std::shared_mutex> lk(impl_->patches_mutex);
   impl_->patches.clear();
+  impl_->has_patches.store(false, std::memory_order_release);
 }
 
 size_t SDFManager::numActiveObstacles() const {
   size_t n = 0;
+  std::shared_lock<std::shared_mutex> lk(impl_->patches_mutex);
   for (const auto& p : impl_->patches) {
     if (p.active) ++n;
   }

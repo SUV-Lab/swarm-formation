@@ -26,6 +26,8 @@
 #include "path_planner/eikonal_godunov.h"
 
 #include <cuda_runtime.h>
+#include <cstdio>
+#include <algorithm>
 
 namespace path_planner {
 
@@ -181,7 +183,16 @@ bool fm2EikonalGPU(const float* F, int nx, int ny, int nz,
 
   const dim3 block(TS, TS, TS);
   const dim3 grid(GX, GY, GZ);
-  const int max_iter = (nx + ny + nz) / TS + 1000;
+  // Round budget must scale with worst-case GEODESIC length, not grid
+  // perimeter: the frozen-halo design advances the wavefront exactly one
+  // TS-block layer per round, so a winding corridor needs ~path_cells/TS
+  // rounds — a 40-leg serpentine needed ~2000 rounds against the old
+  // (nx+ny+nz)/TS + 1000 cap and silently fell back to the ~17x slower CPU
+  // FMM while still converging. Total block count bounds any simple path;
+  // the loop exits early via changed==0, so the larger cap costs nothing
+  // on normal maps.
+  const long total_blocks = (long)GX * GY * GZ;
+  const int max_iter = (int)std::min<long>(total_blocks + 1000, 1000000);
   int iter = 0;
   for (; iter < max_iter; ++iter) {
     PP_CK(cudaMemset(d_changed, 0, sizeof(int)));
@@ -198,7 +209,16 @@ bool fm2EikonalGPU(const float* F, int nx, int ny, int nz,
 
   PP_CK(cudaMemcpy(T, d_T, N * sizeof(float), cudaMemcpyDeviceToHost));
   freeAll();
-  return iter < max_iter;
+  if (iter >= max_iter) {
+    // The caller falls back to the CPU FMM (correct but ~17x slower) —
+    // that latency cliff must never be silent.
+    fprintf(stderr,
+            "[FM2-GPU] FIM hit round cap %d while still converging "
+            "(%dx%dx%d grid) — falling back to CPU FMM\n",
+            max_iter, nx, ny, nz);
+    return false;
+  }
+  return true;
 }
 
 }  // namespace path_planner

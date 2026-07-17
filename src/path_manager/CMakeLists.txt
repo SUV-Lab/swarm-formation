@@ -124,6 +124,13 @@ ament_target_dependencies(risk_scenarios_test
 rosidl_target_interfaces(risk_scenarios_test
   ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
+add_executable(terrain_risk_mask_test test/terrain_risk_mask_test.cpp)
+target_link_libraries(terrain_risk_mask_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(terrain_risk_mask_test
+  ${PATH_MANAGER_DEPENDENCIES})
+rosidl_target_interfaces(terrain_risk_mask_test
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
 
 rosidl_target_interfaces(${PROJECT_NAME}_lib
   ${PROJECT_NAME} "rosidl_typesupport_cpp"
@@ -148,6 +155,10 @@ install(TARGETS load_obstacles_test
 )
 
 install(TARGETS risk_scenarios_test
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS terrain_risk_mask_test
   DESTINATION lib/${PROJECT_NAME}
 )
 

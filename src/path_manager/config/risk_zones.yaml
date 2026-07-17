@@ -3,12 +3,14 @@
     # ============================================================
     # Format: [center_x, center_y, center_z, reach, peak] x N
     #  - all coords/reach in FRAME UNITS (1 unit = 100 m)
-    #  - reach: vertical-cylinder radius; quadratic moat
-    #           moat = peak * (1 - d_horizontal/reach)^2, zero outside;
-    #           z-flat within |z - center_z| < reach, zero above/below.
+    #  - reach: horizontal semi-axis Rh. The planner derives
+    #           Rv = manager/risk_vertical_ratio * Rh and evaluates
+    #           q^2 = rho^2/Rh^2 + dz^2/Rv^2,
+    #           moat = peak * (1-q)^2 for q < 1, zero outside.
+    #           Terrain LOS visibility multiplies this base field.
     #  - peak: MUST be in (0, 1]. Values > 1 saturate against the
     #          1-1e-3 cap over most of the zone, flattening the moat
-    #          into a gradient-free disc (avoidance shaping is lost;
+    #          into a gradient-free core (avoidance shaping is lost;
     #          only the barrier still acts). The pre-V3 Gaussian
     #          format used peak=100 "risk levels" — do not copy those.
     #

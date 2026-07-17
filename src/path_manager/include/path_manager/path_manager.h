@@ -50,19 +50,26 @@ namespace path_manager
     Obstacle(const Eigen::Vector3d& c, double width, double length, double height) : center(c), shape(ObstacleShape::RECTANGLE), param1(width), param2(length), z_extent(height) {}
   };
 
-  // V3 risk zone: quadratic moat with compact support.
-  // moat(x) = peak * (1 - ||x - center|| / reach)^2 for d < reach, else 0.
+  // Terrain-masked air-defence zone. The authored reach is the horizontal
+  // reach; PathManager derives a vertical reach from risk_vertical_ratio_ and
+  // supplies the resulting ellipsoid consistently to the front/back ends.
   struct RiskZone {
     Eigen::Vector3d center; // frame units (1 unit = 100 m)
-    double reach;   // FRAME UNITS (not metres!); vertical-cylinder radius,
-                    // risk exactly zero outside (typical scenario ~90 = 9 km)
-    double peak;    // dimensionless in (0, 1]; >1 saturates to a flat disc
+    double reach;   // horizontal reach in FRAME UNITS (typ. 90 = 9 km)
+    double peak;    // dimensionless in (0, 1]; values >1 are field-capped
   };
 
   // Terrain elevation data extracted from GridMap
-  // Coordinate transform: terrain_publisher uses a different axis convention.
-  // terrain → world: X-mirror, then -90° rotation around center.
-  // world → terrain: +90° rotation, then X-mirror (inverse).
+  // [TERRAIN-FRAME] grid_map core convention (what the RViz plugin renders):
+  //   wx = origin_x + length_x - (row + 0.5) * res   (matrix ROW spans X, mirrored)
+  //   wy = origin_y + length_y - (col + 0.5) * res   (matrix COL spans Y, mirrored)
+  // The historical form here ("X-mirror then -90° rotation about the centre")
+  // composes to wx = (Lx+Ly)/2 - (row+.5)res, wy = (Lx+Ly)/2 - (col+.5)res —
+  // identical to the above ONLY when length_x == length_y. Every map before
+  // korea was square, so the planner agreed with the rendered mesh by luck;
+  // on korea (2991x4478) the two frames diverged by (Ly-Lx)/2 = 1858.75 u per
+  // axis (verified: the DEM peak rendered at (6263.75, 7443.75) while the
+  // planner placed it at (8122.50, 5585.00)). Direct per-axis mirrors below.
   struct TerrainData {
     std::vector<float> elevation;  // Column-major elevation data
     int cols = 0;
@@ -72,26 +79,17 @@ namespace path_manager
     double origin_y = 0.0;       // Terrain grid origin Y
     double length_x = 0.0;       // Terrain total length X
     double length_y = 0.0;       // Terrain total length Y
-    double center_x = 0.0;       // Terrain center X
-    double center_y = 0.0;       // Terrain center Y
     bool valid = false;
 
     // Convert world (planning) coordinate to terrain grid index and query elevation
     float getElevation(double world_x, double world_y) const {
       if (!valid) return -std::numeric_limits<float>::infinity();
 
-      // Inverse of: terrain → X-mirror → -90° rotate → world
-      // Step 1: +90° rotation around terrain center
-      double rel_x = world_x - center_x;
-      double rel_y = world_y - center_y;
-      double rot_x = center_x + rel_y;   // +90°: x' = cy + rel_y
-      double rot_y = center_y - rel_x;   // +90°: y' = cy - rel_x
+      // [TERRAIN-FRAME] inverse: pure per-axis mirror (row <-> X, col <-> Y).
+      double terrain_world_x = origin_x + (origin_y + length_y - world_y);
+      double terrain_world_y = origin_y + (origin_x + length_x - world_x);
 
-      // Step 2: Undo X-mirror
-      double terrain_world_x = 2.0 * center_x - rot_x;
-      double terrain_world_y = rot_y;
-
-      // Step 3: World coord → fractional grid coordinate (same fx/fy convention
+      // World coord → fractional grid coordinate (same fx/fy convention
       // as the RViz panel's getElevationAt) then BILINEAR sample.
       // CELL-CENTER convention (the -0.5): elevation[col*rows+row] is the
       // height AT the cell centre — that is where terrainToWorld places it
@@ -160,14 +158,12 @@ namespace path_manager
     bool getElevationAndGrad(double world_x, double world_y,
                              float *h, float *dhdx, float *dhdy) const {
       if (!valid) return false;
-      // world -> terrain-grid coords (same transform as getElevation):
-      //   twx = (cx + cy) - wy,  twy = (cx + cy) - wx
-      const double rel_x = world_x - center_x;
-      const double rel_y = world_y - center_y;
-      const double rot_x = center_x + rel_y;
-      const double rot_y = center_y - rel_x;
-      const double twx = 2.0 * center_x - rot_x;
-      const double twy = rot_y;
+      // [TERRAIN-FRAME] world -> terrain-grid coords (same transform as
+      // getElevation): twx = oy + Ly - wy (col axis), twy = ox + Lx - wx (row
+      // axis). Axis pairing (col<->Y, row<->X, both mirrored) is unchanged
+      // from the old rotate+mirror form, so the chain rule below still holds.
+      const double twx = origin_x + (origin_y + length_y - world_y);
+      const double twy = origin_y + (origin_x + length_x - world_x);
       // Cell-centre convention (-0.5), same as getElevation — cost and
       // gradient must come from the SAME surface.
       const double fx = (twx - origin_x) / resolution - 0.5;
@@ -186,7 +182,24 @@ namespace path_manager
       const float e01 = at(col0, row0 + 1), e11 = at(col0 + 1, row0 + 1);
       const bool n00 = (e00 == kInv), n10 = (e10 == kInv);
       const bool n01 = (e01 == kInv), n11 = (e11 == kInv);
-      if (n00 && n10 && n01 && n11) return false;
+      // [WATER-FLOOR] all-water/off-DEM patch: report SEA LEVEL (h=0, flat)
+      // instead of "no terrain". Mixed coastal patches already blend NaN
+      // corners as 0, so this is the same surface extended continuously over
+      // open water — the optimizer's terrain band now prices the sea surface
+      // (a sub-stall recovery dive measured z=0.18 u over water with NOTHING
+      // but the w=200 altitude band resisting; the terrain floor is w=10000)
+      // and the audit sweep/profile measure clearance there instead of
+      // skipping water columns. getElevation (FE/SDF voxelisation) keeps its
+      // "water = no terrain" rule — only this grad accessor, whose sole
+      // consumer is the optimizer/audit lambda, gains the floor. Lakes on an
+      // inland DEM read 0 (under-floored vs their true surface) — still a
+      // floor where there was none.
+      if (n00 && n10 && n01 && n11) {
+        *h = 0.0f;
+        *dhdx = 0.0f;
+        *dhdy = 0.0f;
+        return true;
+      }
       const double f00 = n00 ? 0.0 : e00;
       const double f10 = n10 ? 0.0 : e10;
       const double f01 = n01 ? 0.0 : e01;
@@ -206,20 +219,9 @@ namespace path_manager
 
     // Convert terrain grid cell to world (planning) coordinate (for obstacle_points_)
     Eigen::Vector3d terrainToWorld(int col, int row, float elev) const {
-      // Grid index → terrain world coord
-      double tw_x = origin_x + (col + 0.5) * resolution;
-      double tw_y = origin_y + (row + 0.5) * resolution;
-
-      // X-mirror
-      double fx = 2.0 * center_x - tw_x;
-      double fy = tw_y;
-
-      // -90° rotation around center
-      double rel_x = fx - center_x;
-      double rel_y = fy - center_y;
-      double wx = center_x - rel_y;
-      double wy = center_y + rel_x;
-
+      // [TERRAIN-FRAME] forward map, exactly grid_map core's getPosition():
+      const double wx = origin_x + length_x - (row + 0.5) * resolution;
+      const double wy = origin_y + length_y - (col + 0.5) * resolution;
       return Eigen::Vector3d(wx, wy, static_cast<double>(elev));
     }
   };
@@ -255,8 +257,6 @@ namespace path_manager
 
     TrajContainer traj_;
 
-    void updateRobotState(const Eigen::Vector3d& start_pt, const Eigen::Vector3d& local_target_pt);
-    bool isMapReady(const Eigen::Vector3d& start_pos) const;
 
     // Set formation information for path planning
     void setFormationInfo(int drone_id, const std::string& formation_type,
@@ -271,6 +271,17 @@ namespace path_manager
     // Terrain data interface
     void setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg);
     bool hasTerrainData() const { return terrain_data_.valid; }
+    // Terrain elevation at (x, y) in frame units; false over water / off-DEM
+    // / no terrain yet. Used by the FSM's [START AGL] seed conversion.
+    bool terrainElevation(double x, double y, double *elev_out) const {
+        if (!terrain_data_.valid) return false;
+        const float e = terrain_data_.getElevation(x, y);
+        if (e <= -1e9f) return false;
+        *elev_out = static_cast<double>(e);
+        return true;
+    }
+    // AGL floor shared by [GOAL AGL] and [START AGL].
+    double minGoalAgl() const { return min_goal_agl_; }
 
     // Dynamic obstacle interface (RViz-driven). Patches are layered on top of
     // the static terrain ESDF; the next plan picks them up via min(static,dyn).
@@ -290,17 +301,101 @@ namespace path_manager
     // callback group as trajectory commands (handled in ReplanFSM).
     void setRiskZonesRuntime(const std::vector<RiskZone>& zones);
     size_t numRiskZones() const { return risk_zones_.size(); }
+    // Read-only inspection hooks for metrics/tests. These expose the same
+    // precomputed field consumed by FM2/A* and MINCO; no second LOS model.
+    double getRiskVisibility(size_t zone_index,
+                             const Eigen::Vector3d &pos) const {
+      return riskVisibilityValue(zone_index, pos);
+    }
+    double getRiskShadowCeiling(size_t zone_index,
+                                const Eigen::Vector3d &pos) const {
+      return riskShadowCeiling(zone_index, pos);
+    }
+    double getEffectiveRisk(size_t zone_index,
+                            const Eigen::Vector3d &pos) const {
+      return riskZoneValue(zone_index, pos);
+    }
 
   private:
     std::shared_ptr<rclcpp::Node> node_;
-    std::vector<Eigen::Vector3d> simple_path_;
     std::vector<Obstacle> obstacle_centers_;
     // Yaml obstacles are applied once as SDF dynamic patches (not baked into
     // the terrain ESDF / its cache file) — see planGlobalTraj.
     bool static_obstacles_applied_{false};
     std::vector<RiskZone> risk_zones_;
+    // Searcher-facing copy of risk_zones_. PathSearcher::setRiskZones stores
+    // a RAW POINTER to this vector, so it must outlive the plan call — a
+    // function-local here left the searcher holding a dangling pointer
+    // between plans (latent: nothing dereferences it today, but any future
+    // between-plan getRiskCost query would be a use-after-free).
+    std::vector<path_planner::search::RiskZoneLite> astar_risks_;
+    // Zones exactly as authored (yaml param / runtime topic). risk_zones_ is
+    // DERIVED from this list: with risk_zone_agl_ on, center.z is height
+    // ABOVE the DEM at (x,y) — an emitter mast on the terrain — and the
+    // effective absolute z is re-derived whenever the DEM (re)arrives, so
+    // zone-before-terrain ordering does not change the result.
+    std::vector<RiskZone> risk_zones_raw_;
+    bool risk_zone_agl_{false};
+    void refreshEffectiveRiskZones();
     double risk_weight_;
     double risk_barrier_{100.0};   // front-end finite "hard wall" inside zones
+    // Rv / Rh for the compact ellipsoidal engagement envelope. Keeping this
+    // independent of the LOS mask separates weapon support from sensing.
+    double risk_vertical_ratio_{0.35};
+    double riskEllipsoidRadius(const RiskZone &zone,
+                               const Eigen::Vector3d &pos) const;
+    double riskZoneValue(size_t zone_index,
+                         const Eigen::Vector3d &pos) const;
+    // Terrain-masked risk field (radial horizon / viewshed). For each source
+    // and azimuth, shadow_ceiling stores the highest terrain LOS line implied
+    // by all nearer DEM samples. A query is visible above that ceiling and
+    // shadowed below it. The field is O(1) to query in FM2's hot loop.
+    struct TerrainRiskMask {
+      Eigen::Vector3d source{Eigen::Vector3d::Zero()};
+      double max_range{0.0};
+      double radial_step{1.0};
+      int radial_count{0};
+      int angular_count{0};
+      std::vector<float> shadow_ceiling;  // [angle * radial_count + radius]
+      bool valid{false};
+    };
+    std::vector<TerrainRiskMask> terrain_risk_masks_;
+    bool risk_terrain_mask_enable_{true};
+    double risk_mask_radial_step_{0.0};  // <=0: DEM resolution
+    double risk_mask_softness_{0.10};    // vertical sigmoid width (frame units)
+    double risk_mask_viz_step_{0.0};     // <=0: auto per zone/DEM
+    double risk_mask_viz_slice_offset_{0.0};
+    double risk_mask_viz_threshold_{0.50};
+    // Detection-floor heatmap (mode "heatmap"): color ramp saturates at this
+    // AGL (frame units; 2.0 = 200 m), grid capped at max_dim on the longer
+    // side of the zone-union AABB.
+    double risk_heatmap_agl_max_{2.0};
+    int risk_heatmap_max_dim_{768};
+    // Drape height above the DEM. Must clear the RENDERED terrain mesh, which
+    // deviates from the bilinear DEM sample by up to ~half a cell on slopes
+    // (76 m cells on big_terrain) — 0.05 u sank into hillsides.
+    double risk_heatmap_offset_{0.30};
+    // Leave cells whose detection floor is at/above agl_max TRANSPARENT
+    // instead of painting the cyan ramp end: "you would have to fly above the
+    // band of interest to be seen" is background, not signal. Shadow cells
+    // (never detectable) keep their explicit blue.
+    bool risk_heatmap_safe_transparent_{true};
+    // RViz modes: "volume" (default threat-floor mesh + clipped wire shell),
+    // "fixed_agl" (terrain-following diagnostic), or "fixed_msl" (planar
+    // diagnostic). The old drape bool remains only as a compatibility hint.
+    std::string risk_mask_viz_mode_{"heatmap"};
+    int risk_mask_viz_contours_{5};
+    double risk_mask_viz_volume_alpha_{0.24};
+    double risk_mask_viz_agl_{0.15};     // draped eval height above ground
+    void rebuildTerrainRiskMasks();
+    double riskShadowCeiling(size_t zone_index,
+                             const Eigen::Vector3d &pos) const;
+    double riskVisibilityValue(size_t zone_index,
+                               const Eigen::Vector3d &pos) const;
+    double riskVisibility(size_t zone_index, const Eigen::Vector3d &pos,
+                          Eigen::Vector3d *grad) const;
+    void publishEffectiveRiskField();
+    void publishRiskHeatmap();
     double risk_smha_w_{2.0};
     std::string front_end_str_{"fm2"};
     int fm2_coarse_k_{4};
@@ -347,6 +442,7 @@ namespace path_manager
     // Built from terrain + obstacle_centers_ inside planGlobalTraj.
     path_planner::sdf::SDFManager sdf_manager_;
     double sdf_voxel_size_ = 1.0;  // frame units
+    bool sdf_voxel_size_auto_ = false;   // param was <=0: track the DEM cell on map change
     double sdf_voxel_z_{0.0};             // vertical voxel size; <=0 -> isotropic (= sdf_voxel_size_)
     // A* search step size (frame units between neighboring path nodes). Kept
     // independent of sdf_voxel_size_ so we can coarsen A* path density
@@ -364,10 +460,10 @@ namespace path_manager
     //   save: if set, write the freshly built ESDF after first build.
     // When either is set, the ESDF covers the full loaded terrain (not the
     // per-mission bbox) so the cached map is reusable across missions.
-    // Boxes-only SDF grid built once over the full-terrain bbox. Guard, not
-    // cache: a rebuild would drop every dynamic-obstacle patch (they clip to
-    // this grid). The old <world>.esdf disk cache members are gone with the
-    // cache mechanism itself.
+    // Boxes-only SDF grid over the current terrain bbox. Built on the first
+    // terrain message and REBUILT when the map geometry changes (world switch
+    // / corridor re-crop) — setTerrainData resets this latch and clears the
+    // dynamic-obstacle patches, which were grounded on the old DEM.
     bool sdf_built_ = false;
 
     // Full-terrain bbox used when save/load is active. Computed once from
@@ -405,13 +501,15 @@ namespace path_manager
 
     ego_planner::PolyTrajOptimizer::Ptr poly_traj_opt_;
     bool is_optimizer_initialized_;
-    Eigen::Vector3d current_start_pt_, current_target_pt_;
-    bool has_valid_state_;
 
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr simple_path_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr search_path_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr shorten_path_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr esdf_occ_pub_;
+    // Terrain-masked horizontal slices on the existing RViz risk topic.
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr risk_field_pub_;
+    // Draped detection-floor heatmap (GridMap, rendered by a second
+    // grid_map_rviz_plugin display; see publishRiskHeatmap).
+    rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr risk_heatmap_pub_;
     // Dynamic obstacle visualization (one MarkerArray republished on every add/clear).
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr dyn_obstacle_pub_;
     // Terrain ESDF cache status string (RViz panel reads this).

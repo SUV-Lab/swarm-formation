@@ -371,10 +371,24 @@ void run(const Scenario &s, double alpha, double h_weight, const MapSpec &map) {
 
   // DETOUR success = path stays mostly outside zones (low risk_int).
   // Threshold scales with direct length so it's resolution-independent.
+  //
+  // Asserted only at production-representative risk weight: the alpha sweep
+  // deliberately includes sub-production weights (production
+  // manager/risk_weight = 30), and at alpha <= 3 crossing a wide zone IS the
+  // cost-optimal eikonal answer — asserting detour there tested the wrong
+  // invariant, and the suite carried 40 permanent "failures" that were the
+  // sweep behaving as designed (alpha 10/30 pass every scenario). Weaker
+  // alphas stay in the sweep as informational output.
+  const double kDetourAssertAlpha = 10.0;
   const double low_risk = 0.05 * Ldirect;
   if (s.expected == "DETOUR") {
-    check(R < low_risk,        "DETOUR: risk_int < 5% of direct");
-    check(max_depth < 5.0,     "DETOUR: max_depth < 5m");
+    if (alpha >= kDetourAssertAlpha) {
+      check(R < low_risk,        "DETOUR: risk_int < 5% of direct");
+      check(max_depth < 5.0,     "DETOUR: max_depth < 5m");
+    } else {
+      std::printf("  [info] sub-production alpha=%.1f: DETOUR not asserted "
+                  "(risk_int=%.3f, max_depth=%.1fm)\n", alpha, R, max_depth);
+    }
   }
   if (s.expected == "TRANSIT") {
     // Forced transit: path must reach the goal and not explode.

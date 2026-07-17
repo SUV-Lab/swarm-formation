@@ -24,8 +24,6 @@ def load_yaml_file(file_path):
         return yaml.safe_load(file)
 
 def create_drone_nodes(context, *args, **kwargs):
-    rviz_sim_str = context.perform_substitution(LaunchConfiguration('rviz_simulation'))
-    rviz_sim = (rviz_sim_str.lower() == 'true')
 
     record_bag_str = context.perform_substitution(LaunchConfiguration('record_bag'))
     record_bag = (record_bag_str.lower() == 'true')
@@ -61,8 +59,11 @@ def create_drone_nodes(context, *args, **kwargs):
         scenario_file = PathJoinSubstitution([pkg_share, 'config', 'scenarios', f'{scenario_config}.yaml'])
         print(f"Using scenario config: {scenario_config}.yaml")
     else:
-        scenario_file = PathJoinSubstitution([pkg_share, 'config', 'scenarios', 'scenario_basic.yaml'])
-        print("No scenario specified, using default: scenario_basic.yaml")
+        # Default = NO obstacles. The old default (scenario_basic.yaml)
+        # silently planted a legacy test obstacle at (0,-8,0) — a 50 m
+        # infinite column near the origin — in every panel-launched run.
+        scenario_file = PathJoinSubstitution([pkg_share, 'config', 'scenarios', 'scenario_empty.yaml'])
+        print("No scenario specified, using default: scenario_empty.yaml (no obstacles)")
 
     # Load base drone hardware configuration
     drones_file = PathJoinSubstitution([pkg_share, 'config', 'drone_hardware.yaml'])
@@ -71,12 +72,6 @@ def create_drone_nodes(context, *args, **kwargs):
     num_drones = drone_cfg.get('num_drones', 1)
     print(f"Loaded drone hardware config: drone_hardware.yaml (num_drones={num_drones})")
     print("Note: Start positions will be provided via TrajectoryCommand")
-
-    fsm_params = drone_cfg.get('fsm', {})
-    n_seconds_ahead = float(fsm_params.get('n_seconds_ahead', 0.0))
-
-    target_idle_timeout_sec = 0.25
-    arrival_distance_threshold = 0.75
 
     replan_nodes = []
 
@@ -111,7 +106,6 @@ def create_drone_nodes(context, *args, **kwargs):
         i = target_key_index
 
         params = {
-            'rviz_simulation': rviz_sim,
             'drone_id':        idx,
         }
         # Inject manager/world only when the user actually passed one in.
@@ -197,11 +191,6 @@ def create_drone_nodes(context, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
-            'rviz_simulation',
-            default_value='false',
-            description='Enable RViz visualization (bool)'
-        ),
-        DeclareLaunchArgument(
             'drone_id',
             default_value='1',
             description='Target drone ID to run (0-5)'
@@ -209,7 +198,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'scenario',
             default_value='',
-            description='Scenario configuration file containing obstacles (e.g., scenario_basic, scenario_complex)'
+            description='Scenario configuration file containing obstacles (default: scenario_empty = none)'
         ),
         DeclareLaunchArgument(
             'record_bag',
@@ -229,9 +218,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'world',
             default_value='',
-            description='Map name (e.g. dokdo, sample, big_terrain). When set, '
-                        'overrides manager/world in optimizer_params.yaml so '
-                        'path_manager picks the matching <world>.esdf cache.'
+            description='Map name (e.g. korea, sample, big_terrain). When set, '
+                        'overrides manager/world in optimizer_params.yaml.'
         ),
         OpaqueFunction(function=create_drone_nodes),
     ])

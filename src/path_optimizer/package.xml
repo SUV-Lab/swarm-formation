@@ -12,6 +12,7 @@
   <depend>swarm_graph</depend>
   <depend>path_planner</depend>
   <depend>visualization_msgs</depend>
+  <depend>mmp_vehicle_dynamics</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -20,9 +20,9 @@ namespace path_planner { namespace search {
 
 struct RiskZoneLite {
     Eigen::Vector3d center; // frame units (1 unit = 100 m)
-    double reach;   // FRAME UNITS (not metres!); vertical-cylinder radius,
-                    // risk exactly zero outside (typical scenario ~90 = 9 km)
-    double peak;    // dimensionless in (0, 1]; >1 saturates to a flat disc
+    double reach;            // horizontal reach, frame units
+    double peak;             // dimensionless peak
+    double vertical_reach{0.0}; // z semi-axis; <=0 falls back to reach
 };
 
 struct GridNode
@@ -87,11 +87,16 @@ private:
     // SDF's voxel terrain is coarse/z-quantised.
     std::function<float(double, double)> terrain_height_;
     const std::vector<RiskZoneLite> *risk_zones_ = nullptr;
+    // Per-zone terrain visibility supplied by PathManager's precomputed
+    // radial-horizon field. 1 = direct line of sight (full risk), 0 = hidden
+    // behind terrain. Keeping the callback per zone preserves the existing
+    // probabilistic-OR composition and start/goal barrier exemptions.
+    std::function<double(size_t, const Eigen::Vector3d &)> risk_visibility_;
     double obstacle_margin_ = 0.5;  // frame units (1 unit = 100 m)
+    // Terrain sampling pitch for chord feasibility scans: min(0.5, half a DEM
+    // cell). See setTerrainHeightmap.
+    double terrain_stride_floor_ = 0.5;
     double dyn_obstacle_margin_ = 0.0;  // dynamic-obstacle berth, frame units; 0 = off
-    // When true, the A* graph expansion ignores obstacles (every voxel is
-    // traversable); shortcut / downstream checks still use obstacle_margin_.
-    bool search_ignores_obstacles_ = false;
     // Hard ground / ceiling for A* expansion. Cells at or below
     // ground_height_ (and at or above virtual_ceil_height_) are rejected
     // just like SDF-occupied voxels. Sentinel: ≤ -0.5 disables the plane.
@@ -241,8 +246,24 @@ private:
             sdf_->getDynamicDistance(pos) < dyn_obstacle_margin_) return true;
         return false;
     }
-    inline bool checkOccupancy(const Eigen::Vector3d &pos) {
-        return checkOccupancy_esdf(pos);
+    // Bulk twin of checkOccupancy_esdf for HOT loops: identical logic but
+    // uses the lock-free *Bulk SDF queries. Caller MUST hold an
+    // sdf_->bulkReadGuard() for the whole loop (see fm2BuildSpeedMap — the
+    // per-cell shared_lock there cost ~60 s of rwlock traffic on a 686M-cell
+    // grid). Keep in sync with checkOccupancy_esdf.
+    inline bool checkOccupancyBulk_esdf(const Eigen::Vector3d &pos) {
+        if (terrain_height_) {
+            const float h = terrain_height_(pos.x(), pos.y());
+            if (std::isfinite(h) &&
+                pos.z() - static_cast<double>(h) < obstacle_margin_) return true;
+        }
+        if (!sdf_ || !sdf_->hasData()) return false;
+        float d = sdf_->getDistanceBulk(pos);
+        if (!std::isfinite(d)) return true;  // outside map = blocked
+        if (d < obstacle_margin_) return true;
+        if (dyn_obstacle_margin_ > obstacle_margin_ &&
+            sdf_->getDynamicDistanceBulk(pos) < dyn_obstacle_margin_) return true;
+        return false;
     }
 
     // V3: quadratic moat + probabilistic-OR composition.
@@ -255,20 +276,30 @@ private:
     inline double getRiskNorm(const Eigen::Vector3d &pos) const {
         if (!risk_zones_ || risk_zones_->empty()) return 0.0;
         double survival = 1.0;
-        for (const auto &tz : *risk_zones_) {
-            // Vertical-cylinder threat: moat decays with HORIZONTAL distance and
-            // is z-flat within |dz| < reach (the ceiling), so climbing buys no
-            // risk reduction; above the ceiling risk is 0.
+        for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
+            const auto &tz = (*risk_zones_)[zi];
+            // Compact ellipsoidal engagement envelope. Terrain visibility is
+            // a separate multiplier, so radar shadow and weapon support do
+            // not get conflated.
             const double dz = pos.z() - tz.center.z();
-            if (std::abs(dz) >= tz.reach) continue;
+            const double rv = tz.vertical_reach > 0.0
+                                  ? tz.vertical_reach : tz.reach;
+            if (!(rv > 0.0) || std::abs(dz) >= rv) continue;
             const double dx = pos.x() - tz.center.x();
             if (std::abs(dx) >= tz.reach) continue;
             const double dy = pos.y() - tz.center.y();
             if (std::abs(dy) >= tz.reach) continue;
-            const double d = std::sqrt(dx*dx + dy*dy);   // horizontal only
-            if (d >= tz.reach) continue;
-            const double u = 1.0 - d / tz.reach;
-            const double moat = tz.peak * u * u;
+            const double q = std::sqrt(
+                (dx * dx + dy * dy) / (tz.reach * tz.reach) +
+                (dz * dz) / (rv * rv));
+            if (q >= 1.0) continue;
+            const double u = 1.0 - q;
+            double visibility = 1.0;
+            if (risk_visibility_) {
+                visibility = std::clamp(risk_visibility_(zi, pos), 0.0, 1.0);
+                if (visibility <= 0.0) continue;
+            }
+            const double moat = tz.peak * u * u * visibility;
             constexpr double kMoatCap = 1.0 - 1e-3;
             survival *= (1.0 - std::min(moat, kMoatCap));
         }
@@ -281,19 +312,23 @@ private:
         zone_no_barrier_.clear();
         if (!risk_zones_) return;
         zone_no_barrier_.assign(risk_zones_->size(), 0);
-        // Same vertical-cylinder membership as getRiskNorm/insideBarrierZone.
-        // The old 3D-sphere test disagreed with them: an endpoint inside the
-        // cylinder but outside the sphere kept the barrier on a zone the
-        // route MUST enter, walling off its own start/goal.
-        auto in_zone = [](const Eigen::Vector3d &p, const RiskZoneLite &tz) {
-            if (std::abs(p.z() - tz.center.z()) >= tz.reach) return false;
-            const double dx = p.x() - tz.center.x();
-            const double dy = p.y() - tz.center.y();
-            return dx * dx + dy * dy < tz.reach * tz.reach;
+        // Same ellipsoidal membership as getRiskNorm/insideBarrierZone.
+        auto in_zone = [this](const Eigen::Vector3d &p,
+                              const RiskZoneLite &tz, size_t zi) {
+            const double rv = tz.vertical_reach > 0.0
+                                  ? tz.vertical_reach : tz.reach;
+            if (!(tz.reach > 0.0) || !(rv > 0.0)) return false;
+            const Eigen::Vector3d d = p - tz.center;
+            const double q2 = d.head<2>().squaredNorm() /
+                                  (tz.reach * tz.reach) +
+                              d.z() * d.z() /
+                                  (rv * rv);
+            if (q2 >= 1.0) return false;
+            return !risk_visibility_ || risk_visibility_(zi, p) > 0.5;
         };
         for (size_t i = 0; i < risk_zones_->size(); ++i) {
             const auto &tz = (*risk_zones_)[i];
-            if (in_zone(start, tz) || in_zone(goal, tz))
+            if (in_zone(start, tz, i) || in_zone(goal, tz, i))
                 zone_no_barrier_[i] = 1;
         }
     }
@@ -305,12 +340,21 @@ private:
         for (size_t i = 0; i < risk_zones_->size(); ++i) {
             if (i < zone_no_barrier_.size() && zone_no_barrier_[i]) continue;
             const auto &tz = (*risk_zones_)[i];
-            // Vertical cylinder, consistent with getRiskNorm.
-            const double dz = pos.z() - tz.center.z();
-            if (std::abs(dz) >= tz.reach) continue;
-            const double dx = pos.x() - tz.center.x();
-            const double dy = pos.y() - tz.center.y();
-            if (dx*dx + dy*dy < tz.reach * tz.reach) return true;
+            const double rv = tz.vertical_reach > 0.0
+                                  ? tz.vertical_reach : tz.reach;
+            if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
+            const Eigen::Vector3d d = pos - tz.center;
+            const double q2 = d.head<2>().squaredNorm() /
+                                  (tz.reach * tz.reach) +
+                              d.z() * d.z() /
+                                  (rv * rv);
+            if (q2 < 1.0) {
+                // The front-end barrier is intentionally hard. Its terrain
+                // boundary is the 0.5 contour of the optimizer's smooth LOS
+                // transition, i.e. the exact radial-horizon ceiling.
+                if (!risk_visibility_ || risk_visibility_(i, pos) > 0.5)
+                    return true;
+            }
         }
         return false;
     }
@@ -389,12 +433,25 @@ public:
         map_resolution_z_ = (resolution_z > 0.0) ? resolution_z : resolution;
     }
     void setRiskZones(const std::vector<RiskZoneLite> *zones) { risk_zones_ = zones; }
+    void setRiskVisibility(
+        std::function<double(size_t, const Eigen::Vector3d &)> f) {
+        risk_visibility_ = std::move(f);
+    }
     void setObstacleMargin(double m) { obstacle_margin_ = m; }
     // Extra berth around dynamic obstacles only (<= obstacle_margin_ disables).
     void setDynObstacleMargin(double m) { dyn_obstacle_margin_ = m; }
-    void setSearchIgnoresObstacles(bool b) { search_ignores_obstacles_ = b; }
     void setGroundHeight(double h)      { ground_height_ = h; }
-    void setTerrainHeightmap(std::function<float(double, double)> f) { terrain_height_ = std::move(f); }
+    // cell_u > 0 = DEM cell size in frame units. The chord/inner-chord
+    // samplers must out-resolve the DEM: the legacy 0.5 u pitch was sized for
+    // the 250 m korea grid and skips whole cells of the 30-40 m corridor
+    // crops (a one-cell ridge between samples passes untested). Half-cell
+    // pitch is sufficient — the bilinear surface has no sub-cell features.
+    void setTerrainHeightmap(std::function<float(double, double)> f,
+                             double cell_u = 0.0) {
+        terrain_height_ = std::move(f);
+        terrain_stride_floor_ =
+            (cell_u > 0.0) ? std::min(0.5, 0.5 * cell_u) : 0.5;
+    }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
     void setRiskAlpha(double a) { risk_alpha_ = a; }
     void setRiskBarrier(double k) { risk_barrier_ = (k > 0.0 ? k : 0.0); }
@@ -448,14 +505,12 @@ public:
     // map span changes between queries.
     void resizePool(const Eigen::Vector3i &pool_size);
 
-    bool AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, bool use_esdf_check);
+    bool AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 
     std::vector<Eigen::Vector3d> getPath();
 
     std::vector<Eigen::Vector3d> astarSearchAndGetSimplePath(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, int drone_id);
 
-    Eigen::Vector3d getOrigin() const { return map_origin_; }
-    Eigen::Vector3d getMapSize() const { return map_size_; }
 
     // Lowest free altitude in the FM2 speed-field column containing world
     // (wx, wy): the bottom edge of the first non-blocked coarse z-layer.
