@@ -23,14 +23,28 @@
                                         # engagement ellipsoid (Rv = ratio * Rh)
     manager/risk_mask_radial_step: 0.0  # <=0: use DEM resolution
     manager/risk_mask_softness: 0.10    # smooth LOS edge in z-units (0.10 = 10 m)
+    manager/risk_grounded: true         # visibility evaluated at smoothmax(z, terrain+band):
+                                        # no legal hidden state below the clearance band. Root
+                                        # fix for duck-below-horizon terrain penetration (the
+                                        # sigmoid's z-pull out-gunned the terrain cubic 48x and
+                                        # settled the equilibrium 35 m BELOW a ridge; also the
+                                        # cause of the 2x loiter-loop paths). 2026-07-20 gauntlet
+                                        # E-matrix: fixes penetration AND loop; 9/10 scenarios
+                                        # byte-identical (band-high flight -> clamp inert);
+                                        # risk_scenarios_test 154/0 both on and off.
     manager/risk_mask_viz_step: 0.0     # <=0: auto; RViz cell size
     manager/risk_mask_viz_slice_offset: 0.0  # planar mode only: slice z offset
     manager/risk_mask_viz_threshold: 0.50    # visible side of horizon boundary
-    manager/risk_mask_viz_mode: heatmap # heatmap | volume | fixed_agl | fixed_msl
+    manager/risk_mask_viz_mode: heatmap3d # heatmap | heatmap3d | volume | fixed_agl | fixed_msl
+                                        # heatmap3d: 탐지천장을 실제 3D 표면으로 렌더 — 표면고도 =
+                                        # 지형 + 탐지플로어 AGL ("이 지붕 아래로 날면 은신"). 색 램프는
+                                        # heatmap과 동일(빨강=바닥까지 노출, 초록/파랑=agl_max 캡 지붕).
+                                        # 궤적이 지붕을 뚫으면 그 지점부터 노출 — 2D 히트맵의 직관을
+                                        # 그대로 3D로 확장한 뷰(2026-07-20).
     manager/risk_heatmap_agl_max: 2.0   # heatmap ramp saturates at this detection-floor AGL (frame units)
     manager/risk_heatmap_max_dim: 768   # heatmap grid cells along the longer AABB side
     manager/risk_heatmap_offset: 1.0   # drape height above DEM in frame units (1.0 = 100 m; must clear the rendered mesh on slopes)
-    manager/risk_heatmap_safe_transparent: true  # floor >= agl_max cells stay transparent (imagery visible); shadow stays blue
+    manager/risk_heatmap_safe_transparent: false # false: floor >= agl_max cells paint GREEN ("safe in band"); true: transparent (imagery only). Shadow stays blue either way
     manager/risk_mask_viz_contours: 5   # clipped altitude contours in volume mode
     manager/risk_mask_viz_volume_alpha: 0.54
     manager/risk_mask_viz_agl: 0.15     # fixed_agl diagnostic height (15 m)
@@ -52,11 +66,15 @@
 
     # ---- Clearances (ISOTROPIC frame: 1 unit = 100 m on every axis since the
     # publisher z-scale fix; SDF distances are finally physical) ----
-    manager/obstacle_clearance: 0.38    # front-end blocked threshold = 38 m in ANY direction.
-                                        # MUST stay > optimization/obstacle_clearance (0.30) so the
+    manager/obstacle_clearance: 0.60    # front-end blocked threshold = 60 m in ANY direction.
+                                        # MUST stay > optimization/obstacle_clearance (0.50) so the
                                         # front-end delivers routes with room above the penalty onset.
-                                        # Was 1.0 back when z-units were 43.7 m: that demanded ~44 m of
-                                        # vertical berth, so metre-scale islets forced 50+ m hops.
+                                        # Raised 0.38->0.60 (2026-07-20): the 0.30 band left the
+                                        # soft-penalty equilibrium grazing terrain to ~3.7 m on the
+                                        # NOE gauntlet; 0.50/0.60 lifts real clearance to ~37 m on
+                                        # low-altitude missions with NO change to normal (band-high)
+                                        # missions. Zone-saturated extremes may exit -1004 (genuine
+                                        # tug-of-war, never penetrating; reject net catches any breach).
     manager/dyn_obstacle_margin: 10.0   # 1 km berth around RUNTIME obstacles (ships); <= clearance disables
     obstacle_viz_scale: 100.0           # RViz MESH magnification ONLY (SDF collision, geometry companion
                                         # marker and altitude-panel overlay stay exact). Since the scenario
@@ -68,7 +86,7 @@
     manager/floor_swath_halfwidth: 10.0  # altitude-panel "Swath" channel: max FE floor within this lateral
                                         # radius (units; 5 = 500 m). Shows what the route DODGED — a clean
                                         # lateral dodge leaves its cause beside the path, invisible underfoot.
-    optimization/obstacle_clearance: 0.30 # optimizer penalty onset (30 m); MUST be < manager/obstacle_clearance
+    optimization/obstacle_clearance: 0.50 # optimizer penalty onset (50 m); MUST be < manager/obstacle_clearance
                                           # (equal -> path sits on the penalty edge and can't be smoothed).
                                           # SIZED TO THE SOFT-PENALTY EQUILIBRIUM: under opposing costs the
                                           # cubic settles ~0.21 units into the band at sharp (sub-piece-
@@ -110,6 +128,14 @@
                                        # inflates durations (jerk decreases with T). At 1e4 it lands
                                        # ~1e3-5e3 vs time ~1e6 — shaping force without duration creep.
     optimization/weight_obstacle: 10000.0
+    optimization/collision_reject: true # ancestor safety net restored (Swarm-Formation had it;
+                                        # MMP had demoted it to logs-only): a trajectory that
+                                        # fails the final collision audit (terrain/obstacle
+                                        # penetration) is DISCARDED — optimize returns false,
+                                        # nothing is published, FSM keeps the previous plan.
+                                        # Selective by design: a -1004 WITHOUT penetration
+                                        # (e.g. rest-start dynamics) still publishes. false =
+                                        # old behavior (audit logs only).
     optimization/weight_ground_barrier: 4000000.0  # crash-plane half-space below
                                        # manager/ground_height. BARRIER class, not a
                                        # preference: the equilibrium dip below the
@@ -129,12 +155,23 @@
                                        # bulging short over-water head pieces 68 m upward — z is
                                        # penalty-free between the alt floor and cap. xy scoping keeps
                                        # the anti-loitering force, closes the vertical loophole.
-    optimization/weight_time: 500.0     # too low -> duration blow-up (loops/loitering knots)
+    optimization/weight_time: 250.0     # too low -> duration blow-up (loops/loitering knots);
+                                       # too HIGH -> time-cost overpowers the constraint terms and
+                                       # hard instances stall at -1004 (2026-07-19 sweep, 219 runs:
+                                       # 500 failed kwaypt AND timed out the h3_zig holdout; 250
+                                       # converges both, is robust across 125-250 and mission
+                                       # perturbation, duration cost <= +0.3%. Combo bumps of
+                                       # wobs/lpp/wsmo on top of 250 re-broke kwaypt at the tested
+                                       # values (knife-edge basins) — change this TOGETHER with
+                                       # those only after a fresh robustness probe.)
     optimization/weight_formation: 0.0
     optimization/weight_Risk: 10000.0  # arc-length integral of the FM2-shared OR-moat field:
                                        # wei * ∫ r(p)*||v|| dt, same r as manager/risk_weight consumes.
                                        # Layer-agreement scale: ~ risk_weight * weight_time / cruise
-                                       # speed (30*500/2 = 7500); 10000 keeps risk slightly stiffer.
+                                       # speed (30*250/2 = 3750 since weight_time 250); 10000 keeps
+                                       # risk noticeably stiffer than agreement — deliberately kept at
+                                       # 1e4 (safety-conservative), validated by the 2026-07-19 sweep
+                                       # (all 219 runs used this value; zone scenarios unchanged).
     optimization/weight_Risk_barrier: 25000.0  # smoothed front-end barrier K on NON-exempt zones
                                        # (start/goal-inside zones stay moat-only, same rule as FM2).
                                        # Derivation: K * weight_time / cruise = 100*500/2. Without it
