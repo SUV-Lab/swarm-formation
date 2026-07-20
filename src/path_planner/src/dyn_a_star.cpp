@@ -694,7 +694,12 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
 
     auto segmentMaxRisk = [&](const Vector3d &a, const Vector3d &b) {
         if (!risk_zones_ || risk_zones_->empty()) return 0.0;
-        int n = std::max(1, (int)std::ceil((b - a).norm() / 0.5));
+        // Pitch MUST match chordOccRisk's (terrain_stride_floor_, 0.15 u on
+        // 30 m corridor maps — was hard-coded 0.5): a coarser detour scan
+        // under-reads detour_max across narrow zone cores, misclassifying a
+        // grazing detour as zero-risk and then holding candidate chords to
+        // the strict zero-risk rule they can never meet (over-rejection).
+        int n = std::max(1, (int)std::ceil((b - a).norm() / terrain_stride_floor_));
         double mx = 0.0;
         for (int k = 0; k <= n; ++k) {
             double t = (double)k / (double)n;
@@ -829,18 +834,56 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // locally shorter pieces (smaller corner-cut depth) after subdivision.
     {
         const size_t kept_before_guard = kept.size();
+        const bool need_risk = risk_zones_ && !risk_zones_->empty();
+        // Inner chord blocked if it crosses OCCUPIED space (original check) OR
+        // exceeds the raw detour's risk envelope (NEW): the guard used to be
+        // occupancy-only, so at a detour apex between two chords that each
+        // grazed a zone edge within the 1.10 margin, the mid->mid inner chord
+        // — which MINCO actually flies — could cut through the zone CORE
+        // unchecked. Mirror chordOk's V3 filter exactly: zero-risk detours
+        // demand a zero-risk inner chord; risky detours bound the inner chord
+        // at detour_max * kShortcutRiskMargin.
         auto innerChordBlocked = [&](size_t a, size_t b, size_t c) -> bool {
             const Vector3d m0 = 0.5 * (path[a] + path[b]);
             const Vector3d m1 = 0.5 * (path[b] + path[c]);
             const double len = (m1 - m0).norm();
             const int n =
                 std::max(1, (int)std::ceil(len / terrain_stride_floor_));
+            double detour_max = 0.0;
+            if (need_risk) {
+                for (size_t k = a + 1; k <= c; ++k)
+                    detour_max = std::max(detour_max, seg_max[k]);
+            }
+            double inner_max = 0.0;
             for (int s = 0; s <= n; ++s) {
-                if (checkOccupancy_esdf(m0 + (double(s) / n) * (m1 - m0)))
+                const Vector3d p = m0 + (double(s) / n) * (m1 - m0);
+                if (checkOccupancy_esdf(p)) return true;
+                if (need_risk) inner_max = std::max(inner_max, getRiskCost(p));
+            }
+            if (need_risk) {
+                // NOTE(candidate, not enabled): raising this 1e-6 zero-risk
+                // razor to a meaningful moat value (~0.01*alpha) measured
+                // -45% optimizer iterations on the gauntlet (boundary-hug
+                // flicker churn), but chordOk keeps its own 1e-6 razor and
+                // the two filters would disagree across (1e-6, eps] —
+                // promote only together with a chordOk-symmetric change.
+                if (detour_max <= 1e-6) {
+                    if (inner_max > 1e-6) return true;
+                } else if (inner_max > detour_max * kShortcutRiskMargin) {
                     return true;
+                }
             }
             return false;
         };
+        // Integrated fixpoint: (a) corner scan re-inserts a raw vertex where
+        // the inner chord is blocked; (b) validation scan re-checks every
+        // multi-segment chord — guard insertions form chords (b,m),(m,c) that
+        // never went through chordOk (an index midpoint on a curved raw span
+        // can sit far off the old chord) and subdivides on failure. Both run
+        // in the SAME loop so each other's insertions are re-examined; index
+        // halving converges to raw adjacency, which is feasible by
+        // construction. Original chords re-pass validation trivially.
+        bool guard_clean = true;
         bool refined = true;
         int rounds = 0;
         while (refined && rounds++ < 8) {
@@ -850,7 +893,10 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                     continue;
                 const size_t a = kept[n], b = kept[n + 1], c = kept[n + 2];
                 const bool can_l = (b > a + 1), can_r = (c > b + 1);
-                if (!can_l && !can_r) continue;  // already maximally dense here
+                if (!can_l && !can_r) {
+                    guard_clean = false;  // raw-dense corner still blocked
+                    continue;
+                }
                 if (can_r && (!can_l || (c - b) >= (b - a))) {
                     kept.insert(kept.begin() + n + 2, b + (c - b) / 2);
                 } else {
@@ -858,18 +904,67 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                 }
                 refined = true;
             }
+            for (size_t n = 0; n + 1 < kept.size(); ++n) {
+                const size_t u = kept[n], v = kept[n + 1];
+                if (v <= u + 1) continue;
+                double mx = 0.0;
+                if (chordOccRisk(path[u], path[v], &mx)) continue;
+                kept.insert(kept.begin() + n + 1, u + (v - u) / 2);
+                refined = true;
+                ++n;
+            }
         }
-        if (log_manager_ && kept.size() != kept_before_guard) {
-            log_manager_->infof(
-                "[A* SHORTCUT] corner-cut guard re-inserted %zu vertex(es) "
-                "(inner chord crossed occupied space)",
-                kept.size() - kept_before_guard);
+        if (refined) guard_clean = false;  // round cap hit with work remaining
+
+        if (log_manager_) {
+            if (kept.size() != kept_before_guard) {
+                log_manager_->infof(
+                    "[A* SHORTCUT] corner-cut guard re-inserted %zu vertex(es) "
+                    "(inner chord occupied/risk-exceeded)",
+                    kept.size() - kept_before_guard);
+            }
+            if (!guard_clean) {
+                // Mirror the sweep's capped-exit WARN: a silently skipped
+                // still-blocked corner reaches the optimizer otherwise unlogged.
+                log_manager_->warnf(
+                    "[A* SHORTCUT] corner-cut guard capped/dense with blocked "
+                    "inner chord(s) remaining — optimizer terms are the "
+                    "remaining guard");
+            }
         }
     }
 
     vector<Vector3d> simple_path;
     simple_path.reserve(kept.size());
     for (size_t n : kept) simple_path.push_back(path[n]);
+
+    // Near-point dedup BEFORE the terrain sweep (was after — ordering bug:
+    // the 0.3 u filter deleted sweep-inserted terrain-lift vertices, silently
+    // re-opening the exact penetration the sweep repaired; observed as the
+    // "simple=32 -> route=30" count mismatch on the korea corridor).
+    // Here it only cleans guard/polish near-duplicates; the sweep then runs
+    // on final geometry and NOTHING may delete its vertices afterwards
+    // (the post-sweep pass below merges with max-z instead of deleting).
+    // Endpoints are commanded positions: never erase index 0 or last.
+    {
+        bool near_flag;
+        do {
+            near_flag = false;
+            if (simple_path.size() <= 2) break;
+            for (size_t i = 0; i + 1 < simple_path.size(); ++i) {
+                if ((simple_path[i + 1] - simple_path[i]).norm() >= 0.3)
+                    continue;
+                if (i + 1 == simple_path.size() - 1) {
+                    if (i == 0) break;              // only start+goal left
+                    simple_path.erase(simple_path.begin() + i);  // keep goal
+                } else {
+                    simple_path.erase(simple_path.begin() + i + 1);
+                }
+                near_flag = true;
+                break;
+            }
+        } while (near_flag);
+    }
 
     // Terrain validation sweep over the FINAL polyline. Two holes the chord
     // machinery above cannot close: (a) chordOk trusts adjacent raw pairs
@@ -883,8 +978,45 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // spirit as the corner-cut guard's re-insertion loop above).
     if (terrain_height_) {
         int lifted = 0;
-        for (int round = 0; round < 8; ++round) {
+        // Hard cap on total lift/insert operations: every full_route vertex is
+        // preserved 1:1 into clean_path anchors (STEP 3 never merges), so an
+        // unbounded sweep would inflate piece_num_/variable_num_ and the
+        // optimizer's per-iteration cost. Real DEMs converge in a handful of
+        // lifts (bilinear cells have no sub-cell features — measured 2 lifts
+        // on a 44 km ridge-graze NOE); the cap only guards pathological
+        // geometry. A capped exit with work remaining is WARNed below — the
+        // optimizer terrain term is the remaining guard.
+        //
+        // NO fixed round cap: termination is guaranteed by the lift cap alone.
+        // In-place lifts are once-per-vertex (v.z is set to need+0.02 at FIXED
+        // (x,y), so the same vertex can never re-trigger), and every other
+        // change INSERTS a vertex, bounded by kLiftCap. The old 8-round cap
+        // bound FIRST on guard-dense corner chains (observed: knoez stress
+        // exited at 8 rounds with only lifted=14, leaving a penetrating seed
+        // that the optimizer then rode into a -0.543 goal-approach collision).
+        // kRoundSafety is a pure backstop against an unforeseen cycle.
+        constexpr int kLiftCap = 512;
+        constexpr int kRoundSafety = 256;
+        bool clean_exit = false;
+        for (int round = 0; round < kRoundSafety && lifted < kLiftCap; ++round) {
             bool changed = false;
+            // (0) Lift KEPT interior vertices that themselves penetrate. The
+            // per-segment sweep below only samples interior points (s=1..n-1),
+            // so a vertex retained by chordOk's b<=a+1 fast path — which returns
+            // true WITHOUT calling chordOccRisk/checkOccupancy — can sit below
+            // terrain and would otherwise never be repaired. Endpoints (start,
+            // goal) are commanded positions and left untouched.
+            for (size_t k = 1; k + 1 < simple_path.size(); ++k) {
+                Vector3d &v = simple_path[k];
+                const float h = terrain_height_(v.x(), v.y());
+                if (!std::isfinite(h)) continue;
+                const double need = double(h) + obstacle_margin_;
+                if (v.z() < need) {
+                    v.z() = need + 0.02;
+                    ++lifted;
+                    changed = true;
+                }
+            }
             for (size_t k = 0; k + 1 < simple_path.size(); ++k) {
                 const Vector3d &p = simple_path[k];
                 const Vector3d &q = simple_path[k + 1];
@@ -912,14 +1044,95 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                     changed = true;
                 }
             }
-            if (!changed) break;
+            // (2) Inner-chord terrain check. The MINCO back-end smooths ACROSS
+            // kept corners along the mid->mid "inner chord", which can dip
+            // below a ridge even when both adjacent SEGMENTS are clear. The
+            // corner-cut guard earlier ran on the pre-sweep polyline, so
+            // sweep-inserted lift vertices never got this check. Lift the worst
+            // inner-chord penetration in place (same fixpoint as above).
+            for (size_t k = 1; k + 1 < simple_path.size(); ++k) {
+                const Vector3d m0 = 0.5 * (simple_path[k - 1] + simple_path[k]);
+                const Vector3d m1 = 0.5 * (simple_path[k] + simple_path[k + 1]);
+                const double len = (m1 - m0).norm();
+                const int n =
+                    std::max(1, (int)std::ceil(len / terrain_stride_floor_));
+                double worst_pen = 0.0;
+                Vector3d worst_pt;
+                for (int s = 0; s <= n; ++s) {
+                    const Vector3d x = m0 + (double(s) / n) * (m1 - m0);
+                    const float h = terrain_height_(x.x(), x.y());
+                    if (!std::isfinite(h)) continue;
+                    const double pen = (double(h) + obstacle_margin_) - x.z();
+                    if (pen > worst_pen) {
+                        worst_pen = pen;
+                        worst_pt = x;
+                        worst_pt.z() = double(h) + obstacle_margin_ + 0.02;
+                    }
+                }
+                if (worst_pen > 0.0) {
+                    simple_path.insert(simple_path.begin() + k + 1, worst_pt);
+                    ++lifted;
+                    ++k;
+                    changed = true;
+                }
+            }
+            if (!changed) { clean_exit = true; break; }
         }
-        if (log_manager_ && lifted > 0) {
-            log_manager_->infof(
-                "[A* SHORTCUT] terrain sweep lifted %d vertex(es) over "
-                "sub-chord ridges (pitch %.2f u)",
-                lifted, terrain_stride_floor_);
+        if (log_manager_) {
+            if (!clean_exit && lifted > 0) {
+                // Exited via the round cap or kLiftCap while still finding
+                // work — residual sub-chord penetration may remain. Distinct
+                // from the clean-convergence info line so it is greppable.
+                log_manager_->warnf(
+                    "[A* SHORTCUT] terrain sweep hit its cap (lifted=%d, "
+                    "cap=%d) with work remaining — residual penetration "
+                    "possible; optimizer terrain term is the remaining guard",
+                    lifted, kLiftCap);
+            } else if (lifted > 0) {
+                log_manager_->infof(
+                    "[A* SHORTCUT] terrain sweep lifted %d vertex(es) over "
+                    "sub-chord ridges (pitch %.2f u)",
+                    lifted, terrain_stride_floor_);
+            }
         }
+    }
+
+    // Post-sweep near-pair MERGE (terrain-safe replacement of the old delete
+    // filter that ran here). The sweep may insert a lift vertex within 0.3 u
+    // of a neighbor; deleting either would re-open the repaired penetration,
+    // but keeping sub-0.3 u segments recreates the documented MINCO loiter
+    // hazard. So MERGE instead: erase one vertex of a near pair and raise the
+    // INTERIOR survivor's z to the pair max — z-monotone, so the sweep's
+    // terrain invariant is preserved. If the survivor would be a commanded
+    // endpoint (whose z must not move), keep the pair unless the erased
+    // vertex adds no height (z <= endpoint z): a rare tiny segment at an
+    // endpoint is safer than losing a terrain lift.
+    {
+        bool near_flag;
+        do {
+            near_flag = false;
+            if (simple_path.size() <= 2) break;
+            for (size_t i = 0; i + 1 < simple_path.size(); ++i) {
+                if ((simple_path[i + 1] - simple_path[i]).norm() >= 0.3)
+                    continue;
+                const size_t last_i = simple_path.size() - 1;
+                if (i == 0) {                       // survivor = start
+                    if (simple_path[1].z() > simple_path[0].z() + 1e-6)
+                        continue;                   // lift next to start: keep
+                    simple_path.erase(simple_path.begin() + 1);
+                } else if (i + 1 == last_i) {       // survivor = goal
+                    if (simple_path[i].z() > simple_path[last_i].z() + 1e-6)
+                        continue;                   // lift next to goal: keep
+                    simple_path.erase(simple_path.begin() + i);
+                } else {                            // both interior: z-max merge
+                    simple_path[i].z() =
+                        std::max(simple_path[i].z(), simple_path[i + 1].z());
+                    simple_path.erase(simple_path.begin() + i + 1);
+                }
+                near_flag = true;
+                break;
+            }
+        } while (near_flag);
     }
 
     // z-profile logger: 21 rows (5% steps) of z + terrain-under, so the raw
@@ -943,6 +1156,9 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         }
     };
     logZProfileS("SIMPLE-PROFILE", simple_path);
+    // Summary AFTER every mutation so the logged count equals the emitted
+    // route (the old order printed simple=N, then the near filter deleted
+    // vertices -> "simple=32 vs route=30" confusion in the korea logs).
     if (log_manager_) {
         double max_risk_simple = 0.0;
         for (size_t k = 1; k < simple_path.size(); ++k) {
@@ -956,25 +1172,6 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
             kShortcutMargin, kShortcutRiskMargin, max_risk_simple,
             (rclcpp::Clock().now() - t_sc0).seconds() * 1000.0);
     }
-
-    // Remove near points (3D distance)
-    bool near_flag;
-    do {
-        near_flag = false;
-        if (simple_path.size() <= 2) {
-            break;
-        }
-
-        int num_same_check = simple_path.size();
-        for (int i = 0; i < num_same_check - 1; i++) {
-            double len = (simple_path[i+1] - simple_path[i]).norm();  // Full 3D norm
-            if (len < 0.3) {
-                simple_path.erase(simple_path.begin() + i + 1);
-                near_flag = true;
-                break;
-            }
-        }
-    } while (near_flag);
 
     if (log_manager_) {
         log_manager_->infof("드론 %d: 3D 경로 단순화 완료 - %zu점 -> %zu점",
@@ -1257,10 +1454,19 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
     if (!(force_cpu && std::string(force_cpu) == "1") && fm2CudaAvailable()) {
       fm2_T_.resize(N);
       const int gpu_gflat = fm2Flat(gi, gj, gk);
+      // fm2_F_ is a PERSISTENT buffer reused across queries and read by the
+      // column/swath floor viz. Save the goal-cell speed, force it traversable
+      // only for THIS solve, and restore afterwards so a temporary 0.5 never
+      // leaks into a later query or the floor visualization. (GPU reads F,
+      // never writes it, so post-call restore is safe.)
+      const float gpu_f_orig = fm2_F_[gpu_gflat];
       if (fm2_F_[gpu_gflat] <= kFMin) fm2_F_[gpu_gflat] = 0.5f;
-      if (fm2EikonalGPU(fm2_F_.data(), fcnx_, fcny_, fcnz_,
+      const bool gpu_ok =
+          fm2EikonalGPU(fm2_F_.data(), fcnx_, fcny_, fcnz_,
                         static_cast<float>(cres), static_cast<float>(cres),
-                        static_cast<float>(cres_z), gi, gj, gk, fm2_T_.data())) {
+                        static_cast<float>(cres_z), gi, gj, gk, fm2_T_.data());
+      fm2_F_[gpu_gflat] = gpu_f_orig;  // restore regardless of GPU success
+      if (gpu_ok) {
         const float inf = std::numeric_limits<float>::infinity();
         for (float &t : fm2_T_) if (t >= 1e17f) t = inf;
         fm2_valid_ = true;
@@ -1275,7 +1481,10 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
 
     const int gflat = fm2Flat(gi, gj, gk);
     // Goal cell might be ESDF-blocked at coarse res; force it traversable
-    // so the wave can still originate (fine path refines it).
+    // so the wave can still originate (fine path refines it). Save & restore
+    // (after the FMM) so this 0.5 never leaks into fm2_F_ — a persistent
+    // buffer reused by later queries and the column/swath floor viz.
+    const float cpu_f_orig = fm2_F_[gflat];
     if (fm2_F_[gflat] <= kFMin) fm2_F_[gflat] = 0.5f;
     fm2_T_[gflat] = 0.0f;
 
@@ -1365,6 +1574,7 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
             }
         }
     }
+    fm2_F_[gflat] = cpu_f_orig;  // restore persistent speed buffer
     fm2_valid_ = true;
 }
 
