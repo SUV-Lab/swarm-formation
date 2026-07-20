@@ -871,6 +871,14 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
 
     last_received_sequence_ = msg->sequence;
 
+    // A NEW mission (different mission_id) is not a mid-flight continuation of
+    // the current trajectory — its commanded start must be adopted. Capture
+    // this BEFORE current_mission_id_ is overwritten below. (Same mission_id =
+    // formation change / replan, which keeps the trajectory-continuation path.)
+    const bool mission_changed =
+        start_position_received_ && !msg->mission_id.empty() &&
+        msg->mission_id != current_mission_id_;
+
     current_mission_id_ = msg->mission_id;
     commanded_initial_speed_ =
         std::max(0.0, msg->initial_speed) / initial_speed_unit_m_;
@@ -895,8 +903,14 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
         commanded_initial_acceleration_.setZero();
     }
 
-    // Update start position if this is the first command or if position changed significantly
-    if (!start_position_received_) {
+    // Adopt the commanded start for the FIRST command AND for every new
+    // mission. Previously this was a write-once latch (only the first command
+    // ever set the start), so missions 2..N silently planned from the stale
+    // first start / previous trajectory end — there is no odometry sub to
+    // refresh current_pos_. A new mission drops the previous local trajectory
+    // so formationTargetCallback plans from the commanded start, not the old
+    // trajectory position.
+    if (!start_position_received_ || mission_changed) {
         Eigen::Vector3d new_start_pos(
             msg->start_position.x,
             msg->start_position.y,
@@ -907,9 +921,13 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
         current_pos_ = new_start_pos;
         start_position_received_ = true;
         start_seed_agl_pending_ = true;  // z is AGL; resolved at first plan
+        if (mission_changed) {
+            have_local_traj_ = false;    // new mission: do not continue prev traj
+        }
 
-        FSM_LOG_INFO("Received start position from TrajectoryCommand: (%.2f, %.2f, %.2f)",
-                    new_start_pos.x(), new_start_pos.y(), new_start_pos.z());
+        FSM_LOG_INFO("Received start position from TrajectoryCommand: (%.2f, %.2f, %.2f)%s",
+                    new_start_pos.x(), new_start_pos.y(), new_start_pos.z(),
+                    mission_changed ? " [new mission]" : "");
     }
 
     FSM_LOG_INFO("Trajectory command (seq: %d): mission=%s, start=(%.2f, %.2f, %.2f), target=(%.2f, %.2f, %.2f)",

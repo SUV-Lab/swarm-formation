@@ -113,12 +113,18 @@ class SDFManager : public IDistanceField {
   // gradient is well defined out to that radius. Outside the patch AABB the
   // patch's contribution is +inf (i.e. only the static layer matters there).
 
-  // Default 2.0 m, matches the typical clearance reach of our optimizer.
+  // Default 2.0 FRAME UNITS (=200 m at 100 m/unit), matching the optimizer's
+  // clearance reach. NOT metres — the whole SDF works in frame units. The
+  // manager raises this to the dynamic berth (dyn_obstacle_margin_) so a berth
+  // wider than the AABB extension never reads +inf before the margin.
   void   setInfluenceRadius(double r);
   double influenceRadius() const;
 
-  // Returns patch id (>= 0) on success, -1 on failure
-  // (e.g. primitive entirely outside the grid, or static layer missing).
+  // Returns patch id (>= 0) on success, -1 on failure (static layer not
+  // initialized/built yet). Patches are ANALYTIC world-coordinate primitives
+  // (never rasterized into the grid), so a primitive outside the grid extent
+  // is accepted (id >= 0) and simply never near any query — being off-grid is
+  // not a failure.
   int  addObstacle(const PrimitiveSpec& spec);
 
   // Remove a previously added patch by id. No-op for an unknown/freed id.

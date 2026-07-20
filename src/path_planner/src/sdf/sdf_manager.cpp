@@ -925,6 +925,15 @@ void SDFManager::removeObstacle(int patch_id) {
   if (patch_id < 0 ||
       static_cast<size_t>(patch_id) >= impl_->patches.size()) return;
   impl_->patches[patch_id].active = false;
+  // Re-evaluate has_patches: if this was the last ACTIVE patch, clear the
+  // gate so getDistance's lock-free fast path is restored. Without this,
+  // removing all obstacles left has_patches=true forever, forcing the
+  // shared_lock + patch scan on every per-control-point SDF query (millions
+  // per plan) — the exact rwlock traffic the gate exists to avoid.
+  for (const auto& p : impl_->patches) {
+    if (p.active) return;   // still at least one active patch
+  }
+  impl_->has_patches.store(false, std::memory_order_release);
 }
 
 void SDFManager::clearObstacles() {
