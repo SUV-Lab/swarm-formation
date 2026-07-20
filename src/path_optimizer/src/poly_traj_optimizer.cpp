@@ -269,6 +269,11 @@ namespace ego_planner
       const Eigen::Vector3d &start, const Eigen::Vector3d &goal)
   {
     const Eigen::Vector3d ends[2] = {start, goal};
+    const double span = (goal.head<2>() - start.head<2>()).norm();
+    // Default: full radius. The span clamp is applied AFTER the arming loop
+    // below, once we know how many endpoints actually taper (the in-loop log
+    // lines therefore print the BASE radius; a clamp emits its own log).
+    terr_taper_len_eff_ = terrain_taper_len_;
     for (int e = 0; e < 2; ++e) {
       terr_taper_on_[e] = false;
       floor_taper_on_[e] = false;
@@ -284,6 +289,19 @@ namespace ego_planner
           const float hv = terrain_height_(ends[e].x(), ends[e].y());
           if (std::isfinite(hv)) { h = hv; land = true; }
         }
+        if (!land) {
+          // Off-DEM endpoint: the accessor has no data there (returns false
+          // since the off-map/water split). For taper ARMING ONLY, fall back
+          // to sea level (h=0): an off-DEM pinned goal (min_goal_agl 0.15 <
+          // band 0.30 makes this reachable) would otherwise get no taper at
+          // all — the in-map coastal approach then demands the FULL band right
+          // up to the DEM boundary while the terrain term vanishes outside
+          // (cost cliff). Arming with h=0 fades the demanded clearance to the
+          // commanded AGL across the approach, closing most of that cliff.
+          // The terrain TERM itself still prices nothing off-DEM.
+          h = 0.f;
+          land = true;
+        }
         if (land) {
           const double agl = ends[e].z() - static_cast<double>(h);
           if (agl < obstacle_clearance_) {
@@ -294,7 +312,7 @@ namespace ego_planner
                   "[TERRAIN-TAPER] %s pinned at %.3f u AGL < band %.2f u — "
                   "demanded clearance tapers to the commanded AGL within %.0f u",
                   e == 0 ? "start" : "goal", agl, obstacle_clearance_,
-                  terrain_taper_len_);
+                  terr_taper_len_eff_);
             }
           }
         }
@@ -309,7 +327,33 @@ namespace ego_planner
               "[TERRAIN-TAPER] %s pinned at z %.3f < altitude floor %.3f — "
               "floor tapers to the pin within %.0f u",
               e == 0 ? "start" : "goal", ends[e].z(), alt_zlo_,
-              terrain_taper_len_);
+              terr_taper_len_eff_);
+        }
+      }
+    }
+
+    // Span clamp — applied AFTER arming so it can key on how many endpoints
+    // actually taper. Overlap into mid-span (the penetration risk the clamp
+    // exists for) needs BOTH zones, so frac=0.25 there; a single armed zone
+    // cannot overlap anything and may reach half the span (frac=0.5). Floor
+    // the radius at 2.0 u so a short-span mission cannot collapse the zone to
+    // ~nothing: taperedTarget's peak gradient is 1.5*(high-low)/len <=
+    // 1.5*0.30/2.0 = 0.225/u at the floor (tame), and a couple of constraint
+    // points always land inside the ramp. Long legs (span >> 4*len): no-op.
+    const bool armed0 = terr_taper_on_[0] || floor_taper_on_[0];
+    const bool armed1 = terr_taper_on_[1] || floor_taper_on_[1];
+    if ((armed0 || armed1) && span > 1e-6) {
+      const double frac = (armed0 && armed1) ? 0.25 : 0.5;
+      const double clamped =
+          std::min(terrain_taper_len_, std::max(2.0, frac * span));
+      if (clamped < terr_taper_len_eff_) {
+        terr_taper_len_eff_ = clamped;
+        if (log_manager_) {
+          log_manager_->infof(
+              "[TERRAIN-TAPER] radius clamped %.0f -> %.1f u "
+              "(span %.1f u, %s taper)",
+              terrain_taper_len_, terr_taper_len_eff_, span,
+              (armed0 && armed1) ? "both-end" : "single-end");
         }
       }
     }
@@ -349,7 +393,7 @@ namespace ego_planner
       Eigen::Vector2d g;
       const double v = taperedTarget(pos.head<2>(), terr_taper_xy_[e],
                                      floor_taper_z_[e] - 0.02, alt_zlo_,
-                                     terrain_taper_len_, &g);
+                                     terr_taper_len_eff_, &g);
       if (v < floor_t) { floor_t = v; *grad_xy = g; }
     }
     return floor_t;
@@ -365,7 +409,7 @@ namespace ego_planner
       Eigen::Vector2d g;
       const double v = taperedTarget(pos.head<2>(), terr_taper_xy_[e],
                                      terr_taper_agl_[e], obstacle_clearance_,
-                                     terrain_taper_len_, &g);
+                                     terr_taper_len_eff_, &g);
       if (v < target) { target = v; *grad_xy = g; }
     }
     return target;
@@ -407,6 +451,18 @@ namespace ego_planner
     // converged trajectory unchanged (crest dip -0.095 -> -0.098), so the
     // ridge graze is a true optimum of the cost design, not under-convergence.
     lbfgs_params.g_epsilon      = 0.05;     // ref 0.1 → 0.05 (slightly tighter)
+    // [PAST-DELTA] GCOPTER-style cost-plateau convergence (gcopter.hpp:821:
+    // g_epsilon=0, past=3, delta=relCostTol — their lbfgs header explicitly
+    // warns g_epsilon is wrong for nonsmooth objectives). Our penalty terrain
+    // keeps ||g|| above g_epsilon long after the cost has plateaued (opposing
+    // stiff terms leave a large residual gradient), so hard instances idled
+    // thousands of iterations to the cap and exited -1004 with the SAME
+    // trajectory a plateau test would have blessed as converged. past=3 /
+    // delta=1e-6 is conservative: three consecutive iterations must improve
+    // the cost by <1e-6 relative before we call it converged; g_epsilon is
+    // kept as a secondary (smooth-case) exit.
+    lbfgs_params.past           = 3;
+    lbfgs_params.delta          = 1.0e-6;
     lbfgs_params.min_step       = 1e-32;
     // 300 consistently ended at -1004 while risk/altitude terms were still
     // polishing (~0.02%/iter). One-shot global plan on an idle desktop:
@@ -456,12 +512,51 @@ namespace ego_planner
         // 4 restarts: observed hard instances were still DESCENDING fast
         // (risk 9.5M -> 7.9M and accelerating) when 2 restarts ran out, and
         // the published mid-iterate carried needle-spike artifacts.
-        if (result != lbfgs::LBFGSERR_MAXIMUMLINESEARCH || restarts >= 4) {
+        //
+        // Retry ANY recoverable line-search failure, not just -1005: a stiff
+        // feature can also trip ROUNDING_ERROR (-1008) or MINIMUMSTEP from a
+        // still-descending iterate, and re-entering from the best accepted q
+        // with fresh curvature memory recovers the same way. Only re-restart
+        // from a FINITE iterate — a non-finite final_cost cannot recover and
+        // would just burn the restart budget on garbage.
+        const bool recoverable =
+            result == lbfgs::LBFGSERR_MAXIMUMLINESEARCH ||
+            result == lbfgs::LBFGSERR_ROUNDING_ERROR ||
+            result == lbfgs::LBFGSERR_MINIMUMSTEP;
+        // lbfgs_optimize reverts x(=q)/g to the best ACCEPTED iterate on a
+        // line-search failure but does NOT revert fx — so final_cost can hold
+        // the REJECTED trial's cost. The most common -1008 trigger is a
+        // NaN/Inf trial cost (lbfgs.hpp isnan/isinf check), exactly where
+        // final_cost is non-finite while q is a perfectly good finite iterate
+        // (verified with a standalone probe: status=-1008, fx=nan, x reverted
+        // finite). Recompute the cost AT q before gating, so the NaN-trial
+        // subclass still restarts; the gate then only blocks a genuinely
+        // non-finite accepted state.
+        if (recoverable && !std::isfinite(final_cost)) {
+            std::vector<double> gtmp(static_cast<size_t>(variable_num_));
+            final_cost =
+                costFunctionCallback(this, q.data(), gtmp.data(), variable_num_);
+        }
+        if (!recoverable || restarts >= 4 || !std::isfinite(final_cost)) {
             break;
         }
         ++restarts;
-        LOG_WARN("[L-BFGS] line-search stall (-1005) at cost=%.1f — restart %d/4 "
-                 "from current iterate with fresh curvature memory", final_cost, restarts);
+        LOG_WARN("[L-BFGS] recoverable line-search failure %d (%s) at cost=%.1f — "
+                 "restart %d/4 from current iterate with fresh curvature memory",
+                 result, lbfgs::lbfgs_strerror(result), final_cost, restarts);
+    }
+
+    // lbfgs_optimize reverts x=q to the best ACCEPTED iterate on a terminal
+    // line-search failure (-1005 after the restart cap, or -1008 rounding),
+    // but jerkOpt_/cps_ still describe the last REJECTED trial from the final
+    // proc_evaluate. Regenerate them from q so the trajectory that is audited,
+    // returned, executed and broadcast is the best iterate — the rejected
+    // -1008 trial can be terrain-penetrating or non-finite (observed:
+    // [COLLISION] clearance=-1.178 audited right after a -1008 exit). Harmless
+    // on convergence/max-iter (q equals the last evaluated point already).
+    {
+        std::vector<double> regen_grad(static_cast<size_t>(variable_num_));
+        costFunctionCallback(this, q.data(), regen_grad.data(), variable_num_);
     }
 
     if (log_manager_ && enable_debug_logs_) {
@@ -473,7 +568,24 @@ namespace ego_planner
     // Run the final trajectory audit unconditionally. Besides collision and
     // terrain checks it now contains the shared flight-envelope audit, which
     // must still run in obstacle-free ablations.
-    (void)checkCollision();
+    //
+    // [REJECT] (optimization/collision_reject, default ON) Ancestor safety
+    // net: Swarm-Formation's checkCollision() fed OptimizeTrajectory's return
+    // value so a penetrating trajectory was DISCARDED and replanned; MMP had
+    // demoted the verdict to logs — a -1004 exit with a 35 m terrain breach
+    // was published as "planning successful". With the gate on, a collision
+    // audit failure fails the whole optimize call (manager's opt_success
+    // false -> nothing published). Envelope violations still only log.
+    {
+        const bool audit_collided = checkCollision();
+        if (collision_reject_ && audit_collided) {
+            if (log_manager_)
+                log_manager_->warnf(
+                    "[REJECT] collision audit failed — trajectory DISCARDED "
+                    "(optimization/collision_reject, nothing published)");
+            return false;
+        }
+    }
 
     // Per-term vertical-force attribution on the converged trajectory —
     // the ground-truth answer to "what lifts the path over open water".
@@ -810,9 +922,11 @@ namespace ego_planner
         const double viol = terrainClearanceTarget(pos, &tg_xy) - (pos.z() - h);
         if (viol > 0.0) fz_terr = wei_obs_ * 3.0 * viol * viol;
       }
-      // RISK (moat/barrier arc-length integral). gradp uses only the horizontal
-      // dir_h (z==0) by construction, so fz_risk is ALWAYS 0 — logged to prove
-      // the zone term cannot be the lifter. MUST MATCH RiskGradCostP.
+      // RISK (moat/barrier arc-length integral). The oblate-ellipsoid moat and
+      // the z-visibility sigmoid both have a real z-derivative, so fz_risk is
+      // NONZERO near zone skirts and shadow edges — it is a genuine 3D force,
+      // not identically 0. Logged so its vertical share is attributable, NOT to
+      // prove the zone term is horizontal-only. MUST MATCH RiskGradCostP.
       double fz_risk = 0.0;
       if (use_risk_zones_) {
         Eigen::Vector3d gradp, gradv; double costp;

@@ -92,6 +92,7 @@ namespace ego_planner
 
 
     double wei_obs_;
+    bool collision_reject_{true};  // discard (not publish) audit-failed trajs
     double wei_ground_barrier_;  // crash-plane half-space (>> any soft term)
     double wei_swarm_;
     double wei_feas_;
@@ -187,6 +188,11 @@ namespace ego_planner
     bool floor_taper_on_[2] = {false, false};
     double floor_taper_z_[2] = {0.0, 0.0};
     double terrain_taper_len_{30.0};              // taper radius (units)
+    // Effective radius used per plan: clamped to <=1/4 the start->goal span so
+    // that when BOTH endpoints taper (both pinned below the band) the two
+    // relaxation zones cannot overlap into mid-span and erode the demanded
+    // clearance there (terrain-penetration risk). Set in setupTerrainTaper.
+    double terr_taper_len_eff_{30.0};
 
     void setupTerrainTaper(const Eigen::Vector3d &start, const Eigen::Vector3d &goal);
     // targets + their analytic d/dxy (cost and gradient from one surface)
@@ -256,6 +262,11 @@ namespace ego_planner
     void setLogManager(swarm_formation::LogManager::Ptr log_manager);
     void setSDFManager(const path_planner::sdf::IDistanceField *sdf) { sdf_manager_ = sdf; }
     void setObstacleClearance(double c) { obstacle_clearance_ = c; }
+    // [REJECT] restored ancestor safety net: a trajectory that fails the
+    // collision audit is DISCARDED (optimize returns false) instead of being
+    // published with a warning log. Swarm-Formation had this; MMP had demoted
+    // it to logs-only.
+    void setCollisionReject(bool on) { collision_reject_ = on; }
     void setGroundHeight(double h)      { ground_height_ = h; }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
     // cell_u > 0 = DEM cell size in frame units (scales the swath-floor
