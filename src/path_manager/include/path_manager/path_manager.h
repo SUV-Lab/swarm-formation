@@ -133,6 +133,13 @@ namespace path_manager
       // island-dotted maps. Pure water (all four invalid) stays -inf so
       // "water = no terrain" semantics are unchanged for the F-build and the
       // terrain term alike.
+      // KNOWN LIMITATION (deferred): a partial-OOB stencil at the MAP EDGE
+      // (geometric boundary, not water) also 0-blends its out-of-grid corners,
+      // so land touching the grid edge reads a fabricated sea-level down-slope.
+      // Harmless while missions stay interior (all production worlds do). A fix
+      // must nearest-cell-clamp BOTH this and getElevationAndGrad TOGETHER
+      // (cost and gradient must share one surface) plus add an edge-mission
+      // regression — out of scope for the current audit.
       const bool n00 = (e00 == kInv), n10 = (e10 == kInv);
       const bool n01 = (e01 == kInv), n11 = (e11 == kInv);
       if (n00 && n10 && n01 && n11) return kInv;
@@ -195,10 +202,24 @@ namespace path_manager
       // inland DEM read 0 (under-floored vs their true surface) — still a
       // floor where there was none.
       if (n00 && n10 && n01 && n11) {
+        // Distinguish IN-MAP open water (all four corners are valid grid
+        // cells that happen to be NaN) from OFF-DEM (all four corner indices
+        // are outside the grid). In-map water keeps the sea-level floor
+        // (design above: resist sub-stall dives over the sea). Off-DEM has no
+        // terrain data at all — return false, matching getElevation's off-map
+        // -inf, so the optimizer/audit never prices an off-map sample against
+        // a fake z=0 ground (which read a real cropped-out ridge as "safe").
+        auto in_grid = [&](int c, int r) {
+          return c >= 0 && c < cols && r >= 0 && r < rows;
+        };
+        const bool any_in_grid =
+            in_grid(col0, row0) || in_grid(col0 + 1, row0) ||
+            in_grid(col0, row0 + 1) || in_grid(col0 + 1, row0 + 1);
+        if (!any_in_grid) return false;   // off-DEM: no terrain
         *h = 0.0f;
         *dhdx = 0.0f;
         *dhdy = 0.0f;
-        return true;
+        return true;                      // in-map open water: sea-level floor
       }
       const double f00 = n00 ? 0.0 : e00;
       const double f10 = n10 ? 0.0 : e10;
@@ -363,6 +384,8 @@ namespace path_manager
     bool risk_terrain_mask_enable_{true};
     double risk_mask_radial_step_{0.0};  // <=0: DEM resolution
     double risk_mask_softness_{0.10};    // vertical sigmoid width (frame units)
+    bool risk_grounded_{true};           // visibility clamped at terrain+band
+                                         // ("no hidden state below the band")
     double risk_mask_viz_step_{0.0};     // <=0: auto per zone/DEM
     double risk_mask_viz_slice_offset_{0.0};
     double risk_mask_viz_threshold_{0.50};
@@ -375,11 +398,11 @@ namespace path_manager
     // deviates from the bilinear DEM sample by up to ~half a cell on slopes
     // (76 m cells on big_terrain) — 0.05 u sank into hillsides.
     double risk_heatmap_offset_{0.30};
-    // Leave cells whose detection floor is at/above agl_max TRANSPARENT
-    // instead of painting the cyan ramp end: "you would have to fly above the
-    // band of interest to be seen" is background, not signal. Shadow cells
-    // (never detectable) keep their explicit blue.
-    bool risk_heatmap_safe_transparent_{true};
+    // Cells whose detection floor is at/above agl_max ("safe unless you
+    // climb") paint GREEN by default; true leaves them transparent instead
+    // so the terrain imagery dominates. Shadow cells (never detectable)
+    // always keep their explicit blue.
+    bool risk_heatmap_safe_transparent_{false};
     // RViz modes: "volume" (default threat-floor mesh + clipped wire shell),
     // "fixed_agl" (terrain-following diagnostic), or "fixed_msl" (planar
     // diagnostic). The old drape bool remains only as a compatibility hint.
@@ -394,8 +417,24 @@ namespace path_manager
                                const Eigen::Vector3d &pos) const;
     double riskVisibility(size_t zone_index, const Eigen::Vector3d &pos,
                           Eigen::Vector3d *grad) const;
+    // [RISK-GROUNDED] z used by the visibility sigmoid (manager/risk_grounded,
+    // default ON): smooth-max(z, terrain + band) so the
+    // field has no legal hidden state below the clearance band. dzeff_dz (opt)
+    // receives ∂z_eff/∂z for the analytic z-gradient — one C1 surface.
+    double riskGroundedZ(const Eigen::Vector3d &pos, double *dzeff_dz) const;
     void publishEffectiveRiskField();
     void publishRiskHeatmap();
+    // [TRAJ-RISK] the one view where color == cost: the planned trajectory
+    // painted by the risk density the aircraft ACTUALLY experiences at its 3D
+    // position (OR-combined terrain-masked moats). Green (0) -> yellow -> red.
+    // The draped heatmap shows the ground-level detection floor, which is NOT
+    // the flown risk — this line is.
+    void publishTrajRisk(const poly_traj::Trajectory &traj);
+    // [RISK-PROFILE] altitude-panel channels: per arc-length sample along the
+    // plan, the risk-zone DOME cross-section (union vertical extent) and the
+    // detection ROOF (altitude above which some zone sees you; below = hidden).
+    // Quads [s, roof_z, dome_top_z, dome_bot_z]; NaN where no zone covers xy.
+    void publishRiskProfile(const poly_traj::Trajectory &traj);
     double risk_smha_w_{2.0};
     std::string front_end_str_{"fm2"};
     int fm2_coarse_k_{4};
@@ -510,6 +549,8 @@ namespace path_manager
     // Draped detection-floor heatmap (GridMap, rendered by a second
     // grid_map_rviz_plugin display; see publishRiskHeatmap).
     rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr risk_heatmap_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr traj_risk_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr risk_profile_pub_;
     // Dynamic obstacle visualization (one MarkerArray republished on every add/clear).
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr dyn_obstacle_pub_;
     // Terrain ESDF cache status string (RViz panel reads this).

@@ -217,13 +217,22 @@ int main(int argc, char **argv)
            "heatmap corner outside every footprint is transparent");
     expect(std::isfinite(cellAt(-6.5, 0.5, 0)),
            "west heatmap cell is painted");
-    int r = 0, g = 0, b = 0;
-    rgbAt(-6.5, 0.5, &r, &g, &b);
-    expect(r > g && r > b, "west cell (detectable at ground level) is red");
+    int wr = 0, wg = 0, wb = 0;
+    rgbAt(-6.5, 0.5, &wr, &wg, &wb);
+    expect(wr > wg && wr > wb, "west cell (detectable at ground level) is red");
     // East of the ridge only the crest-top emitter sees the column, and only
-    // above its ellipsoid lower shell (~1.16 u AGL) -> mid-ramp (green-ish).
-    rgbAt(6.5, 0.5, &r, &g, &b);
-    expect(g > r, "east cell behind the ridge shows a raised (cooler) floor");
+    // above its ellipsoid lower shell (~1.16 u AGL) -> mid warm ramp, much
+    // yellower than the ground-detectable west cell.
+    int er = 0, eg = 0, eb = 0;
+    rgbAt(6.5, 0.5, &er, &eg, &eb);
+    expect(er > eb && eg > wg + 60,
+           "east cell behind the ridge ramps toward yellow (raised floor)");
+    // Far-east rim: the crest emitter's ellipsoid lower shell there is
+    // ~2.96 u AGL >= agl_max (2.0) -> explicit safe green, not transparent.
+    int sr = 0, sg = 0, sb = 0;
+    rgbAt(12.5, 0.5, &sr, &sg, &sb);
+    expect(sg > sr && sg > sb,
+           "far-east rim cell (floor above agl_max) is safe green");
   }
   (void)heatmap_sub;
   (void)marker_sub;
