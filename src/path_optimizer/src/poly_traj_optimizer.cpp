@@ -225,6 +225,112 @@ namespace ego_planner
     // === L-BFGS optimization with SDF gradient penalty ===
     poly_traj::Trajectory initTraj = globalMJO.getTraj();
 
+    // [FEASIBILITY] Pre-optimization z-feasibility advisory — the risk-effective
+    // ceiling, run on the committed route BEFORE the solve. In the route's
+    // terrain-following (NOE) stretches, weigh the risk visibility down-pull
+    // against the terrain up-push at the committed height. Where risk wins, the
+    // optimizer is forced to trade clearance for concealment (duck-below) — the
+    // risk-driven -1004/graze class the geometric cap-floor corridor is blind to
+    // (validated: risk 4x -> -1004 with a 20 m breach yet the geometric gap
+    // stays open; see [VDIAG-ZDOF-RISK]). Advisory ONLY: it logs a reason and a
+    // recommendation and changes nothing. Cheap (one route scan per plan). Not
+    // diag-gated — this is operator-facing pre-flight information, always on.
+    if (log_manager_ && use_risk_zones_ && (terrain_hgrad_ || terrain_height_)) {
+      const double T = initTraj.getTotalDuration();
+      const double m_xy = (dyn_unit_xy_m_ > 0.0) ? dyn_unit_xy_m_ : 100.0;
+      // The terrain's full in-band restoring capacity: the largest up-force it
+      // can raise before the surface (clearance 0), = wei_obs*3*clearance^2.
+      // A risk pull beyond this cannot be held above terrain -> penetration.
+      const double terr_cap =
+          3.0 * wei_obs_ * obstacle_clearance_ * obstacle_clearance_;
+      const int NS = 400;
+      double s_km = 0.0;
+      Eigen::Vector3d prev = initTraj.getPos(0.0);
+      // Evaluate the risk pull at the SAFE band height (terrain + clearance),
+      // not the seed's committed z: the seed has not ducked yet, so its own z
+      // hides the conflict. The question is normative — "if the vehicle flew at
+      // its safe clearance here, would the risk field let it stay?" The pull is
+      // near its peak at the band (the detection sigmoid is steepest at the
+      // grounded ceiling ~ terrain + band). risk_dn / terr_cap is then the
+      // fraction of the terrain's entire restoring capacity the risk demands;
+      // >= 1 means even the surface cannot hold it (penetration).
+      double worst_ratio = 0.0, worst_s = 0.0, worst_risk = 0.0, worst_clr = 0.0;
+      double ratio_sum = 0.0;
+      int conflict = 0, severe = 0;
+      for (int k = 0; k <= NS; ++k) {
+        const double tt = std::min(k * (T / NS), T - 1e-6);
+        const Eigen::Vector3d p = initTraj.getPos(tt);
+        const Eigen::Vector3d vel = initTraj.getVel(tt);
+        const double dx = p.x() - prev.x(), dy = p.y() - prev.y();
+        s_km += std::sqrt(dx * dx + dy * dy) * m_xy / 1000.0;
+        prev = p;
+        double h = 0.0;
+        bool land = false;
+        if (terrain_hgrad_) {
+          float hh = 0.f, gx = 0.f, gy = 0.f;
+          land = terrain_hgrad_(p.x(), p.y(), &hh, &gx, &gy);
+          if (land) h = hh;
+        } else {
+          const float hv = terrain_height_(p.x(), p.y());
+          if (std::isfinite(hv)) { h = hv; land = true; }
+        }
+        if (!land) continue;
+        const double clr_here = p.z() - h;
+        // Only where the committed route is low enough that ducking is a real
+        // option; a high cruise over a zone is never forced down to the band.
+        if (clr_here > 3.0 * obstacle_clearance_) continue;
+        // Risk down-pull evaluated at the safe band height.
+        const Eigen::Vector3d p_band(p.x(), p.y(),
+                                     h + obstacle_clearance_);
+        Eigen::Vector3d gp, gv;
+        double cp, risk_dn = 0.0;
+        // gp.z() = d(risk cost)/dz >= 0 for the visibility down-pull (higher is
+        // more visible); the downward FORCE magnitude is that positive gradient.
+        // (VDIAG stores fz_risk = -gp.z() and re-negates; here gp is raw.) The
+        // risk cost is an ARC-LENGTH integral, so its position gradient scales
+        // with speed (gradp = |v|*...); pass the committed cruise velocity, not
+        // zero, or the pull reads a spurious 0 (matches VDIAG, which uses vel).
+        if (RiskGradCostP(0, p_band, vel, gp, gv, cp))
+          risk_dn = std::max(0.0, gp.z());
+        if (risk_dn <= 1e-6 || terr_cap <= 0.0) continue;
+        // ratio = the risk down-pull at the SAFE band height / the terrain's
+        // largest restoring force (at the surface). > 1 means the terrain
+        // cannot hold the band against the pull's PEAK, so the route ducks.
+        // This detects the duck-below robustly; it does NOT predict the settled
+        // depth (the pull eases as the route sinks into shadow, so the solve
+        // grazes rather than penetrates unless the pull is far above capacity —
+        // calibrated: ~5x => graze/converge, ~20x => terrain breach).
+        const double ratio = risk_dn / terr_cap;
+        ratio_sum += ratio;
+        if (ratio > 0.25) ++conflict;    // a meaningful pull at the safe height
+        if (ratio > worst_ratio) {
+          worst_ratio = ratio; worst_s = s_km;
+          worst_risk = risk_dn; worst_clr = clr_here;
+        }
+      }
+      if (conflict > 0) {
+        const bool severe = worst_ratio > 8.0;
+        LOG_WARN(
+            "[FEASIBILITY] DUCK-BELOW EXPECTED (%s): the risk field pulls the "
+            "route off its %.0f m clearance band in %d NOE sample(s) — worst "
+            "@s=%.1fkm, peak pull %.1fx the terrain's restoring capacity. The "
+            "optimizer will trade clearance for concealment here%s. Recommend: "
+            "%s",
+            severe ? "severe" : "moderate", obstacle_clearance_ * m_xy, conflict,
+            worst_s, worst_ratio,
+            severe ? " (the pull far exceeds what terrain can restore — expect a "
+                     "clearance breach approaching penetration)"
+                   : " (grazing the band, not penetration)",
+            severe ? "re-route around these zones or cut their coverage/peak — "
+                     "clearance cannot be held through the forced crossing"
+                   : "accept the reduced clearance here, or shift the "
+                     "clearance-vs-risk balance (weight_Risk down), or re-route");
+      } else {
+        LOG_INFO("[FEASIBILITY] FEASIBLE: terrain holds the clearance band along "
+                 "the route (no risk-driven duck-below predicted).");
+      }
+    }
+
     // [INIT-PROFILE]: z of the INITIAL MINCO guess (pre-L-BFGS), same 5%-step
     // format as GEO/SIMPLE/TERRAIN-PROFILE. Splits head/tail transients on
     // sight: a hump already HERE was born in the min-jerk boundary/time
