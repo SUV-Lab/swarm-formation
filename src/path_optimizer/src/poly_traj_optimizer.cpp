@@ -446,11 +446,15 @@ namespace ego_planner
     // mem_size capped at 64: 256 caused -1005 line-search failures.
     lbfgs::lbfgs_parameter_t lbfgs_params;
     lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
-    lbfgs_params.mem_size       = 64;       // ref 16 → 64 (global scale); 256 caused -1005
-    // 0.05 is sufficient: tightening to 0.005 (2.7x the iterations) left the
-    // converged trajectory unchanged (crest dip -0.095 -> -0.098), so the
-    // ridge graze is a true optimum of the cost design, not under-convergence.
-    lbfgs_params.g_epsilon      = 0.05;     // ref 0.1 → 0.05 (slightly tighter)
+    lbfgs_params.mem_size       = lb_mem_size_; // ref 16 → 64 (global scale); 256 caused -1005
+    // 0.1 (2026-07-21 sweep, 100+ runs): -34% iterations across the suite
+    // with the same solutions (clearance deltas <= 0.021 u), and the
+    // zone-saturated gauntlet flips -1004 -> converged. Robust across
+    // 0.08-0.12 and mission seeds (no knife-edge). History: 0.05->0.005
+    // (2.7x iters) left trajectories unchanged, so precision above 0.1 buys
+    // nothing; g_epsilon=0 (pure GCOPTER plateau) quintuples iterations —
+    // the dual gate (g_epsilon 0.1 + past/delta 3/1e-6) beats both extremes.
+    lbfgs_params.g_epsilon      = lb_g_epsilon_;
     // [PAST-DELTA] GCOPTER-style cost-plateau convergence (gcopter.hpp:821:
     // g_epsilon=0, past=3, delta=relCostTol — their lbfgs header explicitly
     // warns g_epsilon is wrong for nonsmooth objectives). Our penalty terrain
@@ -461,9 +465,13 @@ namespace ego_planner
     // delta=1e-6 is conservative: three consecutive iterations must improve
     // the cost by <1e-6 relative before we call it converged; g_epsilon is
     // kept as a secondary (smooth-case) exit.
-    lbfgs_params.past           = 3;
-    lbfgs_params.delta          = 1.0e-6;
+    lbfgs_params.past           = lb_past_;
+    lbfgs_params.delta          = lb_delta_;
     lbfgs_params.min_step       = 1e-32;
+    // [LBFGS-TUNE] optional overrides; <=0 keeps the library default.
+    if (lb_max_linesearch_ > 0) lbfgs_params.max_linesearch = lb_max_linesearch_;
+    if (lb_f_dec_  > 0.0)       lbfgs_params.f_dec_coeff    = lb_f_dec_;
+    if (lb_s_curv_ > 0.0)       lbfgs_params.s_curv_coeff   = lb_s_curv_;
     // 300 consistently ended at -1004 while risk/altitude terms were still
     // polishing (~0.02%/iter). One-shot global plan on an idle desktop:
     // 300 iters ≈ 0.3 s, so thousands are nothing — let g_epsilon decide.

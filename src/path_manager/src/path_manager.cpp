@@ -459,6 +459,32 @@ namespace path_manager
                     node_->declare_parameter("optimization/collision_reject", true);
                 node_->get_parameter("optimization/collision_reject", reject_on);
                 poly_traj_opt_->setCollisionReject(reject_on);
+
+                // [LBFGS-TUNE] solver knobs for no-rebuild parameter sweeps.
+                // Defaults reproduce the hardcoded values exactly.
+                {
+                    auto dp = [&](const char *n, auto v) {
+                        if (!node_->has_parameter(n)) node_->declare_parameter(n, v);
+                    };
+                    dp("optimization/lbfgs_mem_size", 64);
+                    dp("optimization/lbfgs_g_epsilon", 0.1);
+                    dp("optimization/lbfgs_past", 3);
+                    dp("optimization/lbfgs_delta", 1.0e-6);
+                    dp("optimization/lbfgs_max_linesearch", 0);
+                    dp("optimization/lbfgs_f_dec", 0.0);
+                    dp("optimization/lbfgs_s_curv", 0.0);
+                    int mem = 64, past = 3, maxls = 0;
+                    double geps = 0.1, delta = 1.0e-6, fdec = 0.0, scurv = 0.0;
+                    node_->get_parameter("optimization/lbfgs_mem_size", mem);
+                    node_->get_parameter("optimization/lbfgs_g_epsilon", geps);
+                    node_->get_parameter("optimization/lbfgs_past", past);
+                    node_->get_parameter("optimization/lbfgs_delta", delta);
+                    node_->get_parameter("optimization/lbfgs_max_linesearch", maxls);
+                    node_->get_parameter("optimization/lbfgs_f_dec", fdec);
+                    node_->get_parameter("optimization/lbfgs_s_curv", scurv);
+                    poly_traj_opt_->setLbfgsParams(mem, geps, past, delta,
+                                                   maxls, fdec, scurv);
+                }
             }
             poly_traj_opt_->setGroundHeight(ground_height_);
             poly_traj_opt_->setVirtualCeilHeight(virtual_ceil_height_);

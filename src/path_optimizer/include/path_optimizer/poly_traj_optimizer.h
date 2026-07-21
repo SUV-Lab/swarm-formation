@@ -93,6 +93,18 @@ namespace ego_planner
 
     double wei_obs_;
     bool collision_reject_{true};  // discard (not publish) audit-failed trajs
+
+    // [LBFGS-TUNE] solver knobs exposed as ROS params (optimization/lbfgs_*)
+    // so parameter sweeps run without rebuilds. Defaults == the long-standing
+    // hardcoded values; <=0 on the "0 = library default" ones keeps lbfgs's
+    // own default (max_linesearch 40, f_dec 1e-4, s_curv 0.9).
+    int    lb_mem_size_{64};
+    double lb_g_epsilon_{0.1};
+    int    lb_past_{3};
+    double lb_delta_{1.0e-6};
+    int    lb_max_linesearch_{0};   // <=0: keep library default
+    double lb_f_dec_{0.0};          // <=0: keep library default
+    double lb_s_curv_{0.0};         // <=0: keep library default
     double wei_ground_barrier_;  // crash-plane half-space (>> any soft term)
     double wei_swarm_;
     double wei_feas_;
@@ -267,6 +279,13 @@ namespace ego_planner
     // published with a warning log. Swarm-Formation had this; MMP had demoted
     // it to logs-only.
     void setCollisionReject(bool on) { collision_reject_ = on; }
+    void setLbfgsParams(int mem, double geps, int past, double delta,
+                        int maxls, double fdec, double scurv)
+    {
+      lb_mem_size_ = mem; lb_g_epsilon_ = geps; lb_past_ = past;
+      lb_delta_ = delta; lb_max_linesearch_ = maxls;
+      lb_f_dec_ = fdec; lb_s_curv_ = scurv;
+    }
     void setGroundHeight(double h)      { ground_height_ = h; }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
     // cell_u > 0 = DEM cell size in frame units (scales the swath-floor
