@@ -115,9 +115,19 @@
     manager/astar_step_size: 1.0        # A* raw path spacing, frame units (astar front-end)
 
     # ---- Optimizer weights ----
-    optimization/constrain_points_perPiece: 100  # penalty-integral samples per piece. Sized to keep
-                                       # ~25 m sample spacing as pieces shrink: with max_seg 25 units
-                                       # (length_per_piece 6.25) 100 points = 0.25 unit spacing — same
+    optimization/constrain_points_perPiece: 30   # penalty-integral samples per piece. 100->30
+                                       # (2026-07-21 sweep, K in {100..20} x 6 scenarios x seeds +
+                                       # gauntlet): 100 was ~3x oversampled. The risk term is ~62% of
+                                       # the per-iteration cost and scales LINEARLY with this count;
+                                       # K=30 cut optimizer time 57-65% (gauntlet 23.7s->8.3s) with
+                                       # solutions unchanged (k3/gauntlet clearance bit-identical,
+                                       # knoe/knoez -0.3 m, kwp -5.3 m still 42 m, all converged, zero
+                                       # penetration). Seed-invariant (43/44 identical to <1 mm), so
+                                       # the K-to-K clearance wobble is the sampling picking a nearby
+                                       # local optimum, not noise. Below ~25 the NOE clearance starts
+                                       # to wander (K=50 dipped to 0.212 once); 30 is the safe floor.
+                                       # Was 100 to keep ~25 m sample spacing; that spacing was finer
+                                       # than the penalty fields (30 m DEM, coarse risk LUT) resolve.
                                        # resolution the 200-at-50-units setup had. Denser just burns CPU
                                        # (resolves nothing below the ~2.2-unit DEM cell).
     optimization/weight_smoothness: 10000.0  # explicit jerk-energy weight. The jerk integral scales
