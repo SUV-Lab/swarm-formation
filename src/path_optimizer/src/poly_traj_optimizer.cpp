@@ -860,6 +860,17 @@ namespace ego_planner
     std::vector<Eigen::Vector2d> XY;
     S.reserve(N + 1); Z.reserve(N + 1);
 
+    // [ZDOF] Stage-0 z-corridor instrumentation (behavior-neutral, summarised
+    // after the passes). The design plan predicts gauntlet -1004 from a CLOSED
+    // z-corridor: where floor_surface (terrain+clearance / sea+cushion) exceeds
+    // ceiling_surface (the per-piece cap), the vehicle has no feasible z and
+    // the soft penalties fight to a non-converged minimum. Measuring the gap
+    // gives an early warning the later stages gate on.
+    double zdof_min_gap = 1e30;   // min(ceil_surface - floor_surface) over samples
+    int    zdof_infeasible = 0;   // sample count with floor > ceiling
+    double zdof_gap_at_worst_clr = std::numeric_limits<double>::quiet_NaN();
+    double worst_clr_seen = 1e30;
+
     double s_units = 0.0;
     Eigen::Vector3d prev = traj.getPos(0.0);
 
@@ -901,6 +912,17 @@ namespace ego_planner
       }
       // clearance is over the surface if land, else over sea level (z itself).
       const double clr = land ? (pos.z() - h) : pos.z();
+
+      // [ZDOF] floor/ceiling surfaces the optimizer actually enforces here.
+      {
+        const double floor_surf =
+            land ? (h + obstacle_clearance_)
+                 : (std::max(0.0, ground_height_) + obstacle_clearance_);
+        const double gap = zhi_i - floor_surf;  // <0 => z-corridor closed
+        if (gap < zdof_min_gap) zdof_min_gap = gap;
+        if (gap < 0.0) ++zdof_infeasible;
+        if (clr < worst_clr_seen) { worst_clr_seen = clr; zdof_gap_at_worst_clr = gap; }
+      }
 
       // lateral terrain halo: max terrain within +-4 units (like TERRAIN-PROFILE)
       // — proves whether NEIGHBOURING land (not underfoot) could be the driver.
@@ -1099,6 +1121,57 @@ namespace ego_planner
     if (peaks.empty())
       LOG_INFO("[VDIAG-HUMP] no z-humps above prominence %.2f / min-alt %.2f "
                "detected — trajectory is flat within tolerance.", PROM, ALT_MIN);
+
+    // [ZDOF] Stage-0 summary — GEOMETRIC half: floor(terrain+clr) vs the cap
+    // ceiling. min_gap < 0 (infeasible > 0) means the floor DEMAND structurally
+    // exceeds the cap somewhere — a real -1004 (proven: clearance band raised
+    // above the mission AGL closes it, min_gap -1.73 @ -1004). SUFFICIENT but
+    // NOT necessary: the cap gates OFF within the clearance band, and the risk
+    // down-pull is a FORCE, not a geometric surface, so the realistic
+    // risk-driven -1004 keeps this gap OPEN (risk 4x -> -1004 with a 20 m
+    // terrain breach yet min_gap +0.55). That class is the [VDIAG-ZDOF-RISK]
+    // line below; the two together are the z-feasibility verdict.
+    LOG_INFO("[VDIAG-ZDOF] z-corridor(geometric): min_gap=%.4f infeasible_samples=%d/%d "
+             "gap@worst_clr=%.4f (worst_clr=%.4f) — %s",
+             (zdof_min_gap > 1e29) ? 0.0 : zdof_min_gap, zdof_infeasible, N + 1,
+             std::isnan(zdof_gap_at_worst_clr) ? 0.0 : zdof_gap_at_worst_clr,
+             (worst_clr_seen > 1e29) ? 0.0 : worst_clr_seen,
+             (zdof_infeasible > 0)
+                 ? "CLOSED somewhere (geometric floor>cap -1004)"
+                 : "open everywhere");
+
+    // [ZDOF-RISK] Stage-0 summary — FORCE half: the risk-effective ceiling the
+    // geometric gap is blind to. The gauntlet -1004 is not floor>cap; it is the
+    // risk visibility down-pull (dv/dz >= 0) overpowering the terrain up-push
+    // INSIDE the clearance band, dragging the vehicle below its safe clearance
+    // while the cap-floor corridor stays open. Both fz are already recomputed
+    // per sample above; scan where the terrain penalty is ACTIVE (Fterr>0 ==
+    // genuinely in-band, taper-correct) and ask whether the risk down-force
+    // wins there. margin = terr_up - risk_down; margin < 0 == risk-closed
+    // (duck-below / clearance-guarantee breach). This is the seed of the
+    // pre-flight feasibility check ("can this mission hold clearance under the
+    // risk field, or must it duck?").
+    double zdof_risk_margin_min = 1e30;   // min(terr_up - risk_down), in-band land
+    int    zdof_risk_closed     = 0;      // in-band samples where risk_down > terr_up
+    double zdof_risk_down_peak  = 0.0;    // strongest downward risk pull in-band
+    int    zdof_inband          = 0;      // land samples with the terrain penalty active
+    for (int k = 0; k < M; ++k) {
+      if (!Land[k] || Fterr[k] <= 0.0) continue;         // terrain active == in-band
+      ++zdof_inband;
+      const double terr_up = Fterr[k];                    // >= 0 (terrain lifts)
+      const double risk_dn = std::max(0.0, -Frisk[k]);    // downward risk only
+      const double margin  = terr_up - risk_dn;
+      if (margin < zdof_risk_margin_min) zdof_risk_margin_min = margin;
+      if (risk_dn > terr_up) ++zdof_risk_closed;
+      if (risk_dn > zdof_risk_down_peak) zdof_risk_down_peak = risk_dn;
+    }
+    LOG_INFO("[VDIAG-ZDOF-RISK] z-corridor(force): risk_margin_min=%.1f "
+             "risk_closed_samples=%d/%d risk_down_peak=%.1f — %s",
+             (zdof_risk_margin_min > 1e29) ? 0.0 : zdof_risk_margin_min,
+             zdof_risk_closed, zdof_inband, zdof_risk_down_peak,
+             (zdof_risk_closed > 0)
+                 ? "RISK OVERPOWERS TERRAIN in-band (duck-below / clearance breach)"
+                 : "terrain holds the band");
   }
 
   double PolyTrajOptimizer::costFunctionCallback(void *func_data, const double *x, double *grad, const int n)
