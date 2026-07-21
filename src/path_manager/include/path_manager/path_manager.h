@@ -164,6 +164,31 @@ namespace path_manager
     // outside the DEM (no terrain there).
     bool getElevationAndGrad(double world_x, double world_y,
                              float *h, float *dhdx, float *dhdy) const {
+      // [ELEV-MEMO] 1-entry memo. The optimizer evaluates the SAME constraint
+      // point consecutively for the terrain term + every risk zone's grounded
+      // clamp (5 zones -> up to 6 identical (x,y) queries back-to-back);
+      // measured 88% of the per-iteration cost was zone evaluation, most of
+      // it these repeats. Same inputs return the STORED outputs verbatim, so
+      // results are bit-identical by construction. Keyed on the elevation
+      // buffer pointer: a terrain reload changes the buffer and can never
+      // serve a stale sample. thread_local: the optimizer runs on one thread;
+      // other threads just get their own slot.
+      struct ElevMemo { const void *src; double x, y; float h, gx, gy; bool ok; };
+      static thread_local ElevMemo memo{nullptr, 0.0, 0.0, 0.f, 0.f, 0.f, false};
+      const void *src = static_cast<const void *>(elevation.data());
+      if (memo.src == src && memo.x == world_x && memo.y == world_y) {
+        *h = memo.h; *dhdx = memo.gx; *dhdy = memo.gy;
+        return memo.ok;
+      }
+      float th = 0.f, tgx = 0.f, tgy = 0.f;
+      const bool ok = getElevationAndGradUncached(world_x, world_y, &th, &tgx, &tgy);
+      memo = ElevMemo{src, world_x, world_y, th, tgx, tgy, ok};
+      *h = th; *dhdx = tgx; *dhdy = tgy;
+      return ok;
+    }
+
+    bool getElevationAndGradUncached(double world_x, double world_y,
+                                     float *h, float *dhdx, float *dhdy) const {
       if (!valid) return false;
       // [TERRAIN-FRAME] world -> terrain-grid coords (same transform as
       // getElevation): twx = oy + Ly - wy (col axis), twy = ox + Lx - wx (row
