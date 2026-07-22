@@ -703,6 +703,66 @@ namespace ego_planner
     return target;
   }
 
+  // [H5] Freeze the per-inner-point z box from the SEED junctions. Must run
+  // AFTER setupTerrainTaper (taper state arms the floor targets) and after the
+  // cap build (alt_zhi_pieces_). lo = floor (max of terrain+clearance and the
+  // mission anchor), hi = the looser of the two adjoining piece caps; box
+  // collapse (floor>cap) raises hi only. All from seed xy — never a decision
+  // variable. Sets h5_active_.
+  void PolyTrajOptimizer::buildH5Bounds(const Eigen::MatrixXd &initInnerPts)
+  {
+    h5_active_ = false;
+    h5_lo_.resize(0);
+    h5_hi_.resize(0);
+    if (!h5_bounded_z_) return;
+    const int M = static_cast<int>(initInnerPts.cols());  // = piece_num_ - 1
+    if (M < 1) return;
+    const bool have_cap =
+        (alt_zhi_pieces_.size() == piece_num_);
+    Eigen::VectorXd lo(M), hi(M);
+    int collapsed = 0;
+    for (int i = 0; i < M; ++i) {
+      const Eigen::Vector3d p = initInnerPts.col(i);
+      // floor: terrain+clearance and/or mission anchor (mirror UNIFIED FLOOR)
+      double terr_floor = -1e30;
+      if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_)) {
+        float h = 0.f, gx = 0.f, gy = 0.f;
+        bool ok = false;
+        if (terrain_hgrad_) ok = terrain_hgrad_(p.x(), p.y(), &h, &gx, &gy);
+        else { const float hv = terrain_height_(p.x(), p.y());
+               if (std::isfinite(hv)) { h = hv; ok = true; } }
+        if (ok) { Eigen::Vector2d g; terr_floor = static_cast<double>(h) +
+                                     terrainClearanceTarget(p, &g); }
+      }
+      Eigen::Vector2d fg;
+      const double anchor_floor =
+          (wei_alt_ > 0.0) ? altitudeFloorTarget(p, &fg) : -1e30;
+      double lo_i = std::max(terr_floor, anchor_floor);
+      // ceiling: looser of the two adjoining piece caps (outer backstop; min
+      // would erase a neighbour's shadow-lift / headroom license)
+      double hi_i = have_cap ? std::max(alt_zhi_pieces_(i), alt_zhi_pieces_(i + 1))
+                             : (alt_zhi_ >= 0.0 ? alt_zhi_ : 1e30);
+      if (!(hi_i < 1e29)) { // no ceiling source -> cannot bound this solve
+        LOG_WARN("[H5] no cap at inner point %d; H5 inactive this solve", i);
+        return;
+      }
+      if (lo_i < -1e29) { // no floor source -> synthesize a wide lower bound
+        lo_i = (ground_height_ > -0.5) ? ground_height_ : hi_i - h5_max_width_;
+      }
+      lo_i -= h5_floor_slack_;
+      if (hi_i < lo_i + h5_min_width_) { hi_i = lo_i + h5_min_width_; ++collapsed; }
+      lo(i) = lo_i;
+      hi(i) = hi_i;
+    }
+    h5_lo_ = lo;
+    h5_hi_ = hi;
+    h5_D_.resize(M);
+    h5_active_ = true;
+    LOG_INFO("[H5] bounded-z active: %d junctions, %d box-collapsed (floor>cap, "
+             "hi raised), min_width=%.2f floor_slack=%.2f",
+             M, collapsed, h5_min_width_, h5_floor_slack_);
+  }
+
   bool PolyTrajOptimizer::OptimizeTrajectory_lbfgs(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
@@ -722,6 +782,10 @@ namespace ego_planner
 
     // [TERRAIN-TAPER] arm the per-endpoint clearance taper (see header).
     setupTerrainTaper(iniState.col(0), finState.col(0));
+
+    // [H5] freeze the bounded-z box now that the taper (floor targets) and the
+    // per-piece cap are both armed. No-op / byte-identical when off.
+    buildH5Bounds(initInnerPts);
 
     double final_cost;
 
@@ -798,8 +862,50 @@ namespace ego_planner
     variable_num_ = 4 * (piece_num_ - 1) + 1;
     std::vector<double> q(variable_num_);
     memcpy(q.data(), initInnerPts.data(), initInnerPts.size() * sizeof(double));
+    // [H5] transform seed inner z into raw warp coordinates (inverse warp,
+    // seed-clamped): q now holds r, not z, for the z rows.
+    if (h5_active_) {
+      int clamped = 0;
+      for (int i = 0; i < piece_num_ - 1; ++i) {
+        const double z = q[3 * i + 2];
+        const double w = 0.5 * (h5_hi_(i) - h5_lo_(i));
+        const double c = 0.5 * (h5_hi_(i) + h5_lo_(i));
+        if (std::abs((z - c) / w) > 1.0 - h5_seed_margin_) ++clamped;
+        q[3 * i + 2] = h5InvWarp(i, z);
+      }
+      if (clamped > 0)
+        LOG_INFO("[H5] %d/%d seeds clamped into the box", clamped, piece_num_ - 1);
+    }
     Eigen::Map<Eigen::VectorXd> Vt(q.data() + initInnerPts.size(), initT.size());
     RealT2VirtualT(initT, Vt);
+
+    // [H5-FD] central-difference gradient probe on a few coords (z_raw of the
+    // first/mid/last junction, one x, the last virtual time). Proves the warp
+    // chain rule is exact before trusting the solve. Gate: h5_fd_check.
+    if (h5_active_ && h5_fd_check_ && variable_num_ > 4) {
+      std::vector<double> g(variable_num_, 0.0);
+      const double c0 = costFunctionCallback(this, q.data(), g.data(), variable_num_);
+      (void)c0;
+      const int mid = 3 * ((piece_num_ - 1) / 2) + 2;
+      const int ks[5] = {2, mid, 3 * (piece_num_ - 2) + 2, 0, variable_num_ - 1};
+      double worst = 0.0;
+      for (int idx = 0; idx < 5; ++idx) {
+        const int k = ks[idx];
+        if (k < 0 || k >= variable_num_) continue;
+        const double h = 1e-6 * std::max(1.0, std::abs(q[k]));
+        std::vector<double> qp = q, qm = q, gd(variable_num_, 0.0);
+        qp[k] += h; qm[k] -= h;
+        const double cp = costFunctionCallback(this, qp.data(), gd.data(), variable_num_);
+        const double cm = costFunctionCallback(this, qm.data(), gd.data(), variable_num_);
+        const double fd = (cp - cm) / (2.0 * h);
+        const double rel = std::abs(fd - g[k]) / std::max(1.0, std::abs(fd));
+        worst = std::max(worst, rel);
+        LOG_INFO("[H5-FD] k=%d analytic=%.6e fd=%.6e rel=%.2e", k, g[k], fd, rel);
+      }
+      LOG_INFO("[H5-FD] worst relative error = %.2e (%s)", worst,
+               worst < 1e-4 ? "PASS" : "CHECK");
+      iter_num_ = 0;  // probe calls must not pollute the iteration count
+    }
 
     t1 = node_->get_clock()->now();
 
@@ -1510,7 +1616,19 @@ namespace ego_planner
 
     // 1. Trajectory generation
     t1 = std::chrono::high_resolution_clock::now();
-    opt->jerkOpt_.generate(P, T);
+    // [H5] warp the raw z rows into the box before generate; stash dz/dr from
+    // the SAME warped z that generate consumes (single-surface discipline).
+    if (opt->h5_active_) {
+      Eigen::MatrixXd Pw = P;
+      for (int i = 0; i < opt->piece_num_ - 1; ++i) {
+        const double zw = opt->h5Warp(i, P(2, i));
+        Pw(2, i) = zw;
+        opt->h5_D_(i) = opt->h5Deriv(i, zw);
+      }
+      opt->jerkOpt_.generate(Pw, T);
+    } else {
+      opt->jerkOpt_.generate(P, T);
+    }
     double traj_gen_time = std::chrono::duration<double, std::milli>(
         std::chrono::high_resolution_clock::now() - t1).count();
 
@@ -1529,6 +1647,12 @@ namespace ego_planner
     // 4. Gradient calculation
     t4 = std::chrono::high_resolution_clock::now();
     opt->jerkOpt_.getGrad2TP(gradT, gradP);
+    // [H5] chain rule: gradP.row(2) after getGrad2TP is exactly ∂C/∂z_warped
+    // (addPropCtoP assigns, no accumulation); ∂C/∂r = D·∂C/∂z. Rows 0,1 (xy)
+    // and gradt (times) are untouched — the frozen bounds add no cross-terms
+    // and z(r) has no T dependence.
+    if (opt->h5_active_)
+      gradP.row(2).array() *= opt->h5_D_.transpose().array();
     double grad_time = std::chrono::duration<double, std::milli>(
         std::chrono::high_resolution_clock::now() - t4).count();
 
@@ -2787,6 +2911,17 @@ namespace ego_planner
     // [RIDE] H1: direct speed price over rough ground (0 = off).
     node_->declare_parameter("optimization/weight_ride", 0.0);
     node_->get_parameter("optimization/weight_ride", wei_ride_);
+    // [H5] bounded-z warp (0/false = off, byte-identical).
+    node_->declare_parameter("optimization/h5_bounded_z", false);
+    node_->get_parameter("optimization/h5_bounded_z", h5_bounded_z_);
+    node_->declare_parameter("optimization/h5_min_width", 0.10);
+    node_->get_parameter("optimization/h5_min_width", h5_min_width_);
+    node_->declare_parameter("optimization/h5_seed_margin", 0.05);
+    node_->get_parameter("optimization/h5_seed_margin", h5_seed_margin_);
+    node_->declare_parameter("optimization/h5_floor_slack", 0.0);
+    node_->get_parameter("optimization/h5_floor_slack", h5_floor_slack_);
+    node_->declare_parameter("optimization/h5_fd_check", false);
+    node_->get_parameter("optimization/h5_fd_check", h5_fd_check_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {

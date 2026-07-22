@@ -287,6 +287,45 @@ namespace ego_planner
     double wei_ride_{0.0};
     Eigen::VectorXd ride_rough_pieces_;
 
+    // [H5] Bounded-z warp. Each inner point's z decision variable r ∈ ℝ maps
+    // through a per-point z-referenced tanh to z ∈ (lo_i, hi_i): a HARD box
+    // that replaces the soft floor/cap tug-of-war at the junctions. Bounds are
+    // FROZEN per solve from the seed inner points (decision-variable
+    // independent, same safe pattern as alt_zhi_pieces_) so the warp's only
+    // variable is r and the chain rule dz/dr is an exact scalar — deriving the
+    // bounds from live xy in the callback would break cost/gradient (−1005).
+    // Off (default) = byte-identical (no warp, no bound build).
+    bool h5_bounded_z_{false};   // yaml gate
+    bool h5_active_{false};      // per-solve: gate && bounds all finite
+    bool h5_fd_check_{false};    // finite-difference gradient probe (yaml)
+    double h5_min_width_{0.10};  // min box width when floor>cap (raise hi only)
+    double h5_seed_margin_{0.05};// clamp seed z into (lo+δw, hi-δw) before atanh
+    double h5_floor_slack_{0.0}; // lower lo by this (bounded duck allowance)
+    double h5_max_width_{3.0};   // box width when no floor source
+    Eigen::VectorXd h5_lo_, h5_hi_;  // frozen bounds, size piece_num_-1
+    Eigen::VectorXd h5_D_;           // per-callback chain factors dz/dr (scratch)
+    // z-referenced tanh warp: c=(lo+hi)/2, w=(hi-lo)/2.
+    inline double h5Warp(int i, double r) const {
+        const double w = 0.5 * (h5_hi_(i) - h5_lo_(i));
+        const double c = 0.5 * (h5_hi_(i) + h5_lo_(i));
+        return c + w * std::tanh(r / w);
+    }
+    // dz/dr = sech²(r/w) = (hi−z)(z−lo)/w², computed from the warped z.
+    inline double h5Deriv(int i, double z) const {
+        const double w = 0.5 * (h5_hi_(i) - h5_lo_(i));
+        return (h5_hi_(i) - z) * (z - h5_lo_(i)) / (w * w);
+    }
+    // inverse warp with seed clamp: r = (w/2) ln((z−lo)/(hi−z)).
+    inline double h5InvWarp(int i, double z) const {
+        const double w = 0.5 * (h5_hi_(i) - h5_lo_(i));
+        const double c = 0.5 * (h5_hi_(i) + h5_lo_(i));
+        double zeta = (z - c) / w;                        // ->(-1,1)
+        const double lim = 1.0 - h5_seed_margin_;
+        zeta = std::max(-lim, std::min(lim, zeta));
+        return 0.5 * w * std::log((1.0 + zeta) / (1.0 - zeta));  // w*atanh(zeta)
+    }
+    void buildH5Bounds(const Eigen::MatrixXd &initInnerPts);
+
     // Generic fixed-wing inverse dynamics. MINCO provides physical r/v/a after
     // frame scaling; the shared model recovers required lift, load factor,
     // drag, thrust, dynamic pressure, bank angle, and flight-path angle. This
