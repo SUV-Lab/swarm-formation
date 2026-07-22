@@ -251,6 +251,12 @@ namespace ego_planner
     // Headroom added on top of the envelope (same value path_manager uses
     // for the scalar cap). Yaml: optimization/alt_cap_headroom (shared).
     double alt_cap_headroom_opt_{0.4};
+    // [ZONE-RELAX] (z-redesign Stage 3) extra cap headroom near risk zones,
+    // scaled by a per-piece proximity fade. Buys back the zone-crossing z
+    // freedom a tight band-tracking (high weight_altitude) squeezes out,
+    // without loosening the ceiling anywhere else. 0 = off (legacy cap).
+    // Yaml: optimization/alt_cap_zone_relax.
+    double alt_cap_zone_relax_{0.0};
 
     // Generic fixed-wing inverse dynamics. MINCO provides physical r/v/a after
     // frame scaling; the shared model recovers required lift, load factor,

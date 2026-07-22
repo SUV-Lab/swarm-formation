@@ -157,22 +157,59 @@ namespace ego_planner
         return hmax;   // -1e30 over pure water
       };
 
+      // [ZONE-RELAX] (z-redesign Stage 3) zone-proximity cap relaxation.
+      // The altitude campaign quantified a global weight_altitude tradeoff:
+      // tighter band tracking cuts ridge altitude_cost -81% but squeezes the
+      // zone-crossing climb (kzone surplus margin 0.848 -> 0.535), because the
+      // cap presses the arch back toward the committed profile exactly where
+      // the risk field needs vertical freedom. The freedom is only needed NEAR
+      // zones, so grant extra headroom there and nowhere else: relax * infl,
+      // infl = max over zones of a linear fade of the piece chord's xy
+      // distance to the zone center (1 inside the rim, 0 beyond 1.5x reach).
+      // Computed once from clean_path — decision-variable independent, cap
+      // gradients keep their exact form; zone-free (ridge NOE) missions are
+      // untouched by construction. Default 0 = off (legacy cap).
+      auto zone_infl = [&](const Eigen::Vector3d &a,
+                           const Eigen::Vector3d &b) -> double {
+        if (!use_risk_zones_ || alt_cap_zone_relax_ <= 0.0) return 0.0;
+        double infl = 0.0;
+        const Eigen::Vector2d p0 = a.head<2>(), p1 = b.head<2>();
+        const Eigen::Vector2d ab = p1 - p0;
+        const double L2 = ab.squaredNorm();
+        for (const auto &tz : risk_zones_) {
+          if (!(tz.reach > 0.0)) continue;
+          const Eigen::Vector2d c = tz.center.head<2>();
+          double t = (L2 > 1e-12) ? (c - p0).dot(ab) / L2 : 0.0;
+          t = std::max(0.0, std::min(1.0, t));
+          const double d = (p0 + t * ab - c).norm();
+          const double s = 1.0 - (d - tz.reach) / (0.5 * tz.reach);
+          infl = std::max(infl, std::max(0.0, std::min(1.0, s)));
+        }
+        return infl;
+      };
+
       alt_zhi_pieces_.resize(piece_num);
       double cap_min = 1e30, cap_max = -1e30;
+      int relaxed_pieces = 0;
       for (int i = 0; i < piece_num; ++i) {
         double ref = std::max(env[i], env[i + 1]);
         const double terr = swath_terr(clean_path[i], clean_path[i + 1]);
         if (terr > -1e29) {
           ref = std::max(ref, terr + obstacle_clearance_);
         }
-        alt_zhi_pieces_(i) = ref + alt_cap_headroom_opt_;
+        const double zr =
+            alt_cap_zone_relax_ * zone_infl(clean_path[i], clean_path[i + 1]);
+        if (zr > 1e-9) ++relaxed_pieces;
+        alt_zhi_pieces_(i) = ref + alt_cap_headroom_opt_ + zr;
         cap_min = std::min(cap_min, alt_zhi_pieces_(i));
         cap_max = std::max(cap_max, alt_zhi_pieces_(i));
       }
       LOG_INFO("[ALT-CAP] arc-varying cap active: %d pieces, cap=[%.3f, %.3f] "
-               "(slope=%.2f, headroom=%.2f; scalar fallback %.3f)",
+               "(slope=%.2f, headroom=%.2f, zone-relax=%.2f on %d pieces; "
+               "scalar fallback %.3f)",
                piece_num, cap_min, cap_max, alt_cap_slope_,
-               alt_cap_headroom_opt_, alt_zhi_);
+               alt_cap_headroom_opt_, alt_cap_zone_relax_, relaxed_pieces,
+               alt_zhi_);
     } else if (!cap_ref.empty()) {
       LOG_WARN("[ALT-CAP] cap_ref/piece mismatch after insertions (%zu vs %d)"
                " — scalar cap only", cap_ref.size(), piece_num + 1);
@@ -2532,6 +2569,9 @@ namespace ego_planner
     if (node_->has_parameter("optimization/alt_cap_headroom")) {
       node_->get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_opt_);
     }
+    // [ZONE-RELAX] Stage 3: zone-proximity cap relaxation (0 = off/legacy).
+    node_->declare_parameter("optimization/alt_cap_zone_relax", 0.0);
+    node_->get_parameter("optimization/alt_cap_zone_relax", alt_cap_zone_relax_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {
