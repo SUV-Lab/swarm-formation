@@ -188,9 +188,67 @@ namespace ego_planner
         return infl;
       };
 
+      // [SHADOW-CAP] (H3) exposure-owned cap: sample the same swath the
+      // terrain floor uses; at each point take the min over zones IN XY REACH
+      // of the LOS shadow ceiling (PathManager's per-zone radial-horizon
+      // table). Below (min - margin) the piece is hidden from every zone that
+      // could reach it, so the band's downward pressure owns nothing there
+      // and the cap may rise ("only low where visible"). A sample with an
+      // in-reach zone but no finite ceiling (mask off, bare over-water ray,
+      // at-center query) kills the min — a piece with ANY unshadowed in-reach
+      // sample never relaxes, and pieces no zone can reach keep the legacy
+      // band (its hump-suppression role is untouched). The swath, not just
+      // the chord, keeps the license consistent with the lateral drift the
+      // cap floor already budgets for: the trajectory may deviate kSwathR
+      // sideways, so the relax must hold in the lit seams it could drift
+      // into. Computed once from clean_path — decision-variable independent,
+      // cap gradients keep their exact form.
+      auto shadow_ceil = [&](const Eigen::Vector3d &a,
+                             const Eigen::Vector3d &b) -> double {
+        const double kNegInf = -std::numeric_limits<double>::infinity();
+        if (!use_risk_zones_ || alt_cap_shadow_margin_ <= 0.0 ||
+            !risk_shadow_ceiling_)
+          return kNegInf;
+        const Eigen::Vector2d p0 = a.head<2>(), p1 = b.head<2>();
+        const Eigen::Vector2d ab = p1 - p0;
+        const double L = ab.norm(), L2 = ab.squaredNorm();
+        std::vector<size_t> cand;
+        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
+          const auto &tz = risk_zones_[zi];
+          if (!(tz.reach > 0.0)) continue;
+          const Eigen::Vector2d c = tz.center.head<2>();
+          double t = (L2 > 1e-12) ? (c - p0).dot(ab) / L2 : 0.0;
+          t = std::max(0.0, std::min(1.0, t));
+          if ((p0 + t * ab - c).norm() <= tz.reach + kSwathR) cand.push_back(zi);
+        }
+        if (cand.empty()) return kNegInf;
+        const Eigen::Vector2d u = (L > 1e-9) ? Eigen::Vector2d(ab / L)
+                                             : Eigen::Vector2d(1.0, 0.0);
+        const Eigen::Vector2d n(-u.y(), u.x());
+        double ceil_min = std::numeric_limits<double>::infinity();
+        bool reached = false;
+        for (double s = 0.0; s <= L + 1e-9; s += kStepS) {
+          for (double l = -kSwathR; l <= kSwathR + 1e-9; l += kStepL) {
+            const Eigen::Vector3d p(p0.x() + u.x() * s + n.x() * l,
+                                    p0.y() + u.y() * s + n.y() * l, 0.0);
+            for (size_t zi : cand) {
+              const auto &tz = risk_zones_[zi];
+              if ((p.head<2>() - tz.center.head<2>()).norm() > tz.reach)
+                continue;
+              reached = true;
+              ceil_min = std::min(ceil_min, risk_shadow_ceiling_(zi, p));
+              if (!(ceil_min > kNegInf)) return kNegInf;  // unshadowed sample
+            }
+          }
+        }
+        return reached ? ceil_min : kNegInf;
+      };
+
       alt_zhi_pieces_.resize(piece_num);
       double cap_min = 1e30, cap_max = -1e30;
       int relaxed_pieces = 0;
+      int shadow_pieces = 0;
+      double shadow_lift_max = 0.0;
       for (int i = 0; i < piece_num; ++i) {
         double ref = std::max(env[i], env[i + 1]);
         const double terr = swath_terr(clean_path[i], clean_path[i + 1]);
@@ -201,6 +259,16 @@ namespace ego_planner
             alt_cap_zone_relax_ * zone_infl(clean_path[i], clean_path[i + 1]);
         if (zr > 1e-9) ++relaxed_pieces;
         alt_zhi_pieces_(i) = ref + alt_cap_headroom_opt_ + zr;
+        const double sc = shadow_ceil(clean_path[i], clean_path[i + 1]);
+        if (std::isfinite(sc)) {
+          const double cand_cap = sc - alt_cap_shadow_margin_;
+          if (cand_cap > alt_zhi_pieces_(i)) {
+            shadow_lift_max =
+                std::max(shadow_lift_max, cand_cap - alt_zhi_pieces_(i));
+            alt_zhi_pieces_(i) = cand_cap;
+            ++shadow_pieces;
+          }
+        }
         cap_min = std::min(cap_min, alt_zhi_pieces_(i));
         cap_max = std::max(cap_max, alt_zhi_pieces_(i));
       }
@@ -210,6 +278,12 @@ namespace ego_planner
                piece_num, cap_min, cap_max, alt_cap_slope_,
                alt_cap_headroom_opt_, alt_cap_zone_relax_, relaxed_pieces,
                alt_zhi_);
+      if (alt_cap_shadow_margin_ > 0.0 && use_risk_zones_) {
+        LOG_INFO("[SHADOW-CAP] exposure-owned cap: %d/%d pieces lifted above "
+                 "the band to LOS shadow - %.2f margin (max lift %.3f)",
+                 shadow_pieces, piece_num, alt_cap_shadow_margin_,
+                 shadow_lift_max);
+      }
     } else if (!cap_ref.empty()) {
       LOG_WARN("[ALT-CAP] cap_ref/piece mismatch after insertions (%zu vs %d)"
                " — scalar cap only", cap_ref.size(), piece_num + 1);
@@ -2572,6 +2646,10 @@ namespace ego_planner
     // [ZONE-RELAX] Stage 3: zone-proximity cap relaxation (0 = off/legacy).
     node_->declare_parameter("optimization/alt_cap_zone_relax", 0.0);
     node_->get_parameter("optimization/alt_cap_zone_relax", alt_cap_zone_relax_);
+    // [SHADOW-CAP] H3: exposure-owned cap, hidden-margin below the LOS shadow
+    // ceiling in z-units (<=0 = off/legacy).
+    node_->declare_parameter("optimization/alt_cap_shadow_margin", 0.0);
+    node_->get_parameter("optimization/alt_cap_shadow_margin", alt_cap_shadow_margin_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {

@@ -220,6 +220,12 @@ namespace ego_planner
     // Return value is visibility in [0,1]. grad may be null.
     std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)>
         risk_visibility_;
+    // Raw per-zone LOS shadow ceiling (PathManager::riskShadowCeiling): the z
+    // below which terrain hides (x,y) from that zone's emitter. -inf = no
+    // shadow information (masking off, invalid mask, or outside the zone's
+    // horizon table). Queried once per plan while building the per-piece cap
+    // ([SHADOW-CAP]); never called from cost/gradient callbacks.
+    std::function<double(size_t, const Eigen::Vector3d &)> risk_shadow_ceiling_;
     // Per-zone: 1 = contains the plan start/goal, barrier OFF (moat only).
     // Same must-enter exemption rule as the front-end's prepareBarrier.
     std::vector<char> zone_barrier_exempt_;
@@ -257,6 +263,15 @@ namespace ego_planner
     // without loosening the ceiling anywhere else. 0 = off (legacy cap).
     // Yaml: optimization/alt_cap_zone_relax.
     double alt_cap_zone_relax_{0.0};
+    // [SHADOW-CAP] (H3, exposure-owned altitude band) where terrain shadows a
+    // piece from EVERY zone in xy reach, raise the cap to the LOS shadow
+    // ceiling minus this hidden-margin (z-units): the band's downward pressure
+    // exists to stay unseen, so in shadow it owns nothing and the arch may
+    // ride over the ridge instead of being pressed into the duck-below
+    // tug-of-war ("only low where visible"). Pieces no zone can reach keep
+    // the legacy band (its hump-suppression role there is untouched).
+    // <=0 = off (legacy cap). Yaml: optimization/alt_cap_shadow_margin.
+    double alt_cap_shadow_margin_{0.0};
 
     // Generic fixed-wing inverse dynamics. MINCO provides physical r/v/a after
     // frame scaling; the shared model recovers required lift, load factor,
@@ -316,6 +331,10 @@ namespace ego_planner
     void setRiskVisibility(
         std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)> f) {
         risk_visibility_ = std::move(f);
+    }
+    void setRiskShadowCeiling(
+        std::function<double(size_t, const Eigen::Vector3d &)> f) {
+        risk_shadow_ceiling_ = std::move(f);
     }
 
     // Mark zones containing the plan start/goal as barrier-exempt (they must

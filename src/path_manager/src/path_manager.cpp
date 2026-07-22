@@ -527,6 +527,12 @@ namespace path_manager
                        Eigen::Vector3d *grad) -> double {
                     return riskVisibility(zi, p, grad);
                 });
+            // [SHADOW-CAP] raw LOS horizon for the exposure-owned cap: same
+            // zone indexing as the visibility callback above.
+            poly_traj_opt_->setRiskShadowCeiling(
+                [this](size_t zi, const Eigen::Vector3d &p) -> double {
+                    return riskShadowCeiling(zi, p);
+                });
 
             // Only mark as initialized after all steps succeed
             is_optimizer_initialized_ = true;
@@ -926,6 +932,10 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                 [this](size_t zi, const Eigen::Vector3d &p,
                        Eigen::Vector3d *grad) -> double {
                     return riskVisibility(zi, p, grad);
+                });
+            poly_traj_opt_->setRiskShadowCeiling(
+                [this](size_t zi, const Eigen::Vector3d &p) -> double {
+                    return riskShadowCeiling(zi, p);
                 });
         }
         // A* must see obstacles so the simple_path it returns is already an
