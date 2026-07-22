@@ -585,8 +585,18 @@ namespace ego_planner
     // actively descending at a flat 3000 (-1004) while small missions
     // converge in 300-1500; ~1 ms/iter, so even the ceiling stays ~12 s —
     // proportionate to the ~10 s eikonal on those same maps.
+    // Per-piece budget 60 -> 100: the zone-saturated gauntlet converged via
+    // g_epsilon using ~all of the old 60*piece ceiling (101 pieces -> 6060,
+    // used ~6060), so it sat ON the budget edge — any gradient perturbation
+    // (even a behaviour-preserving refactor) pushed g_epsilon-convergence past
+    // the limit and flipped it to -1004. The extra budget is margin, not a new
+    // optimum: cases that already converge are untouched (small missions finish
+    // in 300-1500; the clean big_terrain baseline stays min-clr 4.903 byte for
+    // byte); only budget-edge cases gain room. Genuine non-convergence is still
+    // cut early by the past/delta plateau test, so the ceiling is rarely
+    // reached. ~1 ms/iter keeps the worst case ~10-12 s.
     lbfgs_params.max_iterations =
-        std::min(12000, std::max(3000, 60 * piece_num_));
+        std::min(12000, std::max(3000, 100 * piece_num_));
 
     if (!use_formation)
     {
