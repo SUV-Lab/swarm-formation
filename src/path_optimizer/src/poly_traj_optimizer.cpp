@@ -1498,11 +1498,11 @@ namespace ego_planner
 
     Eigen::VectorXd gradT(opt->piece_num_);
     double smoo_cost = 0, time_cost = 0;
-    // Slots: 0 obstacle, 1 swarm, 2 formation, 3 risk (moat+barrier),
-    //        4 feasibility, 5 sqrvariance, 6 altitude band, 7 cruise dynamics.
-    // Slots: 0 obstacle(SDF), 1 swarm, 2 formation, 3 risk, 4 feasibility,
-    //        5 sqrvariance, 6 altitude, 7 dynamics, 8 terrain(heightmap 2.5D).
-    Eigen::VectorXd obs_swarm_feas_qvar_costs(9);
+    // Slots: 0 obstacle(SDF), 1 swarm, 2 formation, 3 risk (moat+barrier),
+    //        4 feasibility (v/a envelope ONLY), 5 sqrvariance, 6 altitude,
+    //        7 dynamics, 8 terrain(heightmap 2.5D), 9 ride (H1 speed-over-rough).
+    Eigen::VectorXd obs_swarm_feas_qvar_costs(10);
+    obs_swarm_feas_qvar_costs.setZero();
 
     // High-performance timing for debugging (similar to con code)
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -1559,6 +1559,8 @@ namespace ego_planner
         opt->log_manager_->infof("  risk_cost=%.6f (weight=%.3f, barrier=%.3f)", obs_swarm_feas_qvar_costs(3), opt->wei_risk_, opt->wei_risk_barrier_);
         opt->log_manager_->infof("  altitude_cost=%.6f (weight=%.3f, band=[%.2f, %.2f])", obs_swarm_feas_qvar_costs(6), opt->wei_alt_, opt->alt_zlo_, opt->alt_zhi_);
         opt->log_manager_->infof("  feasibility_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(4), opt->wei_feas_);
+        if (opt->wei_ride_ > 0.0)
+            opt->log_manager_->infof("  ride_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(9), opt->wei_ride_);
         opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, V=[%.0f,%.0f] m/s, n<=%.2f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, opt->dynamics_params_.speed_min_mps, opt->dynamics_params_.speed_max_mps, opt->dynamics_params_.load_factor_max,
                                  (opt->dynamics_enable_ && opt->wei_dynamics_ > 0.0) ? "on" : "off");
         opt->log_manager_->infof("  terrain_cost=%.6f (weight=%.3f, heightmap 2.5D, %s)", obs_swarm_feas_qvar_costs(8), opt->wei_obs_, opt->terrain_height_ ? "on" : "off");
@@ -1968,7 +1970,8 @@ namespace ego_planner
                 jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) +=
                     omg * step * gradViolaVc;
                 gdT(i) += omg * (costr / K + step * gradViolaVt);
-                costs(4) += omg * step * costr;
+                costs(9) += omg * step * costr;   // slot 9 = ride (own slot,
+                                                  // not the feasibility slot)
             }
         }
 
@@ -2563,7 +2566,20 @@ namespace ego_planner
     node_ = node;
     node_->declare_parameter("optimization/constrain_points_perPiece", 3);
     node_->get_parameter("optimization/constrain_points_perPiece", cps_num_prePiece_);
-    
+    // K = cps_num_prePiece_ is the per-piece integration divisor in
+    // addPVAGradCost2CT (step = T1/K, alpha = j/K, cost += .../K) and the
+    // constraint-point count in getInitConstrainPoints (pts sized N*K+1, then
+    // written at i_dp = 0..N-1). K < 1 gives +inf/NaN gradients AND an
+    // out-of-bounds pts write — clamp so a mistuned param cannot corrupt the
+    // solve or crash.
+    if (cps_num_prePiece_ < 1) {
+        if (log_manager_)
+            log_manager_->warnf(
+                "[PARAM] constrain_points_perPiece=%d < 1; clamping to 1",
+                cps_num_prePiece_);
+        cps_num_prePiece_ = 1;
+    }
+
     node_->declare_parameter("enable_obstacles", true);
     node_->get_parameter("enable_obstacles", enable_obstacles_);
     

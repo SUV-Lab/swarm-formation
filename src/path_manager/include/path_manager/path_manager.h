@@ -80,6 +80,12 @@ namespace path_manager
     double length_x = 0.0;       // Terrain total length X
     double length_y = 0.0;       // Terrain total length Y
     bool valid = false;
+    // Bumped on every setTerrainData ingest. The ELEV-MEMO keys on this, NOT
+    // the elevation buffer address: a same-geometry corridor re-crop copies
+    // new values into the SAME std::vector buffer (libstdc++ reuses it when
+    // the size fits capacity), so a data()-pointer key would hit and serve
+    // the previous crop's stale sample.
+    uint64_t generation = 0;
 
     // Convert world (planning) coordinate to terrain grid index and query elevation
     float getElevation(double world_x, double world_y) const {
@@ -169,20 +175,21 @@ namespace path_manager
       // clamp (5 zones -> up to 6 identical (x,y) queries back-to-back);
       // measured 88% of the per-iteration cost was zone evaluation, most of
       // it these repeats. Same inputs return the STORED outputs verbatim, so
-      // results are bit-identical by construction. Keyed on the elevation
-      // buffer pointer: a terrain reload changes the buffer and can never
-      // serve a stale sample. thread_local: the optimizer runs on one thread;
-      // other threads just get their own slot.
-      struct ElevMemo { const void *src; double x, y; float h, gx, gy; bool ok; };
-      static thread_local ElevMemo memo{nullptr, 0.0, 0.0, 0.f, 0.f, 0.f, false};
-      const void *src = static_cast<const void *>(elevation.data());
-      if (memo.src == src && memo.x == world_x && memo.y == world_y) {
+      // results are bit-identical by construction. Keyed on the terrain
+      // GENERATION (bumped every ingest): a same-geometry re-crop copies new
+      // values into the same buffer, so a data()-pointer key would wrongly
+      // hit and serve a stale sample. thread_local: the optimizer runs on one
+      // thread; other threads just get their own slot.
+      struct ElevMemo { uint64_t gen; double x, y; float h, gx, gy; bool ok; };
+      static thread_local ElevMemo memo{
+          std::numeric_limits<uint64_t>::max(), 0.0, 0.0, 0.f, 0.f, 0.f, false};
+      if (memo.gen == generation && memo.x == world_x && memo.y == world_y) {
         *h = memo.h; *dhdx = memo.gx; *dhdy = memo.gy;
         return memo.ok;
       }
       float th = 0.f, tgx = 0.f, tgy = 0.f;
       const bool ok = getElevationAndGradUncached(world_x, world_y, &th, &tgx, &tgy);
-      memo = ElevMemo{src, world_x, world_y, th, tgx, tgy, ok};
+      memo = ElevMemo{generation, world_x, world_y, th, tgx, tgy, ok};
       *h = th; *dhdx = tgx; *dhdy = tgy;
       return ok;
     }

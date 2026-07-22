@@ -2704,6 +2704,10 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
     terrain_data_.origin_y = msg->info.pose.position.y - msg->info.length_y / 2.0;
     terrain_data_.elevation = elev_data.data;
     terrain_data_.valid = true;
+    // Invalidate the ELEV-MEMO: a same-geometry re-crop reuses the buffer, so
+    // the memo (keyed on generation) must see a new value or it serves stale
+    // samples from the previous crop.
+    ++terrain_data_.generation;
 
     // Return freed arenas to the OS after a map swap. Alternating small/large
     // corridor crops re-allocate every big grid (elevation, FM2 fields) at a
