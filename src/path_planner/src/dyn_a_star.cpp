@@ -668,6 +668,21 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     const double kShortcutMargin = 1.05;
     const int    kRiskSamples  = 4;  // trapezoidal samples per segment
 
+    // The per-sample max-cost envelope guards below (segmentMaxRisk /
+    // chordOccRisk / chordOk / innerChordBlocked) protect an FM2/A* detour
+    // from being collapsed by a chord that spikes cost somewhere the coarse
+    // 4-sample average misses. They were originally gated on zone presence,
+    // but getRiskCost = alpha*moat + getRoughCost and the H2 roughness term
+    // is ZONE-INDEPENDENT — so on a zone-free rough-terrain (NOE) mission the
+    // envelope was fully disabled and a chord could cut straight across a
+    // narrow rough ridge FM2 had detoured around (header invariant "the
+    // shortcut pass cannot revert an FM2 roughness detour"). Gate on cost
+    // presence, not zone presence: getRiskCost already returns pure roughness
+    // when zones are empty, so seg_max/detour_max then carry the roughness
+    // envelope and the V3 filter applies uniformly.
+    const bool have_zones = risk_zones_ && !risk_zones_->empty();
+    const bool need_cost  = have_zones || (rough_weight_ > 0.0 && terrain_hgrad_);
+
     auto segmentRiskCost = [&](const Vector3d &a, const Vector3d &b) {
         double d = (b - a).norm();
         if (d < 1e-6) return 0.0;
@@ -693,7 +708,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     constexpr double kShortcutRiskMargin = 1.10;  // 10% slack
 
     auto segmentMaxRisk = [&](const Vector3d &a, const Vector3d &b) {
-        if (!risk_zones_ || risk_zones_->empty()) return 0.0;
+        if (!need_cost) return 0.0;
         // Pitch MUST match chordOccRisk's (terrain_stride_floor_, 0.15 u on
         // 30 m corridor maps — was hard-coded 0.5): a coarser detour scan
         // under-reads detour_max across narrow zone cores, misclassifying a
@@ -727,7 +742,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // density the old two-pass check used.
     auto chordOccRisk = [&](const Vector3d &a, const Vector3d &b,
                             double *max_risk_out) -> bool {
-        const bool need_risk = risk_zones_ && !risk_zones_->empty();
+        const bool need_risk = need_cost;
         if (checkOccupancy_esdf(a) || checkOccupancy_esdf(b)) return false;
         double mx = need_risk ? std::max(getRiskCost(a), getRiskCost(b)) : 0.0;
         const double len = (b - a).norm();
@@ -751,7 +766,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         if (b <= a + 1) return true;  // original segment, feasible by construction
         double shortcut_max = 0.0;
         if (!chordOccRisk(path[a], path[b], &shortcut_max)) return false;
-        if (risk_zones_ && !risk_zones_->empty()) {
+        if (need_cost) {
             double detour_max = 0.0;
             for (size_t k = a + 1; k <= b; ++k)
                 detour_max = std::max(detour_max, seg_max[k]);
@@ -834,7 +849,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // locally shorter pieces (smaller corner-cut depth) after subdivision.
     {
         const size_t kept_before_guard = kept.size();
-        const bool need_risk = risk_zones_ && !risk_zones_->empty();
+        const bool need_risk = need_cost;
         // Inner chord blocked if it crosses OCCUPIED space (original check) OR
         // exceeds the raw detour's risk envelope (NEW): the guard used to be
         // occupancy-only, so at a detour apex between two chords that each
