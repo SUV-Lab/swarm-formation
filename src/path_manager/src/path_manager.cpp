@@ -63,6 +63,9 @@ namespace path_manager
         node_->declare_parameter("manager/fm2_alt_penalty", 2.0);
         node_->declare_parameter("manager/fm2_alt_zscale", 10.0);
         node_->declare_parameter("manager/fm2_alt_zscale_down", 2.0);
+        // [ROUGH] H2 terrain-roughness routing (0 = off/legacy field).
+        node_->declare_parameter("manager/fm2_rough_weight", 0.0);
+        node_->declare_parameter("manager/fm2_rough_slope0", 0.20);
         node_->declare_parameter("manager/astar_bypass_shortcut", false);
         node_->declare_parameter("manager/astar_step_size", 1.0);
         node_->declare_parameter("manager/dyn_yaw_seed", 42);  // fixed = reproducible obstacle orientations; <0 = randomize each run
@@ -148,6 +151,8 @@ namespace path_manager
         node_->get_parameter("manager/fm2_alt_penalty", fm2_alt_penalty_);
         node_->get_parameter("manager/fm2_alt_zscale", fm2_alt_zscale_);
         node_->get_parameter("manager/fm2_alt_zscale_down", fm2_alt_zscale_dn_);
+        node_->get_parameter("manager/fm2_rough_weight", fm2_rough_weight_);
+        node_->get_parameter("manager/fm2_rough_slope0", fm2_rough_slope0_);
         node_->get_parameter("manager/astar_bypass_shortcut", astar_bypass_shortcut_);
         node_->get_parameter("manager/astar_step_size", astar_step_size_);
         node_->get_parameter("manager/sdf_voxel_size", sdf_voxel_size_);
@@ -972,6 +977,13 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         searcher_.setFm2MaxCells(static_cast<size_t>(fm2_max_cells_));
         searcher_.setFm2Star(fm2_star_);
         searcher_.setFm2AltPenalty(fm2_alt_penalty_, fm2_alt_zscale_, fm2_alt_zscale_dn_);
+        // [ROUGH] slope field for the roughness pseudo-moat (same TerrainData
+        // surface as the heightmap above; thread_local memo, OMP-safe).
+        searcher_.setTerrainHeightGrad(
+            [this](double x, double y, float *h, float *gx, float *gy) -> bool {
+                return terrain_data_.getElevationAndGrad(x, y, h, gx, gy);
+            });
+        searcher_.setRoughness(fm2_rough_weight_, fm2_rough_slope0_);
         searcher_.setDynObstacleMargin(dyn_obstacle_margin_);
         searcher_.setBypassShortcut(astar_bypass_shortcut_);
 

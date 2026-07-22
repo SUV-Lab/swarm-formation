@@ -92,6 +92,13 @@ private:
     // behind terrain. Keeping the callback per zone preserves the existing
     // probabilistic-OR composition and start/goal barrier exemptions.
     std::function<double(size_t, const Eigen::Vector3d &)> risk_visibility_;
+    // [ROUGH] (H2 terrain-roughness routing) optional slope field for the
+    // shared cost: bilinear h + dh/dxy from PathManager's TerrainData — the
+    // same surface the optimizer's terrain terms use. Pure read with a
+    // thread_local memo, so the OpenMP speed-map build may call it freely.
+    std::function<bool(double, double, float *, float *, float *)> terrain_hgrad_;
+    double rough_weight_ = 0.0;   // pseudo-moat per slope unit above s0; 0 = off
+    double rough_slope0_ = 0.20;  // slope deadband (tan; ~11 deg): plains free
     double obstacle_margin_ = 0.5;  // frame units (1 unit = 100 m)
     // Terrain sampling pitch for chord feasibility scans: min(0.5, half a DEM
     // cell). See setTerrainHeightmap.
@@ -271,11 +278,41 @@ private:
     // Composed: risk(x) = 1 - prod_i (1 - moat_i(x)),  bounded in [0, 1].
     // Returns risk_alpha_ * risk(x). Compact support; AABB pre-filter
     // skips the sqrt for far zones.
+    // [ROUGH] terrain-roughness pseudo-moat in [0, 1): slows the shared field
+    // where the cell is NEAR rough ground (NOE regime). It joins getRiskNorm's
+    // survival composition, so EVERY consumer of the shared field — FM2 speed
+    // map, A* edge cost, coarse cost-to-go heuristic, shortcut acceptance and
+    // the corner-cut guard — sees the same detour incentive, and the shortcut
+    // pass cannot revert an FM2 roughness detour (the field pattern that made
+    // the zone moats consistent). AGL fade: full effect below kRoughAglNear,
+    // zero above kRoughAglFar — a high transit over a ridge is not "rough",
+    // only terrain-following across it is. Effective cost scale inherits
+    // risk_alpha_ like the zone moats (cost = alpha * norm).
+    inline double getTerrainRoughNorm(const Eigen::Vector3d &pos) const {
+        if (rough_weight_ <= 0.0 || !terrain_hgrad_) return 0.0;
+        constexpr double kRoughAglNear = 1.0;   // full effect below (units)
+        constexpr double kRoughAglFar  = 2.5;   // zero at/above (units)
+        float h = 0.f, gx = 0.f, gy = 0.f;
+        if (!terrain_hgrad_(pos.x(), pos.y(), &h, &gx, &gy)) return 0.0;
+        const double agl = pos.z() - static_cast<double>(h);
+        if (agl >= kRoughAglFar) return 0.0;
+        const double slope = std::hypot(static_cast<double>(gx),
+                                        static_cast<double>(gy));
+        if (slope <= rough_slope0_) return 0.0;
+        double r = rough_weight_ * (slope - rough_slope0_);
+        if (agl > kRoughAglNear)
+            r *= (kRoughAglFar - agl) / (kRoughAglFar - kRoughAglNear);
+        constexpr double kMoatCap = 1.0 - 1e-3;
+        return std::min(r, kMoatCap);
+    }
+
     // Normalized OR-moat risk in [0, 1] (no alpha scaling). Used by the
     // inadmissible heuristic so its inflation factor stays dimensionless.
+    // Terrain roughness (when enabled) composes in as one more pseudo-moat.
     inline double getRiskNorm(const Eigen::Vector3d &pos) const {
-        if (!risk_zones_ || risk_zones_->empty()) return 0.0;
-        double survival = 1.0;
+        const double rough = getTerrainRoughNorm(pos);
+        if (!risk_zones_ || risk_zones_->empty()) return rough;
+        double survival = 1.0 - rough;
         for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
             const auto &tz = (*risk_zones_)[zi];
             // Compact ellipsoidal engagement envelope. Terrain visibility is
@@ -454,6 +491,15 @@ public:
     }
     void setVirtualCeilHeight(double h) { virtual_ceil_height_ = h; }
     void setRiskAlpha(double a) { risk_alpha_ = a; }
+    void setTerrainHeightGrad(
+        std::function<bool(double, double, float *, float *, float *)> f) {
+        terrain_hgrad_ = std::move(f);
+    }
+    // [ROUGH] weight 0 disables; slope0 = slope deadband (tan units).
+    void setRoughness(double w, double slope0) {
+        rough_weight_ = std::max(0.0, w);
+        rough_slope0_ = std::max(0.0, slope0);
+    }
     void setRiskBarrier(double k) { risk_barrier_ = (k > 0.0 ? k : 0.0); }
     void setSmhaW(double w) { smha_w_ = w; }
     void setFrontEnd(FrontEnd fe) { front_end_ = fe; }

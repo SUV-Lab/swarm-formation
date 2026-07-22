@@ -468,6 +468,10 @@ namespace path_manager
     double fm2_alt_penalty_{2.0};  // wave slowdown above mission altitude
     double fm2_alt_zscale_{10.0};  // up-side ramp (gentle: climbs allowed)
     double fm2_alt_zscale_dn_{2.0};// down-side ramp (stiff: no diving)
+    // [ROUGH] H2 terrain-roughness routing: pseudo-moat on steep slopes in the
+    // FE shared field (FM2 speed + A* edges + shortcut acceptance). 0 = off.
+    double fm2_rough_weight_{0.0};
+    double fm2_rough_slope0_{0.20};
     double dyn_obstacle_margin_{3.0};  // berth around dynamic obstacles
     double opt_obstacle_clearance_{0.7};  // optimizer penalty onset (< front-end margin)
     double weight_altitude_{1000.0};      // optimizer z-cap weight above mission band
