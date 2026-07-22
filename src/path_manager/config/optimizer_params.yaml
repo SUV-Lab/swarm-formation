@@ -187,12 +187,27 @@
                                        # Derivation: K * weight_time / cruise = 100*500/2. Without it
                                        # MINCO re-litigates the rim standoff: the moat's zero contact
                                        # slope makes skirt-cutting profitable ~tens of metres deep.
-    optimization/weight_altitude: 200.0  # z-cap above mission band (quadratic); keep << weight_obstacle
-                                         # or it presses into terrain. Was bumped to 2400 to squash
-                                         # z-spikes in the pre-consistency era; those had a root cause
-                                         # (frozen gate gradient / smoothed-slope mismatch) since fixed,
-                                         # and at 2400 the cap's shoulder pressure set the crest-graze
-                                         # equilibrium ~2.3x deeper (-8.4 m vs the historical -3.9 m).
+    optimization/weight_altitude: 1600.0 # z-band tracking weight (quadratic); keep << weight_obstacle
+                                         # or it presses into terrain. 1600 + alt_cap_zone_relax 0.6
+                                         # (adopted together, 2026-07-22): ridge-NOE altitude_cost -81%
+                                         # (k2), opt time -85%, clr +5 m, while the zone relax below
+                                         # buys back the zone-crossing headroom the tight band squeezes
+                                         # (kzone 0.848 -> 0.970, gauntlet clr 0.041 -> 0.054). The old
+                                         # campaign verdict "WA400/800 break the gauntlet (-1004)" was an
+                                         # iteration-budget artifact (fixed at 100/piece); the axis is
+                                         # smooth. k1 over-water probe: water z profile unchanged
+                                         # (mean 1.267 -> 1.277), ship-zone crossing ducks 13 m LESS
+                                         # (clr 0.71 -> 0.84 u) at the cost of risk_cost 53 -> 160
+                                         # (concealment traded for clearance, converged, FE risk 0).
+                                         # Was bumped to 2400 to squash z-spikes in the pre-consistency
+                                         # era; those had a root cause (frozen gate gradient /
+                                         # smoothed-slope mismatch) since fixed.
+    optimization/alt_cap_zone_relax: 0.6 # [ZONE-RELAX] extra per-piece cap headroom near risk zones
+                                         # (z-units, scaled by a linear fade: 1 inside the rim -> 0 at
+                                         # 1.5x reach). Grants the zone-crossing arch the vertical
+                                         # freedom a tight band-tracking weight removes, and nothing
+                                         # else: zone-free missions are untouched by construction.
+                                         # 0.6 is the sweet spot (1.0 over-relaxes: kzone 0.876 < 0.970).
     optimization/alt_cap_headroom: 0.4   # z-cap slack above the front-end geodesic max. Must leave the
                                          # sparse-piece quintic a workable corridor above the obstacle
                                          # clearance floor: +1 over a sea-level route made a ~4 m band and
