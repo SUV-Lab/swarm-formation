@@ -1410,8 +1410,9 @@ void PathSearcher::fm2BuildSpeedMap()
             } else {
                 // Free-space speed: risk slowdown (alpha*risk + finite barrier K
                 // inside non-exempt zones), modulated by obstacle distance.
+                // Terrain roughness adds in its own currency ([ROUGH]).
                 const double r = getRiskNorm(w);
-                double risk_cost = risk_alpha_ * r;
+                double risk_cost = risk_alpha_ * r + getRoughCost(w);
                 if (insideBarrierZone(w)) risk_cost += risk_barrier_;
                 // Altitude-band penalty (see altBandCost): keeps the
                 // geodesic at mission altitude over open water; it leaves the

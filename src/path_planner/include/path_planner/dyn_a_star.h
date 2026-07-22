@@ -97,7 +97,8 @@ private:
     // same surface the optimizer's terrain terms use. Pure read with a
     // thread_local memo, so the OpenMP speed-map build may call it freely.
     std::function<bool(double, double, float *, float *, float *)> terrain_hgrad_;
-    double rough_weight_ = 0.0;   // pseudo-moat per slope unit above s0; 0 = off
+    double rough_weight_ = 0.0;   // cost per slope unit above s0 (own currency,
+                                  // NOT risk_alpha_-scaled); 0 = off
     double rough_slope0_ = 0.20;  // slope deadband (tan; ~11 deg): plains free
     double obstacle_margin_ = 0.5;  // frame units (1 unit = 100 m)
     // Terrain sampling pitch for chord feasibility scans: min(0.5, half a DEM
@@ -278,20 +279,28 @@ private:
     // Composed: risk(x) = 1 - prod_i (1 - moat_i(x)),  bounded in [0, 1].
     // Returns risk_alpha_ * risk(x). Compact support; AABB pre-filter
     // skips the sqrt for far zones.
-    // [ROUGH] terrain-roughness pseudo-moat in [0, 1): slows the shared field
-    // where the cell is NEAR rough ground (NOE regime). It joins getRiskNorm's
-    // survival composition, so EVERY consumer of the shared field — FM2 speed
-    // map, A* edge cost, coarse cost-to-go heuristic, shortcut acceptance and
-    // the corner-cut guard — sees the same detour incentive, and the shortcut
-    // pass cannot revert an FM2 roughness detour (the field pattern that made
-    // the zone moats consistent). AGL fade: full effect below kRoughAglNear,
-    // zero above kRoughAglFar — a high transit over a ridge is not "rough",
-    // only terrain-following across it is. Effective cost scale inherits
-    // risk_alpha_ like the zone moats (cost = alpha * norm).
-    inline double getTerrainRoughNorm(const Eigen::Vector3d &pos) const {
+    // [ROUGH] terrain-roughness cost, ADDITIVE and in its own currency —
+    // deliberately NOT composed into the OR-moat and NOT scaled by
+    // risk_alpha_. The composed form was built first and measured: with
+    // survival = (1-rough)(1-moat) a high roughness devalues the moat's
+    // marginal weight, so the front-end started trading detection exposure
+    // for gentle terrain (gauntlet risk_cost 4x at similar max_risk). The
+    // additive form keeps the zone moat's gradient intact at any roughness.
+    // It is added inside getRiskCost and the FM2 speed map, so every
+    // consumer of the shared field — FM2 wave, A* edge cost, coarse
+    // cost-to-go heuristic, shortcut acceptance and the corner-cut guard —
+    // sees the same detour incentive and the shortcut pass cannot revert an
+    // FM2 roughness detour. AGL fade: full effect below kRoughAglNear, zero
+    // above kRoughAglFar — a high transit over a ridge is not "rough", only
+    // terrain-following across it is.
+    inline double getRoughCost(const Eigen::Vector3d &pos) const {
         if (rough_weight_ <= 0.0 || !terrain_hgrad_) return 0.0;
         constexpr double kRoughAglNear = 1.0;   // full effect below (units)
         constexpr double kRoughAglFar  = 2.5;   // zero at/above (units)
+        // Cost cap: bends routes as hard as a mid-strength zone moat
+        // (~ alpha 30 * norm 0.33) but stays far below the barrier K, and a
+        // DEM cliff's huge |dh/dxy| cannot act like a binary wall.
+        constexpr double kRoughCostCap = 10.0;
         float h = 0.f, gx = 0.f, gy = 0.f;
         if (!terrain_hgrad_(pos.x(), pos.y(), &h, &gx, &gy)) return 0.0;
         const double agl = pos.z() - static_cast<double>(h);
@@ -302,17 +311,14 @@ private:
         double r = rough_weight_ * (slope - rough_slope0_);
         if (agl > kRoughAglNear)
             r *= (kRoughAglFar - agl) / (kRoughAglFar - kRoughAglNear);
-        constexpr double kMoatCap = 1.0 - 1e-3;
-        return std::min(r, kMoatCap);
+        return std::min(r, kRoughCostCap);
     }
 
     // Normalized OR-moat risk in [0, 1] (no alpha scaling). Used by the
     // inadmissible heuristic so its inflation factor stays dimensionless.
-    // Terrain roughness (when enabled) composes in as one more pseudo-moat.
     inline double getRiskNorm(const Eigen::Vector3d &pos) const {
-        const double rough = getTerrainRoughNorm(pos);
-        if (!risk_zones_ || risk_zones_->empty()) return rough;
-        double survival = 1.0 - rough;
+        if (!risk_zones_ || risk_zones_->empty()) return 0.0;
+        double survival = 1.0;
         for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
             const auto &tz = (*risk_zones_)[zi];
             // Compact ellipsoidal engagement envelope. Terrain visibility is
@@ -410,8 +416,9 @@ private:
     inline double getRiskCost(const Eigen::Vector3d &pos) const {
         // alpha*moat (all zones) + finite barrier K on non-exempt zones. K is
         // large but finite, so the graph never disconnects: detour when a route
-        // exists, else cross at the least-moat point.
-        double cost = risk_alpha_ * getRiskNorm(pos);
+        // exists, else cross at the least-moat point. Terrain roughness adds
+        // in its own currency (see getRoughCost — NOT alpha-coupled).
+        double cost = risk_alpha_ * getRiskNorm(pos) + getRoughCost(pos);
         if (insideBarrierZone(pos)) cost += risk_barrier_;
         return cost;
     }
