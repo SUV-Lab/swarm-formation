@@ -355,6 +355,24 @@ namespace ego_planner
                         const Eigen::Vector3d &goal_pos);
     void logH4PostSolve(const poly_traj::Trajectory &traj);
 
+    // [H4-COMMIT] The decision layer with SEED authority only (prototype):
+    // rewrite clean_path's inner z from a vertex-lattice corridor DP before
+    // any consumer reads it. The DP TRACKS the committed profile and departs
+    // only for the three corrections the layer exists for — floor
+    // violations, climb infeasibility, exposure above the concealment
+    // ceiling. It does NOT seed "as low as safely possible": an A/B showed
+    // seeds pick the solve's homotopy, and floor-hugging seeds settle into
+    // band-grazing local optima even with the soft terms in full authority
+    // (kwaypt clearance 1.862 -> 0.267). Commit swath is sized to the
+    // MEASURED back-end lateral drift (~1-8 u), not the cap floor's 25 u
+    // budget (whose commit premium over ridge NOE is +2.4-2.6 u). Default
+    // off = byte-identical.
+    bool h4_commit_{false};          // yaml gate optimization/h4_commit
+    double h4_commit_swath_{3.0};    // vertex-disc floor radius [xy-u]
+    bool commitH4Profile(std::vector<Eigen::Vector3d> &clean_path,
+                         const Eigen::Vector3d &start_pos,
+                         const Eigen::Vector3d &goal_pos, int first_free);
+
     // Generic fixed-wing inverse dynamics. MINCO provides physical r/v/a after
     // frame scaling; the shared model recovers required lift, load factor,
     // drag, thrust, dynamic pressure, bank angle, and flight-path angle. This

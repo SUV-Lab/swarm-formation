@@ -63,7 +63,9 @@ namespace ego_planner
     // ~86 s). Plant a short lead-in point ALONG start_vel so the head coasts out in the
     // direction the drone is already moving; the redirect then happens over the next,
     // normal segment. The lead-in is an inner point, so L-BFGS may relax it freely.
+    bool lead_in_inserted = false;
     if (lead_in_time_ > 0.0 && start_vel.norm() > 1e-3) {
+      lead_in_inserted = true;
       Eigen::Vector3d v_hat = start_vel.normalized();
       double d_lead = start_vel.norm() * lead_in_time_;  // distance travelled while redirecting
       Eigen::Vector3d p_lead = clean_path.front() + v_hat * d_lead;
@@ -78,6 +80,17 @@ namespace ego_planner
     }
 
     int piece_num = static_cast<int>(clean_path.size()) - 1;
+
+    // [H4-COMMIT] decision layer as seed authority (default off): rewrite
+    // the inner z profile from the vertex-lattice corridor DP BEFORE any
+    // consumer reads it, so the cap build's AGL fade, the ride/rough table,
+    // the time allocation and the MINCO inner points all see ONE consistent
+    // committed z. The lead-in vertex (dynamics-motivated, along start_vel)
+    // and both endpoints stay pinned. Soft terms keep final authority.
+    if (h4_commit_ && piece_num >= 2) {
+      commitH4Profile(clean_path, start_pos, waypoints.back(),
+                      lead_in_inserted ? 2 : 1);
+    }
 
     // === Arc-varying altitude cap (per-piece ceiling) ===
     // Restores the z trust-region lost with the SFC corridor: the committed
@@ -1248,6 +1261,199 @@ namespace ego_planner
     LOG_INFO("[H4-POST] flown-vs-DP z: mean|dz|=%.3f max=%.3f @s=%.1fkm "
              "(%d stations)",
              ddp_mean, ddp_max, ddp_max_s, ddp_n);
+  }
+
+  // [H4-COMMIT] Vertex-lattice corridor DP -> committed inner z (see header
+  // for the design rationale). Returns false (clean_path untouched) whenever
+  // the corridor DP is infeasible under the anchors/climb window — the
+  // legacy seed then flies unchanged, so the gate can never lose a plan.
+  // Same taper idempotency argument as the diagnostic.
+  bool PolyTrajOptimizer::commitH4Profile(
+      std::vector<Eigen::Vector3d> &clean_path,
+      const Eigen::Vector3d &start_pos, const Eigen::Vector3d &goal_pos,
+      int first_free)
+  {
+    const int NV = static_cast<int>(clean_path.size());
+    if (NV < 3 || first_free >= NV - 1) return false;
+    setupTerrainTaper(start_pos, goal_pos);
+
+    const double m_xy = (dyn_unit_xy_m_ > 0.0) ? dyn_unit_xy_m_ : 100.0;
+    const double kInf = std::numeric_limits<double>::infinity();
+    const double rc = std::max(0.5, h4_commit_swath_);
+    const double step = (terrain_cell_u_ > 0.0)
+                            ? std::min(2.3, terrain_cell_u_)
+                            : 2.3;
+
+    std::vector<double> floor_v(NV), ceil_v(NV, kInf), zs(NV), s_v(NV);
+    std::vector<char> stat(NV, 'F'), anch(NV, 0);
+    int n_ceil = 0, n_exp = 0, n_closed = 0;
+    for (int i = 0; i < NV; ++i) {
+      const Eigen::Vector3d &p = clean_path[i];
+      zs[i] = p.z();
+      s_v[i] = (i == 0) ? 0.0
+                        : s_v[i - 1] + (p.head<2>() -
+                                        clean_path[i - 1].head<2>()).norm();
+      anch[i] = (i == 0 || i == NV - 1 || i < first_free) ? 1 : 0;
+
+      // floor: disc max terrain around the vertex + tapered clearance
+      double hmax = -1e30;
+      for (double dx = -rc; dx <= rc + 1e-9; dx += step) {
+        for (double dy = -rc; dy <= rc + 1e-9; dy += step) {
+          if (dx * dx + dy * dy > rc * rc + 1e-9) continue;
+          const double x = p.x() + dx, y = p.y() + dy;
+          if (terrain_hgrad_) {
+            float h, gx, gy;
+            if (terrain_hgrad_(x, y, &h, &gx, &gy) && h > hmax) hmax = h;
+          } else if (terrain_height_) {
+            const float h = terrain_height_(x, y);
+            if (std::isfinite(h) && h > hmax) hmax = h;
+          }
+        }
+      }
+      Eigen::Vector2d gdum;
+      double fl = -1e30;
+      if (hmax > -1e29) fl = hmax + terrainClearanceTarget(p, &gdum);
+      if (wei_alt_ > 0.0) fl = std::max(fl, altitudeFloorTarget(p, &gdum));
+      if (fl < -1e29) fl = (ground_height_ > -0.5) ? ground_height_ : 0.0;
+      floor_v[i] = fl;
+
+      // concealment ceiling at the vertex disc (3-state, as the diagnostic)
+      if (use_risk_zones_ && risk_shadow_ceiling_) {
+        bool reached = false, exposed = false;
+        double cmin = kInf;
+        for (size_t zi = 0; zi < risk_zones_.size() && !exposed; ++zi) {
+          const auto &tz = risk_zones_[zi];
+          if (!(tz.reach > 0.0)) continue;
+          if ((p.head<2>() - tz.center.head<2>()).norm() > tz.reach + rc)
+            continue;
+          for (double dx = -rc; dx <= rc + 1e-9 && !exposed; dx += step) {
+            for (double dy = -rc; dy <= rc + 1e-9; dy += step) {
+              if (dx * dx + dy * dy > rc * rc + 1e-9) continue;
+              const Eigen::Vector3d q(p.x() + dx, p.y() + dy, 0.0);
+              if ((q.head<2>() - tz.center.head<2>()).norm() > tz.reach)
+                continue;
+              reached = true;
+              const double v = risk_shadow_ceiling_(zi, q);
+              if (!(v > -kInf)) { exposed = true; break; }
+              cmin = std::min(cmin, v);
+            }
+          }
+        }
+        if (exposed) { stat[i] = 'E'; ceil_v[i] = -kInf; ++n_exp; }
+        else if (reached) {
+          stat[i] = 'C'; ceil_v[i] = cmin - h4_shadow_margin_; ++n_ceil;
+          if (floor_v[i] > ceil_v[i]) ++n_closed;
+        }
+      }
+    }
+
+    // 1-D DP, anchor-aware. NOT the diagnostic's min-altitude objective:
+    // an A/B measured that seeding "as low as safely possible" everywhere
+    // shifts the solve's HOMOTOPY — from a floor-hugging seed the soft
+    // equilibrium settles into a band-grazing local optimum even where
+    // nothing asks for lowness (kwaypt clearance 1.862 -> 0.267, kzone1
+    // 3.929 -> 2.800, k3 3.085 -> 2.237; only the already-grazing gauntlet
+    // improved). The commit therefore TRACKS the committed profile
+    // (W_TRACK * |z - fe|) and departs from it only for the three
+    // corrections the layer exists for: floor violations (hard), climb
+    // infeasibility (window), and exposure above the concealment ceiling
+    // (W_EXP >> W_TRACK pulls under the ceiling / to the floor exactly in
+    // lit stretches — "only low where visible").
+    const double smax = std::max(1e-6, h4_climb_slope_);
+    constexpr int NZ = 64;
+    constexpr double W_TRACK = 1.0, W_EXP = 10.0, W_CLIMB = 0.1;
+    const double kBig = 1e18;
+    double zlo = kInf, zhi = -kInf;
+    for (int i = 0; i < NV; ++i) {
+      zlo = std::min(zlo, std::min(floor_v[i], zs[i]));
+      zhi = std::max(zhi, std::max(floor_v[i], zs[i]));
+    }
+    zlo -= 0.5; zhi += 1.5;
+    const double dz = (zhi - zlo) / (NZ - 1);
+    auto near_k = [&](double z) {
+      return std::max(0, std::min(NZ - 1,
+                 static_cast<int>(std::lround((z - zlo) / dz))));
+    };
+    auto site_cost = [&](int i, int k) -> double {
+      if (anch[i]) return (k == near_k(zs[i])) ? 0.0 : kBig;
+      const double z = zlo + k * dz;
+      if (z < floor_v[i] - 0.5 * dz) return kBig;
+      double c = W_TRACK * std::abs(z - zs[i]);
+      if (stat[i] == 'C' && z > ceil_v[i]) c += W_EXP * (z - ceil_v[i]);
+      return c;
+    };
+    std::vector<double> dp_prev(NZ, kBig), dp_cur(NZ, kBig);
+    std::vector<int> par(static_cast<size_t>(NV) * NZ, -1);
+    dp_prev[near_k(zs[0])] = 0.0;
+    int dead_at = -1;
+    for (int i = 1; i < NV; ++i) {
+      const double d = std::max(1e-9, s_v[i] - s_v[i - 1]);
+      const int win = static_cast<int>((smax * d) / dz + 0.5) + 1;
+      std::fill(dp_cur.begin(), dp_cur.end(), kBig);
+      bool alive = false;
+      for (int k = 0; k < NZ; ++k) {
+        const double sc = site_cost(i, k);
+        if (sc >= kBig) continue;
+        double best = kBig; int bj = -1;
+        for (int j = std::max(0, k - win);
+             j <= std::min(NZ - 1, k + win); ++j) {
+          if (dp_prev[j] >= kBig) continue;
+          const double tc = dp_prev[j] + W_CLIMB * std::abs(k - j) * dz;
+          if (tc < best) { best = tc; bj = j; }
+        }
+        if (bj < 0) continue;
+        dp_cur[k] = best + sc;
+        par[static_cast<size_t>(i) * NZ + k] = bj;
+        alive = true;
+      }
+      if (!alive) { dead_at = i; break; }
+      dp_prev.swap(dp_cur);
+    }
+    const int kN = near_k(zs[NV - 1]);
+    if (dead_at >= 0 || dp_prev[kN] >= kBig) {
+      LOG_WARN("[H4-COMMIT] corridor DP infeasible (%s station %d) — commit "
+               "skipped, legacy seed flies unchanged",
+               dead_at >= 0 ? "dead at" : "tail unreachable,",
+               dead_at >= 0 ? dead_at : NV - 1);
+      return false;
+    }
+    std::vector<double> dpz(NV, 0.0);
+    {
+      int k = kN;
+      for (int i = NV - 1; i >= 1; --i) {
+        dpz[i] = zlo + k * dz;
+        k = par[static_cast<size_t>(i) * NZ + k];
+        if (k < 0) {
+          LOG_WARN("[H4-COMMIT] backtrace broke at station %d — commit "
+                   "skipped", i);
+          return false;
+        }
+      }
+      dpz[0] = zlo + k * dz;
+    }
+
+    int changed = 0;
+    double dmean = 0.0, dmax = 0.0, dmax_s = 0.0;
+    int n_free_v = 0;
+    for (int i = first_free; i < NV - 1; ++i) {
+      if (anch[i]) continue;
+      ++n_free_v;
+      const double d = std::abs(dpz[i] - clean_path[i].z());
+      dmean += d;
+      if (d > dmax) { dmax = d; dmax_s = s_v[i]; }
+      // Within one grid cell the DP is just tracking the committed z — the
+      // difference is quantization, not a correction; committing it would
+      // sprinkle +-dz/2 snap noise over the whole profile. Rewrite only
+      // where a real correction (floor / climb / exposure) moved the DP.
+      if (d > dz) { clean_path[i].z() = dpz[i]; ++changed; }
+    }
+    if (n_free_v > 0) dmean /= n_free_v;
+    LOG_INFO("[H4-COMMIT] committed z at %d/%d free vertices (swath %.1f, "
+             "grid %.3fu, climb %.2f): mean|dz|=%.3f max=%.3f @s=%.1fkm | "
+             "corridor: ceil %d exposed %d closed %d of %d",
+             changed, n_free_v, rc, dz, smax, dmean, dmax,
+             dmax_s * m_xy / 1000.0, n_ceil, n_exp, n_closed, NV);
+    return true;
   }
 
   bool PolyTrajOptimizer::OptimizeTrajectory_lbfgs(
@@ -3417,6 +3623,11 @@ namespace ego_planner
     node_->get_parameter("optimization/h4_shadow_margin", h4_shadow_margin_);
     node_->declare_parameter("optimization/h4_climb_slope", 0.60);
     node_->get_parameter("optimization/h4_climb_slope", h4_climb_slope_);
+    // [H4-COMMIT] seed-authority z commit (default off = byte-identical).
+    node_->declare_parameter("optimization/h4_commit", false);
+    node_->get_parameter("optimization/h4_commit", h4_commit_);
+    node_->declare_parameter("optimization/h4_commit_swath", 3.0);
+    node_->get_parameter("optimization/h4_commit_swath", h4_commit_swath_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {
