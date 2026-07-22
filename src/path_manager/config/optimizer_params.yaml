@@ -8,6 +8,20 @@
     manager/fm2_max_cells: 1640000000   # OOM guard; over this -> straight-line fallback
     manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
+    # [ROUGH] H2 terrain-roughness routing (2026-07-22): additive slope cost in
+    # the FE shared field (FM2 speed map, A* edges, coarse heuristic, shortcut
+    # acceptance, guard) — own currency, deliberately NOT risk_weight-scaled
+    # (the coupled form devalued the zone moat: gauntlet risk_cost 4x). Faded
+    # to zero between 1.0 and 2.5 u AGL, so high transits are untouched.
+    # w=1.5 measured: knoe ridge iter -34%, kzone clearance 2x / risk -24%,
+    # k1 coast-ships risk -17% + alt_cost -57%, gauntlet risk -64% with
+    # max_risk 100 -> 0.8 (the reshaped wave avoids the forced barrier
+    # crossing), clearance 2.4x, dynamics -75%, durations ~flat. Full
+    # sc_suite A/B: 6 cases identical; only cost = kwaypt clearance
+    # 0.560 -> 0.404 (returns the WA1600 bonus toward the historical 0.420,
+    # iter -51%). 0 = off.
+    manager/fm2_rough_weight: 1.5
+    manager/fm2_rough_slope0: 0.20      # slope deadband (tan, ~11 deg): plains/valleys free
     # DEM radial-horizon/viewshed mask. center.z of each risk zone is the
     # emitter altitude; risk is removed below the highest intervening terrain
     # LOS and reappears if the vehicle climbs above that horizon.
