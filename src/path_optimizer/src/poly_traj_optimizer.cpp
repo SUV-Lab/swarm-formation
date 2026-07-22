@@ -1059,14 +1059,27 @@ namespace ego_planner
         Eigen::Vector3d gradp; double costp;
         if (sdfGradCostP(0, pos, gradp, costp)) fz_obs = -gradp.z();
       }
-      // TERRAIN (2.5D heightmap cubic). MUST MATCH addPVAGradCost2CT terrain
-      // block: viol = clearance - (z - h); d(cost)/dz = -wei_obs*3*viol^2, so
-      // the up-force fz = +wei_obs*3*viol^2 (never negative — terrain lifts).
-      double fz_terr = 0.0;
+      // UNIFIED FLOOR (MUST MATCH addPVAGradCost2CT): one floor surface
+      // F = max(terrain+clearance, mission-altitude anchor); only the GOVERNING
+      // branch fires. TERRAIN branch (slot 8, cubic wei_obs) when it is the
+      // higher floor; ANCHOR branch (slot 6, quad wei_alt) otherwise. fz > 0
+      // (floors lift). fz_terr feeds the [VDIAG-ZDOF-RISK] margin, so it must
+      // read the governing terrain force, not a shadow of the retired term.
+      double fz_terr = 0.0, fz_floor = 0.0;
+      double vfloor_terr = -1e30;
       if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_) && land) {
         Eigen::Vector2d tg_xy;   // fz only needs the z-derivative
-        const double viol = terrainClearanceTarget(pos, &tg_xy) - (pos.z() - h);
-        if (viol > 0.0) fz_terr = wei_obs_ * 3.0 * viol * viol;
+        vfloor_terr = h + terrainClearanceTarget(pos, &tg_xy);
+      }
+      Eigen::Vector2d fg_xy0;
+      const double vfloor_anchor =
+          (wei_alt_ > 0.0) ? altitudeFloorTarget(pos, &fg_xy0) : -1e30;
+      const bool terr_gov = (vfloor_terr > -1e29) && vfloor_terr >= vfloor_anchor;
+      const double Fv = terr_gov ? vfloor_terr : vfloor_anchor;
+      if (Fv > -1e29 && pos.z() < Fv) {
+        const double viol = Fv - pos.z();
+        if (terr_gov) fz_terr = wei_obs_ * 3.0 * viol * viol;
+        else          fz_floor = wei_alt_ * 2.0 * viol;
       }
       // RISK (moat/barrier arc-length integral). The oblate-ellipsoid moat and
       // the z-visibility sigmoid both have a real z-derivative, so fz_risk is
@@ -1119,16 +1132,9 @@ namespace ego_planner
           cap_on = true;
         }
       }
-      // ALT-FLOOR (quadratic up-force below the band). MUST MATCH the floor
-      // block: d(cost)/dz = -wei_alt*2*ua, so fz = +wei_alt*2*ua (lifts).
-      double fz_floor = 0.0; bool floor_on = false;
-      Eigen::Vector2d fg_xy;     // fz only needs the z-derivative
-      const double zlo_t = altitudeFloorTarget(pos, &fg_xy);
-      if (wei_alt_ > 0.0 && pos.z() < zlo_t) {
-        const double ua = zlo_t - pos.z();
-        fz_floor = wei_alt_ * 2.0 * ua;
-        floor_on = true;
-      }
+      // ALT-FLOOR is the anchor branch of the UNIFIED FLOOR above — fz_floor is
+      // already set there (governance-selected), so nothing to recompute here.
+      const bool floor_on = (fz_floor != 0.0);
 
       S.push_back(s_units * m_xy / 1000.0);
       Z.push_back(pos.z()); VZ.push_back(vel.z()); AZ.push_back(acc.z());
@@ -1513,50 +1519,72 @@ namespace ego_planner
             }
         }
 
-        // 2.5D TERRAIN penalty from the heightmap (exact z, matches the panel/DEM).
-        // The 3D SDF above voxelises terrain z at 10 m and under-sees it, so the
-        // trajectory reads "clear" to it yet penetrates the finer DEM. Here terrain
-        // clearance = pos.z - h(x,y) exactly; cubic push-up when within the same
-        // obstacle_clearance band. Purely vertical (the horizontal ∂h term is
-        // second-order; the obstacle/FM2 layers own lateral avoidance) — Step 1
-        // proves the heightmap SEES the penetration the SDF misses.
-        // Gated on enable_obstacles_ like the SDF term: the "ignore obstacles"
-        // debug flag must silence ALL collision geometry, terrain included.
-        if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_)) {
+        // UNIFIED FLOOR (z-redesign Stage 2): one floor surface
+        //   F(x,y) = max(terrain + clearance, mission-altitude anchor)
+        // is the single source of truth for how low z may go, replacing the
+        // separate 2.5D-terrain (slot 8) and alt-floor (slot 6) penalties. Only
+        // the GOVERNING floor is penalised: where the terrain-clearance floor is
+        // higher it rules (cubic wei_obs — the safety floor that MUST hold; the
+        // heightmap sees the fine-DEM penetration the 10 m SDF misses; grad is
+        // surface-normal so the path skirts slopes rather than spiking over
+        // them); elsewhere the anchor rules (quadratic wei_alt — soft anti-sag,
+        // nothing terrain-forced ever dives below mission altitude). Firing only
+        // the governing term drops the old overlap double-count (both pushed
+        // below the anchor over terrain) and hands the FE/panel/later stages ONE
+        // floor to agree on. The crash-plane half-space (ground barrier,
+        // sdfGradCostP) stays SEPARATE — a hard barrier of a different class.
+        // enable_obstacles_ (the "ignore obstacles" debug flag) silences only
+        // the terrain floor (have_terr=false -> anchor governs), never the
+        // anchor.
+        {
+            double terr_floor = -1e30;
             float h = 0.f, dhx = 0.f, dhy = 0.f;
-            bool have = false;
-            if (terrain_hgrad_) {
-                // Value + ANALYTIC slope of the SAME bilinear surface — cost and
-                // gradient must agree exactly (a smoothed central-diff slope
-                // paired with the bilinear value disagreed near DEM-cell edges;
-                // on cliff cells the mismatch killed the line search, -1008).
-                have = terrain_hgrad_(pos.x(), pos.y(), &h, &dhx, &dhy);
-            } else {
-                const float hv = terrain_height_(pos.x(), pos.y());
-                if (std::isfinite(hv)) { h = hv; have = true; }  // value-only: vertical push
-            }
-            if (have) {
-                const double terr_clear = pos.z() - static_cast<double>(h);  // >0 above terrain
-                // [TERRAIN-TAPER] near a below-band pinned endpoint the target
-                // relaxes to the commanded AGL instead of the full band; its
-                // analytic d(target)/dxy joins the gradient below.
-                Eigen::Vector2d tgrad;
-                const double viol = terrainClearanceTarget(pos, &tgrad) - terr_clear;
-                if (viol > 0.0) {
-                    const double costt = wei_obs_ * viol * viol * viol;
-                    const double dcoef = wei_obs_ * 3.0 * viol * viol;  // d(cost)/d(viol)
-                    // SURFACE-NORMAL push: viol = target(x,y) - z + h(x,y), so
-                    //   d(viol)/dz = -1, d(viol)/dx = ∂target/∂x + ∂h/∂x, ... —
-                    // the trajectory moves +z AND down-slope, skirting steep
-                    // slopes instead of spiking over them.
-                    Eigen::Vector3d gradt3(dcoef * (dhx + tgrad.x()),
-                                           dcoef * (dhy + tgrad.y()), -dcoef);
-                    gradViolaPc = beta0 * gradt3.transpose();
-                    gradViolaPt = alpha * gradt3.transpose() * vel;
-                    jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
-                    gdT(i) += omg * (costt / K + step * gradViolaPt);
-                    costs(8) += omg * step * costt;
+            Eigen::Vector2d tgrad(0.0, 0.0);
+            bool have_terr = false;
+            if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_)) {
+                if (terrain_hgrad_) {
+                    // Value + ANALYTIC slope of the SAME bilinear surface (a
+                    // smoothed central-diff slope disagreed near DEM-cell edges
+                    // and killed the line search on cliff cells, -1008).
+                    have_terr = terrain_hgrad_(pos.x(), pos.y(), &h, &dhx, &dhy);
+                } else {
+                    const float hv = terrain_height_(pos.x(), pos.y());
+                    if (std::isfinite(hv)) { h = hv; have_terr = true; }  // value-only push
                 }
+                if (have_terr)
+                    terr_floor = static_cast<double>(h) +
+                                 terrainClearanceTarget(pos, &tgrad);
+            }
+            // [TERRAIN-TAPER] both floors relax toward a below-band pinned
+            // endpoint; their analytic d(target)/dxy joins the gradient below.
+            Eigen::Vector2d fgrad(0.0, 0.0);
+            const double anchor_floor =
+                (wei_alt_ > 0.0) ? altitudeFloorTarget(pos, &fgrad) : -1e30;
+
+            const bool terrain_governs = have_terr && terr_floor >= anchor_floor;
+            const double F = terrain_governs ? terr_floor : anchor_floor;
+            if (F > -1e29 && pos.z() < F) {
+                const double viol = F - pos.z();
+                Eigen::Vector3d grad3;
+                double costf = 0.0;
+                int slot = 6;
+                if (terrain_governs) {
+                    costf = wei_obs_ * viol * viol * viol;
+                    const double dcoef = wei_obs_ * 3.0 * viol * viol;
+                    grad3 = Eigen::Vector3d(dcoef * (dhx + tgrad.x()),
+                                            dcoef * (dhy + tgrad.y()), -dcoef);
+                    slot = 8;
+                } else {
+                    costf = wei_alt_ * viol * viol;
+                    const double dua = wei_alt_ * 2.0 * viol;
+                    grad3 = Eigen::Vector3d(dua * fgrad.x(), dua * fgrad.y(), -dua);
+                    slot = 6;
+                }
+                gradViolaPc = beta0 * grad3.transpose();
+                gradViolaPt = alpha * grad3.transpose() * vel;
+                jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
+                gdT(i) += omg * (costf / K + step * gradViolaPt);
+                costs(slot) += omg * step * costf;
             }
         }
 
@@ -1699,26 +1727,9 @@ namespace ego_planner
             }
         }
 
-        // Altitude-band floor: mirror of the cap. Nothing terrain-forced
-        // ever requires diving BELOW the mission altitude, so this is
-        // always safe to enforce; it stops the min-jerk z-sags that
-        // otherwise bounce off the collision clearance floor.
-        // [TERRAIN-TAPER] near a pinned-below-floor endpoint the floor target
-        // relaxes to the pin; elsewhere it is the scalar cushion. Its analytic
-        // d(target)/dxy joins the gradient (cost/gradient one-surface rule).
-        Eigen::Vector2d fgrad;
-        const double zlo_t = altitudeFloorTarget(pos, &fgrad);
-        if (wei_alt_ > 0.0 && pos.z() < zlo_t) {
-            const double ua = zlo_t - pos.z();
-            const double costa_z = wei_alt_ * ua * ua;
-            const double dua = wei_alt_ * 2.0 * ua;
-            Eigen::Vector3d grad_a(dua * fgrad.x(), dua * fgrad.y(), -dua);
-            gradViolaPc = beta0 * grad_a.transpose();
-            gradViolaPt = alpha * grad_a.transpose() * vel;
-            jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
-            gdT(i) += omg * (costa_z / K + step * gradViolaPt);
-            costs(6) += omg * step * costa_z;
-        }
+        // Altitude-band floor (soft anti-sag) is now the anchor branch of the
+        // UNIFIED FLOOR above (slot 6, quadratic wei_alt) — folded in so there is
+        // one floor surface and no terrain/anchor overlap double-count.
 
         // Feasibility cost calculation
         if (feasibilityGradCostV(vel, gradv, costv)) {
