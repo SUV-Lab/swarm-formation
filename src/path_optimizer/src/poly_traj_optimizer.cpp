@@ -96,6 +96,8 @@ namespace ego_planner
     // sideways bleed is what makes a piece-index correspondence tolerant to
     // that drift (a hard window would cliff).
     alt_zhi_pieces_.resize(0);
+    time_relief_pieces_.resize(0);
+    ride_rough_pieces_.resize(0);
     if (!cap_ref.empty() && piece_num >= 1 &&
         static_cast<int>(cap_ref.size()) == piece_num + 1) {
       std::vector<double> env = cap_ref;
@@ -293,11 +295,80 @@ namespace ego_planner
       innerPts.col(i) = clean_path[i + 1];
     }
 
+    // [RIDE] (H1) per-piece time-weight relief over rough terrain. The time
+    // cost is otherwise piece-uniform (wei_time * sum T_i), so the optimizer
+    // has ZERO incentive to slow down locally — 200 m/s terrain-following
+    // over a ridge demands the same time price as cruising over water. Relief
+    // makes time spent on rough pieces cheaper: factor_i = 1 - relief *
+    // rough_i with rough_i in [0, 1] from the mean slope excess along the
+    // piece chord (deadband tan 0.2 ~ 11 deg, full at 0.8 ~ 39 deg — same
+    // deadband as the FE [ROUGH] field). Frozen per solve from clean_path
+    // (decision-variable independent; VirtualTGradCost keeps its exact
+    // gradient form), consumed by BOTH the seed allocation below and the
+    // running time cost. Default 0 = off (legacy uniform time price).
+    if ((time_rough_relief_ > 0.0 || wei_ride_ > 0.0) &&
+        (terrain_hgrad_ || terrain_height_)) {
+      constexpr double kSlope0 = 0.2, kSlopeFull = 0.8;
+      const double rstep = (terrain_cell_u_ > 0.0)
+                               ? std::min(2.3, terrain_cell_u_)
+                               : 2.3;
+      ride_rough_pieces_.resize(piece_num);
+      if (time_rough_relief_ > 0.0) time_relief_pieces_.resize(piece_num);
+      int relieved = 0;
+      double factor_min = 1.0;
+      for (int i = 0; i < piece_num; ++i) {
+        const Eigen::Vector3d &a = clean_path[i], &b = clean_path[i + 1];
+        const double L = (b - a).head<2>().norm();
+        double excess_sum = 0.0;
+        int n = 0;
+        for (double s = 0.0; s <= L + 1e-9; s += rstep) {
+          const double t = (L > 1e-9) ? s / L : 0.0;
+          const double x = a.x() + (b.x() - a.x()) * t;
+          const double y = a.y() + (b.y() - a.y()) * t;
+          float h = 0.f, gx = 0.f, gy = 0.f;
+          if (terrain_hgrad_ && terrain_hgrad_(x, y, &h, &gx, &gy)) {
+            const double slope = std::hypot(static_cast<double>(gx),
+                                            static_cast<double>(gy));
+            // AGL fade (same 1.0 -> 2.5 u band as the FE [ROUGH] field,
+            // evaluated on the COMMITTED profile z — frozen per solve): a
+            // high transit over a ridge is not terrain-following and gets
+            // no relief; only the NOE regime does.
+            constexpr double kAglNear = 1.0, kAglFar = 2.5;
+            const double z = a.z() + (b.z() - a.z()) * t;
+            const double agl = z - static_cast<double>(h);
+            double fade = 1.0;
+            if (agl >= kAglFar) fade = 0.0;
+            else if (agl > kAglNear)
+              fade = (kAglFar - agl) / (kAglFar - kAglNear);
+            excess_sum += fade * std::max(0.0, slope - kSlope0);
+          }
+          ++n;
+        }
+        const double rough = std::min(
+            1.0, (n > 0 ? excess_sum / n : 0.0) / (kSlopeFull - kSlope0));
+        ride_rough_pieces_(i) = rough;
+        if (rough > 1e-9) ++relieved;
+        if (time_rough_relief_ > 0.0) {
+          const double f = 1.0 - time_rough_relief_ * rough;
+          time_relief_pieces_(i) = f;
+          factor_min = std::min(factor_min, f);
+        }
+      }
+      LOG_INFO("[RIDE] rough table: %d/%d pieces rough "
+               "(relief=%.2f min factor %.3f, wei_ride=%.1f)",
+               relieved, piece_num, time_rough_relief_, factor_min, wei_ride_);
+    }
+
     const double des_vel = max_vel;
     Eigen::VectorXd time_vec(piece_num);
     for (int i = 0; i < piece_num; ++i) {
       double seg_len = (clean_path[i + 1] - clean_path[i]).norm();
-      time_vec(i) = std::max(0.05, seg_len / des_vel);
+      // Seed allocation matches the relieved time price: rough pieces start
+      // slower instead of making L-BFGS discover the stretch by itself.
+      const double f = (time_relief_pieces_.size() == piece_num)
+                           ? time_relief_pieces_(i)
+                           : 1.0;
+      time_vec(i) = std::max(0.05, seg_len / (des_vel * std::max(0.2, f)));
     }
 
     // Arrival contract: full cruise speed at the goal (a separate control
@@ -706,8 +777,13 @@ namespace ego_planner
     // byte); only budget-edge cases gain room. Genuine non-convergence is still
     // cut early by the past/delta plateau test, so the ceiling is rarely
     // reached. ~1 ms/iter keeps the worst case ~10-12 s.
+    // Ceiling raised 12000 -> 20000 (2026-07-22): the roughness-routed
+    // gauntlet plans 139 pieces, where 100/piece = 13900 was silently
+    // truncated and the solve converged 3% under the old ceiling. Converged
+    // runs stop at g_epsilon regardless, so only would-be -1004 truncations
+    // are affected (same argument as the 60 -> 100 budget fix).
     lbfgs_params.max_iterations =
-        std::min(12000, std::max(3000, 100 * piece_num_));
+        std::min(20000, std::max(3000, 100 * piece_num_));
 
     if (!use_formation)
     {
@@ -1544,6 +1620,11 @@ namespace ego_planner
       const Eigen::VectorXd &gdRT, EIGENVECGD &gdVT,
       double &costT)
   {
+    // [RIDE] per-piece time price: wei_time * relief factor (1.0 when the
+    // relief table is absent or piece counts mismatch — scalar legacy path).
+    const bool per_piece_time =
+        (time_relief_pieces_.size() == VT.size());
+    costT = 0.0;
     for (int i = 0; i < VT.size(); ++i)
     {
       double gdVT2Rt;
@@ -1556,9 +1637,13 @@ namespace ego_planner
         double denSqrt = (0.5 * VT(i) - 1.0) * VT(i) + 1.0;
         gdVT2Rt = (1.0 - VT(i)) / (denSqrt * denSqrt);
       }
-      gdVT(i) = (gdRT(i) + wei_time_) * gdVT2Rt;
+      const double wt = per_piece_time ? wei_time_ * time_relief_pieces_(i)
+                                       : wei_time_;
+      gdVT(i) = (gdRT(i) + wt) * gdVT2Rt;
+      if (per_piece_time) costT += RT(i) * wt;
     }
-    costT = RT.sum() * wei_time_;
+    // Scalar path keeps the original expression (identical rounding).
+    if (!per_piece_time) costT = RT.sum() * wei_time_;
   }
 
   template <typename EIGENVEC>
@@ -1856,6 +1941,35 @@ namespace ego_planner
             jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaAc;
             gdT(i) += omg * (costa / K + step * gradViolaAt);
             costs(4) += omg * step * costa;
+        }
+
+        // [RIDE] speed-over-roughness energy: wei_ride * rough_i * |v|^2 with
+        // rough_i FROZEN per solve from the committed chord (slope excess,
+        // AGL-faded) — the gradient touches only v, no terrain Hessian. This
+        // is the direct local slow-down price the uniform time cost cannot
+        // express: the time-relief variant measured durations flat while
+        // clearance slipped, because making time cheap does not make speed
+        // expensive. Piece-indexed like the cap (i is the piece index here).
+        if (wei_ride_ > 0.0 &&
+            static_cast<int>(ride_rough_pieces_.size()) == N) {
+            const double r = ride_rough_pieces_(i);
+            if (r > 1e-9) {
+                // HORIZONTAL speed only: the full |v|^2 form measured knoe
+                // clearance -4~-10 m — it taxed the climb/descent rate that
+                // terrain-following IS, flattening z over crests. Ground
+                // speed is the ride driver; vertical agility stays free.
+                const double v2xy = vel.x() * vel.x() + vel.y() * vel.y();
+                const double costr = wei_ride_ * r * v2xy;
+                const Eigen::Vector3d gradvr(2.0 * wei_ride_ * r * vel.x(),
+                                             2.0 * wei_ride_ * r * vel.y(),
+                                             0.0);
+                gradViolaVc = beta1 * gradvr.transpose();
+                gradViolaVt = alpha * gradvr.transpose() * acc;
+                jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) +=
+                    omg * step * gradViolaVc;
+                gdT(i) += omg * (costr / K + step * gradViolaVt);
+                costs(4) += omg * step * costr;
+            }
         }
 
         // Fixed-wing inverse dynamics: couples position (density), velocity,
@@ -2650,6 +2764,13 @@ namespace ego_planner
     // ceiling in z-units (<=0 = off/legacy).
     node_->declare_parameter("optimization/alt_cap_shadow_margin", 0.0);
     node_->get_parameter("optimization/alt_cap_shadow_margin", alt_cap_shadow_margin_);
+    // [RIDE] H1: per-piece time-weight relief over rough terrain (0 = off).
+    node_->declare_parameter("optimization/time_rough_relief", 0.0);
+    node_->get_parameter("optimization/time_rough_relief", time_rough_relief_);
+    time_rough_relief_ = std::clamp(time_rough_relief_, 0.0, 0.9);
+    // [RIDE] H1: direct speed price over rough ground (0 = off).
+    node_->declare_parameter("optimization/weight_ride", 0.0);
+    node_->get_parameter("optimization/weight_ride", wei_ride_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {

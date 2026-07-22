@@ -272,6 +272,20 @@ namespace ego_planner
     // the legacy band (its hump-suppression role there is untouched).
     // <=0 = off (legacy cap). Yaml: optimization/alt_cap_shadow_margin.
     double alt_cap_shadow_margin_{0.0};
+    // [RIDE] (H1) per-piece time-weight relief over rough terrain: the time
+    // cost is otherwise piece-uniform, giving zero incentive to slow down
+    // locally. factor_i = 1 - relief * rough_i (rough_i in [0,1] from the
+    // chord's mean slope excess), applied to wei_time in VirtualTGradCost and
+    // to the seed time allocation. Frozen per solve from clean_path; empty ->
+    // scalar legacy path. 0 = off. Yaml: optimization/time_rough_relief.
+    double time_rough_relief_{0.0};
+    Eigen::VectorXd time_relief_pieces_;
+    // [RIDE] direct speed price over rough ground: wei_ride * rough_i * |v|^2
+    // per constraint point, rough_i in [0,1] frozen per solve (chord slope
+    // excess, AGL-faded on the committed z). Gradient touches only v — no
+    // terrain Hessian. 0 = off. Yaml: optimization/weight_ride.
+    double wei_ride_{0.0};
+    Eigen::VectorXd ride_rough_pieces_;
 
     // Generic fixed-wing inverse dynamics. MINCO provides physical r/v/a after
     // frame scaling; the shared model recovers required lift, load factor,
