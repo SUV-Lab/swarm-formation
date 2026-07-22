@@ -326,6 +326,35 @@ namespace ego_planner
     }
     void buildH5Bounds(const Eigen::MatrixXd &initInnerPts);
 
+    // [H4] z-corridor decision layer — DIAGNOSTIC prototype (logging only).
+    // Builds the along-route [floor(s), ceil(s)] vertical corridor per piece
+    // chord (safety floor = the cap's own terrain swath + tapered clearance /
+    // altitude anchor; concealment ceiling = min over in-reach zones of the
+    // LOS shadow table H3 plumbed in, minus a hidden-margin), runs the
+    // climb-rate envelope (the h4_climb_slope dilation as the one-shot
+    // feasibility pass) plus a discretized 1-D DP over it, and logs what
+    // committing that z profile into clean_path would change — WITHOUT
+    // touching the solve. After the solve, the flown z is compared back to
+    // the corridor and the DP profile station-by-station. Gate:
+    // optimization/h4_corridor_diag (default off = byte-identical).
+    bool h4_corridor_diag_{false};
+    double h4_shadow_margin_{0.10};  // hidden-margin below the LOS ceiling [z-u]
+    // Climb grade for the corridor envelope and the DP window [z-u per xy-u].
+    // NOT alt_cap_slope: that is the cap's licensing grade (0.10), far below
+    // what the vehicle demonstrably flies on ridge NOE (~0.3-0.5) — using it
+    // declared reachable ridges infeasible on first measurement.
+    double h4_climb_slope_{0.60};
+    // Per-plan station stash for the post-solve comparison (diag on only).
+    // h4_floor_ is the SWATH floor (commit corridor, drift-budget
+    // conservative); h4_floor_c_ the chord floor (real safety comparisons).
+    std::vector<double> h4_x_, h4_y_, h4_s_km_, h4_dp_z_, h4_floor_, h4_ceil_;
+    std::vector<double> h4_floor_c_;
+    std::vector<char> h4_status_;    // 'F' free / 'C' ceiling / 'E' exposed
+    void logH4ZCorridor(const std::vector<Eigen::Vector3d> &clean_path,
+                        const Eigen::Vector3d &start_pos,
+                        const Eigen::Vector3d &goal_pos);
+    void logH4PostSolve(const poly_traj::Trajectory &traj);
+
     // Generic fixed-wing inverse dynamics. MINCO provides physical r/v/a after
     // frame scaling; the shared model recovers required lift, load factor,
     // drag, thrust, dynamic pressure, bank angle, and flight-path angle. This

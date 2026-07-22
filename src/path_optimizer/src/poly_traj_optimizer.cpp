@@ -290,6 +290,17 @@ namespace ego_planner
       LOG_WARN("[ALT-CAP] cap_ref/piece mismatch after insertions (%zu vs %d)"
                " — scalar cap only", cap_ref.size(), piece_num + 1);
     }
+
+    // [H4] z-corridor decision-layer diagnostic (prototype, logging only —
+    // the solve below is untouched). Stash cleared every plan so a skipped
+    // diagnostic can never leave stale stations for the post-solve pass.
+    h4_x_.clear(); h4_y_.clear(); h4_s_km_.clear(); h4_dp_z_.clear();
+    h4_floor_.clear(); h4_floor_c_.clear(); h4_ceil_.clear();
+    h4_status_.clear();
+    if (h4_corridor_diag_ && log_manager_ && piece_num >= 2) {
+      logH4ZCorridor(clean_path, start_pos, waypoints.back());
+    }
+
     Eigen::MatrixXd innerPts(3, piece_num - 1);
     for (int i = 0; i < piece_num - 1; ++i) {
       innerPts.col(i) = clean_path[i + 1];
@@ -550,6 +561,13 @@ namespace ego_planner
     }
 
     out_local = jerkOpt_.getTraj();
+
+    // [H4] post-solve leg of the corridor diagnostic: compare the flown z
+    // against the pre-solve corridor and DP profile at the same stations.
+    if (h4_corridor_diag_ && log_manager_ && !h4_x_.empty()) {
+      logH4PostSolve(out_local);
+    }
+
     return true;
   }
 
@@ -761,6 +779,475 @@ namespace ego_planner
     LOG_INFO("[H5] bounded-z active: %d junctions, %d box-collapsed (floor>cap, "
              "hi raised), min_width=%.2f floor_slack=%.2f",
              M, collapsed, h5_min_width_, h5_floor_slack_);
+  }
+
+  // [H4] z-corridor decision layer — DIAGNOSTIC ONLY (prototype).
+  //
+  // The eventual layer would sit between the FE (H2 routes around rough
+  // terrain in xy) and the BE (H5 hard-boxes z): from the committed route it
+  // derives the vertical corridor
+  //   floor(s) = what safety demands (swath terrain + tapered clearance,
+  //              altitude anchor / ground over water),
+  //   ceil(s)  = what concealment allows (min over zones in xy reach of the
+  //              LOS shadow ceiling − hidden margin),
+  // and commits a climb-feasible z profile into clean_path before MINCO ever
+  // sees it. This prototype MEASURES that layer without wiring it in — the
+  // commit path (clean_path z) has a wide blast radius (taper arming,
+  // fe_raw_max, the seed time allocation and the MINCO boundary states all
+  // key on it), so instrumentation comes first.
+  //
+  // Three-state ceiling: the H3 [SHADOW-CAP] lambda collapses "no zone
+  // reaches this swath" (FREE) and "an in-reach sample with no finite LOS
+  // ceiling" (EXPOSED) into one −inf return — fine for a cap that only ever
+  // relaxes, but the corridor must tell them apart: FREE transfers no
+  // ceiling at all, EXPOSED means concealment is impossible at ANY altitude
+  // there (such stations are counted, not depth-scored — with no finite
+  // ceiling there is nothing to measure a depth against; the DP prices them
+  // by altitude alone).
+  //
+  // Sentinel caveat (measured on k3): a ray with NO terrain blocker at all
+  // keeps the mask's finite clear_ceiling fill (center.z − 2·max_range −
+  // 20·softness − 1, ≈ −1e3 u; path_manager rebuildTerrainRiskMasks), not
+  // −inf — those stations read as 'C' with a ceiling far below the chord
+  // floor. Physically that is ground-visible, i.e. EXPOSED for flight
+  // purposes, and any per-station depth SUM they enter is dominated by the
+  // fill's magnitude. Where RAW-CLOSED depths reach kilometer scale, read
+  // the exposure COUNTS, not the sums.
+  //
+  // Climb-rate closure: the h4_climb_slope two-pass dilation (the same
+  // machinery as the alt_cap_slope cap envelope, at the vehicle's grade) IS
+  // the one-shot feasibility pass for the "fly as low as safely possible"
+  // objective —
+  // F*(s) = max_j(floor(j) − slope·d(s,j)) is the lowest slope-feasible
+  // profile and the matching erosion C*(s) = min_j(ceil(j) + slope·d(s,j))
+  // the highest all-hidden one; F* > C* at a station means no z there is
+  // both safe and hidden under the climb limit, whatever the rest of the
+  // profile does. The discretized 1-D DP (z-grid, altitude + exposure +
+  // climb costs, slope-limited transitions, endpoints pinned to the
+  // committed z) generalizes the envelope where hidden and exposed
+  // stretches trade off; DP-vs-F* divergence measures what the one-shot
+  // pass leaves on the table.
+  //
+  // Calls setupTerrainTaper with the same endpoint args the solve passes
+  // later (idempotent — the solve re-arms identical state; only the
+  // [TERRAIN-TAPER] log lines repeat while the diagnostic is on).
+  void PolyTrajOptimizer::logH4ZCorridor(
+      const std::vector<Eigen::Vector3d> &clean_path,
+      const Eigen::Vector3d &start_pos, const Eigen::Vector3d &goal_pos)
+  {
+    const int N = static_cast<int>(clean_path.size()) - 1; // station per piece
+    if (N < 2) return;
+    setupTerrainTaper(start_pos, goal_pos);
+
+    const double m_xy = (dyn_unit_xy_m_ > 0.0) ? dyn_unit_xy_m_ : 100.0;
+    const double kInf = std::numeric_limits<double>::infinity();
+    // Same swath geometry as the cap floor / [SHADOW-CAP]: the corridor must
+    // hold under the lateral drift the cap already budgets for.
+    const double kSwathR = 25.0;
+    const double step = (terrain_cell_u_ > 0.0)
+                            ? std::min(2.3, terrain_cell_u_)
+                            : 2.3;
+
+    std::vector<double> floor_v(N), floor_c(N), ceil_v(N, kInf), fe_z(N),
+        st_s(N);
+    std::vector<double> cap_v(N, kInf);
+    std::vector<char> stat(N, 'F');
+    int n_free = 0, n_ceil = 0, n_exp = 0;
+    Eigen::Vector2d prev_mid(0.0, 0.0);
+    h4_x_.reserve(N); h4_y_.reserve(N); h4_s_km_.reserve(N);
+    h4_floor_.reserve(N); h4_ceil_.reserve(N);
+    for (int i = 0; i < N; ++i) {
+      const Eigen::Vector3d &a = clean_path[i], &b = clean_path[i + 1];
+      const Eigen::Vector3d mid = 0.5 * (a + b);
+      fe_z[i] = mid.z();
+      st_s[i] = (i == 0) ? 0.0
+                         : st_s[i - 1] + (mid.head<2>() - prev_mid).norm();
+      prev_mid = mid.head<2>();
+
+      const Eigen::Vector2d p0 = a.head<2>(), p1 = b.head<2>();
+      const Eigen::Vector2d ab = p1 - p0;
+      const double L = ab.norm(), L2 = ab.squaredNorm();
+      const Eigen::Vector2d u = (L > 1e-9) ? Eigen::Vector2d(ab / L)
+                                           : Eigen::Vector2d(1.0, 0.0);
+      const Eigen::Vector2d nrm(-u.y(), u.x());
+
+      // zones whose reach can touch the swath (chord distance, as SHADOW-CAP)
+      std::vector<size_t> cand;
+      if (use_risk_zones_ && risk_shadow_ceiling_) {
+        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
+          const auto &tz = risk_zones_[zi];
+          if (!(tz.reach > 0.0)) continue;
+          const Eigen::Vector2d c = tz.center.head<2>();
+          double t = (L2 > 1e-12) ? (c - p0).dot(ab) / L2 : 0.0;
+          t = std::max(0.0, std::min(1.0, t));
+          if ((p0 + t * ab - c).norm() <= tz.reach + kSwathR)
+            cand.push_back(zi);
+        }
+      }
+
+      // One swath walk: terrain max (floor) + LOS ceiling status. An
+      // EXPOSED verdict stops further shadow queries but NEVER the terrain
+      // walk — the floor must come from the complete swath.
+      double hmax = -1e30, ceil_min = kInf;
+      bool reached = false, exposed = false;
+      for (double s = 0.0; s <= L + 1e-9; s += step) {
+        for (double l = -kSwathR; l <= kSwathR + 1e-9; l += step) {
+          const double x = p0.x() + u.x() * s + nrm.x() * l;
+          const double y = p0.y() + u.y() * s + nrm.y() * l;
+          if (terrain_hgrad_) {
+            float h, gx, gy;
+            if (terrain_hgrad_(x, y, &h, &gx, &gy) && h > hmax) hmax = h;
+          } else if (terrain_height_) {
+            const float h = terrain_height_(x, y);
+            if (std::isfinite(h) && h > hmax) hmax = h;
+          }
+          if (!exposed && !cand.empty()) {
+            const Eigen::Vector3d p(x, y, 0.0);
+            for (size_t zi : cand) {
+              const auto &tz = risk_zones_[zi];
+              if ((p.head<2>() - tz.center.head<2>()).norm() > tz.reach)
+                continue;
+              reached = true;
+              const double v = risk_shadow_ceiling_(zi, p);
+              if (!(v > -kInf)) { exposed = true; break; } // unshadowed
+              ceil_min = std::min(ceil_min, v);
+            }
+          }
+        }
+      }
+
+      // Chord-only terrain max (l = 0): the flown path tracks LOCAL terrain,
+      // so safety comparisons against the flown z use this floor; the swath
+      // max above is the drift-budget COMMIT floor (over ridge NOE the two
+      // differ by several units — conflating them misread "flown below the
+      // swath floor" as a safety breach on first measurement).
+      double hmax_c = -1e30;
+      for (double s = 0.0; s <= L + 1e-9; s += step) {
+        const double x = p0.x() + u.x() * s;
+        const double y = p0.y() + u.y() * s;
+        if (terrain_hgrad_) {
+          float h, gx, gy;
+          if (terrain_hgrad_(x, y, &h, &gx, &gy) && h > hmax_c) hmax_c = h;
+        } else if (terrain_height_) {
+          const float h = terrain_height_(x, y);
+          if (std::isfinite(h) && h > hmax_c) hmax_c = h;
+        }
+      }
+
+      Eigen::Vector2d gdum;
+      double fl = -1e30, flc = -1e30;
+      if (hmax > -1e29) fl = hmax + terrainClearanceTarget(mid, &gdum);
+      if (hmax_c > -1e29) flc = hmax_c + terrainClearanceTarget(mid, &gdum);
+      if (wei_alt_ > 0.0) {
+        const double af = altitudeFloorTarget(mid, &gdum);
+        fl = std::max(fl, af);
+        flc = std::max(flc, af);
+      }
+      const double fallback = (ground_height_ > -0.5) ? ground_height_ : 0.0;
+      if (fl < -1e29) fl = fallback;
+      if (flc < -1e29) flc = fallback;
+      floor_v[i] = fl;
+      floor_c[i] = flc;
+
+      if (exposed)      { stat[i] = 'E'; ceil_v[i] = -kInf; ++n_exp; }
+      else if (reached) { stat[i] = 'C';
+                          ceil_v[i] = ceil_min - h4_shadow_margin_; ++n_ceil; }
+      else              { stat[i] = 'F'; ceil_v[i] = kInf; ++n_free; }
+
+      cap_v[i] = (alt_zhi_pieces_.size() == N)
+                     ? alt_zhi_pieces_(i)
+                     : (alt_zhi_ >= 0.0 ? alt_zhi_ : kInf);
+
+      h4_x_.push_back(mid.x());
+      h4_y_.push_back(mid.y());
+      h4_s_km_.push_back(st_s[i] * m_xy / 1000.0);
+      h4_floor_.push_back(floor_v[i]);
+      h4_floor_c_.push_back(floor_c[i]);
+      h4_ceil_.push_back(ceil_v[i]);
+    }
+    h4_status_.assign(stat.begin(), stat.end());
+
+    // Climb-rate envelopes (two-pass dilation/erosion, exact). FREE and
+    // EXPOSED stations transfer no ceiling into the erosion: FREE has none,
+    // and EXPOSED cannot be hidden at any z, so a −inf there must not poison
+    // its hidable neighbours.
+    const double smax = std::max(1e-6, h4_climb_slope_);
+    std::vector<double> F(floor_v), C(N);
+    for (int i = 0; i < N; ++i) C[i] = (stat[i] == 'C') ? ceil_v[i] : kInf;
+    for (int i = 1; i < N; ++i) {
+      const double d = st_s[i] - st_s[i - 1];
+      F[i] = std::max(F[i], F[i - 1] - smax * d);
+      C[i] = std::min(C[i], C[i - 1] + smax * d);
+    }
+    for (int i = N - 2; i >= 0; --i) {
+      const double d = st_s[i + 1] - st_s[i];
+      F[i] = std::max(F[i], F[i + 1] - smax * d);
+      C[i] = std::min(C[i], C[i + 1] + smax * d);
+    }
+
+    int n_raw = 0, n_dil = 0, n_finC = 0;
+    double raw_depth = 0.0, raw_s = 0.0, dil_depth = 0.0, dil_s = 0.0;
+    double gap_min = kInf, gap_min_s = 0.0;
+    for (int i = 0; i < N; ++i) {
+      if (stat[i] == 'C' && floor_v[i] > ceil_v[i]) {
+        ++n_raw;
+        if (floor_v[i] - ceil_v[i] > raw_depth) {
+          raw_depth = floor_v[i] - ceil_v[i]; raw_s = st_s[i];
+        }
+      }
+      // Dilated-closure accounting only at stations that actually carry a
+      // hiding requirement ('C'): the erosion legitimately propagates a
+      // ceiling THROUGH a FREE/EXPOSED station, but the all-hidden profile
+      // z=F* only has to satisfy z<=ceil at 'C' stations, so counting an
+      // eroded C* elsewhere would over-report the closure.
+      if (stat[i] == 'C') {
+        ++n_finC;
+        const double gap = C[i] - F[i];
+        if (gap < gap_min) { gap_min = gap; gap_min_s = st_s[i]; }
+        if (gap < 0.0) {
+          ++n_dil;
+          if (-gap > dil_depth) { dil_depth = -gap; dil_s = st_s[i]; }
+        }
+      }
+    }
+
+    // 1-D DP over a shared z-grid: altitude above floor + exposure above the
+    // ceiling + climb effort, transitions limited to the climb cone,
+    // endpoints pinned to the committed z (start/goal are not free).
+    constexpr int NZ = 64;
+    constexpr double W_ALT = 1.0, W_EXP = 10.0, W_CLIMB = 0.1;
+    const double kBig = 1e18;
+    // Grid range from floors and the committed profile ONLY. Ceilings are
+    // deliberately excluded: a ground-visible forward slope carries a finite
+    // LOS ceiling far below terrain (hundreds of units on the first k3
+    // measurement), and letting it stretch the grid destroyed the DP's
+    // resolution (dz jumped to 18 u). Exposure depth (z − ceil) needs no
+    // grid coverage — it is monotone in z either way.
+    double zlo = kInf, zhi = -kInf;
+    for (int i = 0; i < N; ++i) {
+      zlo = std::min(zlo, std::min(floor_v[i], fe_z[i]));
+      zhi = std::max(zhi, std::max(floor_v[i], fe_z[i]));
+    }
+    zlo -= 0.5; zhi += 1.5;
+    const double dz = (zhi - zlo) / (NZ - 1);
+    auto site_cost = [&](int i, int k) -> double {
+      const double z = zlo + k * dz;
+      const bool anchor = (i == 0 || i == N - 1);
+      if (!anchor && z < floor_v[i] - 0.5 * dz) return kBig; // below floor
+      double c = W_ALT * std::max(0.0, z - floor_v[i]);
+      if (stat[i] == 'C' && z > ceil_v[i]) c += W_EXP * (z - ceil_v[i]);
+      return c;
+    };
+    auto near_k = [&](double z) {
+      return std::max(0, std::min(NZ - 1,
+                 static_cast<int>(std::lround((z - zlo) / dz))));
+    };
+    const int k0 = near_k(fe_z[0]), kN = near_k(fe_z[N - 1]);
+    std::vector<double> dp_prev(NZ, kBig), dp_cur(NZ, kBig);
+    std::vector<int> par(static_cast<size_t>(N) * NZ, -1);
+    dp_prev[k0] = 0.0;
+    int dead_at = -1;
+    for (int i = 1; i < N; ++i) {
+      const double d = std::max(1e-9, st_s[i] - st_s[i - 1]);
+      const int win = static_cast<int>((smax * d) / dz + 0.5) + 1;
+      std::fill(dp_cur.begin(), dp_cur.end(), kBig);
+      bool alive = false;
+      for (int k = 0; k < NZ; ++k) {
+        if (i == N - 1 && k != kN) continue; // tail anchor
+        const double sc = site_cost(i, k);
+        if (sc >= kBig) continue;
+        double best = kBig; int bj = -1;
+        for (int j = std::max(0, k - win);
+             j <= std::min(NZ - 1, k + win); ++j) {
+          if (dp_prev[j] >= kBig) continue;
+          const double tc = dp_prev[j] + W_CLIMB * std::abs(k - j) * dz;
+          if (tc < best) { best = tc; bj = j; }
+        }
+        if (bj < 0) continue;
+        dp_cur[k] = best + sc;
+        par[static_cast<size_t>(i) * NZ + k] = bj;
+        alive = true;
+      }
+      if (!alive) { dead_at = i; break; }
+      dp_prev.swap(dp_cur);
+    }
+    std::vector<double> dpz(N, std::numeric_limits<double>::quiet_NaN());
+    bool dp_ok = (dead_at < 0) && dp_prev[kN] < kBig;
+    if (dp_ok) {
+      int k = kN;
+      for (int i = N - 1; i >= 1 && dp_ok; --i) {
+        dpz[i] = zlo + k * dz;
+        k = par[static_cast<size_t>(i) * NZ + k];
+        if (k < 0) dp_ok = false;
+      }
+      if (dp_ok) dpz[0] = zlo + k * dz;
+    }
+    h4_dp_z_.assign(dpz.begin(), dpz.end());
+
+    // Metrics: DP vs envelope / committed FE profile.
+    int dp_above_F = 0, dp_exposed = 0, fe_exposed = 0;
+    int fe_below_chord = 0, fe_below_swath = 0;
+    double dp_exp_sum = 0.0, fe_exp_sum = 0.0;
+    double dfe_mean = 0.0, dfe_max = 0.0, dfe_max_s = 0.0;
+    for (int i = 0; i < N; ++i) {
+      if (stat[i] == 'C' && fe_z[i] > ceil_v[i] + 1e-9) {
+        ++fe_exposed; fe_exp_sum += fe_z[i] - ceil_v[i];
+      }
+      if (fe_z[i] < floor_c[i] - 0.02) ++fe_below_chord;
+      if (fe_z[i] < floor_v[i] - 0.02) ++fe_below_swath;
+      if (!dp_ok) continue;
+      if (dpz[i] > F[i] + dz) ++dp_above_F;
+      if (stat[i] == 'C' && dpz[i] > ceil_v[i] + 1e-9) {
+        ++dp_exposed; dp_exp_sum += dpz[i] - ceil_v[i];
+      }
+      const double dd = std::abs(dpz[i] - fe_z[i]);
+      dfe_mean += dd;
+      if (dd > dfe_max) { dfe_max = dd; dfe_max_s = st_s[i]; }
+    }
+    if (dp_ok) dfe_mean /= N;
+
+    LOG_INFO("[H4-CORRIDOR] stations=%d zones=%zu | status: free=%d ceil=%d "
+             "exposed=%d | margin=%.2f climb=%.2f (cap-slope %.2f) "
+             "swath=%.0f step=%.2f",
+             N, risk_zones_.size(), n_free, n_ceil, n_exp,
+             h4_shadow_margin_, smax, alt_cap_slope_, kSwathR, step);
+    if (n_finC > 0) {
+      LOG_INFO("[H4-CORRIDOR] raw collapse (floor>ceil): %d, max depth %.3f "
+               "@s=%.1fkm | climb-dilated (F*>C*): %d, max depth %.3f "
+               "@s=%.1fkm | min gap C*-F* = %.3f @s=%.1fkm (%d ceiled)",
+               n_raw, raw_depth, raw_s * m_xy / 1000.0, n_dil, dil_depth,
+               dil_s * m_xy / 1000.0, gap_min, gap_min_s * m_xy / 1000.0,
+               n_finC);
+    } else {
+      LOG_INFO("[H4-CORRIDOR] no concealment ceiling anywhere on the route "
+               "(all stations FREE or EXPOSED) — corridor is floor-only");
+    }
+    if (dp_ok) {
+      LOG_INFO("[H4-CORRIDOR] DP(grid %d x %.3fu, W alt/exp/climb "
+               "%.0f/%.0f/%.1f): dp>F*+dz at %d | dp exposed %d (per-stn "
+               "depth sum %.2f) vs fe exposed %d (sum %.2f) | fe below "
+               "floor: chord %d / swath %d",
+               NZ, dz, W_ALT, W_EXP, W_CLIMB, dp_above_F, dp_exposed,
+               dp_exp_sum, fe_exposed, fe_exp_sum, fe_below_chord,
+               fe_below_swath);
+      LOG_INFO("[H4-CORRIDOR] DP-vs-FE z: mean|dz|=%.3f max=%.3f @s=%.1fkm",
+               dfe_mean, dfe_max, dfe_max_s * m_xy / 1000.0);
+    } else if (dead_at >= 0) {
+      LOG_WARN("[H4-CORRIDOR] DP infeasible: no reachable level at station "
+               "%d (s=%.1fkm floor=%.3f F*=%.3f anchor0 z=%.3f, climb=%.2f) "
+               "— corridor stats above remain valid",
+               dead_at, st_s[dead_at] * m_xy / 1000.0, floor_v[dead_at],
+               F[dead_at], fe_z[0], smax);
+    } else {
+      LOG_WARN("[H4-CORRIDOR] DP infeasible under endpoint anchors / climb "
+               "window (corridor stats above remain valid)");
+    }
+
+    // Decimated profile + every flagged station (capped against log storms).
+    auto f7 = [](double v) -> std::string {
+      if (!std::isfinite(v)) return v > 0.0 ? "    inf" : "   -inf";
+      char b[32]; snprintf(b, sizeof b, "%7.3f", v);
+      return std::string(b);
+    };
+    const int stride = std::max(1, N / 40);
+    int rows = 0;
+    for (int i = 0; i < N && rows < 120; ++i) {
+      const bool fraw = (stat[i] == 'C' && floor_v[i] > ceil_v[i]);
+      const bool fdil = (stat[i] == 'C' && F[i] > C[i]);
+      const bool fdfe = dp_ok && std::abs(dpz[i] - fe_z[i]) > 0.5;
+      if (i % stride != 0 && !fraw && !fdil && stat[i] != 'E' && !fdfe)
+        continue;
+      const std::string cs = (stat[i] == 'F') ? "   FREE"
+                             : (stat[i] == 'E') ? "    EXP"
+                                                : f7(ceil_v[i]);
+      LOG_INFO("[H4-PROF] i=%4d s=%6.1fkm floor=%7.3f fc=%7.3f ceil=%s "
+               "F*=%7.3f C*=%s fe=%7.3f dp=%s cap=%s%s%s%s",
+               i, st_s[i] * m_xy / 1000.0, floor_v[i], floor_c[i],
+               cs.c_str(), F[i], f7(C[i]).c_str(), fe_z[i],
+               (dp_ok ? f7(dpz[i]) : std::string("    n/a")).c_str(),
+               f7(cap_v[i]).c_str(),
+               fraw ? " RAW-CLOSED" : "", fdil ? " DIL-CLOSED" : "",
+               fdfe ? " DP!=FE" : "");
+      ++rows;
+    }
+  }
+
+  // [H4] post-solve leg: sample the flown trajectory, map each corridor
+  // station to its nearest-xy trajectory sample (robust to arc-vs-time
+  // reparameterization; the worst xy match distance is reported so a
+  // self-crossing route's mismatch is visible), and score the flown z
+  // against the corridor and the DP profile.
+  void PolyTrajOptimizer::logH4PostSolve(const poly_traj::Trajectory &traj)
+  {
+    const int N = static_cast<int>(h4_x_.size());
+    if (N < 2) return;
+    const double T = traj.getTotalDuration();
+    if (!(T > 1e-6)) return;
+    const int M = std::max(64, 4 * N);
+    std::vector<double> sx(M + 1), sy(M + 1), sz(M + 1);
+    for (int k = 0; k <= M; ++k) {
+      const double tt = std::min(k * (T / M), T - 1e-9);
+      const Eigen::Vector3d p = traj.getPos(tt);
+      sx[k] = p.x(); sy[k] = p.y(); sz[k] = p.z();
+    }
+    double match_max = 0.0, below_max = 0.0, below_s = 0.0;
+    double fin_exp_sum = 0.0, ddp_mean = 0.0, ddp_max = 0.0, ddp_max_s = 0.0;
+    int fin_below = 0, fin_below_swath = 0, fin_exposed = 0, ddp_n = 0,
+        rows = 0;
+    // Stations advance along the route, so the matched sample index may
+    // only slip back by a small slack: on a self-crossing / switchback
+    // route an unconstrained nearest-xy search happily grabs the OTHER
+    // arm's z (and match_max would not show it — the wrong arm is close in
+    // xy by definition).
+    const int back_slack = std::max(1, M / N);
+    int bk_prev = 0;
+    for (int i = 0; i < N; ++i) {
+      double best = 1e30; int bk = bk_prev;
+      for (int k = std::max(0, bk_prev - back_slack); k <= M; ++k) {
+        const double dx = sx[k] - h4_x_[i], dy = sy[k] - h4_y_[i];
+        const double d2 = dx * dx + dy * dy;
+        if (d2 < best) { best = d2; bk = k; }
+      }
+      bk_prev = bk;
+      match_max = std::max(match_max, std::sqrt(best));
+      const double zf = sz[bk];
+      // Safety comparison against the CHORD floor (the flown path follows
+      // local terrain; the swath floor is the drift-budget commit surface
+      // and reads several units high over ridge NOE by construction).
+      const bool below = zf < h4_floor_c_[i] - 0.02;
+      if (zf < h4_floor_[i] - 0.02) ++fin_below_swath;
+      if (below) {
+        ++fin_below;
+        if (h4_floor_c_[i] - zf > below_max) {
+          below_max = h4_floor_c_[i] - zf; below_s = h4_s_km_[i];
+        }
+      }
+      const bool expo = (h4_status_[i] == 'C' && zf > h4_ceil_[i] + 1e-9);
+      if (expo) { ++fin_exposed; fin_exp_sum += zf - h4_ceil_[i]; }
+      double dd = -1.0;
+      if (std::isfinite(h4_dp_z_[i])) {
+        dd = std::abs(zf - h4_dp_z_[i]);
+        ddp_mean += dd; ++ddp_n;
+        if (dd > ddp_max) { ddp_max = dd; ddp_max_s = h4_s_km_[i]; }
+      }
+      if ((below || dd > 0.5) && rows < 40) {
+        LOG_INFO("[H4-POST-ROW] i=%4d s=%6.1fkm flown=%7.3f chord-floor="
+                 "%7.3f swath-floor=%7.3f dp=%7.3f%s%s",
+                 i, h4_s_km_[i], zf, h4_floor_c_[i], h4_floor_[i],
+                 std::isfinite(h4_dp_z_[i]) ? h4_dp_z_[i] : -999.0,
+                 below ? " BELOW-FLOOR" : "", expo ? " EXPOSED" : "");
+        ++rows;
+      }
+    }
+    if (ddp_n) ddp_mean /= ddp_n;
+    LOG_INFO("[H4-POST] flown-vs-corridor: below chord-floor %d (max %.3f "
+             "@s=%.1fkm), below swath-floor %d | exposed %d (per-stn depth "
+             "sum %.2f) | worst xy match %.2fu over %d stations",
+             fin_below, below_max, below_s, fin_below_swath, fin_exposed,
+             fin_exp_sum, match_max, N);
+    LOG_INFO("[H4-POST] flown-vs-DP z: mean|dz|=%.3f max=%.3f @s=%.1fkm "
+             "(%d stations)",
+             ddp_mean, ddp_max, ddp_max_s, ddp_n);
   }
 
   bool PolyTrajOptimizer::OptimizeTrajectory_lbfgs(
@@ -2922,6 +3409,14 @@ namespace ego_planner
     node_->get_parameter("optimization/h5_floor_slack", h5_floor_slack_);
     node_->declare_parameter("optimization/h5_fd_check", false);
     node_->get_parameter("optimization/h5_fd_check", h5_fd_check_);
+    // [H4] z-corridor decision-layer diagnostic (logging only; see
+    // logH4ZCorridor). Off = byte-identical.
+    node_->declare_parameter("optimization/h4_corridor_diag", false);
+    node_->get_parameter("optimization/h4_corridor_diag", h4_corridor_diag_);
+    node_->declare_parameter("optimization/h4_shadow_margin", 0.10);
+    node_->get_parameter("optimization/h4_shadow_margin", h4_shadow_margin_);
+    node_->declare_parameter("optimization/h4_climb_slope", 0.60);
+    node_->get_parameter("optimization/h4_climb_slope", h4_climb_slope_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {
