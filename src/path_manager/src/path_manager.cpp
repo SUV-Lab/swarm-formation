@@ -1499,9 +1499,22 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         traj_.setGlobalTraj(global_traj, global_time);
         traj_.setLocalTraj(local_traj, local_time, traj_.local_traj.drone_id);
 
-        publishTerrainInfluence(global_traj);
-        publishTrajRisk(global_traj);
-        publishRiskProfile(global_traj);
+        // [VIZ-TRAJ] The along-trajectory diagnostics (terrain floor underfoot,
+        // experienced risk, and the risk-exposure profile) must sample the
+        // OPTIMIZED trajectory that is actually flown and displayed
+        // (/planning/trajectory -> /viz/opt_trajectory), NOT the pre-L-BFGS
+        // seed. They were wired to the seed (out_global): in zone missions the
+        // optimizer dodges/ducks in xy, so the risk band and the colored risk
+        // line sat at the seed's positions while the panel drew the optimized
+        // trajectory over them — the arc-length axes and the exposure test
+        // then disagreed. Measured on the gauntlet: seed vs optimized arc
+        // length 691 vs 637 u (an 8% axis stretch), xy divergence up to 15.6 u
+        // (~20% of the zones' reach, so the dome/roof were sampled well off the
+        // flown path near the rims where they vary fastest), z up to 2.5 u.
+        // Sample the flown trajectory so the overlay and the trajectory agree.
+        publishTerrainInfluence(local_traj);
+        publishTrajRisk(local_traj);
+        publishRiskProfile(local_traj);
 
         auto t_opt_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] trajectory optimization: %.1f ms, duration=%.3f max_vel=%.3f",
