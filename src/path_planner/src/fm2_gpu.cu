@@ -124,7 +124,77 @@ __global__ void fimBlock(float* T, const float* Tread, const float* F,
   }
 }
 
-#define PP_CK(x) do { if ((x) != cudaSuccess) { cudaGetLastError(); freeAll(); return false; } } while (0)
+// Re-sync d_Tread for the tiles the round's active blocks may have written.
+// Cells of inactive blocks were not touched in d_T, so they are already equal
+// in both buffers — copying only the ran-blocks' tiles restores the round
+// invariant (Tread == T) with cost proportional to the ACTIVE set instead of
+// the full-field O(N) snapshot the loop used to pay every round.
+__global__ void refreshKernel(float* Tread, const float* T,
+                              int nx, int ny, int nz,
+                              const char* blockRan) {
+  const int bid =
+      ((int)blockIdx.z * gridDim.y + blockIdx.y) * gridDim.x + blockIdx.x;
+  if (!blockRan[bid]) return;              // uniform across the block -> safe
+  const int gx = blockIdx.x * TS + threadIdx.x;
+  const int gy = blockIdx.y * TS + threadIdx.y;
+  const int gz = blockIdx.z * TS + threadIdx.z;
+  if (gx >= nx || gy >= ny || gz >= nz) return;
+  const long c = (long)gx + nx * ((long)gy + (long)ny * gz);
+  Tread[c] = T[c];
+}
+
+// Process-lifetime device-buffer cache. cudaMalloc/cudaFree are
+// device-synchronizing, so paying six of each per replan was avoidable
+// setup latency; buffers grow monotonically and the driver reclaims them at
+// process exit. The FM2 front-end calls this from a single planning thread.
+struct DeviceBufs {
+  float *F = nullptr, *T = nullptr, *Tread = nullptr;
+  char *ba = nullptr, *bn = nullptr;
+  int *changed = nullptr;
+  long capN = 0, capNB = 0;
+};
+DeviceBufs g_bufs;
+
+bool ensureDeviceBufs(long N, long NB) {
+  if (N > g_bufs.capN) {
+    cudaFree(g_bufs.F); cudaFree(g_bufs.T); cudaFree(g_bufs.Tread);
+    g_bufs.F = g_bufs.T = g_bufs.Tread = nullptr;
+    g_bufs.capN = 0;
+    if (cudaMalloc(&g_bufs.F, N * sizeof(float)) != cudaSuccess ||
+        cudaMalloc(&g_bufs.T, N * sizeof(float)) != cudaSuccess ||
+        cudaMalloc(&g_bufs.Tread, N * sizeof(float)) != cudaSuccess) {
+      cudaGetLastError();
+      cudaFree(g_bufs.F); cudaFree(g_bufs.T); cudaFree(g_bufs.Tread);
+      g_bufs.F = g_bufs.T = g_bufs.Tread = nullptr;
+      return false;
+    }
+    g_bufs.capN = N;
+  }
+  if (NB > g_bufs.capNB) {
+    cudaFree(g_bufs.ba); cudaFree(g_bufs.bn);
+    g_bufs.ba = g_bufs.bn = nullptr;
+    g_bufs.capNB = 0;
+    if (cudaMalloc(&g_bufs.ba, NB) != cudaSuccess ||
+        cudaMalloc(&g_bufs.bn, NB) != cudaSuccess) {
+      cudaGetLastError();
+      cudaFree(g_bufs.ba); cudaFree(g_bufs.bn);
+      g_bufs.ba = g_bufs.bn = nullptr;
+      return false;
+    }
+    g_bufs.capNB = NB;
+  }
+  if (!g_bufs.changed &&
+      cudaMalloc(&g_bufs.changed, sizeof(int)) != cudaSuccess) {
+    cudaGetLastError();
+    g_bufs.changed = nullptr;
+    return false;
+  }
+  return true;
+}
+
+// On error: clear the sticky CUDA error and bail to the CPU fallback. The
+// cached buffers stay allocated (they remain valid allocations).
+#define PP_CK(x) do { if ((x) != cudaSuccess) { cudaGetLastError(); return false; } } while (0)
 
 }  // namespace
 
@@ -146,23 +216,13 @@ bool fm2EikonalGPU(const float* F, int nx, int ny, int nz,
   const int GX = (nx + TS - 1) / TS, GY = (ny + TS - 1) / TS, GZ = (nz + TS - 1) / TS;
   const long NB = (long)GX * GY * GZ;
 
-  float* d_F = nullptr;
-  float* d_T = nullptr;
-  float* d_Tread = nullptr;  // frozen per-round snapshot of d_T (halo reads)
-  char*  d_ba = nullptr;
-  char*  d_bn = nullptr;
-  int*   d_changed = nullptr;
-  auto freeAll = [&]() {
-    cudaFree(d_F); cudaFree(d_T); cudaFree(d_Tread);
-    cudaFree(d_ba); cudaFree(d_bn); cudaFree(d_changed);
-  };
-
-  PP_CK(cudaMalloc(&d_F, N * sizeof(float)));
-  PP_CK(cudaMalloc(&d_T, N * sizeof(float)));
-  PP_CK(cudaMalloc(&d_Tread, N * sizeof(float)));
-  PP_CK(cudaMalloc(&d_ba, NB));
-  PP_CK(cudaMalloc(&d_bn, NB));
-  PP_CK(cudaMalloc(&d_changed, sizeof(int)));
+  if (!ensureDeviceBufs(N, NB)) return false;
+  float* d_F = g_bufs.F;
+  float* d_T = g_bufs.T;
+  float* d_Tread = g_bufs.Tread;  // frozen per-round snapshot of d_T (halo reads)
+  char*  d_ba = g_bufs.ba;
+  char*  d_bn = g_bufs.bn;
+  int*   d_changed = g_bufs.changed;
 
   PP_CK(cudaMemcpy(d_F, F, N * sizeof(float), cudaMemcpyHostToDevice));
 
@@ -193,14 +253,21 @@ bool fm2EikonalGPU(const float* F, int nx, int ny, int nz,
   // on normal maps.
   const long total_blocks = (long)GX * GY * GZ;
   const int max_iter = (int)std::min<long>(total_blocks + 1000, 1000000);
+  // Establish the round invariant d_Tread == d_T ONCE; afterwards
+  // refreshKernel re-syncs only the tiles the round's active blocks may have
+  // written. The per-round full-field snapshot copy this replaces was O(N)
+  // regardless of active-set size and dominated long corridor solves
+  // (~2000 rounds x 32 MB on an 8M-cell grid). Halos still read the frozen
+  // d_Tread, so the round stays a pure block-Jacobi step: bit-identical T.
+  PP_CK(cudaMemcpy(d_Tread, d_T, N * sizeof(float), cudaMemcpyDeviceToDevice));
   int iter = 0;
   for (; iter < max_iter; ++iter) {
     PP_CK(cudaMemset(d_changed, 0, sizeof(int)));
     PP_CK(cudaMemset(d_bn, 0, NB));
-    // Freeze this round's field: halos are read from d_Tread, writes go to d_T,
-    // so no block's halo load can race a neighbour's write -> deterministic.
-    PP_CK(cudaMemcpy(d_Tread, d_T, N * sizeof(float), cudaMemcpyDeviceToDevice));
     fimBlock<<<grid, block>>>(d_T, d_Tread, d_F, nx, ny, nz, hx, hy, hz, d_ba, d_bn, d_changed);
+    // Restore Tread == T for the next round (default stream: runs after
+    // fimBlock; d_ba is still THIS round's ran-mask, swapped below).
+    refreshKernel<<<grid, block>>>(d_Tread, d_T, nx, ny, nz, d_ba);
     int changed = 0;
     PP_CK(cudaMemcpy(&changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost));
     char* tmp = d_ba; d_ba = d_bn; d_bn = tmp;
@@ -208,7 +275,6 @@ bool fm2EikonalGPU(const float* F, int nx, int ny, int nz,
   }
 
   PP_CK(cudaMemcpy(T, d_T, N * sizeof(float), cudaMemcpyDeviceToHost));
-  freeAll();
   if (iter >= max_iter) {
     // The caller falls back to the CPU FMM (correct but ~17x slower) —
     // that latency cliff must never be silent.

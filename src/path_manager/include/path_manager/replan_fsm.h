@@ -172,6 +172,11 @@ private:
 
     // Mission sequencing for robustness
     int last_received_sequence_;        // Last received sequence number to check duplicates
+    // Outcome of the last triggerGlobalPlan run. trajectoryCommandCallback
+    // consumes the sequence number only when this is true: bumping it before
+    // a failed/rejected plan made an identical retry a "duplicate", silently
+    // stranding the mission with no reject signal.
+    bool last_plan_succeeded_{false};
     std::string current_mission_id_;    // Current mission being executed
     std::string next_mission_id_;       // Next mission to execute
     bool is_final_mission_;             // True if no more missions after current

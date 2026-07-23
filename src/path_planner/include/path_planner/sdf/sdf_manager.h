@@ -20,6 +20,7 @@
 #define PATH_PLANNER_SDF_MANAGER_H_
 
 #include <Eigen/Core>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -149,7 +150,10 @@ class SDFManager : public IDistanceField {
 
  private:
   std::unique_ptr<SDFManagerImpl> impl_;
-  uint64_t revision_ = 0;
+  // Bumped from obstacle callbacks, read from the planning flow — atomic so
+  // the cross-thread read/write pair is defined behavior (relaxed is enough:
+  // it is a change-detection counter, not a synchronization point).
+  std::atomic<uint64_t> revision_{0};
 };
 
 }  // namespace sdf

@@ -129,6 +129,15 @@
     manager/astar_step_size: 1.0        # A* raw path spacing, frame units (astar front-end)
 
     # ---- Optimizer weights ----
+    optimization/risk_parallel_threads: 0  # [RISK-PAR] per-sample cost precompute threads
+                                       # (risk/LOS + obstacle SDF + floor + cap + dynamics).
+                                       # 0 = auto (half the HW threads, max 16 — measured on a
+                                       # 32-thread host: gauntlet 26.7s -> 8.8s at 16, 9.8s at 8;
+                                       # ALL 32 threads PATHOLOGICAL >2x slower, HT starvation).
+                                       # 1 = serial inline (pre-parallel path). Results are
+                                       # BIT-IDENTICAL for every setting: the parallel phase only
+                                       # precomputes pure per-sample records; the main loop
+                                       # consumes them in its original accumulation order.
     optimization/constrain_points_perPiece: 30   # penalty-integral samples per piece. 100->30
                                        # (2026-07-21 sweep, K in {100..20} x 6 scenarios x seeds +
                                        # gauntlet): 100 was ~3x oversampled. The risk term is ~62% of

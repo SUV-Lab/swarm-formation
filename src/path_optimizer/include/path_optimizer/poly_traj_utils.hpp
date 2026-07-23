@@ -322,7 +322,10 @@ namespace poly_traj
             }
             while (fabs(RootFinder::polyVal(eq, r)) < DBL_EPSILON)
             {
-                r = 0.5 * (duration + 1.0);
+                // Converge toward duration from above (cf. getMaxVelRate);
+                // the old constant re-assignment could loop forever and, for
+                // duration > 1, even land INSIDE the search interval.
+                r = 0.5 * (r + duration);
             }
             std::set<double> roots =
                 RootFinder::solvePolynomial(eq, l, r, 1e-6);
@@ -350,7 +353,9 @@ namespace poly_traj
                     pro_pt = p;
                 }
             }
-            return min_dist > 0;
+            // >= 0: a query point exactly ON the trajectory is a valid
+            // projection (distance 0), not a failure.
+            return min_dist >= 0;
         }
 
         inline bool intersection_plane(const Eigen::Vector3d p,
@@ -369,7 +374,8 @@ namespace poly_traj
             }
             while (fabs(RootFinder::polyVal(eq, r)) < DBL_EPSILON)
             {
-                r = 0.5 * (duration + 1.0);
+                // Same converging bracket fix as project_pt above.
+                r = 0.5 * (r + duration);
             }
             std::set<double> roots =
                 RootFinder::solvePolynomial(eq, l, r, 1e-6);
@@ -1041,6 +1047,13 @@ namespace poly_traj
             {
 
                 T1(0) = ts(0);
+                // Keep the T2..T5 powers valid for the single-piece branch
+                // too: getTrajJerkCost/addGradJbyT read them for every N, and
+                // they were left unsized (empty VectorXd) on this path.
+                T2 = T1.cwiseProduct(T1);
+                T3 = T2.cwiseProduct(T1);
+                T4 = T2.cwiseProduct(T2);
+                T5 = T4.cwiseProduct(T1);
                 double t1_inv = 1.0 / T1(0);
                 double t2_inv = t1_inv * t1_inv;
                 double t3_inv = t2_inv * t1_inv;

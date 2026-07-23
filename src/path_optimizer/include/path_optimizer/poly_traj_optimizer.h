@@ -81,6 +81,12 @@ namespace ego_planner
     poly_traj::MinJerkOpt jerkOpt_;
     SwarmTrajData *swarm_trajs_{nullptr};
     ConstrainPoints cps_;
+    // Per-callback scratch buffers: the cost callback runs thousands of times
+    // per solve, and these used to be heap-allocated locals every call.
+    // resize() on an unchanged size is a no-op, so reuse costs nothing.
+    Eigen::VectorXd cb_T_, cb_gradT_, cb_costs_;
+    Eigen::MatrixXd sqrvar_gdp_, sqrvar_dps_;      // distance-variance work
+    Eigen::VectorXd sqrvar_dsqrs_;
     SwarmGraph::Ptr swarm_graph_;
     swarm_formation::LogManager::Ptr log_manager_;
 
@@ -214,6 +220,43 @@ namespace ego_planner
     // Risk zone data for trajectory optimization.
     std::vector<RiskZone> risk_zones_;
     bool use_risk_zones_{false};
+    // Barrier ramp width as a fraction of reach, OUTSIDE the rim: s=1 at
+    // d<=reach, fading to 0 at reach*(1+frac). Shared by RiskGradCostP and
+    // the setRiskZones precomputation below.
+    static constexpr double kRiskBarrierRampFrac = 0.05;
+    // Per-zone constants of RiskGradCostP's hot loop (geometry-only; filled
+    // in setRiskZones, always sized with risk_zones_).
+    struct RiskZonePrep { double reach_b; double rv; double rv_b; bool valid; };
+    std::vector<RiskZonePrep> risk_zone_prep_;
+    // [RISK-PAR] Parallel precompute of the pure per-sample cost terms (risk/
+    // LOS — the dominant one — plus obstacle SDF, unified floor, altitude cap,
+    // fixed-wing dynamics). One OpenMP task per piece replays that piece's
+    // exact s1/beta/pos/vel/acc arithmetic, so every stored record is
+    // bit-identical to inline evaluation; the main loop consumes them in its
+    // original order, keeping every accumulation bitwise unchanged for ANY
+    // thread count. swarm/formation stay inline (they write members).
+    // optimization/risk_parallel_threads: 0 (default) = auto, capped at 8 —
+    // measured knee; ALL hyperthreads was >2x SLOWER than serial (spin-starved
+    // the serial rest of the loop). 1 = inline serial path (exactly the
+    // pre-parallel code), n>1 = that many threads.
+    int risk_parallel_threads_{0};
+    std::vector<char> risk_par_found_;
+    Eigen::MatrixXd risk_par_gradp_, risk_par_gradv_;
+    Eigen::VectorXd risk_par_costp_;
+    std::vector<char> par_obs_found_, par_floor_found_, par_cap_found_,
+        par_dyn_found_;
+    std::vector<int> par_floor_slot_;
+    Eigen::MatrixXd par_obs_grad_, par_floor_grad_, par_cap_grad_;
+    Eigen::MatrixXd par_dyn_gp_, par_dyn_gv_, par_dyn_ga_;
+    Eigen::VectorXd par_obs_cost_, par_floor_cost_, par_cap_cost_,
+        par_dyn_cost_;
+    // Pure per-sample term computations shared by the [RISK-PAR] precompute
+    // and the serial (threads==1) inline path — single source of truth for
+    // the unified-floor / altitude-cap math that used to live in the loop.
+    bool unifiedFloorTermP(const Eigen::Vector3d &pos, Eigen::Vector3d *grad3,
+                           double *cost, int *slot);
+    bool altCapTermP(const Eigen::Vector3d &pos, double zhi_i,
+                     Eigen::Vector3d *grad, double *cost);
     // Per-zone terrain LOS mask and spatial gradient. PathManager owns the
     // precomputed radial-horizon field; this callback lets the optimizer use
     // exactly the same effective risk support as FM2/A* without copying a DEM.
@@ -427,6 +470,18 @@ namespace ego_planner
         // Stale exemptions must not outlive the zone list they were computed
         // for; prepareRiskBarrier() recomputes them per plan.
         zone_barrier_exempt_.clear();
+        // Hoist the per-zone constants RiskGradCostP needs before its AABB
+        // rejects: they depend only on zone geometry, and recomputing them per
+        // constraint point was the entire per-zone cost for far zones.
+        risk_zone_prep_.resize(zones.size());
+        for (size_t i = 0; i < zones.size(); ++i) {
+            const auto &tz = zones[i];
+            RiskZonePrep &zp = risk_zone_prep_[i];
+            zp.reach_b = tz.reach * (1.0 + kRiskBarrierRampFrac);
+            zp.rv = tz.vertical_reach > 0.0 ? tz.vertical_reach : tz.reach;
+            zp.rv_b = zp.rv * (1.0 + kRiskBarrierRampFrac);
+            zp.valid = (tz.reach > 0.0) && (zp.rv > 0.0);
+        }
     }
     void setRiskVisibility(
         std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)> f) {
@@ -489,9 +544,6 @@ namespace ego_planner
 
   private:
     static double costFunctionCallback(void *func_data, const double *x, double *grad, const int n);
-    static int earlyExitCallback(void *func_data, const double *x, const double *g,
-                                 const double fx, const double xnorm, const double gnorm,
-                                 const double step, int n, int k, int ls);
 
     template <typename EIGENVEC>
     void RealT2VirtualT(const Eigen::VectorXd &RT, EIGENVEC &VT);
@@ -510,10 +562,14 @@ namespace ego_planner
     template <typename EIGENVEC>
     void addPVAGradCost2CT(EIGENVEC &gdT, Eigen::VectorXd &costs, const int &K);
 
+    // use_sdf gates ONLY the SDF box lookup: the ground crash-plane /
+    // virtual-ceiling half-spaces evaluated first are a safety guarantee and
+    // fire regardless of SDF presence or the obstacle debug flag.
     bool sdfGradCostP(const int i_dp,
                       const Eigen::Vector3d &p,
                       Eigen::Vector3d &gradp,
-                      double &costp);
+                      double &costp,
+                      bool use_sdf = true);
 
     bool swarmGradCostP(const int i_dp,
                         const double t,

@@ -341,6 +341,7 @@ void ReplanFSM::computeAndPublishPaths() {
                     if (sequential_start_failures > 10) {
                         RCLCPP_ERROR(node_->get_logger(), "Too many failures in SEQUENTIAL_START, going to EMERGENCY_STOP");
                         log_manager_->errorf("Too many failures in SEQUENTIAL_START, going to EMERGENCY_STOP");
+                        flag_escape_emergency_ = true;  // entry tick commands the hover
                         changeFSMExecState(EMERGENCY_STOP, "FSM");
                         sequential_start_failures = 0;
                     } else {
@@ -367,6 +368,7 @@ void ReplanFSM::computeAndPublishPaths() {
             if (!path_manager_) {
                 RCLCPP_ERROR(node_->get_logger(), "PathManager is not initialized!");
                 log_manager_->errorf("PathManager is not initialized!");
+                flag_escape_emergency_ = true;  // entry tick commands the hover
                 changeFSMExecState(EMERGENCY_STOP, "FSM");
                 break;
             }
@@ -389,18 +391,21 @@ void ReplanFSM::computeAndPublishPaths() {
 
         case EMERGENCY_STOP: {
             if (flag_escape_emergency_) {
-                // Avoiding repeated calls
+                // Entry tick (flag set on the transition): command the hover
+                // ONCE. The flag was never set before, so this state published
+                // nothing and fell straight through to GEN_NEW_TRAJ.
                 callEmergencyStop(current_pos_);
+                flag_escape_emergency_ = false;
             } else {
-                // Check if drone has stopped (velocity near zero)
-                // If stopped, try to generate new trajectory
-                if (current_vel_.norm() < 0.1) {
-                    RCLCPP_WARN(node_->get_logger(), "Drone stopped, attempting to recover from emergency stop");
-                    log_manager_->warnf("Drone stopped, attempting to recover from emergency stop");
-                    changeFSMExecState(GEN_NEW_TRAJ, "FSM");
-                }
+                // No odometry exists in this architecture (current_vel_ was
+                // never written), so a "wait until stopped" gate is
+                // unknowable. Park and await the next mission instead.
+                have_target_ = false;
+                have_local_traj_ = false;
+                RCLCPP_WARN(node_->get_logger(), "Emergency hover commanded; awaiting a new mission");
+                log_manager_->warnf("Emergency hover commanded; awaiting a new mission");
+                changeFSMExecState(WAIT_POSITION, "FSM");
             }
-            flag_escape_emergency_ = false;
             break;
         }
     }
@@ -729,7 +734,17 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
             geometry_msgs::msg::Point p;
             p.x = wp(0);
             p.y = wp(1);
+            // Waypoint z is AGL ([GOAL AGL]); render the marker at the
+            // ABSOLUTE altitude planGlobalTraj will fly (elevation + max(z,
+            // min_goal_agl)) — the raw value drew the sphere inside the
+            // terrain on any non-flat DEM. Same rule and gate as the
+            // conversion in path_manager (water/off-DEM base = 0).
             p.z = wp(2);
+            if (path_manager_ && path_manager_->hasTerrainData()) {
+                double base = 0.0;
+                path_manager_->terrainElevation(wp(0), wp(1), &base);
+                p.z = base + std::max(wp(2), path_manager_->minGoalAgl());
+            }
             marker.points.push_back(p);
         }
 
@@ -777,6 +792,7 @@ void ReplanFSM::resolveCommandedStartAgl()
 }
 
 void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints) {
+    last_plan_succeeded_ = false;
     resolveCommandedStartAgl();
     // Use formation pattern received via TrajectoryCommand
     auto formation_setup_start = std::chrono::high_resolution_clock::now();
@@ -813,6 +829,7 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         }
 
         have_target_ = true;
+        last_plan_succeeded_ = true;
 
         if (exec_state_ == WAIT_POSITION)
             changeFSMExecState(SEQUENTIAL_START, "formationTargetCallback");
@@ -868,6 +885,12 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
                      msg->sequence, last_received_sequence_);
         return;
     }
+
+    // Capture the pre-command sequencing state: if the plan below fails or is
+    // rejected, both are ROLLED BACK at the end of this callback so a resend
+    // of the SAME command retries instead of dying in the dedup gate above.
+    const int prev_sequence = last_received_sequence_;
+    const std::string prev_mission_id = current_mission_id_;
 
     last_received_sequence_ = msg->sequence;
 
@@ -993,7 +1016,25 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
                 waypoints.size());
 
     // Build the formation target and trigger planning directly (no topic round-trip)
+    last_plan_succeeded_ = false;  // also covers early returns before triggerGlobalPlan
     publishFormationTarget(target_position, waypoints, false, formation_offset);
+
+    if (!last_plan_succeeded_) {
+        // Plan failed or was rejected (e.g. the optimizer's collision audit).
+        // Un-consume the sequencing state so a resend of the SAME command
+        // retries; without this the dedup gate silently dropped it and the
+        // mission was stranded with no reject signal.
+        last_received_sequence_ = prev_sequence;
+        current_mission_id_ = prev_mission_id;
+        RCLCPP_ERROR(node_->get_logger(),
+                     "[PLAN REJECTED] mission '%s' (seq %d) produced no trajectory — "
+                     "sequence rolled back, a resend will retry",
+                     msg->mission_id.c_str(), msg->sequence);
+        log_manager_->errorf(
+                     "[PLAN REJECTED] mission '%s' (seq %d) produced no trajectory — "
+                     "sequence rolled back, a resend will retry",
+                     msg->mission_id.c_str(), msg->sequence);
+    }
 
     auto callback_end = std::chrono::high_resolution_clock::now();
     auto callback_duration = std::chrono::duration_cast<std::chrono::milliseconds>(callback_end - callback_start).count();

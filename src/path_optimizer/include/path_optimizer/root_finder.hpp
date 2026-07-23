@@ -388,7 +388,9 @@ inline std::set<double> eigenSolveRealRoots(const Eigen::VectorXd &coeffs, doubl
     for (int i = 0; i < eivalsNum; i++)
     {
         real = eivals(i).real();
-        if (eivals(i).imag() < tol && real > lbound && real < ubound)
+        // fabs: complex eigenvalues come in conjugate pairs, and the member
+        // with a large NEGATIVE imaginary part is not a real root either.
+        if (fabs(eivals(i).imag()) < tol && real > lbound && real < ubound)
             rts.insert(real);
     }
 

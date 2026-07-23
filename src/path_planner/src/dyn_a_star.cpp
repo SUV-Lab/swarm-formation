@@ -200,7 +200,7 @@ bool PathSearcher::AstarSearch(const double step_size, Vector3d start_pt, Vector
     ++rounds_;
     
     if (log_manager_) {
-        log_manager_->infof("3D A* 검색 시작 - Round: %d, Step size: %.3f, ESDF 사용: %s",
+        log_manager_->infof("3D A* 검색 시작 - Round: %d, Step size: %.3f",
                            rounds_, step_size);
         log_manager_->infof("시작점: (%.2f,%.2f,%.2f), 도착점: (%.2f,%.2f,%.2f)",
                            start_pt(0), start_pt(1), start_pt(2), end_pt(0), end_pt(1), end_pt(2));
@@ -376,21 +376,19 @@ bool PathSearcher::AstarSearch(const double step_size, Vector3d start_pt, Vector
 
             neighbor.rounds = rounds_;
 
-            {
-                const Eigen::Vector3d nw = Index2Coord(neighborIdx);
-                // Hard ground / ceiling gate.
-                if (ground_height_ > -0.5 && nw.z() < ground_height_) continue;
-                if (virtual_ceil_height_ > -0.5 && nw.z() > virtual_ceil_height_) continue;
-            }
+            const Eigen::Vector3d neigh_world = Index2Coord(neighborIdx);
 
-            if (checkOccupancy_esdf(Index2Coord(neighborIdx)))
+            // Hard ground / ceiling gate.
+            if (ground_height_ > -0.5 && neigh_world.z() < ground_height_) continue;
+            if (virtual_ceil_height_ > -0.5 && neigh_world.z() > virtual_ceil_height_) continue;
+
+            if (checkOccupancy_esdf(neigh_world))
                 continue;
 
             double static_cost = neighbor_costs_ordered[i];
 
             // Risk-aware edge cost: distance * (1 + risk). Multiplicative
             // form keeps shorter paths cheaper inside risk regions.
-            Eigen::Vector3d neigh_world = Index2Coord(neighborIdx);
             double risk_cost = getRiskCost(neigh_world);
             ++risk_query_count;
             if (risk_cost > 0.0) {

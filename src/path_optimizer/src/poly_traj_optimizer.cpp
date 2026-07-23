@@ -3,6 +3,9 @@
 #include <iomanip>
 #include <ctime>
 #include <sys/resource.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace ego_planner
 {
@@ -1616,7 +1619,9 @@ namespace ego_planner
             &final_cost,
             PolyTrajOptimizer::costFunctionCallback,
             NULL,
-            PolyTrajOptimizer::earlyExitCallback,
+            // No progress callback: a non-null slot makes the line search
+            // compute two full-vector norms per evaluation just to discard them.
+            NULL,
             this,
             &lbfgs_params);
         // 4 restarts: observed hard instances were still DESCENDING fast
@@ -2039,11 +2044,14 @@ namespace ego_planner
       }
 
       // ---- fz per term (fz>0 pushes altitude UP; fz = -d(cost)/dz) --------
-      // OBSTACLE (SDF boxes + hard ground/ceiling half-spaces): reuse verbatim.
+      // OBSTACLE (SDF boxes + hard ground/ceiling half-spaces): reuse verbatim,
+      // with the same use_sdf gating as addPVAGradCost2CT (half-spaces always).
       double fz_obs = 0.0;
-      if (enable_obstacles_) {
+      {
         Eigen::Vector3d gradp; double costp;
-        if (sdfGradCostP(0, pos, gradp, costp)) fz_obs = -gradp.z();
+        const bool use_sdf =
+            enable_obstacles_ && sdf_manager_ && sdf_manager_->hasData();
+        if (sdfGradCostP(0, pos, gradp, costp, use_sdf)) fz_obs = -gradp.z();
       }
       // UNIFIED FLOOR (MUST MATCH addPVAGradCost2CT): one floor surface
       // F = max(terrain+clearance, mission-altitude anchor); only the GOVERNING
@@ -2291,16 +2299,21 @@ namespace ego_planner
     Eigen::Map<const Eigen::VectorXd> t(x + (3 * (opt->piece_num_ - 1)), opt->piece_num_);
     Eigen::Map<Eigen::MatrixXd> gradP(grad, 3, opt->piece_num_ - 1);
     Eigen::Map<Eigen::VectorXd> gradt(grad + (3 * (opt->piece_num_ - 1)), opt->piece_num_);
-    Eigen::VectorXd T(opt->piece_num_);
+    // Member scratch: this callback runs thousands of times per solve;
+    // resize() is a no-op after the first call of a solve.
+    Eigen::VectorXd &T = opt->cb_T_;
+    T.resize(opt->piece_num_);
 
     opt->VirtualT2RealT(t, T);
 
-    Eigen::VectorXd gradT(opt->piece_num_);
+    Eigen::VectorXd &gradT = opt->cb_gradT_;
+    gradT.resize(opt->piece_num_);
     double smoo_cost = 0, time_cost = 0;
     // Slots: 0 obstacle(SDF), 1 swarm, 2 formation, 3 risk (moat+barrier),
     //        4 feasibility (v/a envelope ONLY), 5 sqrvariance, 6 altitude,
     //        7 dynamics, 8 terrain(heightmap 2.5D), 9 ride (H1 speed-over-rough).
-    Eigen::VectorXd obs_swarm_feas_qvar_costs(10);
+    Eigen::VectorXd &obs_swarm_feas_qvar_costs = opt->cb_costs_;
+    obs_swarm_feas_qvar_costs.resize(10);
     obs_swarm_feas_qvar_costs.setZero();
 
     // High-performance timing for debugging (similar to con code)
@@ -2391,13 +2404,6 @@ namespace ego_planner
     }
 
     return smoo_cost + obs_swarm_feas_qvar_costs.sum() + time_cost;
-  }
-
-  int PolyTrajOptimizer::earlyExitCallback(void *func_data, const double *x, const double *g, const double fx,
-                                           const double xnorm, const double gnorm, const double step, int n, int k, int ls)
-  {
-    // Never early-exits; kept only as the lbfgs_optimize callback slot.
-    return 0;
   }
 
   template <typename EIGENVEC>
@@ -2497,6 +2503,132 @@ namespace ego_planner
     costs.setZero();
     double t = 0;
 
+    // Loop-invariant SDF gate (hasData() cannot change mid-solve): shared by
+    // the precompute and the serial obstacle call below.
+    const bool use_sdf =
+        enable_obstacles_ && sdf_manager_ && sdf_manager_->hasData();
+
+    // [RISK-PAR] Precompute every PURE per-sample cost term in parallel (one
+    // task per piece — pieces are independent; within a piece the exact
+    // s1 += step accumulation and beta/pos/vel/acc expressions of the main
+    // loop are replayed, so every stored record is bit-identical to what the
+    // inline call below would produce). The main loop then consumes the
+    // records in its ORIGINAL order: accumulation order is untouched, so the
+    // result is bitwise the same for any thread count. Covered terms: risk
+    // (LOS/visibility — the dominant one), obstacle SDF + half-spaces,
+    // unified floor, altitude cap, fixed-wing dynamics. swarm/formation stay
+    // inline (they write members). All covered callees are const-pure and
+    // the terrain memo is thread_local (audited); SDF reads take the shared
+    // lock.
+    const bool sample_par = risk_parallel_threads_ != 1;
+    if (sample_par) {
+      const int S = N * (K + 1);
+      if (static_cast<int>(risk_par_found_.size()) < S) {
+        risk_par_found_.resize(S);
+        risk_par_gradp_.resize(3, S);
+        risk_par_gradv_.resize(3, S);
+        risk_par_costp_.resize(S);
+        par_obs_found_.resize(S);
+        par_floor_found_.resize(S);
+        par_cap_found_.resize(S);
+        par_dyn_found_.resize(S);
+        par_floor_slot_.resize(S);
+        par_obs_grad_.resize(3, S);
+        par_floor_grad_.resize(3, S);
+        par_cap_grad_.resize(3, S);
+        par_dyn_gp_.resize(3, S);
+        par_dyn_gv_.resize(3, S);
+        par_dyn_ga_.resize(3, S);
+        par_obs_cost_.resize(S);
+        par_floor_cost_.resize(S);
+        par_cap_cost_.resize(S);
+        par_dyn_cost_.resize(S);
+      }
+      const bool dyn_on = dynamics_enable_ && wei_dynamics_ > 0.0;
+#ifdef _OPENMP
+      // auto (0) = half the hardware threads (~physical cores), capped at 16:
+      // measured on a 32-thread host with all terms precomputed — 16 threads
+      // 8.8 s vs 8 threads 9.8 s vs serial 26.7 s, while ALL 32 was
+      // pathological (HT siblings spin-starve the serial remainder of the
+      // loop, >2x slower than serial). Half-of-HW generalizes "never run on
+      // every hyperthread" to smaller machines.
+      const int risk_par_nthreads =
+          risk_parallel_threads_ > 0
+              ? risk_parallel_threads_
+              : std::max(1, std::min(16, omp_get_max_threads() / 2));
+#pragma omp parallel for schedule(dynamic, 1) num_threads(risk_par_nthreads)
+#endif
+      for (int pi = 0; pi < N; ++pi) {
+        const Eigen::Matrix<double, 6, 3> &pc =
+            jerkOpt_.get_b().block<6, 3>(pi * 6, 0);
+        const double pstep = jerkOpt_.get_T1()(pi) / K;
+        const double pzhi =
+            (alt_zhi_pieces_.size() == N) ? alt_zhi_pieces_(pi) : alt_zhi_;
+        double ps1 = 0.0;
+        Eigen::Matrix<double, 6, 1> pb0, pb1, pb2;
+        for (int pj = 0; pj <= K; ++pj) {
+          const double ps2 = ps1 * ps1;
+          const double ps3 = ps2 * ps1;
+          const double ps4 = ps2 * ps2;
+          const double ps5 = ps4 * ps1;
+          pb0 << 1.0, ps1, ps2, ps3, ps4, ps5;
+          pb1 << 0.0, 1.0, 2.0 * ps1, 3.0 * ps2, 4.0 * ps3, 5.0 * ps4;
+          pb2 << 0.0, 0.0, 2.0, 6.0 * ps1, 12.0 * ps2, 20.0 * ps3;
+          const Eigen::Vector3d ppos = pc.transpose() * pb0;
+          const Eigen::Vector3d pvel = pc.transpose() * pb1;
+          const Eigen::Vector3d pacc = pc.transpose() * pb2;
+          const int s = pi * (K + 1) + pj;
+
+          Eigen::Vector3d pg;
+          double pcst;
+
+          par_obs_found_[s] = sdfGradCostP(s, ppos, pg, pcst, use_sdf) ? 1 : 0;
+          par_obs_grad_.col(s) = pg;
+          par_obs_cost_(s) = pcst;
+
+          int pslot = 6;
+          par_floor_found_[s] =
+              unifiedFloorTermP(ppos, &pg, &pcst, &pslot) ? 1 : 0;
+          par_floor_grad_.col(s) = pg;
+          par_floor_cost_(s) = pcst;
+          par_floor_slot_[s] = pslot;
+
+          if (use_risk_zones_) {
+            Eigen::Vector3d rgp, rgv;
+            double rcp;
+            risk_par_found_[s] =
+                RiskGradCostP(s, ppos, pvel, rgp, rgv, rcp) ? 1 : 0;
+            risk_par_gradp_.col(s) = rgp;
+            risk_par_gradv_.col(s) = rgv;
+            risk_par_costp_(s) = rcp;
+          } else {
+            risk_par_found_[s] = 0;
+          }
+
+          par_cap_found_[s] = altCapTermP(ppos, pzhi, &pg, &pcst) ? 1 : 0;
+          par_cap_grad_.col(s) = pg;
+          par_cap_cost_(s) = pcst;
+
+          par_dyn_found_[s] = 0;
+          if (dyn_on) {
+            Eigen::Vector3d dgp, dgv, dga;
+            double dcst;
+            // Outputs are written only on success — store only then.
+            if (fixedWingDynamicsGradCostPVA(ppos, pvel, pacc, dgp, dgv, dga,
+                                             dcst)) {
+              par_dyn_found_[s] = 1;
+              par_dyn_gp_.col(s) = dgp;
+              par_dyn_gv_.col(s) = dgv;
+              par_dyn_ga_.col(s) = dga;
+              par_dyn_cost_(s) = dcst;
+            }
+          }
+
+          ps1 += pstep;
+        }
+      }
+    }
+
     for (int i = 0; i < N; ++i)
     {
       const Eigen::Matrix<double, 6, 3> &c = jerkOpt_.get_b().block<6, 3>(i * 6, 0);
@@ -2523,9 +2655,24 @@ namespace ego_planner
 
         cps_.points.col(i_dp) = pos;
 
-        // SDF-based obstacle penalty.
-        if (enable_obstacles_ && sdf_manager_ && sdf_manager_->hasData()) {
-            if (sdfGradCostP(i_dp, pos, gradp, costp)) {
+        // SDF-based obstacle penalty. The ground crash-plane / virtual-ceiling
+        // half-spaces are evaluated INSIDE sdfGradCostP before its SDF lookup;
+        // they are a safety guarantee, not an obstacle term, so the call is no
+        // longer gated on SDF presence / enable_obstacles_ — only the SDF box
+        // penalty is (via use_sdf). [RISK-PAR]: precomputed record when active.
+        {
+            bool obs_found;
+            if (sample_par) {
+                const int s = i * (K + 1) + j;
+                obs_found = par_obs_found_[s] != 0;
+                if (obs_found) {
+                    gradp = par_obs_grad_.col(s);
+                    costp = par_obs_cost_(s);
+                }
+            } else {
+                obs_found = sdfGradCostP(i_dp, pos, gradp, costp, use_sdf);
+            }
+            if (obs_found) {
                 gradViolaPc = beta0 * gradp.transpose();
                 gradViolaPt = alpha * gradp.transpose() * vel;
                 jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -2551,50 +2698,25 @@ namespace ego_planner
         // enable_obstacles_ (the "ignore obstacles" debug flag) silences only
         // the terrain floor (have_terr=false -> anchor governs), never the
         // anchor.
+        // (math lives in unifiedFloorTermP — shared with the [RISK-PAR]
+        // precompute; records are bit-identical to the inline call.)
         {
-            double terr_floor = -1e30;
-            float h = 0.f, dhx = 0.f, dhy = 0.f;
-            Eigen::Vector2d tgrad(0.0, 0.0);
-            bool have_terr = false;
-            if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_)) {
-                if (terrain_hgrad_) {
-                    // Value + ANALYTIC slope of the SAME bilinear surface (a
-                    // smoothed central-diff slope disagreed near DEM-cell edges
-                    // and killed the line search on cliff cells, -1008).
-                    have_terr = terrain_hgrad_(pos.x(), pos.y(), &h, &dhx, &dhy);
-                } else {
-                    const float hv = terrain_height_(pos.x(), pos.y());
-                    if (std::isfinite(hv)) { h = hv; have_terr = true; }  // value-only push
+            bool floor_found;
+            Eigen::Vector3d grad3;
+            double costf = 0.0;
+            int slot = 6;
+            if (sample_par) {
+                const int s = i * (K + 1) + j;
+                floor_found = par_floor_found_[s] != 0;
+                if (floor_found) {
+                    grad3 = par_floor_grad_.col(s);
+                    costf = par_floor_cost_(s);
+                    slot = par_floor_slot_[s];
                 }
-                if (have_terr)
-                    terr_floor = static_cast<double>(h) +
-                                 terrainClearanceTarget(pos, &tgrad);
+            } else {
+                floor_found = unifiedFloorTermP(pos, &grad3, &costf, &slot);
             }
-            // [TERRAIN-TAPER] both floors relax toward a below-band pinned
-            // endpoint; their analytic d(target)/dxy joins the gradient below.
-            Eigen::Vector2d fgrad(0.0, 0.0);
-            const double anchor_floor =
-                (wei_alt_ > 0.0) ? altitudeFloorTarget(pos, &fgrad) : -1e30;
-
-            const bool terrain_governs = have_terr && terr_floor >= anchor_floor;
-            const double F = terrain_governs ? terr_floor : anchor_floor;
-            if (F > -1e29 && pos.z() < F) {
-                const double viol = F - pos.z();
-                Eigen::Vector3d grad3;
-                double costf = 0.0;
-                int slot = 6;
-                if (terrain_governs) {
-                    costf = wei_obs_ * viol * viol * viol;
-                    const double dcoef = wei_obs_ * 3.0 * viol * viol;
-                    grad3 = Eigen::Vector3d(dcoef * (dhx + tgrad.x()),
-                                            dcoef * (dhy + tgrad.y()), -dcoef);
-                    slot = 8;
-                } else {
-                    costf = wei_alt_ * viol * viol;
-                    const double dua = wei_alt_ * 2.0 * viol;
-                    grad3 = Eigen::Vector3d(dua * fgrad.x(), dua * fgrad.y(), -dua);
-                    slot = 6;
-                }
+            if (floor_found) {
                 gradViolaPc = beta0 * grad3.transpose();
                 gradViolaPt = alpha * grad3.transpose() * vel;
                 jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -2633,12 +2755,28 @@ namespace ego_planner
 
         // Risk zone cost (FM2-shared OR-moat field, arc-length integral
         // r(p)*||v||; see RiskGradCostP). Position AND velocity couple in.
-        if (use_risk_zones_ && RiskGradCostP(i_dp, pos, vel, gradp, gradv, costp)) {
-            gradViolaPc = beta0 * gradp.transpose() + beta1 * gradv.transpose();
-            gradViolaPt = alpha * (gradp.dot(vel) + gradv.dot(acc));
-            jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
-            gdT(i) += omg * (costp / K + step * gradViolaPt);
-            costs(3) += omg * step * costp;
+        // [RISK-PAR] with the parallel precompute active the (bit-identical)
+        // stored record replaces the inline call; accumulation is unchanged.
+        {
+            bool risk_found = false;
+            if (sample_par) {
+                const int s = i * (K + 1) + j;
+                risk_found = risk_par_found_[s] != 0;
+                if (risk_found) {
+                    gradp = risk_par_gradp_.col(s);
+                    gradv = risk_par_gradv_.col(s);
+                    costp = risk_par_costp_(s);
+                }
+            } else if (use_risk_zones_) {
+                risk_found = RiskGradCostP(i_dp, pos, vel, gradp, gradv, costp);
+            }
+            if (risk_found) {
+                gradViolaPc = beta0 * gradp.transpose() + beta1 * gradv.transpose();
+                gradViolaPt = alpha * (gradp.dot(vel) + gradv.dot(acc));
+                jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
+                gdT(i) += omg * (costp / K + step * gradViolaPt);
+                costs(3) += omg * step * costp;
+            }
         }
 
         // Altitude-band cap. Own slot (6) — it used to share the risk slot
@@ -2649,91 +2787,41 @@ namespace ego_planner
         // (see optimizeFromPath), scalar alt_zhi_ otherwise. zhi_i is constant
         // w.r.t. the decision variables, so the gradients below are exact
         // either way. MUST MATCH logVerticalAttribution's cap recompute.
-        const double zhi_i =
-            (alt_zhi_pieces_.size() == N) ? alt_zhi_pieces_(i) : alt_zhi_;
-        if (wei_alt_ > 0.0 && zhi_i >= 0.0 && pos.z() > zhi_i) {
-            // TERRAIN-AWARE GATE — root fix for cap-vs-terrain penetration.
-            // alt_zhi_ is a single SCALAR (front-end geodesic max z + headroom),
-            // but the sparse-piece back-end corner-cuts across terrain HIGHER
-            // than that scalar. There the cap ("come down to alt_zhi_") and the
-            // terrain penalty ("stay clear of terrain") are physically
-            // unsatisfiable: L-BFGS stalls (-1004/-1005) and the crest is pressed
-            // into the DEM. Gate the cap by TERRAIN CLEARANCE so the two are
-            // mutually exclusive by construction: within obstacle_clearance_ of
-            // the surface the cap is OFF (terrain rules; the terrain term lifts
-            // the crest); a smoothstep hands control back to the cap once the
-            // point is safely clear (>= 2*clearance), where its only job —
-            // stopping the quintic ballooning above the committed profile —
-            // applies unchanged.
-            // KEYED ON THE HEIGHTMAP (z - h), not the SDF: terrain is no longer
-            // voxelised into the SDF, so getDistance() reads "far" everywhere and
-            // an SDF-keyed gate silently pins to 1 — full cap press inside
-            // terrain-forced climbs, resurrecting the very stall this gate
-            // exists to prevent (regression: -1005 at 0.3% above the old
-            // optimum, crest pressed -15.7 m into the DEM). SDF keying remains
-            // only as a fallback when no heightmap is wired.
-            double gate = 1.0;
-            // ∂gate/∂pos — the heightmap branch keys the gate on (z − h(x,y))
-            // so the slope is dgate·(−hx, −hy, 1); the SDF fallback keys it
-            // on d(pos) so the slope is dgate·∇d. Zero outside the band.
-            Eigen::Vector3d gate_grad = Eigen::Vector3d::Zero();
-            const double glo = obstacle_clearance_;        // cap OFF at/below clearance
-            const double ghi = 2.0 * obstacle_clearance_;  // cap fully ON above
-            bool gated = false;
-            if (terrain_hgrad_) {
-                float hg = 0.f, hx = 0.f, hy = 0.f;
-                if (terrain_hgrad_(pos.x(), pos.y(), &hg, &hx, &hy)) {
-                    const double tc = pos.z() - static_cast<double>(hg);
-                    double t = (ghi > glo) ? (tc - glo) / (ghi - glo) : 1.0;
-                    t = std::max(0.0, std::min(1.0, t));
-                    gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1
-                    // CONSISTENT gradient: the cost is wei*ua^2*gate(z - h(x,y)),
-                    // so the gradient MUST carry d(gate) with the ANALYTIC slope
-                    // of the same surface. A frozen or smoothed-slope gradient
-                    // disagrees with the cost inside the transition band — the
-                    // exact heightmap parks the crest right in that band (the
-                    // coarse SDF used to under-read terrain and saturate the
-                    // gate), and the line search died (-1005/-1008) there.
-                    if (t > 0.0 && t < 1.0) {
-                        const double dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
-                        gate_grad = dgate * Eigen::Vector3d(-hx, -hy, 1.0);
-                    }
-                    gated = true;
+        // TERRAIN-AWARE GATE — root fix for cap-vs-terrain penetration.
+        // alt_zhi_ is a single SCALAR (front-end geodesic max z + headroom),
+        // but the sparse-piece back-end corner-cuts across terrain HIGHER
+        // than that scalar. There the cap ("come down to alt_zhi_") and the
+        // terrain penalty ("stay clear of terrain") are physically
+        // unsatisfiable: L-BFGS stalls (-1004/-1005) and the crest is pressed
+        // into the DEM. Gate the cap by TERRAIN CLEARANCE so the two are
+        // mutually exclusive by construction: within obstacle_clearance_ of
+        // the surface the cap is OFF (terrain rules; the terrain term lifts
+        // the crest); a smoothstep hands control back to the cap once the
+        // point is safely clear (>= 2*clearance), where its only job —
+        // stopping the quintic ballooning above the committed profile —
+        // applies unchanged. KEYED ON THE HEIGHTMAP (z - h), not the SDF
+        // (terrain is not voxelised into the SDF; an SDF-keyed gate pinned to
+        // 1 and pressed the crest -15.7 m into the DEM); SDF keying remains
+        // only as a fallback when no heightmap is wired.
+        // (gate + cost math lives in altCapTermP — shared with the
+        // [RISK-PAR] precompute; records are bit-identical to inline.)
+        {
+            const double zhi_i =
+                (alt_zhi_pieces_.size() == N) ? alt_zhi_pieces_(i) : alt_zhi_;
+            bool cap_found;
+            Eigen::Vector3d grad_a;
+            double costa_z = 0.0;
+            if (sample_par) {
+                const int s = i * (K + 1) + j;
+                cap_found = par_cap_found_[s] != 0;
+                if (cap_found) {
+                    grad_a = par_cap_grad_.col(s);
+                    costa_z = par_cap_cost_(s);
                 }
+            } else {
+                cap_found = altCapTermP(pos, zhi_i, &grad_a, &costa_z);
             }
-            if (!gated && sdf_manager_ && sdf_manager_->hasData()) {
-                // Same cost/gradient-pair rule as above: the cost carries
-                // gate(d(pos)), so the gradient carries dgate·∇d — the frozen
-                // (dgate = 0) legacy form disagreed with the cost inside the
-                // band whenever this no-heightmap fallback was active.
-                float d = 0.f;
-                Eigen::Vector3d grad_d = Eigen::Vector3d::Zero();
-                if (sdf_manager_->getDistanceAndGradient(pos, &d, &grad_d) &&
-                    std::isfinite(d)) {
-                    double t = (ghi > glo) ? (static_cast<double>(d) - glo) / (ghi - glo) : 1.0;
-                    t = std::max(0.0, std::min(1.0, t));
-                    gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1
-                    if (t > 0.0 && t < 1.0) {
-                        const double dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
-                        gate_grad = dgate * grad_d;
-                    }
-                }
-            }
-            if (gate > 0.0) {
-                // QUADRATIC, not cubic: ridge crossings sit several units above
-                // the band, and a cubic down-force there outgrows the obstacle
-                // penalty's cubic (which works on the SMALL violation depth) —
-                // the cap then presses the trajectory into terrain. Quadratic
-                // shapes the swell but can never win against the clearance wall.
-                const double ua = pos.z() - zhi_i;
-                const double costa_z = wei_alt_ * ua * ua * gate;
-                // Full gradient of wei*ua^2*gate(·):
-                //   ∂/∂pos = wei*ua^2*gate_grad + (0,0, wei*2*ua*gate).
-                // gate_grad = 0 outside the transition band, so this reduces
-                // to the plain capped gradient there.
-                Eigen::Vector3d grad_a =
-                    wei_alt_ * ua * ua * gate_grad +
-                    Eigen::Vector3d(0.0, 0.0, wei_alt_ * 2.0 * ua * gate);
+            if (cap_found) {
                 gradViolaPc = beta0 * grad_a.transpose();
                 gradViolaPt = alpha * grad_a.transpose() * vel;
                 jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) += omg * step * gradViolaPc;
@@ -2794,19 +2882,35 @@ namespace ego_planner
 
         // Fixed-wing inverse dynamics: couples position (density), velocity,
         // and acceleration through lift/drag/thrust and the flight envelope.
-        double costdyn;
-        if (dynamics_enable_ && wei_dynamics_ > 0.0 &&
-            fixedWingDynamicsGradCostPVA(pos, vel, acc, gradp, gradv, grada,
-                                         costdyn)) {
-            gradViolaPc = beta0 * gradp.transpose();
-            gradViolaVc = beta1 * gradv.transpose();
-            gradViolaAc = beta2 * grada.transpose();
-            gradViolaVt = alpha *
-                (gradp.dot(vel) + gradv.dot(acc) + grada.dot(jer));
-            jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) +=
-                omg * step * (gradViolaPc + gradViolaVc + gradViolaAc);
-            gdT(i) += omg * (costdyn / K + step * gradViolaVt);
-            costs(7) += omg * step * costdyn;
+        // [RISK-PAR]: precomputed record when active.
+        {
+            double costdyn = 0.0;
+            bool dyn_found;
+            if (sample_par) {
+                const int s = i * (K + 1) + j;
+                dyn_found = par_dyn_found_[s] != 0;
+                if (dyn_found) {
+                    gradp = par_dyn_gp_.col(s);
+                    gradv = par_dyn_gv_.col(s);
+                    grada = par_dyn_ga_.col(s);
+                    costdyn = par_dyn_cost_(s);
+                }
+            } else {
+                dyn_found = dynamics_enable_ && wei_dynamics_ > 0.0 &&
+                    fixedWingDynamicsGradCostPVA(pos, vel, acc, gradp, gradv,
+                                                 grada, costdyn);
+            }
+            if (dyn_found) {
+                gradViolaPc = beta0 * gradp.transpose();
+                gradViolaVc = beta1 * gradv.transpose();
+                gradViolaAc = beta2 * grada.transpose();
+                gradViolaVt = alpha *
+                    (gradp.dot(vel) + gradv.dot(acc) + grada.dot(jer));
+                jerkOpt_.get_gdC().block<6, 3>(i * 6, 0) +=
+                    omg * step * (gradViolaPc + gradViolaVc + gradViolaAc);
+                gdT(i) += omg * (costdyn / K + step * gradViolaVt);
+                costs(7) += omg * step * costdyn;
+            }
         }
 
         s1 += step;
@@ -2819,10 +2923,13 @@ namespace ego_planner
 
     // Distance variance cost (spreads inner points evenly).
     {
-      Eigen::MatrixXd gdp;
+      Eigen::MatrixXd &gdp = sqrvar_gdp_;
       double var;
       distanceSqrVarianceWithGradCost2p(cps_.points, gdp, var);
 
+      // (A pass-1 beta/vel cache was tried here and REVERTED: forcing beta0
+      // to memory every sample in the main pass disturbed its vectorization
+      // and cost ~3% net on the gauntlet A/B — recomputing is cheaper.)
       i_dp = 0;
       for (int i = 0; i < N; ++i) {
         step = jerkOpt_.get_T1()(i) / K;
@@ -2868,11 +2975,14 @@ namespace ego_planner
       return false;
     }
 
-    int size = swarm_trajs_->size();
-    if (drone_id_ == formation_size_ - 1)
-      size = formation_size_;
-
-    if (size < formation_size_)
+    // The buffer is indexed by drone id and the LAST drone's own slot is
+    // absent by construction, so it needs one entry fewer than everyone else.
+    // (The old "force size = formation_size_" shortcut bypassed the guard and
+    // made at(id) throw at startup before all peers had broadcast.)
+    const int have = static_cast<int>(swarm_trajs_->size());
+    const int need = (drone_id_ == formation_size_ - 1) ? formation_size_ - 1
+                                                        : formation_size_;
+    if (have < need)
       return false;
 
     bool ret = false;
@@ -2886,7 +2996,9 @@ namespace ego_planner
     swarm_graph_pos[drone_id_] = p;
     swarm_graph_vel[drone_id_] = v;
 
-    for (size_t id = 0; id < size; id++)
+    // Bound by formation_size_, NOT the raw buffer size: a buffer with extra
+    // (non-formation) drones overran the formation-sized vectors above.
+    for (int id = 0; id < formation_size_; id++)
     {
       if (id == drone_id_)
         continue;
@@ -2927,7 +3039,7 @@ namespace ego_planner
 
       gradp = wei_formation_ * swarm_grad[drone_id_];
 
-      for (size_t id = 0; id < size; id++)
+      for (int id = 0; id < formation_size_; id++)
       {
         gradt += wei_formation_ * swarm_grad[id].dot(swarm_graph_vel[id]);
         if (id != drone_id_)
@@ -2947,7 +3059,8 @@ namespace ego_planner
   bool PolyTrajOptimizer::sdfGradCostP(const int i_dp,
                                         const Eigen::Vector3d &p,
                                         Eigen::Vector3d &gradp,
-                                        double &costp)
+                                        double &costp,
+                                        bool use_sdf)
   {
     (void)i_dp;
     gradp.setZero();
@@ -2984,7 +3097,7 @@ namespace ego_planner
       gradp = Eigen::Vector3d(0.0, 0.0, wei_obs_ * 9.0 * viol * viol);
       return true;
     }
-    if (!sdf_manager_ || !sdf_manager_->hasData()) return false;
+    if (!use_sdf || !sdf_manager_ || !sdf_manager_->hasData()) return false;
     if (!sdf_manager_->getDistanceAndGradient(p, &d, &grad_d)) return false;
     if (!std::isfinite(d)) return false;
 
@@ -3115,6 +3228,116 @@ namespace ego_planner
     return false;
   }
 
+  // UNIFIED FLOOR (z-redesign Stage 2) — pure per-sample computation. The
+  // governing-floor doctrine and slot semantics are documented at the call
+  // site in addPVAGradCost2CT; math moved here verbatim so the [RISK-PAR]
+  // precompute and the serial inline path share one implementation.
+  bool PolyTrajOptimizer::unifiedFloorTermP(const Eigen::Vector3d &pos,
+                                            Eigen::Vector3d *grad3,
+                                            double *cost, int *slot)
+  {
+    double terr_floor = -1e30;
+    float h = 0.f, dhx = 0.f, dhy = 0.f;
+    Eigen::Vector2d tgrad(0.0, 0.0);
+    bool have_terr = false;
+    if (enable_obstacles_ && (terrain_hgrad_ || terrain_height_)) {
+        if (terrain_hgrad_) {
+            // Value + ANALYTIC slope of the SAME bilinear surface (a
+            // smoothed central-diff slope disagreed near DEM-cell edges
+            // and killed the line search on cliff cells, -1008).
+            have_terr = terrain_hgrad_(pos.x(), pos.y(), &h, &dhx, &dhy);
+        } else {
+            const float hv = terrain_height_(pos.x(), pos.y());
+            if (std::isfinite(hv)) { h = hv; have_terr = true; }  // value-only push
+        }
+        if (have_terr)
+            terr_floor = static_cast<double>(h) +
+                         terrainClearanceTarget(pos, &tgrad);
+    }
+    // [TERRAIN-TAPER] both floors relax toward a below-band pinned
+    // endpoint; their analytic d(target)/dxy joins the gradient below.
+    Eigen::Vector2d fgrad(0.0, 0.0);
+    const double anchor_floor =
+        (wei_alt_ > 0.0) ? altitudeFloorTarget(pos, &fgrad) : -1e30;
+
+    const bool terrain_governs = have_terr && terr_floor >= anchor_floor;
+    const double F = terrain_governs ? terr_floor : anchor_floor;
+    if (!(F > -1e29 && pos.z() < F)) return false;
+
+    const double viol = F - pos.z();
+    if (terrain_governs) {
+        *cost = wei_obs_ * viol * viol * viol;
+        const double dcoef = wei_obs_ * 3.0 * viol * viol;
+        *grad3 = Eigen::Vector3d(dcoef * (dhx + tgrad.x()),
+                                 dcoef * (dhy + tgrad.y()), -dcoef);
+        *slot = 8;
+    } else {
+        *cost = wei_alt_ * viol * viol;
+        const double dua = wei_alt_ * 2.0 * viol;
+        *grad3 = Eigen::Vector3d(dua * fgrad.x(), dua * fgrad.y(), -dua);
+        *slot = 6;
+    }
+    return true;
+  }
+
+  // ARC-VARYING altitude cap with the terrain-aware smoothstep gate — pure
+  // per-sample computation; doctrine documented at the call site. Moved here
+  // verbatim (same sharing rationale as unifiedFloorTermP).
+  bool PolyTrajOptimizer::altCapTermP(const Eigen::Vector3d &pos, double zhi_i,
+                                      Eigen::Vector3d *grad, double *cost)
+  {
+    if (!(wei_alt_ > 0.0 && zhi_i >= 0.0 && pos.z() > zhi_i)) return false;
+
+    double gate = 1.0;
+    Eigen::Vector3d gate_grad = Eigen::Vector3d::Zero();
+    const double glo = obstacle_clearance_;        // cap OFF at/below clearance
+    const double ghi = 2.0 * obstacle_clearance_;  // cap fully ON above
+    bool gated = false;
+    if (terrain_hgrad_) {
+        float hg = 0.f, hx = 0.f, hy = 0.f;
+        if (terrain_hgrad_(pos.x(), pos.y(), &hg, &hx, &hy)) {
+            const double tc = pos.z() - static_cast<double>(hg);
+            double t = (ghi > glo) ? (tc - glo) / (ghi - glo) : 1.0;
+            t = std::max(0.0, std::min(1.0, t));
+            gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1
+            // CONSISTENT gradient: the cost is wei*ua^2*gate(z - h(x,y)),
+            // so the gradient MUST carry d(gate) with the ANALYTIC slope of
+            // the same surface (frozen/smoothed slopes died in the band).
+            if (t > 0.0 && t < 1.0) {
+                const double dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
+                gate_grad = dgate * Eigen::Vector3d(-hx, -hy, 1.0);
+            }
+            gated = true;
+        }
+    }
+    if (!gated && sdf_manager_ && sdf_manager_->hasData()) {
+        // Same cost/gradient-pair rule: gate(d(pos)) carries dgate*grad_d.
+        float d = 0.f;
+        Eigen::Vector3d grad_d = Eigen::Vector3d::Zero();
+        if (sdf_manager_->getDistanceAndGradient(pos, &d, &grad_d) &&
+            std::isfinite(d)) {
+            double t = (ghi > glo) ? (static_cast<double>(d) - glo) / (ghi - glo) : 1.0;
+            t = std::max(0.0, std::min(1.0, t));
+            gate = t * t * (3.0 - 2.0 * t);            // smoothstep, C1
+            if (t > 0.0 && t < 1.0) {
+                const double dgate = 6.0 * t * (1.0 - t) / (ghi - glo);
+                gate_grad = dgate * grad_d;
+            }
+        }
+    }
+    if (gate <= 0.0) return false;
+
+    // QUADRATIC, not cubic: see call-site doctrine (cap must never out-press
+    // the clearance wall).
+    const double ua = pos.z() - zhi_i;
+    *cost = wei_alt_ * ua * ua * gate;
+    // Full gradient of wei*ua^2*gate(·):
+    //   d/dpos = wei*ua^2*gate_grad + (0,0, wei*2*ua*gate).
+    *grad = wei_alt_ * ua * ua * gate_grad +
+            Eigen::Vector3d(0.0, 0.0, wei_alt_ * 2.0 * ua * gate);
+    return true;
+  }
+
   bool PolyTrajOptimizer::fixedWingDynamicsGradCostPVA(
       const Eigen::Vector3d &p,
       const Eigen::Vector3d &v,
@@ -3237,11 +3460,10 @@ namespace ego_planner
     costp = 0.0;
 
     constexpr double kMoatCap = 1.0 - 1e-3;  // identical to getRiskNorm
-    // Barrier ramp width as a fraction of reach, OUTSIDE the rim: s=1 at
-    // d<=reach, fading to 0 at reach*(1+frac). ~ the front-end's coarse-cell
-    // bleed (cres ~ metres) at typical zone sizes; steep enough that the
-    // approach equilibrium sits outside the true rim.
-    constexpr double kBarrierRampFrac = 0.05;
+    // Ramp fraction ~ the front-end's coarse-cell bleed (cres ~ metres) at
+    // typical zone sizes; steep enough that the approach equilibrium sits
+    // outside the true rim. Shared with the setRiskZones precomputation.
+    constexpr double kBarrierRampFrac = kRiskBarrierRampFrac;
 
     double Sm = 1.0;                               // moat survival prod(1-m_i)
     Eigen::Vector3d Gm = Eigen::Vector3d::Zero();  // sum grad(m_i)/(1-m_i)
@@ -3252,11 +3474,14 @@ namespace ego_planner
       // AABB pre-filter on the ENLARGED support (barrier ramp lives outside
       // the rim); the moat keeps the exact getRiskNorm support d < reach.
       // The normalized ramp expands every ellipsoid semi-axis equally.
-      const double reach_b = tz.reach * (1.0 + kBarrierRampFrac);
-      const double rv = tz.vertical_reach > 0.0
-                            ? tz.vertical_reach : tz.reach;
-      if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
-      const double rv_b = rv * (1.0 + kBarrierRampFrac);
+      // Geometry-only constants come precomputed from setRiskZones — this
+      // loop runs per constraint point per iteration, and for far zones the
+      // constants WERE the whole cost.
+      const RiskZonePrep &zp = risk_zone_prep_[zi];
+      if (!zp.valid) continue;
+      const double reach_b = zp.reach_b;
+      const double rv = zp.rv;
+      const double rv_b = zp.rv_b;
       const double dz = p.z() - tz.center.z();
       if (std::abs(dz) >= rv_b) continue;
       const double dx = p.x() - tz.center.x();
@@ -3354,9 +3579,13 @@ namespace ego_planner
                                                             double &var)
   {
     int N = ps.cols() - 1;
-    Eigen::MatrixXd dps = ps.rightCols(N) - ps.leftCols(N);
+    // Member scratch (called once per cost evaluation): no per-call heap churn.
+    Eigen::MatrixXd &dps = sqrvar_dps_;
+    dps.resize(3, N);
+    dps = ps.rightCols(N) - ps.leftCols(N);
     dps.row(2).setZero();  // horizontal spacing only (see block comment)
-    Eigen::VectorXd dsqrs = dps.colwise().squaredNorm().transpose();
+    Eigen::VectorXd &dsqrs = sqrvar_dsqrs_;
+    dsqrs = dps.colwise().squaredNorm().transpose();
     double dsqrsum = dsqrs.sum();
     double dquarsum = dsqrs.squaredNorm();
     double dsqrmean = dsqrsum / N;
@@ -3396,6 +3625,13 @@ namespace ego_planner
                 cps_num_prePiece_);
         cps_num_prePiece_ = 1;
     }
+
+    // [RISK-PAR] 0 = all cores, 1 = serial inline (pre-parallel code path),
+    // n > 1 = capped. Results are bit-identical for every setting.
+    node_->declare_parameter("optimization/risk_parallel_threads", 0);
+    node_->get_parameter("optimization/risk_parallel_threads",
+                         risk_parallel_threads_);
+    if (risk_parallel_threads_ < 0) risk_parallel_threads_ = 0;
 
     node_->declare_parameter("enable_obstacles", true);
     node_->get_parameter("enable_obstacles", enable_obstacles_);

@@ -31,10 +31,18 @@ find_package(path_planner REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(mmp_vehicle_dynamics REQUIRED)
+# [RISK-PAR] OpenMP for the per-piece risk-term precompute in
+# addPVAGradCost2CT. Raw flags (not OpenMP::OpenMP_CXX) for the same
+# plain-signature target_link_libraries reason as path_manager.
+find_package(OpenMP)
 
 add_library(${PROJECT_NAME}_lib
   src/poly_traj_optimizer.cpp
 )
+if(OpenMP_CXX_FOUND)
+  target_compile_options(${PROJECT_NAME}_lib PRIVATE ${OpenMP_CXX_FLAGS})
+  target_link_libraries(${PROJECT_NAME}_lib ${OpenMP_CXX_LIBRARIES})
+endif()
 
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
