@@ -250,6 +250,16 @@ namespace ego_planner
     Eigen::MatrixXd par_dyn_gp_, par_dyn_gv_, par_dyn_ga_;
     Eigen::VectorXd par_obs_cost_, par_floor_cost_, par_cap_cost_,
         par_dyn_cost_;
+    // [PIECE-PAR] merged-pass cost summands: 8 terms x S, ZERO when a term
+    // did not fire (x + 0.0 is exact for finite x, so the serial replay in
+    // the original (piece, sample, term) order keeps costs bit-identical).
+    Eigen::MatrixXd pp_cost_add_;
+    // [PROF] Per-solve stage-time accumulators (ms), summed across every cost
+    // callback and logged once when the solve returns. The chrono reads
+    // already existed per call (t1..t5) — this just stops discarding them.
+    double prof_gen_ms_{0.0}, prof_smooth_ms_{0.0}, prof_pva_ms_{0.0},
+        prof_pre_ms_{0.0}, prof_grad_ms_{0.0}, prof_vt_ms_{0.0},
+        prof_cb_ms_{0.0};
     // Pure per-sample term computations shared by the [RISK-PAR] precompute
     // and the serial (threads==1) inline path — single source of truth for
     // the unified-floor / altitude-cap math that used to live in the loop.

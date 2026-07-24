@@ -1611,6 +1611,10 @@ namespace ego_planner
     // q still holds the best accepted iterate, so re-entering from it with
     // FRESH memory (first step = steepest descent) routinely makes progress
     // again. Bounded retries keep the worst case cheap.
+    // [PROF] reset the per-solve stage accumulators.
+    prof_gen_ms_ = prof_smooth_ms_ = prof_pva_ms_ = prof_pre_ms_ =
+        prof_grad_ms_ = prof_vt_ms_ = prof_cb_ms_ = 0.0;
+
     int restarts = 0;
     for (;;) {
         result = lbfgs::lbfgs_optimize(
@@ -1714,6 +1718,18 @@ namespace ego_planner
     if (log_manager_) {
         log_manager_->infof("Optimization completed: iter=%d, use_formation_param=%d, use_formation_internal=%d, time(ms)=%f",
                             iter_num_, use_formation, use_formation_, time_ms);
+
+        // [PROF] where the solve time actually went. serial_loop = the
+        // record-consuming accumulation loop (PVA minus the parallel
+        // precompute); lbfgs = everything outside the cost callback
+        // (direction/line-search bookkeeping and vector ops).
+        log_manager_->infof(
+            "[PROF] total=%.0fms cb=%.0fms | gen=%.0f smooth=%.0f "
+            "pva=%.0f (pre=%.0f serial_loop=%.0f) grad=%.0f vt=%.0f | "
+            "lbfgs=%.0fms",
+            time_ms, prof_cb_ms_, prof_gen_ms_, prof_smooth_ms_,
+            prof_pva_ms_, prof_pre_ms_, prof_pva_ms_ - prof_pre_ms_,
+            prof_grad_ms_, prof_vt_ms_, time_ms - prof_cb_ms_);
 
         // Calculate and log jerk metrics
         poly_traj::Trajectory final_traj = jerkOpt_.getTraj();
@@ -2370,11 +2386,20 @@ namespace ego_planner
 
     opt->iter_num_ += 1;
 
+    // [PROF] accumulate the per-stage timings (already measured above).
+    opt->prof_gen_ms_ += traj_gen_time;
+    opt->prof_smooth_ms_ += smoothness_time;
+    opt->prof_pva_ms_ += pva_cost_time;
+    opt->prof_grad_ms_ += grad_time;
+    opt->prof_vt_ms_ += time_cost_time;
+    opt->prof_cb_ms_ += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t_start).count();
+
     // Debug output for performance monitoring
     if (opt->iter_num_ % 50 == 0 && opt->log_manager_ && opt->enable_debug_logs_) {
         double total_callback_time = std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - t_start).count();
-        opt->log_manager_->debugf("CostFunction iter=%d: Traj=%fms, Smooth=%fms, PVA=%fms, Grad=%fms, Time=%fms, Total=%fms", 
+        opt->log_manager_->debugf("CostFunction iter=%d: Traj=%fms, Smooth=%fms, PVA=%fms, Grad=%fms, Time=%fms, Total=%fms",
           opt->iter_num_, traj_gen_time, smoothness_time, pva_cost_time, grad_time, time_cost_time, total_callback_time);
     }
 
@@ -2521,7 +2546,27 @@ namespace ego_planner
     // the terrain memo is thread_local (audited); SDF reads take the shared
     // lock.
     const bool sample_par = risk_parallel_threads_ != 1;
-    if (sample_par) {
+    // [PIECE-PAR] The fully merged single-pass path (compute AND accumulate
+    // per piece in one parallel region) is bit-exact only when the
+    // swarm/formation terms cannot fire: they interleave into gdT/costs
+    // between floor and risk, and formation writes debug_similarity_ and
+    // gdT.head(i). When either may fire, fall back to the two-phase
+    // precompute+serial-consume path below (itself bit-identical).
+    const bool swarm_may_fire = swarm_trajs_ && !swarm_trajs_->empty();
+    const bool formation_may_fire =
+        use_formation_ && swarm_trajs_ &&
+        static_cast<int>(swarm_trajs_->size()) >=
+            ((drone_id_ == formation_size_ - 1) ? formation_size_ - 1
+                                                : formation_size_);
+    const bool piece_par = sample_par && !swarm_may_fire && !formation_may_fire;
+#ifdef _OPENMP
+    const int pp_nthreads =
+        risk_parallel_threads_ > 0
+            ? risk_parallel_threads_
+            : std::max(1, std::min(16, omp_get_max_threads() / 2));
+#endif
+    const auto prof_pre_t0 = std::chrono::high_resolution_clock::now();
+    if (sample_par && !piece_par) {
       const int S = N * (K + 1);
       if (static_cast<int>(risk_par_found_.size()) < S) {
         risk_par_found_.resize(S);
@@ -2546,17 +2591,10 @@ namespace ego_planner
       }
       const bool dyn_on = dynamics_enable_ && wei_dynamics_ > 0.0;
 #ifdef _OPENMP
-      // auto (0) = half the hardware threads (~physical cores), capped at 16:
-      // measured on a 32-thread host with all terms precomputed — 16 threads
-      // 8.8 s vs 8 threads 9.8 s vs serial 26.7 s, while ALL 32 was
-      // pathological (HT siblings spin-starve the serial remainder of the
-      // loop, >2x slower than serial). Half-of-HW generalizes "never run on
-      // every hyperthread" to smaller machines.
-      const int risk_par_nthreads =
-          risk_parallel_threads_ > 0
-              ? risk_parallel_threads_
-              : std::max(1, std::min(16, omp_get_max_threads() / 2));
-#pragma omp parallel for schedule(dynamic, 1) num_threads(risk_par_nthreads)
+      // Thread rule (pp_nthreads above): auto = half the hardware threads
+      // (~physical cores) capped at 16 — measured knee; ALL hyperthreads was
+      // pathological (spin-starves the serial remainder, >2x slower).
+#pragma omp parallel for schedule(dynamic, 1) num_threads(pp_nthreads)
 #endif
       for (int pi = 0; pi < N; ++pi) {
         const Eigen::Matrix<double, 6, 3> &pc =
@@ -2629,6 +2667,170 @@ namespace ego_planner
       }
     }
 
+    // [PIECE-PAR] merged pass: each piece is owned by ONE thread that replays
+    // its samples in order and accumulates DIRECTLY into that piece's gdC
+    // block and gdT entry — pieces touch disjoint memory, and within a piece
+    // the += sequence is exactly the serial loop's, so gdC/gdT stay
+    // bit-identical. costs is cross-piece, so each term's summand
+    // (omg*step*cost, 0.0 when unfired) is stored and replayed serially in
+    // the original (piece, sample, term) order below.
+    if (piece_par) {
+      const int S = N * (K + 1);
+      if (pp_cost_add_.cols() < S) pp_cost_add_.resize(8, S);
+      if (static_cast<int>(par_floor_slot_.size()) < S)
+        par_floor_slot_.resize(S);
+      const bool dyn_on = dynamics_enable_ && wei_dynamics_ > 0.0;
+      const bool ride_on =
+          wei_ride_ > 0.0 &&
+          static_cast<int>(ride_rough_pieces_.size()) == N;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 1) num_threads(pp_nthreads)
+#endif
+      for (int pi = 0; pi < N; ++pi) {
+        const Eigen::Matrix<double, 6, 3> &c =
+            jerkOpt_.get_b().block<6, 3>(pi * 6, 0);
+        const double step_p = jerkOpt_.get_T1()(pi) / K;
+        const double zhi_p =
+            (alt_zhi_pieces_.size() == N) ? alt_zhi_pieces_(pi) : alt_zhi_;
+        double s1p = 0.0;
+        Eigen::Matrix<double, 6, 1> b0, b1, b2, b3;
+        Eigen::Vector3d posp, velp, accp, jerp;
+        Eigen::Vector3d gp, gv, ga;
+        Eigen::Matrix<double, 6, 3> vPc, vVc, vAc;
+        double cst;
+        for (int pj = 0; pj <= K; ++pj) {
+          const double s2p = s1p * s1p;
+          const double s3p = s2p * s1p;
+          const double s4p = s2p * s2p;
+          const double s5p = s4p * s1p;
+          b0 << 1.0, s1p, s2p, s3p, s4p, s5p;
+          b1 << 0.0, 1.0, 2.0 * s1p, 3.0 * s2p, 4.0 * s3p, 5.0 * s4p;
+          b2 << 0.0, 0.0, 2.0, 6.0 * s1p, 12.0 * s2p, 20.0 * s3p;
+          b3 << 0.0, 0.0, 0.0, 6.0, 24.0 * s1p, 60.0 * s2p;
+          const double alpha_p = 1.0 / K * pj;
+          posp = c.transpose() * b0;
+          velp = c.transpose() * b1;
+          accp = c.transpose() * b2;
+          jerp = c.transpose() * b3;
+          const double omg_p = (pj == 0 || pj == K) ? 0.5 : 1.0;
+          const int s = pi * (K + 1) + pj;
+          const int idp = pi * K + pj;  // boundary samples share an i_dp
+          // The serial loop writes the shared boundary column twice and the
+          // SUCCESSOR piece's j=0 write wins — skip the doomed write.
+          if (pj != K || pi == N - 1) cps_.points.col(idp) = posp;
+          double a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0, a4 = 0.0,
+                 a5 = 0.0, a6 = 0.0, a7 = 0.0;
+          int fslot = 6;
+
+          // Terms in the serial loop's exact order (swarm/formation cannot
+          // fire on this path — see the piece_par gate).
+          if (sdfGradCostP(idp, posp, gp, cst, use_sdf)) {
+            vPc = b0 * gp.transpose();
+            const double vPt = alpha_p * gp.transpose() * velp;
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) += omg_p * step_p * vPc;
+            gdT(pi) += omg_p * (cst / K + step_p * vPt);
+            a0 = omg_p * step_p * cst;
+          }
+          if (unifiedFloorTermP(posp, &gp, &cst, &fslot)) {
+            vPc = b0 * gp.transpose();
+            const double vPt = alpha_p * gp.transpose() * velp;
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) += omg_p * step_p * vPc;
+            gdT(pi) += omg_p * (cst / K + step_p * vPt);
+            a1 = omg_p * step_p * cst;
+          }
+          if (use_risk_zones_ && RiskGradCostP(idp, posp, velp, gp, gv, cst)) {
+            vPc = b0 * gp.transpose() + b1 * gv.transpose();
+            const double vPt = alpha_p * (gp.dot(velp) + gv.dot(accp));
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) += omg_p * step_p * vPc;
+            gdT(pi) += omg_p * (cst / K + step_p * vPt);
+            a2 = omg_p * step_p * cst;
+          }
+          if (altCapTermP(posp, zhi_p, &gp, &cst)) {
+            vPc = b0 * gp.transpose();
+            const double vPt = alpha_p * gp.transpose() * velp;
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) += omg_p * step_p * vPc;
+            gdT(pi) += omg_p * (cst / K + step_p * vPt);
+            a3 = omg_p * step_p * cst;
+          }
+          if (feasibilityGradCostV(velp, gv, cst)) {
+            vVc = b1 * gv.transpose();
+            const double vVt = alpha_p * gv.transpose() * accp;
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) += omg_p * step_p * vVc;
+            gdT(pi) += omg_p * (cst / K + step_p * vVt);
+            a4 = omg_p * step_p * cst;
+          }
+          if (feasibilityGradCostA(accp, ga, cst)) {
+            vAc = b2 * ga.transpose();
+            const double vAt = alpha_p * ga.transpose() * jerp;
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) += omg_p * step_p * vAc;
+            gdT(pi) += omg_p * (cst / K + step_p * vAt);
+            a5 = omg_p * step_p * cst;
+          }
+          if (ride_on) {
+            const double r = ride_rough_pieces_(pi);
+            if (r > 1e-9) {
+              const double v2xy = velp.x() * velp.x() + velp.y() * velp.y();
+              const double costr = wei_ride_ * r * v2xy;
+              const Eigen::Vector3d gradvr(2.0 * wei_ride_ * r * velp.x(),
+                                           2.0 * wei_ride_ * r * velp.y(),
+                                           0.0);
+              vVc = b1 * gradvr.transpose();
+              const double vVt = alpha_p * gradvr.transpose() * accp;
+              jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) +=
+                  omg_p * step_p * vVc;
+              gdT(pi) += omg_p * (costr / K + step_p * vVt);
+              a6 = omg_p * step_p * costr;
+            }
+          }
+          if (dyn_on &&
+              fixedWingDynamicsGradCostPVA(posp, velp, accp, gp, gv, ga, cst)) {
+            vPc = b0 * gp.transpose();
+            vVc = b1 * gv.transpose();
+            vAc = b2 * ga.transpose();
+            const double vVt =
+                alpha_p * (gp.dot(velp) + gv.dot(accp) + ga.dot(jerp));
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) +=
+                omg_p * step_p * (vPc + vVc + vAc);
+            gdT(pi) += omg_p * (cst / K + step_p * vVt);
+            a7 = omg_p * step_p * cst;
+          }
+
+          pp_cost_add_(0, s) = a0;
+          pp_cost_add_(1, s) = a1;
+          pp_cost_add_(2, s) = a2;
+          pp_cost_add_(3, s) = a3;
+          pp_cost_add_(4, s) = a4;
+          pp_cost_add_(5, s) = a5;
+          pp_cost_add_(6, s) = a6;
+          pp_cost_add_(7, s) = a7;
+          par_floor_slot_[s] = fslot;
+
+          s1p += step_p;
+        }
+      }
+    }
+    prof_pre_ms_ += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - prof_pre_t0).count();
+
+    // [PIECE-PAR] serial costs replay in the original order (0.0 summands
+    // are exact identities).
+    if (piece_par) {
+      for (int ri = 0; ri < N; ++ri) {
+        for (int rj = 0; rj <= K; ++rj) {
+          const int s = ri * (K + 1) + rj;
+          costs(0) += pp_cost_add_(0, s);
+          costs(par_floor_slot_[s]) += pp_cost_add_(1, s);
+          costs(3) += pp_cost_add_(2, s);
+          costs(6) += pp_cost_add_(3, s);
+          costs(4) += pp_cost_add_(4, s);
+          costs(4) += pp_cost_add_(5, s);
+          costs(9) += pp_cost_add_(6, s);
+          costs(7) += pp_cost_add_(7, s);
+        }
+      }
+    }
+
+    if (!piece_par)
     for (int i = 0; i < N; ++i)
     {
       const Eigen::Matrix<double, 6, 3> &c = jerkOpt_.get_b().block<6, 3>(i * 6, 0);
@@ -2930,6 +3132,38 @@ namespace ego_planner
       // (A pass-1 beta/vel cache was tried here and REVERTED: forcing beta0
       // to memory every sample in the main pass disturbed its vectorization
       // and cost ~3% net on the gauntlet A/B — recomputing is cheaper.)
+      if (piece_par) {
+        // [PIECE-PAR] same piece-owned direct accumulation as the merged
+        // pass: gdC block / gdT entry of piece pi are written only by pi's
+        // thread, in the serial loop's exact order; gdp is read-only.
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) num_threads(pp_nthreads)
+#endif
+        for (int pi = 0; pi < N; ++pi) {
+          const double step_p = jerkOpt_.get_T1()(pi) / K;
+          double s1p = 0.0;
+          Eigen::Matrix<double, 6, 1> b0, b1;
+          Eigen::Vector3d velp;
+          Eigen::Matrix<double, 6, 3> vPc;
+          for (int pj = 0; pj <= K; ++pj) {
+            const double s2p = s1p * s1p;
+            const double s3p = s2p * s1p;
+            const double s4p = s2p * s2p;
+            const double s5p = s4p * s1p;
+            b0 << 1.0, s1p, s2p, s3p, s4p, s5p;
+            b1 << 0.0, 1.0, 2.0 * s1p, 3.0 * s2p, 4.0 * s3p, 5.0 * s4p;
+            const double alpha_p = 1.0 / K * pj;
+            velp = jerkOpt_.get_b().block<6, 3>(pi * 6, 0).transpose() * b1;
+            const double omg_p = (pj == 0 || pj == K) ? 0.5 : 1.0;
+            const int idp = pi * K + pj;
+            vPc = b0 * gdp.col(idp).transpose();
+            const double vPt = alpha_p * gdp.col(idp).transpose() * velp;
+            jerkOpt_.get_gdC().block<6, 3>(pi * 6, 0) += omg_p * vPc;
+            gdT(pi) += omg_p * (vPt);
+            s1p += step_p;
+          }
+        }
+      } else {
       i_dp = 0;
       for (int i = 0; i < N; ++i) {
         step = jerkOpt_.get_T1()(i) / K;
@@ -2953,6 +3187,7 @@ namespace ego_planner
               ++i_dp;
           }
         }
+      }
       }
       costs(5) += var;
     }
