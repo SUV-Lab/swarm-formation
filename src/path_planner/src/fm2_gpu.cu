@@ -100,7 +100,7 @@ __global__ void fimBlock(float* T, const float* Tread, const float* F,
     // its cells settle to within this, so a LARGER eps freezes more block-grained
     // residual noise into T — and the geodesic, descending T, follows that noise
     // into tortuous high-risk detours (observed: eps 1e-4 produced a 3681-pt
-    // zigzag with 5x the risk exposure that the back-end could not smooth, tipping
+    // zigzag with 5x the accumulated risk that the back-end could not smooth, tipping
     // it to a -1005 stall). Tightened 1e-4 -> 1e-6 so the field relaxes closer to
     // the true solution and the geodesic follows the real (weak, in-band)
     // z-gradients instead of noise. Costs a few more relaxation rounds (still well

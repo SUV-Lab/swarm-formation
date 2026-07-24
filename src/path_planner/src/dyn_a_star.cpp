@@ -662,7 +662,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // cost the A* search actually paid. This way:
     //   - clear corridors: fully shortcut to a straight line
     //   - risk detour    : original avoidance is preserved
-    //   - forced breakthrough: detour_cost ≈ shortcut_cost, shortcut allowed
+    //   - required zone crossing: detour_cost ≈ shortcut_cost, shortcut allowed
     const double kShortcutMargin = 1.05;
     const int    kRiskSamples  = 4;  // trapezoidal samples per segment
 
@@ -671,7 +671,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // from being collapsed by a chord that spikes cost somewhere the coarse
     // 4-sample average misses. They were originally gated on zone presence,
     // but getRiskCost = alpha*moat + getRoughCost and the H2 roughness term
-    // is ZONE-INDEPENDENT — so on a zone-free rough-terrain (NOE) mission the
+    // is ZONE-INDEPENDENT — so on a zone-free rough-terrain,
+    // low-altitude terrain-following mission the
     // envelope was fully disabled and a chord could cut straight across a
     // narrow rough ridge FM2 had detoured around (header invariant "the
     // shortcut pass cannot revert an FM2 roughness detour"). Gate on cost
@@ -876,7 +877,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
             if (need_risk) {
                 // NOTE(candidate, not enabled): raising this 1e-6 zero-risk
                 // razor to a meaningful moat value (~0.01*alpha) measured
-                // -45% optimizer iterations on the gauntlet (boundary-hug
+                // -45% optimizer iterations on the complex-field stress case
+                // (boundary-hug
                 // flicker churn), but chordOk keeps its own 1e-6 razor and
                 // the two filters would disagree across (1e-6, eps] —
                 // promote only together with a chordOk-symmetric change.
@@ -953,8 +955,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
 
     // Near-point dedup BEFORE the terrain sweep (was after — ordering bug:
     // the 0.3 u filter deleted sweep-inserted terrain-lift vertices, silently
-    // re-opening the exact penetration the sweep repaired; observed as the
-    // "simple=32 -> route=30" count mismatch on the korea corridor).
+    // re-opening the exact clearance violation the sweep repaired; observed
+    // as the "simple=32 -> route=30" count mismatch on the regional corridor).
     // Here it only cleans guard/polish near-duplicates; the sweep then runs
     // on final geometry and NOTHING may delete its vertices afterwards
     // (the post-sweep pass below merges with max-z instead of deleting).
@@ -986,7 +988,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // between them is never terrain-tested; (b) even a failing adjacent pair
     // would have no repair path, since there is no raw vertex to re-insert
     // between a and a+1. So instead of rejecting, REPAIR: sample every kept
-    // segment at the DEM-scaled pitch and lift the worst penetration point to
+    // segment at the DEM-scaled pitch and lift the worst clearance-violation
+    // point to
     // terrain + margin as a new climb vertex, repeating until clean (same
     // spirit as the corner-cut guard's re-insertion loop above).
     if (terrain_height_) {
@@ -996,7 +999,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         // unbounded sweep would inflate piece_num_/variable_num_ and the
         // optimizer's per-iteration cost. Real DEMs converge in a handful of
         // lifts (bilinear cells have no sub-cell features — measured 2 lifts
-        // on a 44 km ridge-graze NOE); the cap only guards pathological
+        // on a 44 km ridge-grazing terrain-following route); the cap only
+        // guards pathological
         // geometry. A capped exit with work remaining is WARNed below — the
         // optimizer terrain term is the remaining guard.
         //
@@ -1004,16 +1008,18 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         // In-place lifts are once-per-vertex (v.z is set to need+0.02 at FIXED
         // (x,y), so the same vertex can never re-trigger), and every other
         // change INSERTS a vertex, bounded by kLiftCap. The old 8-round cap
-        // bound FIRST on guard-dense corner chains (observed: knoez stress
-        // exited at 8 rounds with only lifted=14, leaving a penetrating seed
-        // that the optimizer then rode into a -0.543 goal-approach collision).
+        // bound FIRST on guard-dense corner chains (observed: terrain-following
+        // stress case exited at 8 rounds with only lifted=14, leaving a
+        // terrain-overlapping seed that the optimizer then rode into a -0.543
+        // goal-approach collision).
         // kRoundSafety is a pure backstop against an unforeseen cycle.
         constexpr int kLiftCap = 512;
         constexpr int kRoundSafety = 256;
         bool clean_exit = false;
         for (int round = 0; round < kRoundSafety && lifted < kLiftCap; ++round) {
             bool changed = false;
-            // (0) Lift KEPT interior vertices that themselves penetrate. The
+            // (0) Lift KEPT interior vertices that themselves overlap terrain.
+            // The
             // per-segment sweep below only samples interior points (s=1..n-1),
             // so a vertex retained by chordOk's b<=a+1 fast path — which returns
             // true WITHOUT calling chordOccRisk/checkOccupancy — can sit below
@@ -1062,7 +1068,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
             // below a ridge even when both adjacent SEGMENTS are clear. The
             // corner-cut guard earlier ran on the pre-sweep polyline, so
             // sweep-inserted lift vertices never got this check. Lift the worst
-            // inner-chord penetration in place (same fixpoint as above).
+            // inner-chord clearance violation in place (same fixpoint as above).
             for (size_t k = 1; k + 1 < simple_path.size(); ++k) {
                 const Vector3d m0 = 0.5 * (simple_path[k - 1] + simple_path[k]);
                 const Vector3d m1 = 0.5 * (simple_path[k] + simple_path[k + 1]);
@@ -1094,11 +1100,12 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         if (log_manager_) {
             if (!clean_exit && lifted > 0) {
                 // Exited via the round cap or kLiftCap while still finding
-                // work — residual sub-chord penetration may remain. Distinct
+                // work — a residual sub-chord clearance violation may remain.
+                // Distinct
                 // from the clean-convergence info line so it is greppable.
                 log_manager_->warnf(
                     "[A* SHORTCUT] terrain sweep hit its cap (lifted=%d, "
-                    "cap=%d) with work remaining — residual penetration "
+                    "cap=%d) with work remaining — residual clearance violation "
                     "possible; optimizer terrain term is the remaining guard",
                     lifted, kLiftCap);
             } else if (lifted > 0) {
@@ -1112,7 +1119,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
 
     // Post-sweep near-pair MERGE (terrain-safe replacement of the old delete
     // filter that ran here). The sweep may insert a lift vertex within 0.3 u
-    // of a neighbor; deleting either would re-open the repaired penetration,
+    // of a neighbor; deleting either would re-open the repaired clearance
+    // violation,
     // but keeping sub-0.3 u segments recreates the documented MINCO loiter
     // hazard. So MERGE instead: erase one vertex of a near pair and raise the
     // INTERIOR survivor's z to the pair max — z-monotone, so the sweep's
@@ -1171,7 +1179,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     logZProfileS("SIMPLE-PROFILE", simple_path);
     // Summary AFTER every mutation so the logged count equals the emitted
     // route (the old order printed simple=N, then the near filter deleted
-    // vertices -> "simple=32 vs route=30" confusion in the korea logs).
+    // vertices -> "simple=32 vs route=30" confusion in the regional logs).
     if (log_manager_) {
         double max_risk_simple = 0.0;
         for (size_t k = 1; k < simple_path.size(); ++k) {

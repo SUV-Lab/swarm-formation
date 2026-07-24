@@ -88,7 +88,8 @@ private:
     std::function<float(double, double)> terrain_height_;
     const std::vector<RiskZoneLite> *risk_zones_ = nullptr;
     // Per-zone terrain visibility supplied by PathManager's precomputed
-    // radial-horizon field. 1 = direct line of sight (full risk), 0 = hidden
+    // radial-horizon field. 1 = direct line of sight (full risk),
+    // 0 = terrain-occluded
     // behind terrain. Keeping the callback per zone preserves the existing
     // probabilistic-OR composition and start/goal barrier exemptions.
     std::function<double(size_t, const Eigen::Vector3d &)> risk_visibility_;
@@ -283,8 +284,9 @@ private:
     // deliberately NOT composed into the OR-moat and NOT scaled by
     // risk_alpha_. The composed form was built first and measured: with
     // survival = (1-rough)(1-moat) a high roughness devalues the moat's
-    // marginal weight, so the front-end started trading detection exposure
-    // for gentle terrain (gauntlet risk_cost 4x at similar max_risk). The
+    // marginal weight, so the front-end started trading visibility cost
+    // for gentle terrain (complex-field stress-case risk_cost 4x at similar
+    // max_risk). The
     // additive form keeps the zone moat's gradient intact at any roughness.
     // It is added inside getRiskCost and the FM2 speed map, so every
     // consumer of the shared field — FM2 wave, A* edge cost, coarse
@@ -321,9 +323,9 @@ private:
         double survival = 1.0;
         for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
             const auto &tz = (*risk_zones_)[zi];
-            // Compact ellipsoidal engagement envelope. Terrain visibility is
-            // a separate multiplier, so radar shadow and weapon support do
-            // not get conflated.
+            // Compact ellipsoidal risk envelope. Terrain visibility is a
+            // separate multiplier, so terrain occlusion and geometric risk
+            // coverage do not get conflated.
             const double dz = pos.z() - tz.center.z();
             const double rv = tz.vertical_reach > 0.0
                                   ? tz.vertical_reach : tz.reach;
@@ -487,7 +489,7 @@ public:
     void setGroundHeight(double h)      { ground_height_ = h; }
     // cell_u > 0 = DEM cell size in frame units. The chord/inner-chord
     // samplers must out-resolve the DEM: the legacy 0.5 u pitch was sized for
-    // the 250 m korea grid and skips whole cells of the 30-40 m corridor
+    // the 250 m regional_terrain grid and skips whole cells of the 30-40 m corridor
     // crops (a one-cell ridge between samples passes untested). Half-cell
     // pitch is sufficient — the bilinear surface has no sub-cell features.
     void setTerrainHeightmap(std::function<float(double, double)> f,
@@ -599,7 +601,7 @@ public:
     // Max column floor within lateral radius `halfwidth` (world units) of
     // (wx, wy) — the corridor/swath view. A successful lateral dodge leaves
     // the causal column NEXT TO the path, never under it, so an underfoot
-    // profile systematically hides exactly the constraints that shaped the
+    // profile systematically omits exactly the constraints that shaped the
     // route; the swath max puts them back. Same exact fm2_F_ source.
     float fm2SwathFloor(double wx, double wy, double halfwidth) const {
         const size_t N = (size_t)fcnx_ * fcny_ * fcnz_;

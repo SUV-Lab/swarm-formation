@@ -50,7 +50,7 @@ namespace path_manager
     Obstacle(const Eigen::Vector3d& c, double width, double length, double height) : center(c), shape(ObstacleShape::RECTANGLE), param1(width), param2(length), z_extent(height) {}
   };
 
-  // Terrain-masked air-defence zone. The authored reach is the horizontal
+  // Terrain-occluded risk zone. The authored reach is the horizontal
   // reach; PathManager derives a vertical reach from risk_vertical_ratio_ and
   // supplies the resulting ellipsoid consistently to the front/back ends.
   struct RiskZone {
@@ -66,8 +66,9 @@ namespace path_manager
   // The historical form here ("X-mirror then -90° rotation about the centre")
   // composes to wx = (Lx+Ly)/2 - (row+.5)res, wy = (Lx+Ly)/2 - (col+.5)res —
   // identical to the above ONLY when length_x == length_y. Every map before
-  // korea was square, so the planner agreed with the rendered mesh by luck;
-  // on korea (2991x4478) the two frames diverged by (Ly-Lx)/2 = 1858.75 u per
+  // regional_terrain was square, so the planner agreed with the rendered mesh
+  // by luck; on regional_terrain (2991x4478) the two frames diverged by
+  // (Ly-Lx)/2 = 1858.75 u per
   // axis (verified: the DEM peak rendered at (6263.75, 7443.75) while the
   // planner placed it at (8122.50, 5585.00)). Direct per-axis mirrors below.
   struct TerrainData {
@@ -108,7 +109,7 @@ namespace path_manager
       // WHY bilinear (was nearest-cell): the SDF the optimizer plans against is
       // voxelised from THIS function; nearest-cell made it a piecewise-constant,
       // ~cell-coarse (~230 m DEM cell) terrain, so a trajectory that only grazed
-      // that blocky surface looked like it PENETRATED the finer bilinear terrain
+      // that blocky surface appeared to overlap the finer bilinear terrain
       // the altitude/clearance panels display. Interpolating here makes the
       // optimizer's terrain match the panels' terrain, so grazes stop reading as
       // pass-throughs. Water/edge (any NaN or out-of-range corner) keeps the old
@@ -165,7 +166,7 @@ namespace path_manager
     // slope estimate disagrees with the bilinear cost near DEM-cell edges,
     // and on steep (cliff) cells the mismatch kills the L-BFGS line search
     // (-1008 rounding error at near-optimal points). Analytic-per-patch
-    // gradients are the same smoothness class the battle-tested SDF term had
+    // gradients are the same smoothness class the well-validated SDF term had
     // (trilinear value + its exact gradient). Returns false over pure water /
     // outside the DEM (no terrain there).
     bool getElevationAndGrad(double world_x, double world_y,
@@ -384,7 +385,7 @@ namespace path_manager
     std::vector<path_planner::search::RiskZoneLite> astar_risks_;
     // Zones exactly as authored (yaml param / runtime topic). risk_zones_ is
     // DERIVED from this list: with risk_zone_agl_ on, center.z is height
-    // ABOVE the DEM at (x,y) — an emitter mast on the terrain — and the
+    // ABOVE the DEM at (x,y) — a source-height offset on the terrain — and the
     // effective absolute z is re-derived whenever the DEM (re)arrives, so
     // zone-before-terrain ordering does not change the result.
     std::vector<RiskZone> risk_zones_raw_;
@@ -392,8 +393,9 @@ namespace path_manager
     void refreshEffectiveRiskZones();
     double risk_weight_;
     double risk_barrier_{100.0};   // front-end finite "hard wall" inside zones
-    // Rv / Rh for the compact ellipsoidal engagement envelope. Keeping this
-    // independent of the LOS mask separates weapon support from sensing.
+    // Rv / Rh for the compact ellipsoidal risk envelope. Keeping this
+    // independent of the LOS mask separates geometric risk coverage from
+    // terrain visibility.
     double risk_vertical_ratio_{0.35};
     double riskEllipsoidRadius(const RiskZone &zone,
                                const Eigen::Vector3d &pos) const;
@@ -417,11 +419,11 @@ namespace path_manager
     double risk_mask_radial_step_{0.0};  // <=0: DEM resolution
     double risk_mask_softness_{0.10};    // vertical sigmoid width (frame units)
     bool risk_grounded_{true};           // visibility clamped at terrain+band
-                                         // ("no hidden state below the band")
+                                         // ("no terrain-occluded state below the band")
     double risk_mask_viz_step_{0.0};     // <=0: auto per zone/DEM
     double risk_mask_viz_slice_offset_{0.0};
     double risk_mask_viz_threshold_{0.50};
-    // Detection-floor heatmap (mode "heatmap"): color ramp saturates at this
+    // Visibility-boundary heatmap (mode "heatmap"): color ramp saturates at this
     // AGL (frame units; 2.0 = 200 m), grid capped at max_dim on the longer
     // side of the zone-union AABB.
     double risk_heatmap_agl_max_{2.0};
@@ -430,12 +432,12 @@ namespace path_manager
     // deviates from the bilinear DEM sample by up to ~half a cell on slopes
     // (76 m cells on big_terrain) — 0.05 u sank into hillsides.
     double risk_heatmap_offset_{0.30};
-    // Cells whose detection floor is at/above agl_max ("safe unless you
+    // Cells whose visibility boundary is at/above agl_max ("low risk unless you
     // climb") paint GREEN by default; true leaves them transparent instead
-    // so the terrain imagery dominates. Shadow cells (never detectable)
+    // so the terrain imagery dominates. Occluded cells (never visible)
     // always keep their explicit blue.
     bool risk_heatmap_safe_transparent_{false};
-    // RViz modes: "volume" (default threat-floor mesh + clipped wire shell),
+    // RViz modes: "volume" (default risk-boundary mesh + clipped wire shell),
     // "fixed_agl" (terrain-following diagnostic), or "fixed_msl" (planar
     // diagnostic). The old drape bool remains only as a compatibility hint.
     std::string risk_mask_viz_mode_{"heatmap"};
@@ -451,7 +453,8 @@ namespace path_manager
                           Eigen::Vector3d *grad) const;
     // [RISK-GROUNDED] z used by the visibility sigmoid (manager/risk_grounded,
     // default ON): smooth-max(z, terrain + band) so the
-    // field has no legal hidden state below the clearance band. dzeff_dz (opt)
+    // field has no legal terrain-occluded state below the clearance band.
+    // dzeff_dz (opt)
     // receives ∂z_eff/∂z for the analytic z-gradient — one C1 surface.
     double riskGroundedZ(const Eigen::Vector3d &pos, double *dzeff_dz) const;
     void publishEffectiveRiskField();
@@ -459,12 +462,13 @@ namespace path_manager
     // [TRAJ-RISK] the one view where color == cost: the planned trajectory
     // painted by the risk density the aircraft ACTUALLY experiences at its 3D
     // position (OR-combined terrain-masked moats). Green (0) -> yellow -> red.
-    // The draped heatmap shows the ground-level detection floor, which is NOT
+    // The draped heatmap shows the ground-level visibility boundary, which is NOT
     // the flown risk — this line is.
     void publishTrajRisk(const poly_traj::Trajectory &traj);
     // [RISK-PROFILE] altitude-panel channels: per arc-length sample along the
     // plan, the risk-zone DOME cross-section (union vertical extent) and the
-    // detection ROOF (altitude above which some zone sees you; below = hidden).
+    // visibility ROOF (altitude above which some zone has visibility; below =
+    // terrain-occluded).
     // Quads [s, roof_z, dome_top_z, dome_bot_z]; NaN where no zone covers xy.
     void publishRiskProfile(const poly_traj::Trajectory &traj);
     double risk_smha_w_{2.0};
@@ -583,7 +587,7 @@ namespace path_manager
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr esdf_occ_pub_;
     // Terrain-masked horizontal slices on the existing RViz risk topic.
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr risk_field_pub_;
-    // Draped detection-floor heatmap (GridMap, rendered by a second
+    // Draped visibility-boundary heatmap (GridMap, rendered by a second
     // grid_map_rviz_plugin display; see publishRiskHeatmap).
     rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr risk_heatmap_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr traj_risk_pub_;

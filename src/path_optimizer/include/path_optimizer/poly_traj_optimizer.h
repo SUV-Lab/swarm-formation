@@ -165,7 +165,7 @@ namespace ego_planner
     // 2.5D terrain heightmap (frame units; -inf over water/invalid). Terrain is a
     // height FUNCTION, so querying it directly gives an EXACT clearance
     // (z - h(x,y)) instead of the 3D SDF's 10 m z-quantised approximation — the
-    // SDF under-sees terrain, so trajectories that read "clear" to it penetrate
+    // SDF under-sees terrain, so trajectories that read "clear" to it overlap
     // the finer DEM the clearance panel shows. When set, this term is the
     // authoritative terrain-collision check.
     std::function<float(double, double)> terrain_height_;
@@ -177,7 +177,8 @@ namespace ego_planner
     // -> false over pure water / outside the DEM.
     std::function<bool(double, double, float *, float *, float *)> terrain_hgrad_;
     // DEM cell size in frame units (0 = unknown). The SWATH-TERRAIN FLOOR
-    // sampling pitch tracks this: 2.3 u was sized for the 250 m korea grid
+    // sampling pitch tracks this: 2.3 u was sized for the 250 m
+    // regional_terrain grid
     // and skips 6-8 cells at a stride on the 30-40 m corridor crops, so a
     // one-cell ridge inside the swath went unseen and the cap floor it exists
     // to provide silently vanished.
@@ -200,7 +201,8 @@ namespace ego_planner
     Eigen::Vector2d terr_taper_xy_[2];
     double terr_taper_agl_[2] = {0.0, 0.0};
     // Same disease, altitude-floor edition: the scalar floor (ground cushion)
-    // may sit above a pinned endpoint (NOE start 0.05 < cushion 0.09). The
+    // may sit above a pinned endpoint (terrain-following start 0.05 <
+    // cushion 0.09). The
     // scalar must stay (it cushions sag off the ground-plane cliff), so the
     // floor tapers POINTWISE to just under the pinned z near that endpoint.
     bool floor_taper_on_[2] = {false, false};
@@ -209,7 +211,8 @@ namespace ego_planner
     // Effective radius used per plan: clamped to <=1/4 the start->goal span so
     // that when BOTH endpoints taper (both pinned below the band) the two
     // relaxation zones cannot overlap into mid-span and erode the demanded
-    // clearance there (terrain-penetration risk). Set in setupTerrainTaper.
+    // clearance there (terrain-clearance-violation risk). Set in
+    // setupTerrainTaper.
     double terr_taper_len_eff_{30.0};
 
     void setupTerrainTaper(const Eigen::Vector3d &start, const Eigen::Vector3d &goal);
@@ -274,7 +277,7 @@ namespace ego_planner
     std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)>
         risk_visibility_;
     // Raw per-zone LOS shadow ceiling (PathManager::riskShadowCeiling): the z
-    // below which terrain hides (x,y) from that zone's emitter. -inf = no
+    // below which terrain occludes (x,y) from that zone's source. -inf = no
     // shadow information (masking off, invalid mask, or outside the zone's
     // horizon table). Queried once per plan while building the per-piece cap
     // ([SHADOW-CAP]); never called from cost/gradient callbacks.
@@ -316,12 +319,13 @@ namespace ego_planner
     // without loosening the ceiling anywhere else. 0 = off (legacy cap).
     // Yaml: optimization/alt_cap_zone_relax.
     double alt_cap_zone_relax_{0.0};
-    // [SHADOW-CAP] (H3, exposure-owned altitude band) where terrain shadows a
+    // [OCCLUSION-CAP] (H3, visibility-aware altitude band) where terrain
+    // occludes a
     // piece from EVERY zone in xy reach, raise the cap to the LOS shadow
-    // ceiling minus this hidden-margin (z-units): the band's downward pressure
+    // ceiling minus this occlusion margin (z-units): the band's downward pressure
     // exists to stay unseen, so in shadow it owns nothing and the arch may
     // ride over the ridge instead of being pressed into the duck-below
-    // tug-of-war ("only low where visible"). Pieces no zone can reach keep
+    // cost conflict ("only low where visible"). Pieces no zone can reach keep
     // the legacy band (its hump-suppression role there is untouched).
     // <=0 = off (legacy cap). Yaml: optimization/alt_cap_shadow_margin.
     double alt_cap_shadow_margin_{0.0};
@@ -342,7 +346,7 @@ namespace ego_planner
 
     // [H5] Bounded-z warp. Each inner point's z decision variable r ∈ ℝ maps
     // through a per-point z-referenced tanh to z ∈ (lo_i, hi_i): a HARD box
-    // that replaces the soft floor/cap tug-of-war at the junctions. Bounds are
+    // that replaces the soft floor/cap cost conflict at the junctions. Bounds are
     // FROZEN per solve from the seed inner points (decision-variable
     // independent, same safe pattern as alt_zhi_pieces_) so the warp's only
     // variable is r and the chain rule dz/dr is an exact scalar — deriving the
@@ -382,8 +386,8 @@ namespace ego_planner
     // [H4] z-corridor decision layer — DIAGNOSTIC prototype (logging only).
     // Builds the along-route [floor(s), ceil(s)] vertical corridor per piece
     // chord (safety floor = the cap's own terrain swath + tapered clearance /
-    // altitude anchor; concealment ceiling = min over in-reach zones of the
-    // LOS shadow table H3 plumbed in, minus a hidden-margin), runs the
+    // altitude anchor; terrain-occlusion ceiling = min over in-reach zones of
+    // the LOS shadow table H3 plumbed in, minus an occlusion margin), runs the
     // climb-rate envelope (the h4_climb_slope dilation as the one-shot
     // feasibility pass) plus a discretized 1-D DP over it, and logs what
     // committing that z profile into clean_path would change — WITHOUT
@@ -391,10 +395,11 @@ namespace ego_planner
     // the corridor and the DP profile station-by-station. Gate:
     // optimization/h4_corridor_diag (default off = byte-identical).
     bool h4_corridor_diag_{false};
-    double h4_shadow_margin_{0.10};  // hidden-margin below the LOS ceiling [z-u]
+    double h4_shadow_margin_{0.10};  // occlusion margin below the LOS ceiling [z-u]
     // Climb grade for the corridor envelope and the DP window [z-u per xy-u].
     // NOT alt_cap_slope: that is the cap's licensing grade (0.10), far below
-    // what the vehicle demonstrably flies on ridge NOE (~0.3-0.5) — using it
+    // what the vehicle demonstrably flies on ridge terrain-following routes
+    // (~0.3-0.5) — using it
     // declared reachable ridges infeasible on first measurement.
     double h4_climb_slope_{0.60};
     // Per-plan station stash for the post-solve comparison (diag on only).
@@ -402,7 +407,7 @@ namespace ego_planner
     // conservative); h4_floor_c_ the chord floor (real safety comparisons).
     std::vector<double> h4_x_, h4_y_, h4_s_km_, h4_dp_z_, h4_floor_, h4_ceil_;
     std::vector<double> h4_floor_c_;
-    std::vector<char> h4_status_;    // 'F' free / 'C' ceiling / 'E' exposed
+    std::vector<char> h4_status_;    // 'F' free / 'C' ceiling / 'V' visible
     void logH4ZCorridor(const std::vector<Eigen::Vector3d> &clean_path,
                         const Eigen::Vector3d &start_pos,
                         const Eigen::Vector3d &goal_pos);
@@ -412,13 +417,14 @@ namespace ego_planner
     // rewrite clean_path's inner z from a vertex-lattice corridor DP before
     // any consumer reads it. The DP TRACKS the committed profile and departs
     // only for the three corrections the layer exists for — floor
-    // violations, climb infeasibility, exposure above the concealment
+    // violations, climb infeasibility, visibility above the terrain-occlusion
     // ceiling. It does NOT seed "as low as safely possible": an A/B showed
     // seeds pick the solve's homotopy, and floor-hugging seeds settle into
     // band-grazing local optima even with the soft terms in full authority
     // (kwaypt clearance 1.862 -> 0.267). Commit swath is sized to the
     // MEASURED back-end lateral drift (~1-8 u), not the cap floor's 25 u
-    // budget (whose commit premium over ridge NOE is +2.4-2.6 u). Default
+    // budget (whose commit premium over ridge terrain-following is
+    // +2.4-2.6 u). Default
     // off = byte-identical.
     bool h4_commit_{false};          // yaml gate optimization/h4_commit
     double h4_commit_swath_{3.0};    // vertex-disc floor radius [xy-u]
@@ -510,8 +516,8 @@ namespace ego_planner
     // Extend the exemption to zones the FRONT-END ROUTE already crosses: the
     // front-end's finite barrier permits crossing when every alternative is
     // worse (e.g. randomly-oriented ships walling the good corridor), and a
-    // back-end barrier on that zone would fight the committed crossing —
-    // the observed failure was a 1M-scale risk/obstacle tug-of-war ending in
+    // back-end barrier on that zone would oppose the committed crossing —
+    // the observed failure was a 1M-scale risk/obstacle cost conflict ending in
     // a -1005 line-search death with an unfinished iterate published. Point
     // sampling of the densified path is intentional: deep crossings exempt,
     // shallow corner-clips stay barred (the ramp SHOULD push those out).

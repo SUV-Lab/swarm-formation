@@ -218,7 +218,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'world',
             default_value='',
-            description='Map name (e.g. korea, sample, big_terrain). When set, '
+            description='Map name (e.g. regional_terrain, sample, big_terrain). When set, '
                         'overrides manager/world in optimizer_params.yaml.'
         ),
         OpaqueFunction(function=create_drone_nodes),

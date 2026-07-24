@@ -11,10 +11,12 @@
     # [ROUGH] H2 terrain-roughness routing (2026-07-22): additive slope cost in
     # the FE shared field (FM2 speed map, A* edges, coarse heuristic, shortcut
     # acceptance, guard) — own currency, deliberately NOT risk_weight-scaled
-    # (the coupled form devalued the zone moat: gauntlet risk_cost 4x). Faded
+    # (the coupled form devalued the zone moat: complex-field stress-case
+    # risk_cost 4x). Faded
     # to zero between 1.0 and 2.5 u AGL, so high transits are untouched.
-    # w=1.5 measured: knoe ridge iter -34%, kzone clearance 2x / risk -24%,
-    # k1 coast-ships risk -17% + alt_cost -57%, gauntlet risk -64% with
+    # w=1.5 measured: ridge terrain-following iter -34%, zone-case clearance
+    # 2x / risk -24%, coastal surface-obstacle risk -17% + alt_cost -57%,
+    # complex-field stress-case risk -64% with
     # max_risk 100 -> 0.8 (the reshaped wave avoids the forced barrier
     # crossing), clearance 2.4x, dynamics -75%, durations ~flat. Full
     # sc_suite A/B: 6 cases identical; only cost = kwaypt clearance
@@ -23,39 +25,40 @@
     manager/fm2_rough_weight: 1.5
     manager/fm2_rough_slope0: 0.20      # slope deadband (tan, ~11 deg): plains/valleys free
     # DEM radial-horizon/viewshed mask. center.z of each risk zone is the
-    # emitter altitude; risk is removed below the highest intervening terrain
+    # source altitude; risk is removed below the highest intervening terrain
     # LOS and reappears if the vehicle climbs above that horizon.
     manager/risk_terrain_mask_enable: true
-    # Zone center.z semantics: true = AGL mast height (effective emitter z =
+    # Zone center.z semantics: true = AGL source height (effective source z =
     # DEM terrain at (x,y) + center.z; z=0 sits ON the ground — author x,y and
     # the zone can never end up underground/floating). Scenario yamls were
     # bulk-converted 2026-07-16 (legacy absolute z=25 -> mast 0.1 = 10 m).
     manager/risk_zone_agl: true
                                         # altitude. Set true only when every zone z is an
-                                        # actual mast height above its local DEM.
+                                        # actual source height above its local DEM.
     manager/risk_vertical_ratio: 0.35   # vertical/horizontal semi-axis ratio of the
-                                        # engagement ellipsoid (Rv = ratio * Rh)
+                                        # risk ellipsoid (Rv = ratio * Rh)
     manager/risk_mask_radial_step: 0.0  # <=0: use DEM resolution
     manager/risk_mask_softness: 0.10    # smooth LOS edge in z-units (0.10 = 10 m)
     manager/risk_grounded: true         # visibility evaluated at smoothmax(z, terrain+band):
-                                        # no legal hidden state below the clearance band. Root
-                                        # fix for duck-below-horizon terrain penetration (the
+                                        # no legal terrain-occluded state below the clearance band.
+                                        # Root fix for below-horizon terrain clearance violation (the
                                         # sigmoid's z-pull out-gunned the terrain cubic 48x and
                                         # settled the equilibrium 35 m BELOW a ridge; also the
-                                        # cause of the 2x loiter-loop paths). 2026-07-20 gauntlet
-                                        # E-matrix: fixes penetration AND loop; 9/10 scenarios
+                                        # cause of the 2x loiter-loop paths). 2026-07-20
+                                        # complex-field stress-case E-matrix: fixes clearance
+                                        # violation AND loop; 9/10 scenarios
                                         # byte-identical (band-high flight -> clamp inert);
                                         # risk_scenarios_test 154/0 both on and off.
     manager/risk_mask_viz_step: 0.0     # <=0: auto; RViz cell size
     manager/risk_mask_viz_slice_offset: 0.0  # planar mode only: slice z offset
     manager/risk_mask_viz_threshold: 0.50    # visible side of horizon boundary
     manager/risk_mask_viz_mode: heatmap3d # heatmap | heatmap3d | volume | fixed_agl | fixed_msl
-                                        # heatmap3d: 탐지천장을 실제 3D 표면으로 렌더 — 표면고도 =
-                                        # 지형 + 탐지플로어 AGL ("이 지붕 아래로 날면 은신"). 색 램프는
-                                        # heatmap과 동일(빨강=바닥까지 노출, 초록/파랑=agl_max 캡 지붕).
-                                        # 궤적이 지붕을 뚫으면 그 지점부터 노출 — 2D 히트맵의 직관을
+                                        # heatmap3d: 가시성 경계면을 실제 3D 표면으로 렌더 — 표면고도 =
+                                        # 지형 + 가시성 기준고도 AGL ("이 지붕 아래는 지형 차폐"). 색 램프는
+                                        # heatmap과 동일(빨강=바닥까지 가시, 초록/파랑=agl_max 캡 지붕).
+                                        # 궤적이 지붕을 뚫으면 그 지점부터 가시 상태 — 2D 히트맵의 직관을
                                         # 그대로 3D로 확장한 뷰(2026-07-20).
-    manager/risk_heatmap_agl_max: 2.0   # heatmap ramp saturates at this detection-floor AGL (frame units)
+    manager/risk_heatmap_agl_max: 2.0   # heatmap ramp saturates at this visibility-boundary AGL (frame units)
     manager/risk_heatmap_max_dim: 768   # heatmap grid cells along the longer AABB side
     manager/risk_heatmap_offset: 1.0   # drape height above DEM in frame units (1.0 = 100 m; must clear the rendered mesh on slopes)
     manager/risk_heatmap_safe_transparent: false # false: floor >= agl_max cells paint GREEN ("safe in band"); true: transparent (imagery only). Shadow stays blue either way
@@ -85,10 +88,12 @@
                                         # front-end delivers routes with room above the penalty onset.
                                         # Raised 0.38->0.60 (2026-07-20): the 0.30 band left the
                                         # soft-penalty equilibrium grazing terrain to ~3.7 m on the
-                                        # NOE gauntlet; 0.50/0.60 lifts real clearance to ~37 m on
+                                        # low-altitude complex-field stress case; 0.50/0.60 lifts
+                                        # real clearance to ~37 m on
                                         # low-altitude missions with NO change to normal (band-high)
                                         # missions. Zone-saturated extremes may exit -1004 (genuine
-                                        # tug-of-war, never penetrating; reject net catches any breach).
+                                        # cost conflict, never overlapping terrain; reject net catches
+                                        # any clearance violation).
     manager/dyn_obstacle_margin: 10.0   # 1 km berth around RUNTIME obstacles (ships); <= clearance disables
     obstacle_viz_scale: 100.0           # RViz MESH magnification ONLY (SDF collision, geometry companion
                                         # marker and altitude-panel overlay stay exact). Since the scenario
@@ -131,7 +136,8 @@
     # ---- Optimizer weights ----
     optimization/risk_parallel_threads: 0  # [RISK-PAR]/[PIECE-PAR] cost-loop threads.
                                        # 0 = auto (half the HW threads, max 16 — measured on a
-                                       # 32-thread host: gauntlet 26.7s -> 6.2s at 16, 7.3s at 8;
+                                       # 32-thread host: complex-field stress case 26.7s -> 6.2s
+                                       # at 16, 7.3s at 8;
                                        # ALL 32 threads PATHOLOGICAL >2x slower, HT starvation).
                                        # 1 = serial inline (the original loop). Results are
                                        # BIT-IDENTICAL for every setting (10-scenario suite
@@ -141,14 +147,18 @@
                                        # swarm/formation terms can fire.
     optimization/constrain_points_perPiece: 30   # penalty-integral samples per piece. 100->30
                                        # (2026-07-21 sweep, K in {100..20} x 6 scenarios x seeds +
-                                       # gauntlet): 100 was ~3x oversampled. The risk term is ~62% of
+                                       # complex-field stress case): 100 was ~3x oversampled. The
+                                       # risk term is ~62% of
                                        # the per-iteration cost and scales LINEARLY with this count;
-                                       # K=30 cut optimizer time 57-65% (gauntlet 23.7s->8.3s) with
-                                       # solutions unchanged (k3/gauntlet clearance bit-identical,
-                                       # knoe/knoez -0.3 m, kwp -5.3 m still 42 m, all converged, zero
-                                       # penetration). Seed-invariant (43/44 identical to <1 mm), so
+                                       # K=30 cut optimizer time 57-65% (complex-field stress case
+                                       # 23.7s->8.3s) with solutions unchanged (dense-zone/
+                                       # complex-field clearance bit-identical, terrain-following
+                                       # variants -0.3 m, waypoint case -5.3 m still 42 m, all
+                                       # converged, zero terrain overlap). Seed-invariant
+                                       # (43/44 identical to <1 mm), so
                                        # the K-to-K clearance wobble is the sampling picking a nearby
-                                       # local optimum, not noise. Below ~25 the NOE clearance starts
+                                       # local optimum, not noise. Below ~25 the terrain-following
+                                       # clearance starts
                                        # to wander (K=50 dipped to 0.212 once); 30 is the safe floor.
                                        # Was 100 to keep ~25 m sample spacing; that spacing was finer
                                        # than the penalty fields (30 m DEM, coarse risk LUT) resolve.
@@ -165,9 +175,9 @@
     optimization/collision_reject: true # ancestor safety net restored (Swarm-Formation had it;
                                         # MMP had demoted it to logs-only): a trajectory that
                                         # fails the final collision audit (terrain/obstacle
-                                        # penetration) is DISCARDED — optimize returns false,
+                                        # terrain overlap) is DISCARDED — optimize returns false,
                                         # nothing is published, FSM keeps the previous plan.
-                                        # Selective by design: a -1004 WITHOUT penetration
+                                        # Selective by design: a -1004 WITHOUT terrain overlap
                                         # (e.g. rest-start dynamics) still publishes. false =
                                         # old behavior (audit logs only).
     optimization/weight_ground_barrier: 4000000.0  # crash-plane half-space below
@@ -213,16 +223,19 @@
                                        # slope makes skirt-cutting profitable ~tens of metres deep.
     optimization/weight_altitude: 1600.0 # z-band tracking weight (quadratic); keep << weight_obstacle
                                          # or it presses into terrain. 1600 + alt_cap_zone_relax 0.6
-                                         # (adopted together, 2026-07-22): ridge-NOE altitude_cost -81%
+                                         # (adopted together, 2026-07-22): ridge terrain-following
+                                         # altitude_cost -81%
                                          # (k2), opt time -85%, clr +5 m, while the zone relax below
                                          # buys back the zone-crossing headroom the tight band squeezes
-                                         # (kzone 0.848 -> 0.970, gauntlet clr 0.041 -> 0.054). The old
-                                         # campaign verdict "WA400/800 break the gauntlet (-1004)" was an
+                                         # (zone-case 0.848 -> 0.970, complex-field stress-case
+                                         # clr 0.041 -> 0.054). The old evaluation verdict
+                                         # "WA400/800 fail the complex-field stress case (-1004)" was an
                                          # iteration-budget artifact (fixed at 100/piece); the axis is
                                          # smooth. k1 over-water probe: water z profile unchanged
                                          # (mean 1.267 -> 1.277), ship-zone crossing ducks 13 m LESS
                                          # (clr 0.71 -> 0.84 u) at the cost of risk_cost 53 -> 160
-                                         # (concealment traded for clearance, converged, FE risk 0).
+                                         # (lower visibility traded for clearance,
+                                         # converged, FE risk 0).
                                          # Was bumped to 2400 to squash z-spikes in the pre-consistency
                                          # era; those had a root cause (frozen gate gradient /
                                          # smoothed-slope mismatch) since fixed.
@@ -386,7 +399,7 @@
                                         # that dip inside the margin, above the true
                                         # surface. <= -0.5 disables
     manager/virtual_ceil_height: -1.0   # <= -0.5 disables
-    manager/world: "dokdo"              # fallback; RViz MapSelector overrides
+    manager/world: "island_sample"      # fallback; RViz MapSelector overrides
     manager/dynamic_obstacle_radius: 50.0  # RViz "Publish Point" sphere radius, FRAME units (50 = 5 km; use 0.5 for 50 m)
     manager/esdf_viz_step: 4.0             # ESDF occupancy overlay sample step [m]; 1.0 = fine but ~30 s per (re)load
     manager/esdf_viz_enable: true          # false = skip the overlay entirely (fastest planning)

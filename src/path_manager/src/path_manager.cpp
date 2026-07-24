@@ -39,8 +39,9 @@ namespace path_manager
         node_->declare_parameter("manager/risk_mask_radial_step", 0.0);
         node_->declare_parameter("manager/risk_mask_softness", 0.10);
         // [RISK-GROUNDED] visibility evaluated at smoothmax(z, terrain+band):
-        // no legal hidden state below the clearance band. Root fix for the
-        // duck-below-horizon terrain penetration (2026-07-20 gauntlet).
+        // no legal terrain-occluded state below the clearance band. Root fix
+        // for the below-horizon terrain-clearance violation (2026-07-20
+        // complex-field stress case).
         node_->declare_parameter("manager/risk_grounded", true);
         node_->declare_parameter("manager/risk_mask_viz_step", 0.0);
         node_->declare_parameter("manager/risk_mask_viz_slice_offset", 0.0);
@@ -249,13 +250,14 @@ namespace path_manager
         }
 
         // ESDF cache resolution:
-        //   manager/world  : map name (default "dokdo"); RViz MapSelector overrides.
+        //   manager/world  : map name (default "island_sample"); RViz
+        //                    MapSelector overrides.
         // The old <world>.esdf disk cache is GONE: with terrain in the 2.5D
         // heightmap the static SDF is empty, so caching wrote ~3.6 GB of
         // constant free-space per world — and loading a PRE-heightmap cache
         // silently resurrected voxel terrain (double-count vs the heightmap
         // term). The boxes-only grid now builds instantly when terrain arrives.
-        node_->declare_parameter("manager/world", std::string("dokdo"));
+        node_->declare_parameter("manager/world", std::string("island_sample"));
         std::string world_name;
         node_->get_parameter("manager/world", world_name);
         log_manager_->infof("world='%s' (no ESDF disk cache; boxes-only SDF builds on demand)",
@@ -456,7 +458,7 @@ namespace path_manager
                 std::min(opt_obstacle_clearance_, obstacle_clearance_));
             {
                 // [REJECT] ancestor safety net (default ON): an audit-failed
-                // (terrain/obstacle-penetrating) trajectory is discarded, not
+                // (terrain/obstacle-overlapping) trajectory is discarded, not
                 // published. optimization/collision_reject: false restores the
                 // old logs-only behavior.
                 bool reject_on = true;
@@ -503,7 +505,8 @@ namespace path_manager
                              : -std::numeric_limits<float>::infinity();
                 },
                 // DEM cell in frame units — scales the SWATH-FLOOR sampling
-                // pitch to the actual grid (corridor 30 m vs korea 250 m).
+                // pitch to the actual grid (corridor 30 m vs
+                // regional_terrain 250 m).
                 terrain_data_.valid ? terrain_data_.resolution : 0.0);
             // Value + analytic slope of the same surface, for the terrain term
             // and alt-cap gate: cost and gradient must agree exactly (see
@@ -532,7 +535,7 @@ namespace path_manager
                        Eigen::Vector3d *grad) -> double {
                     return riskVisibility(zi, p, grad);
                 });
-            // [SHADOW-CAP] raw LOS horizon for the exposure-owned cap: same
+            // [OCCLUSION-CAP] raw LOS horizon for the visibility-aware cap: same
             // zone indexing as the visibility callback above.
             poly_traj_opt_->setRiskShadowCeiling(
                 [this](size_t zi, const Eigen::Vector3d &p) -> double {
@@ -965,7 +968,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             },
             // DEM cell in frame units: the searcher scales its chord-sampling
             // pitch to half a cell (corridor 30 m crops need ~0.15 u, not the
-            // legacy 0.5 u sized for the 250 m korea grid).
+            // legacy 0.5 u sized for the 250 m regional_terrain grid).
             terrain_data_.valid ? terrain_data_.resolution : 0.0);
         searcher_.setRiskAlpha(risk_weight_);
         searcher_.setRiskBarrier(risk_barrier_);
@@ -1298,7 +1301,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                     // Land: hold terrain + full clearance. Water (invalid
                     // elev): the mission-min floor (see water_pin_floor
                     // above) — keeps the geodesic's z-noise pins (observed
-                    // -0.40, fighting the ground plane) above water WITHOUT
+                    // -0.40, conflicting with the ground plane) above water WITHOUT
                     // distorting low-altitude cruises upward.
                     if (elev > -1e9f) {
                         z_new = std::max(z_new,
@@ -1435,7 +1438,7 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             //
             // NO terrain floor on the scalar cap (removed). A chord-sampled
             // "terrain max under the route" floor was added while the
-            // clearance band was 0.12 to fight cap-vs-terrain contradictions,
+            // clearance band was 0.12 to resolve cap-vs-terrain contradictions,
             // but (a) it barely moved the crest dip (-0.117 -> -0.084; the
             // 0.30 band sizing was the actual fix), (b) its 1-D chord/inner-
             // chord sampling provably missed corner-cut knobs anyway, and
@@ -1458,8 +1461,8 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             // own down-side band is soft, so its committed profile can dip
             // below the mission endpoints (observed 0.53 vs mission 1.0). A
             // floor pinned to the endpoints then sits ABOVE front-end pins
-            // and fights them together with obstacle/risk — a multi-way
-            // tug-of-war that killed the line search on high-altitude
+            // and conflicts with them together with obstacle/risk — a multi-way
+            // cost conflict that caused line-search failure on high-altitude
             // missions (low-z missions hid it: their floor was < 0).
             // Keep the soft floor ABOVE the hard ground half-space: for a
             // low mission (cruise 0.1) path_min - headroom went negative, so
@@ -1473,8 +1476,9 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             if (ground_height_ > -0.5) {
                 z_lo = std::max(z_lo, ground_height_ + 0.5 * alt_floor_headroom_);
             }
-            // NB: this floor may sit ABOVE a hard-pinned endpoint (NOE
-            // gauntlet: start z 0.05 < cushion top 0.09). Lowering the SCALAR
+            // NB: this floor may sit ABOVE a hard-pinned endpoint
+            // (low-altitude complex-field stress case: start z 0.05 <
+            // cushion top 0.09). Lowering the SCALAR
             // floor to the pin would disable the sag cushion and expose the
             // ground-plane cliff (-1005, tried); instead the optimizer tapers
             // the floor penalty toward pinned endpoints pointwise — see
@@ -1500,14 +1504,16 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         traj_.setLocalTraj(local_traj, local_time, traj_.local_traj.drone_id);
 
         // [VIZ-TRAJ] The along-trajectory diagnostics (terrain floor underfoot,
-        // experienced risk, and the risk-exposure profile) must sample the
+        // experienced risk, and the risk-visibility profile) must sample the
         // OPTIMIZED trajectory that is actually flown and displayed
         // (/planning/trajectory -> /viz/opt_trajectory), NOT the pre-L-BFGS
         // seed. They were wired to the seed (out_global): in zone missions the
         // optimizer dodges/ducks in xy, so the risk band and the colored risk
         // line sat at the seed's positions while the panel drew the optimized
-        // trajectory over them — the arc-length axes and the exposure test
-        // then disagreed. Measured on the gauntlet: seed vs optimized arc
+        // trajectory over them — the arc-length axes and the visibility
+        // evaluation
+        // then disagreed. Measured on the complex-field stress case: seed vs
+        // optimized arc
         // length 691 vs 637 u (an 8% axis stretch), xy divergence up to 15.6 u
         // (~20% of the zones' reach, so the dome/roof were sampled well off the
         // flown path near the rims where they vary fastest), z up to 2.5 u.
@@ -1619,11 +1625,11 @@ void PathManager::refreshEffectiveRiskZones()
         tz.center.z() = base + z_agl;
         if (log_manager_) {
             log_manager_->infof(
-                "[RISK-ZONE] zone[%zu] grounded: DEM h=%.2f + mast %.2f "
-                "-> emitter z=%.2f", zi, base, z_agl, tz.center.z());
+                "[RISK-ZONE] zone[%zu] grounded: DEM h=%.2f + source height "
+                "%.2f -> source z=%.2f", zi, base, z_agl, tz.center.z());
             if (z_agl > 2.0) {
                 log_manager_->warnf(
-                    "[RISK-ZONE] zone[%zu] mast height %.1f units = %.0f m "
+                    "[RISK-ZONE] zone[%zu] source height %.1f units = %.0f m "
                     "AGL — looks like an absolute altitude or a metres "
                     "value (frame is 1 unit = 100 m)", zi, z_agl,
                     100.0 * z_agl);
@@ -1723,7 +1729,7 @@ void PathManager::rebuildTerrainRiskMasks()
             log_manager_) {
             log_manager_->warnf(
                 "[RISK-MASK] zone[%zu] source z=%.2f is at/below DEM %.2f; "
-                "center.z is used literally as the emitter height",
+                "center.z is used literally as the source height",
                 zi, zone.center.z(), static_cast<double>(source_ground));
         }
 
@@ -1816,11 +1822,12 @@ double PathManager::riskShadowCeiling(size_t zone_index,
 }
 
 // [RISK-GROUNDED] (manager/risk_grounded, default ON) The visibility sigmoid's
-// ∂v/∂z = v(1-v)/σ ≥ 0 is a pure DOWN-pull ("lower = hidden"); over a ridge
+// ∂v/∂z = v(1-v)/σ ≥ 0 is a pure DOWN-pull
+// ("lower = terrain-occluded"); over a ridge
 // inside a zone it out-guns the terrain cubic 48x and settles the equilibrium
 // BELOW the surface (measured -0.355 u, VDIAG terr +4803 vs risk -4574).
 // Grounding evaluates the sigmoid at z_eff = smoothmax(z, terrain + band):
-// below the clearance band there is no legal hidden state, so the z-pull
+// below the clearance band there is no legal terrain-occluded state, so the z-pull
 // fades to zero while xy-steering (shadow seams) is untouched. Softplus with
 // width = risk_mask_softness_ keeps value and analytic z-gradient ONE C1
 // surface (project hard rule); the xy central differences query this same
@@ -1840,11 +1847,12 @@ double PathManager::riskGroundedZ(const Eigen::Vector3d &pos,
     const double floor_z = static_cast<double>(h) + opt_obstacle_clearance_;
     // Blend width = σ (validated). MEASURED DEAD END (2026-07-20, do not
     // retry): narrowing to σ/4 or σ/2 to stop the softplus tail leaking
-    // stealth pull below the band (VDIAG: terr +1108 vs risk -902 at
-    // clr=0.108 → 3.7 m graze) BROKE the gauntlet both times (-1004 +
-    // collision). The width is not a local optimizer knob: it reshapes the
+    // low-exposure pull below the band (VDIAG: terr +1108 vs risk -902 at
+    // clr=0.108 → 3.7 m graze) BROKE the complex-field stress case both
+    // times (-1004 + collision). The width is not a local optimizer knob: it
+    // reshapes the
     // shared field for the FRONT-END too (max_risk_simple 106.6 → 0.5 =
-    // different seed homotopy), reigniting the tug-of-war. The 3.7 m graze
+    // different seed homotopy), reigniting the cost conflict. The 3.7 m graze
     // is instead addressed by the clearance band itself
     // (optimization/obstacle_clearance): a higher band raises the clamp
     // floor AND the terrain cubic at the leak depth quadratically, moving
@@ -1911,20 +1919,20 @@ double PathManager::riskVisibility(size_t zone_index,
     return value;
 }
 
-// Draped detection-floor heatmap. One latched GridMap summarises the
+// Draped visibility-boundary heatmap. One latched GridMap summarises the
 // terrain-masked field as "how low can this column be flown before some zone
 // sees me", in four color categories:
-//   warm ramp (red -> orange -> yellow)  floor below agl_max: detectable
+//   warm ramp (red -> orange -> yellow)  floor below agl_max: visible
 //                                        inside the mission band; red = at
 //                                        ground level.
 //   green                                floor at/above agl_max: safe in the
 //                                        band, seen only if you climb.
 //                                        (Transparent instead when
 //                                        risk_heatmap_safe_transparent.)
-//   deep blue                            NEVER detectable in the footprint
+//   deep blue                            NEVER visible in the footprint
 //                                        (terrain shadow / envelope wholly
 //                                        underground or over the horizon).
-// [TRAJ-RISK] The draped heatmap shows the GROUND detection floor — not what
+// [TRAJ-RISK] The draped heatmap shows the GROUND visibility boundary — not what
 // the aircraft experiences at its 3D position, so "red cell under a green
 // (safe) flight segment" is common and confusing. This line is the missing
 // view where color == cost: sample the OR-combined terrain-masked moat field
@@ -1965,7 +1973,7 @@ void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
             surv *= (1.0 - riskZoneValue(zi, p));
         const double r = 1.0 - surv;
         // Perceptual ramp: sqrt lifts the faint-halo values so "slightly
-        // exposed" is visibly yellow-ish instead of indistinguishable green.
+        // visible" is visibly yellow-ish instead of indistinguishable green.
         const double s = std::sqrt(std::clamp(r, 0.0, 1.0));
         geometry_msgs::msg::Point gp;
         gp.x = p.x(); gp.y = p.y(); gp.z = p.z();
@@ -2006,9 +2014,9 @@ void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
 
 // [RISK-PROFILE] Altitude-panel channels: the risk zones as they REALLY are
 // in 3-D, cut along the flight path. Per arc-length sample: the zone-union
-// DOME cross-section [dome_bot, dome_top] and the detection ROOF (the
+// DOME cross-section [dome_bot, dome_top] and the visibility ROOF (the
 // altitude above which at least one zone can see this column; flying BELOW
-// the roof inside a dome = hidden). The top-down heatmap cannot express
+// the roof inside a dome = terrain-occluded). The top-down heatmap cannot express
 // "under the roof" — the profile view can, which is exactly the ambiguity
 // the user hit ("looks like it passes through, but is it safe?").
 // Same math as the heatmap cells (single source of truth: effective
@@ -2079,7 +2087,7 @@ void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
             msg.data.push_back(nan);
         } else {
             // Full shadow (no zone can ever see this column): roof caps at
-            // the dome top — the exposed band [roof, dome_top] is empty.
+            // the dome top — the visible band [roof, dome_top] is empty.
             msg.data.push_back(std::isfinite(roof) ? roof : dome_top);
             msg.data.push_back(dome_top);
             msg.data.push_back(dome_bot);
@@ -2171,7 +2179,7 @@ void PathManager::publishRiskHeatmap()
     };
     // Danger ramp stays WARM only (red at floor 0 -> yellow near agl_max):
     // green is reserved for the explicit safe category so "green = safe"
-    // never collides with "high-but-still-detectable".
+    // never collides with "high-but-still-visible".
     auto rampColor = [&pack](double t) -> float {
         const double h = 60.0 * std::clamp(t, 0.0, 1.0) / 60.0;
         const double s = 0.90, v = 0.95;
@@ -2243,7 +2251,7 @@ void PathManager::publishRiskHeatmap()
             if (!in_footprint) continue;  // NaN = transparent cell
             float cell_color;
             if (!std::isfinite(floor_agl)) {
-                cell_color = shadow_color;  // never detectable here
+                cell_color = shadow_color;  // never visible here
             } else if (floor_agl >= risk_heatmap_agl_max_) {
                 // Safe within the band of interest — seen only if you climb
                 // above agl_max. Optionally transparent to maximise imagery.
@@ -2258,13 +2266,14 @@ void PathManager::publishRiskHeatmap()
             // mesh (which locally overshoots the bilinear DEM on slopes)
             // without reading as a floating slab.
             //
-            // [HEATMAP3D] mode "heatmap3d": render the DETECTION CEILING as a
+            // [HEATMAP3D] mode "heatmap3d": render the VISIBILITY CEILING as a
             // real 3-D surface instead of a terrain drape — surface altitude
-            // = ground + detection-floor AGL ("fly BELOW this roof and no
-            // zone sees you"). Shadow (never detectable) and safe-in-band
+            // = ground + visibility-boundary AGL ("fly BELOW this roof and no
+            // zone sees you"). Terrain-occluded (never visible) and
+            // safe-in-band
             // cells cap flat at agl_max, so the roof height itself is the
-            // information: hugging terrain (red) = exposed at any altitude,
-            // high roof (green/blue) = generous stealth envelope. The
+            // information: hugging terrain (red) = visible at any altitude,
+            // high roof (green/blue) = generous low-exposure envelope. The
             // trajectory piercing the roof = becoming visible.
             double lift = risk_heatmap_offset_;
             if (hm3d) {
@@ -2443,7 +2452,7 @@ void PathManager::publishEffectiveRiskField()
             // ellipsoid without filling it with a visually dominant lid.
             // Heatmap mode keeps only the visibility-clipped equator ring:
             // the draped map already carries the field, so the ring just
-            // marks the engagement rim.
+            // marks the risk boundary.
             const int n_contours = heatmap_mode ? 1 : risk_mask_viz_contours_;
             const int n_meridians = heatmap_mode ? 0 : 12;
             visualization_msgs::msg::Marker wire;
@@ -2573,7 +2582,7 @@ void PathManager::publishEffectiveRiskField()
         source.lifetime = rclcpp::Duration(0, 0);
         risk_field_pub_->publish(source);
 
-        // A thin mast/vertical reference visually anchors a ground emitter.
+        // A thin vertical reference visually anchors a ground risk source.
         double source_ground = 0.0;
         if (groundAt(zone.center.x(), zone.center.y(), &source_ground) &&
             zone.center.z() > source_ground + 0.02) {
@@ -2615,7 +2624,7 @@ void PathManager::publishEffectiveRiskField()
         char label_text[96];
         if (volume_mode || heatmap_mode) {
             std::snprintf(label_text, sizeof(label_text),
-                          "terrain-masked AD #%zu  Rh=%.0fm Rv=%.0fm",
+                          "terrain-occluded risk zone #%zu  Rh=%.0fm Rv=%.0fm",
                           zi, 100.0 * zone.reach, 100.0 * rv);
         } else if (risk_mask_viz_mode_ == "fixed_agl") {
             std::snprintf(label_text, sizeof(label_text),
@@ -2780,7 +2789,7 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
     }
 
     // DEM coordinates and elevations are now authoritative. Re-ground the
-    // AGL zone emitters onto the fresh heightmap, then rebuild the radial
+    // AGL zone sources onto the fresh heightmap, then rebuild the radial
     // viewshed and replace the ideal circular RViz fallback.
     refreshEffectiveRiskZones();
     rebuildTerrainRiskMasks();

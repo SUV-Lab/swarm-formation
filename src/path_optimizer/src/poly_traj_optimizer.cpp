@@ -141,7 +141,8 @@ namespace ego_planner
       // suppression is untouched, and the lift is LOCAL (a tall islet no
       // longer raises the whole route's ceiling — only its own +-kSwathR).
       const double kSwathR = 25.0;      // ~ one piece length of deviation slack
-      // Sampling pitch = one DEM cell (2.3 u matched the 250 m korea grid;
+      // Sampling pitch = one DEM cell (2.3 u matched the 250 m
+      // regional_terrain grid;
       // corridor crops are 30-40 m, and a coarser-than-cell stride can step
       // clean over a one-cell ridge — the exact failure this floor guards).
       // Runs once per plan on a decision-variable-independent quantity, so
@@ -185,7 +186,8 @@ namespace ego_planner
       // infl = max over zones of a linear fade of the piece chord's xy
       // distance to the zone center (1 inside the rim, 0 beyond 1.5x reach).
       // Computed once from clean_path — decision-variable independent, cap
-      // gradients keep their exact form; zone-free (ridge NOE) missions are
+      // gradients keep their exact form; zone-free ridge terrain-following
+      // missions are
       // untouched by construction. Default 0 = off (legacy cap).
       auto zone_infl = [&](const Eigen::Vector3d &a,
                            const Eigen::Vector3d &b) -> double {
@@ -206,10 +208,11 @@ namespace ego_planner
         return infl;
       };
 
-      // [SHADOW-CAP] (H3) exposure-owned cap: sample the same swath the
+      // [OCCLUSION-CAP] (H3) visibility-aware cap: sample the same swath the
       // terrain floor uses; at each point take the min over zones IN XY REACH
       // of the LOS shadow ceiling (PathManager's per-zone radial-horizon
-      // table). Below (min - margin) the piece is hidden from every zone that
+      // table). Below (min - margin) the piece is terrain-occluded from every
+      // zone that
       // could reach it, so the band's downward pressure owns nothing there
       // and the cap may rise ("only low where visible"). A sample with an
       // in-reach zone but no finite ceiling (mask off, bare over-water ray,
@@ -297,7 +300,7 @@ namespace ego_planner
                alt_cap_headroom_opt_, alt_cap_zone_relax_, relaxed_pieces,
                alt_zhi_);
       if (alt_cap_shadow_margin_ > 0.0 && use_risk_zones_) {
-        LOG_INFO("[SHADOW-CAP] exposure-owned cap: %d/%d pieces lifted above "
+        LOG_INFO("[OCCLUSION-CAP] visibility-aware cap: %d/%d pieces lifted above "
                  "the band to LOS shadow - %.2f margin (max lift %.3f)",
                  shadow_pieces, piece_num, alt_cap_shadow_margin_,
                  shadow_lift_max);
@@ -359,7 +362,7 @@ namespace ego_planner
             // AGL fade (same 1.0 -> 2.5 u band as the FE [ROUGH] field,
             // evaluated on the COMMITTED profile z — frozen per solve): a
             // high transit over a ridge is not terrain-following and gets
-            // no relief; only the NOE regime does.
+            // no relief; only the terrain-following regime does.
             constexpr double kAglNear = 1.0, kAglFar = 2.5;
             const double z = a.z() + (b.z() - a.z()) * t;
             const double agl = z - static_cast<double>(h);
@@ -436,11 +439,13 @@ namespace ego_planner
 
     // [FEASIBILITY] Pre-optimization z-feasibility advisory — the risk-effective
     // ceiling, run on the committed route BEFORE the solve. In the route's
-    // terrain-following (NOE) stretches, weigh the risk visibility down-pull
+    // terrain-following stretches, weigh the risk visibility down-pull
     // against the terrain up-push at the committed height. Where risk wins, the
-    // optimizer is forced to trade clearance for concealment (duck-below) — the
+    // optimizer is forced to trade clearance for terrain occlusion
+    // (below-band) — the
     // risk-driven -1004/graze class the geometric cap-floor corridor is blind to
-    // (validated: risk 4x -> -1004 with a 20 m breach yet the geometric gap
+    // (validated: risk 4x -> -1004 with a 20 m clearance violation yet the
+    // geometric gap
     // stays open; see [VDIAG-ZDOF-RISK]). Advisory ONLY: it logs a reason and a
     // recommendation and changes nothing. Cheap (one route scan per plan). Not
     // diag-gated — this is operator-facing pre-flight information, always on.
@@ -449,7 +454,8 @@ namespace ego_planner
       const double m_xy = (dyn_unit_xy_m_ > 0.0) ? dyn_unit_xy_m_ : 100.0;
       // The terrain's full in-band restoring capacity: the largest up-force it
       // can raise before the surface (clearance 0), = wei_obs*3*clearance^2.
-      // A risk pull beyond this cannot be held above terrain -> penetration.
+      // A risk pull beyond this cannot be held above terrain -> clearance
+      // violation.
       const double terr_cap =
           3.0 * wei_obs_ * obstacle_clearance_ * obstacle_clearance_;
       const int NS = 400;
@@ -457,12 +463,12 @@ namespace ego_planner
       Eigen::Vector3d prev = initTraj.getPos(0.0);
       // Evaluate the risk pull at the SAFE band height (terrain + clearance),
       // not the seed's committed z: the seed has not ducked yet, so its own z
-      // hides the conflict. The question is normative — "if the vehicle flew at
+      // masks the conflict. The question is normative — "if the vehicle flew at
       // its safe clearance here, would the risk field let it stay?" The pull is
-      // near its peak at the band (the detection sigmoid is steepest at the
+      // near its peak at the band (the visibility sigmoid is steepest at the
       // grounded ceiling ~ terrain + band). risk_dn / terr_cap is then the
       // fraction of the terrain's entire restoring capacity the risk demands;
-      // >= 1 means even the surface cannot hold it (penetration).
+      // >= 1 means even the surface cannot hold it (terrain overlap).
       double worst_ratio = 0.0, worst_s = 0.0, worst_risk = 0.0, worst_clr = 0.0;
       double ratio_sum = 0.0;
       int conflict = 0, severe = 0;
@@ -506,9 +512,10 @@ namespace ego_planner
         // largest restoring force (at the surface). > 1 means the terrain
         // cannot hold the band against the pull's PEAK, so the route ducks.
         // This detects the duck-below robustly; it does NOT predict the settled
-        // depth (the pull eases as the route sinks into shadow, so the solve
-        // grazes rather than penetrates unless the pull is far above capacity —
-        // calibrated: ~5x => graze/converge, ~20x => terrain breach).
+        // depth (the pull eases as the route becomes terrain-occluded, so the
+        // solve grazes rather than overlaps terrain unless the pull is far
+        // above capacity — calibrated: ~5x => graze/converge, ~20x =>
+        // terrain-clearance violation).
         const double ratio = risk_dn / terr_cap;
         ratio_sum += ratio;
         if (ratio > 0.25) ++conflict;    // a meaningful pull at the safe height
@@ -521,15 +528,17 @@ namespace ego_planner
         const bool severe = worst_ratio > 8.0;
         LOG_WARN(
             "[FEASIBILITY] DUCK-BELOW EXPECTED (%s): the risk field pulls the "
-            "route off its %.0f m clearance band in %d NOE sample(s) — worst "
+            "route off its %.0f m clearance band in %d terrain-following "
+            "sample(s) — worst "
             "@s=%.1fkm, peak pull %.1fx the terrain's restoring capacity. The "
-            "optimizer will trade clearance for concealment here%s. Recommend: "
+            "optimizer will trade clearance for terrain occlusion here%s. "
+            "Recommend: "
             "%s",
             severe ? "severe" : "moderate", obstacle_clearance_ * m_xy, conflict,
             worst_s, worst_ratio,
             severe ? " (the pull far exceeds what terrain can restore — expect a "
-                     "clearance breach approaching penetration)"
-                   : " (grazing the band, not penetration)",
+                     "clearance violation approaching terrain overlap)"
+                   : " (grazing the band, not overlapping terrain)",
             severe ? "re-route around these zones or cut their coverage/peak — "
                      "clearance cannot be held through the forced crossing"
                    : "accept the reduced clearance here, or shift the "
@@ -655,7 +664,8 @@ namespace ego_planner
     }
 
     // Span clamp — applied AFTER arming so it can key on how many endpoints
-    // actually taper. Overlap into mid-span (the penetration risk the clamp
+    // actually taper. Overlap into mid-span (the clearance-violation risk the
+    // clamp
     // exists for) needs BOTH zones, so frac=0.25 there; a single armed zone
     // cannot overlap anything and may reach half the span (frac=0.5). Floor
     // the radius at 2.0 u so a short-span mission cannot collapse the zone to
@@ -804,19 +814,20 @@ namespace ego_planner
   // derives the vertical corridor
   //   floor(s) = what safety demands (swath terrain + tapered clearance,
   //              altitude anchor / ground over water),
-  //   ceil(s)  = what concealment allows (min over zones in xy reach of the
-  //              LOS shadow ceiling − hidden margin),
+  //   ceil(s)  = what terrain occlusion allows (min over zones in xy reach
+  //              of the LOS shadow ceiling − occlusion margin),
   // and commits a climb-feasible z profile into clean_path before MINCO ever
   // sees it. This prototype MEASURES that layer without wiring it in — the
   // commit path (clean_path z) has a wide blast radius (taper arming,
   // fe_raw_max, the seed time allocation and the MINCO boundary states all
   // key on it), so instrumentation comes first.
   //
-  // Three-state ceiling: the H3 [SHADOW-CAP] lambda collapses "no zone
+  // Three-state ceiling: the H3 [OCCLUSION-CAP] lambda collapses "no zone
   // reaches this swath" (FREE) and "an in-reach sample with no finite LOS
-  // ceiling" (EXPOSED) into one −inf return — fine for a cap that only ever
+  // ceiling" (VISIBLE) into one −inf return — fine for a cap that only ever
   // relaxes, but the corridor must tell them apart: FREE transfers no
-  // ceiling at all, EXPOSED means concealment is impossible at ANY altitude
+  // ceiling at all, VISIBLE means terrain occlusion is impossible at ANY
+  // altitude
   // there (such stations are counted, not depth-scored — with no finite
   // ceiling there is nothing to measure a depth against; the DP prices them
   // by altitude alone).
@@ -825,10 +836,10 @@ namespace ego_planner
   // keeps the mask's finite clear_ceiling fill (center.z − 2·max_range −
   // 20·softness − 1, ≈ −1e3 u; path_manager rebuildTerrainRiskMasks), not
   // −inf — those stations read as 'C' with a ceiling far below the chord
-  // floor. Physically that is ground-visible, i.e. EXPOSED for flight
+  // floor. Physically that is ground-visible, i.e. VISIBLE for flight
   // purposes, and any per-station depth SUM they enter is dominated by the
   // fill's magnitude. Where RAW-CLOSED depths reach kilometer scale, read
-  // the exposure COUNTS, not the sums.
+  // the visibility COUNTS, not the sums.
   //
   // Climb-rate closure: the h4_climb_slope two-pass dilation (the same
   // machinery as the alt_cap_slope cap envelope, at the vehicle's grade) IS
@@ -836,11 +847,12 @@ namespace ego_planner
   // objective —
   // F*(s) = max_j(floor(j) − slope·d(s,j)) is the lowest slope-feasible
   // profile and the matching erosion C*(s) = min_j(ceil(j) + slope·d(s,j))
-  // the highest all-hidden one; F* > C* at a station means no z there is
-  // both safe and hidden under the climb limit, whatever the rest of the
-  // profile does. The discretized 1-D DP (z-grid, altitude + exposure +
+  // the highest all-occluded one; F* > C* at a station means no z there is
+  // both safe and terrain-occluded under the climb limit, whatever the rest
+  // of the profile does. The discretized 1-D DP (z-grid, altitude +
+  // visibility +
   // climb costs, slope-limited transitions, endpoints pinned to the
-  // committed z) generalizes the envelope where hidden and exposed
+  // committed z) generalizes the envelope where terrain-occluded and visible
   // stretches trade off; DP-vs-F* divergence measures what the one-shot
   // pass leaves on the table.
   //
@@ -857,7 +869,7 @@ namespace ego_planner
 
     const double m_xy = (dyn_unit_xy_m_ > 0.0) ? dyn_unit_xy_m_ : 100.0;
     const double kInf = std::numeric_limits<double>::infinity();
-    // Same swath geometry as the cap floor / [SHADOW-CAP]: the corridor must
+    // Same swath geometry as the cap floor / [OCCLUSION-CAP]: the corridor must
     // hold under the lateral drift the cap already budgets for.
     const double kSwathR = 25.0;
     const double step = (terrain_cell_u_ > 0.0)
@@ -868,7 +880,7 @@ namespace ego_planner
         st_s(N);
     std::vector<double> cap_v(N, kInf);
     std::vector<char> stat(N, 'F');
-    int n_free = 0, n_ceil = 0, n_exp = 0;
+    int n_free = 0, n_ceil = 0, n_visible = 0;
     Eigen::Vector2d prev_mid(0.0, 0.0);
     h4_x_.reserve(N); h4_y_.reserve(N); h4_s_km_.reserve(N);
     h4_floor_.reserve(N); h4_ceil_.reserve(N);
@@ -887,7 +899,8 @@ namespace ego_planner
                                            : Eigen::Vector2d(1.0, 0.0);
       const Eigen::Vector2d nrm(-u.y(), u.x());
 
-      // zones whose reach can touch the swath (chord distance, as SHADOW-CAP)
+      // zones whose reach can touch the swath (chord distance, as
+      // OCCLUSION-CAP)
       std::vector<size_t> cand;
       if (use_risk_zones_ && risk_shadow_ceiling_) {
         for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
@@ -902,10 +915,10 @@ namespace ego_planner
       }
 
       // One swath walk: terrain max (floor) + LOS ceiling status. An
-      // EXPOSED verdict stops further shadow queries but NEVER the terrain
+      // VISIBLE verdict stops further shadow queries but NEVER the terrain
       // walk — the floor must come from the complete swath.
       double hmax = -1e30, ceil_min = kInf;
-      bool reached = false, exposed = false;
+      bool reached = false, visible = false;
       for (double s = 0.0; s <= L + 1e-9; s += step) {
         for (double l = -kSwathR; l <= kSwathR + 1e-9; l += step) {
           const double x = p0.x() + u.x() * s + nrm.x() * l;
@@ -917,7 +930,7 @@ namespace ego_planner
             const float h = terrain_height_(x, y);
             if (std::isfinite(h) && h > hmax) hmax = h;
           }
-          if (!exposed && !cand.empty()) {
+          if (!visible && !cand.empty()) {
             const Eigen::Vector3d p(x, y, 0.0);
             for (size_t zi : cand) {
               const auto &tz = risk_zones_[zi];
@@ -925,7 +938,7 @@ namespace ego_planner
                 continue;
               reached = true;
               const double v = risk_shadow_ceiling_(zi, p);
-              if (!(v > -kInf)) { exposed = true; break; } // unshadowed
+              if (!(v > -kInf)) { visible = true; break; } // not occluded
               ceil_min = std::min(ceil_min, v);
             }
           }
@@ -934,9 +947,10 @@ namespace ego_planner
 
       // Chord-only terrain max (l = 0): the flown path tracks LOCAL terrain,
       // so safety comparisons against the flown z use this floor; the swath
-      // max above is the drift-budget COMMIT floor (over ridge NOE the two
+      // max above is the drift-budget COMMIT floor (over ridge
+      // terrain-following routes the two
       // differ by several units — conflating them misread "flown below the
-      // swath floor" as a safety breach on first measurement).
+      // swath floor" as a safety violation on first measurement).
       double hmax_c = -1e30;
       for (double s = 0.0; s <= L + 1e-9; s += step) {
         const double x = p0.x() + u.x() * s;
@@ -965,7 +979,7 @@ namespace ego_planner
       floor_v[i] = fl;
       floor_c[i] = flc;
 
-      if (exposed)      { stat[i] = 'E'; ceil_v[i] = -kInf; ++n_exp; }
+      if (visible)      { stat[i] = 'V'; ceil_v[i] = -kInf; ++n_visible; }
       else if (reached) { stat[i] = 'C';
                           ceil_v[i] = ceil_min - h4_shadow_margin_; ++n_ceil; }
       else              { stat[i] = 'F'; ceil_v[i] = kInf; ++n_free; }
@@ -984,9 +998,9 @@ namespace ego_planner
     h4_status_.assign(stat.begin(), stat.end());
 
     // Climb-rate envelopes (two-pass dilation/erosion, exact). FREE and
-    // EXPOSED stations transfer no ceiling into the erosion: FREE has none,
-    // and EXPOSED cannot be hidden at any z, so a −inf there must not poison
-    // its hidable neighbours.
+    // VISIBLE stations transfer no ceiling into the erosion: FREE has none,
+    // and VISIBLE cannot be terrain-occluded at any z, so a −inf there must
+    // not poison its occludable neighbours.
     const double smax = std::max(1e-6, h4_climb_slope_);
     std::vector<double> F(floor_v), C(N);
     for (int i = 0; i < N; ++i) C[i] = (stat[i] == 'C') ? ceil_v[i] : kInf;
@@ -1012,8 +1026,8 @@ namespace ego_planner
         }
       }
       // Dilated-closure accounting only at stations that actually carry a
-      // hiding requirement ('C'): the erosion legitimately propagates a
-      // ceiling THROUGH a FREE/EXPOSED station, but the all-hidden profile
+      // occlusion requirement ('C'): the erosion legitimately propagates a
+      // ceiling THROUGH a FREE/VISIBLE station, but the all-occluded profile
       // z=F* only has to satisfy z<=ceil at 'C' stations, so counting an
       // eroded C* elsewhere would over-report the closure.
       if (stat[i] == 'C') {
@@ -1027,17 +1041,17 @@ namespace ego_planner
       }
     }
 
-    // 1-D DP over a shared z-grid: altitude above floor + exposure above the
+    // 1-D DP over a shared z-grid: altitude above floor + visibility above the
     // ceiling + climb effort, transitions limited to the climb cone,
     // endpoints pinned to the committed z (start/goal are not free).
     constexpr int NZ = 64;
-    constexpr double W_ALT = 1.0, W_EXP = 10.0, W_CLIMB = 0.1;
+    constexpr double W_ALT = 1.0, W_VIS = 10.0, W_CLIMB = 0.1;
     const double kBig = 1e18;
     // Grid range from floors and the committed profile ONLY. Ceilings are
     // deliberately excluded: a ground-visible forward slope carries a finite
     // LOS ceiling far below terrain (hundreds of units on the first k3
     // measurement), and letting it stretch the grid destroyed the DP's
-    // resolution (dz jumped to 18 u). Exposure depth (z − ceil) needs no
+    // resolution (dz jumped to 18 u). Visible depth (z − ceil) needs no
     // grid coverage — it is monotone in z either way.
     double zlo = kInf, zhi = -kInf;
     for (int i = 0; i < N; ++i) {
@@ -1051,7 +1065,7 @@ namespace ego_planner
       const bool anchor = (i == 0 || i == N - 1);
       if (!anchor && z < floor_v[i] - 0.5 * dz) return kBig; // below floor
       double c = W_ALT * std::max(0.0, z - floor_v[i]);
-      if (stat[i] == 'C' && z > ceil_v[i]) c += W_EXP * (z - ceil_v[i]);
+      if (stat[i] == 'C' && z > ceil_v[i]) c += W_VIS * (z - ceil_v[i]);
       return c;
     };
     auto near_k = [&](double z) {
@@ -1101,20 +1115,20 @@ namespace ego_planner
     h4_dp_z_.assign(dpz.begin(), dpz.end());
 
     // Metrics: DP vs envelope / committed FE profile.
-    int dp_above_F = 0, dp_exposed = 0, fe_exposed = 0;
+    int dp_above_F = 0, dp_visible = 0, fe_visible = 0;
     int fe_below_chord = 0, fe_below_swath = 0;
-    double dp_exp_sum = 0.0, fe_exp_sum = 0.0;
+    double dp_vis_sum = 0.0, fe_vis_sum = 0.0;
     double dfe_mean = 0.0, dfe_max = 0.0, dfe_max_s = 0.0;
     for (int i = 0; i < N; ++i) {
       if (stat[i] == 'C' && fe_z[i] > ceil_v[i] + 1e-9) {
-        ++fe_exposed; fe_exp_sum += fe_z[i] - ceil_v[i];
+        ++fe_visible; fe_vis_sum += fe_z[i] - ceil_v[i];
       }
       if (fe_z[i] < floor_c[i] - 0.02) ++fe_below_chord;
       if (fe_z[i] < floor_v[i] - 0.02) ++fe_below_swath;
       if (!dp_ok) continue;
       if (dpz[i] > F[i] + dz) ++dp_above_F;
       if (stat[i] == 'C' && dpz[i] > ceil_v[i] + 1e-9) {
-        ++dp_exposed; dp_exp_sum += dpz[i] - ceil_v[i];
+        ++dp_visible; dp_vis_sum += dpz[i] - ceil_v[i];
       }
       const double dd = std::abs(dpz[i] - fe_z[i]);
       dfe_mean += dd;
@@ -1123,9 +1137,9 @@ namespace ego_planner
     if (dp_ok) dfe_mean /= N;
 
     LOG_INFO("[H4-CORRIDOR] stations=%d zones=%zu | status: free=%d ceil=%d "
-             "exposed=%d | margin=%.2f climb=%.2f (cap-slope %.2f) "
+             "visible=%d | margin=%.2f climb=%.2f (cap-slope %.2f) "
              "swath=%.0f step=%.2f",
-             N, risk_zones_.size(), n_free, n_ceil, n_exp,
+             N, risk_zones_.size(), n_free, n_ceil, n_visible,
              h4_shadow_margin_, smax, alt_cap_slope_, kSwathR, step);
     if (n_finC > 0) {
       LOG_INFO("[H4-CORRIDOR] raw collapse (floor>ceil): %d, max depth %.3f "
@@ -1135,16 +1149,16 @@ namespace ego_planner
                dil_s * m_xy / 1000.0, gap_min, gap_min_s * m_xy / 1000.0,
                n_finC);
     } else {
-      LOG_INFO("[H4-CORRIDOR] no concealment ceiling anywhere on the route "
-               "(all stations FREE or EXPOSED) — corridor is floor-only");
+      LOG_INFO("[H4-CORRIDOR] no terrain-occlusion ceiling anywhere on the "
+               "route (all stations FREE or VISIBLE) — corridor is floor-only");
     }
     if (dp_ok) {
-      LOG_INFO("[H4-CORRIDOR] DP(grid %d x %.3fu, W alt/exp/climb "
-               "%.0f/%.0f/%.1f): dp>F*+dz at %d | dp exposed %d (per-stn "
-               "depth sum %.2f) vs fe exposed %d (sum %.2f) | fe below "
+      LOG_INFO("[H4-CORRIDOR] DP(grid %d x %.3fu, W alt/vis/climb "
+               "%.0f/%.0f/%.1f): dp>F*+dz at %d | dp visible %d (per-stn "
+               "depth sum %.2f) vs fe visible %d (sum %.2f) | fe below "
                "floor: chord %d / swath %d",
-               NZ, dz, W_ALT, W_EXP, W_CLIMB, dp_above_F, dp_exposed,
-               dp_exp_sum, fe_exposed, fe_exp_sum, fe_below_chord,
+               NZ, dz, W_ALT, W_VIS, W_CLIMB, dp_above_F, dp_visible,
+               dp_vis_sum, fe_visible, fe_vis_sum, fe_below_chord,
                fe_below_swath);
       LOG_INFO("[H4-CORRIDOR] DP-vs-FE z: mean|dz|=%.3f max=%.3f @s=%.1fkm",
                dfe_mean, dfe_max, dfe_max_s * m_xy / 1000.0);
@@ -1171,10 +1185,10 @@ namespace ego_planner
       const bool fraw = (stat[i] == 'C' && floor_v[i] > ceil_v[i]);
       const bool fdil = (stat[i] == 'C' && F[i] > C[i]);
       const bool fdfe = dp_ok && std::abs(dpz[i] - fe_z[i]) > 0.5;
-      if (i % stride != 0 && !fraw && !fdil && stat[i] != 'E' && !fdfe)
+      if (i % stride != 0 && !fraw && !fdil && stat[i] != 'V' && !fdfe)
         continue;
       const std::string cs = (stat[i] == 'F') ? "   FREE"
-                             : (stat[i] == 'E') ? "    EXP"
+                             : (stat[i] == 'V') ? "    VIS"
                                                 : f7(ceil_v[i]);
       LOG_INFO("[H4-PROF] i=%4d s=%6.1fkm floor=%7.3f fc=%7.3f ceil=%s "
                "F*=%7.3f C*=%s fe=%7.3f dp=%s cap=%s%s%s%s",
@@ -1207,8 +1221,8 @@ namespace ego_planner
       sx[k] = p.x(); sy[k] = p.y(); sz[k] = p.z();
     }
     double match_max = 0.0, below_max = 0.0, below_s = 0.0;
-    double fin_exp_sum = 0.0, ddp_mean = 0.0, ddp_max = 0.0, ddp_max_s = 0.0;
-    int fin_below = 0, fin_below_swath = 0, fin_exposed = 0, ddp_n = 0,
+    double fin_vis_sum = 0.0, ddp_mean = 0.0, ddp_max = 0.0, ddp_max_s = 0.0;
+    int fin_below = 0, fin_below_swath = 0, fin_visible = 0, ddp_n = 0,
         rows = 0;
     // Stations advance along the route, so the matched sample index may
     // only slip back by a small slack: on a self-crossing / switchback
@@ -1229,7 +1243,8 @@ namespace ego_planner
       const double zf = sz[bk];
       // Safety comparison against the CHORD floor (the flown path follows
       // local terrain; the swath floor is the drift-budget commit surface
-      // and reads several units high over ridge NOE by construction).
+      // and reads several units high over ridge terrain-following routes by
+      // construction).
       const bool below = zf < h4_floor_c_[i] - 0.02;
       if (zf < h4_floor_[i] - 0.02) ++fin_below_swath;
       if (below) {
@@ -1238,8 +1253,9 @@ namespace ego_planner
           below_max = h4_floor_c_[i] - zf; below_s = h4_s_km_[i];
         }
       }
-      const bool expo = (h4_status_[i] == 'C' && zf > h4_ceil_[i] + 1e-9);
-      if (expo) { ++fin_exposed; fin_exp_sum += zf - h4_ceil_[i]; }
+      const bool visible = (h4_status_[i] == 'C' &&
+                            zf > h4_ceil_[i] + 1e-9);
+      if (visible) { ++fin_visible; fin_vis_sum += zf - h4_ceil_[i]; }
       double dd = -1.0;
       if (std::isfinite(h4_dp_z_[i])) {
         dd = std::abs(zf - h4_dp_z_[i]);
@@ -1251,16 +1267,16 @@ namespace ego_planner
                  "%7.3f swath-floor=%7.3f dp=%7.3f%s%s",
                  i, h4_s_km_[i], zf, h4_floor_c_[i], h4_floor_[i],
                  std::isfinite(h4_dp_z_[i]) ? h4_dp_z_[i] : -999.0,
-                 below ? " BELOW-FLOOR" : "", expo ? " EXPOSED" : "");
+                 below ? " BELOW-FLOOR" : "", visible ? " VISIBLE" : "");
         ++rows;
       }
     }
     if (ddp_n) ddp_mean /= ddp_n;
     LOG_INFO("[H4-POST] flown-vs-corridor: below chord-floor %d (max %.3f "
-             "@s=%.1fkm), below swath-floor %d | exposed %d (per-stn depth "
+             "@s=%.1fkm), below swath-floor %d | visible %d (per-stn depth "
              "sum %.2f) | worst xy match %.2fu over %d stations",
-             fin_below, below_max, below_s, fin_below_swath, fin_exposed,
-             fin_exp_sum, match_max, N);
+             fin_below, below_max, below_s, fin_below_swath, fin_visible,
+             fin_vis_sum, match_max, N);
     LOG_INFO("[H4-POST] flown-vs-DP z: mean|dz|=%.3f max=%.3f @s=%.1fkm "
              "(%d stations)",
              ddp_mean, ddp_max, ddp_max_s, ddp_n);
@@ -1289,7 +1305,7 @@ namespace ego_planner
 
     std::vector<double> floor_v(NV), ceil_v(NV, kInf), zs(NV), s_v(NV);
     std::vector<char> stat(NV, 'F'), anch(NV, 0);
-    int n_ceil = 0, n_exp = 0, n_closed = 0;
+    int n_ceil = 0, n_visible = 0, n_closed = 0;
     for (int i = 0; i < NV; ++i) {
       const Eigen::Vector3d &p = clean_path[i];
       zs[i] = p.z();
@@ -1320,16 +1336,16 @@ namespace ego_planner
       if (fl < -1e29) fl = (ground_height_ > -0.5) ? ground_height_ : 0.0;
       floor_v[i] = fl;
 
-      // concealment ceiling at the vertex disc (3-state, as the diagnostic)
+      // terrain-occlusion ceiling at the vertex disc (3-state, as the diagnostic)
       if (use_risk_zones_ && risk_shadow_ceiling_) {
-        bool reached = false, exposed = false;
+        bool reached = false, visible = false;
         double cmin = kInf;
-        for (size_t zi = 0; zi < risk_zones_.size() && !exposed; ++zi) {
+        for (size_t zi = 0; zi < risk_zones_.size() && !visible; ++zi) {
           const auto &tz = risk_zones_[zi];
           if (!(tz.reach > 0.0)) continue;
           if ((p.head<2>() - tz.center.head<2>()).norm() > tz.reach + rc)
             continue;
-          for (double dx = -rc; dx <= rc + 1e-9 && !exposed; dx += step) {
+          for (double dx = -rc; dx <= rc + 1e-9 && !visible; dx += step) {
             for (double dy = -rc; dy <= rc + 1e-9; dy += step) {
               if (dx * dx + dy * dy > rc * rc + 1e-9) continue;
               const Eigen::Vector3d q(p.x() + dx, p.y() + dy, 0.0);
@@ -1337,12 +1353,12 @@ namespace ego_planner
                 continue;
               reached = true;
               const double v = risk_shadow_ceiling_(zi, q);
-              if (!(v > -kInf)) { exposed = true; break; }
+              if (!(v > -kInf)) { visible = true; break; }
               cmin = std::min(cmin, v);
             }
           }
         }
-        if (exposed) { stat[i] = 'E'; ceil_v[i] = -kInf; ++n_exp; }
+        if (visible) { stat[i] = 'V'; ceil_v[i] = -kInf; ++n_visible; }
         else if (reached) {
           stat[i] = 'C'; ceil_v[i] = cmin - h4_shadow_margin_; ++n_ceil;
           if (floor_v[i] > ceil_v[i]) ++n_closed;
@@ -1355,16 +1371,17 @@ namespace ego_planner
     // shifts the solve's HOMOTOPY — from a floor-hugging seed the soft
     // equilibrium settles into a band-grazing local optimum even where
     // nothing asks for lowness (kwaypt clearance 1.862 -> 0.267, kzone1
-    // 3.929 -> 2.800, k3 3.085 -> 2.237; only the already-grazing gauntlet
-    // improved). The commit therefore TRACKS the committed profile
+    // 3.929 -> 2.800, dense-zone 3.085 -> 2.237; only the already-grazing
+    // complex-field stress case improved). The commit therefore TRACKS the
+    // committed profile
     // (W_TRACK * |z - fe|) and departs from it only for the three
     // corrections the layer exists for: floor violations (hard), climb
-    // infeasibility (window), and exposure above the concealment ceiling
-    // (W_EXP >> W_TRACK pulls under the ceiling / to the floor exactly in
+    // infeasibility (window), and visibility above the terrain-occlusion ceiling
+    // (W_VIS >> W_TRACK pulls under the ceiling / to the floor exactly in
     // lit stretches — "only low where visible").
     const double smax = std::max(1e-6, h4_climb_slope_);
     constexpr int NZ = 64;
-    constexpr double W_TRACK = 1.0, W_EXP = 10.0, W_CLIMB = 0.1;
+    constexpr double W_TRACK = 1.0, W_VIS = 10.0, W_CLIMB = 0.1;
     const double kBig = 1e18;
     double zlo = kInf, zhi = -kInf;
     for (int i = 0; i < NV; ++i) {
@@ -1382,7 +1399,7 @@ namespace ego_planner
       const double z = zlo + k * dz;
       if (z < floor_v[i] - 0.5 * dz) return kBig;
       double c = W_TRACK * std::abs(z - zs[i]);
-      if (stat[i] == 'C' && z > ceil_v[i]) c += W_EXP * (z - ceil_v[i]);
+      if (stat[i] == 'C' && z > ceil_v[i]) c += W_VIS * (z - ceil_v[i]);
       return c;
     };
     std::vector<double> dp_prev(NZ, kBig), dp_cur(NZ, kBig);
@@ -1447,15 +1464,15 @@ namespace ego_planner
       // Within one grid cell the DP is just tracking the committed z — the
       // difference is quantization, not a correction; committing it would
       // sprinkle +-dz/2 snap noise over the whole profile. Rewrite only
-      // where a real correction (floor / climb / exposure) moved the DP.
+      // where a real correction (floor / climb / visibility) moved the DP.
       if (d > dz) { clean_path[i].z() = dpz[i]; ++changed; }
     }
     if (n_free_v > 0) dmean /= n_free_v;
     LOG_INFO("[H4-COMMIT] committed z at %d/%d free vertices (swath %.1f, "
              "grid %.3fu, climb %.2f): mean|dz|=%.3f max=%.3f @s=%.1fkm | "
-             "corridor: ceil %d exposed %d closed %d of %d",
+             "corridor: ceil %d visible %d closed %d of %d",
              changed, n_free_v, rc, dz, smax, dmean, dmax,
-             dmax_s * m_xy / 1000.0, n_ceil, n_exp, n_closed, NV);
+             dmax_s * m_xy / 1000.0, n_ceil, n_visible, n_closed, NV);
     return true;
   }
 
@@ -1497,7 +1514,8 @@ namespace ego_planner
     lbfgs_params.mem_size       = lb_mem_size_; // ref 16 → 64 (global scale); 256 caused -1005
     // 0.1 (2026-07-21 sweep, 100+ runs): -34% iterations across the suite
     // with the same solutions (clearance deltas <= 0.021 u), and the
-    // zone-saturated gauntlet flips -1004 -> converged. Robust across
+    // zone-saturated complex-field stress case flips -1004 -> converged.
+    // Robust across
     // 0.08-0.12 and mission seeds (no knife-edge). History: 0.05->0.005
     // (2.7x iters) left trajectories unchanged, so precision above 0.1 buys
     // nothing; g_epsilon=0 (pure GCOPTER plateau) quintuples iterations —
@@ -1527,7 +1545,8 @@ namespace ego_planner
     // actively descending at a flat 3000 (-1004) while small missions
     // converge in 300-1500; ~1 ms/iter, so even the ceiling stays ~12 s —
     // proportionate to the ~10 s eikonal on those same maps.
-    // Per-piece budget 60 -> 100: the zone-saturated gauntlet converged via
+    // Per-piece budget 60 -> 100: the zone-saturated complex-field stress
+    // case converged via
     // g_epsilon using ~all of the old 60*piece ceiling (101 pieces -> 6060,
     // used ~6060), so it sat ON the budget edge — any gradient perturbation
     // (even a behaviour-preserving refactor) pushed g_epsilon-convergence past
@@ -1538,7 +1557,8 @@ namespace ego_planner
     // cut early by the past/delta plateau test, so the ceiling is rarely
     // reached. ~1 ms/iter keeps the worst case ~10-12 s.
     // Ceiling raised 12000 -> 20000 (2026-07-22): the roughness-routed
-    // gauntlet plans 139 pieces, where 100/piece = 13900 was silently
+    // complex-field stress-case plans 139 pieces, where 100/piece = 13900 was
+    // silently
     // truncated and the solve converged 3% under the old ceiling. Converged
     // runs stop at g_epsilon regardless, so only would-be -1004 truncations
     // are affected (same argument as the 60 -> 100 budget fix).
@@ -1607,7 +1627,7 @@ namespace ego_planner
 
     // Line-search stalls (-1005) usually mean the accumulated curvature
     // memory has gone inconsistent near a stiff feature (clearance band /
-    // barrier ramp / z-corridor tug-of-war), not that the point is optimal:
+    // barrier ramp / z-corridor cost conflict), not that the point is optimal:
     // q still holds the best accepted iterate, so re-entering from it with
     // FRESH memory (first step = steepest descent) routinely makes progress
     // again. Bounded retries keep the worst case cheap.
@@ -1670,7 +1690,7 @@ namespace ego_planner
     // but jerkOpt_/cps_ still describe the last REJECTED trial from the final
     // proc_evaluate. Regenerate them from q so the trajectory that is audited,
     // returned, executed and broadcast is the best iterate — the rejected
-    // -1008 trial can be terrain-penetrating or non-finite (observed:
+    // -1008 trial can overlap terrain or be non-finite (observed:
     // [COLLISION] clearance=-1.178 audited right after a -1008 exit). Harmless
     // on convergence/max-iter (q equals the last evaluated point already).
     {
@@ -1690,8 +1710,9 @@ namespace ego_planner
     //
     // [REJECT] (optimization/collision_reject, default ON) Ancestor safety
     // net: Swarm-Formation's checkCollision() fed OptimizeTrajectory's return
-    // value so a penetrating trajectory was DISCARDED and replanned; MMP had
-    // demoted the verdict to logs — a -1004 exit with a 35 m terrain breach
+    // value so a terrain-overlapping trajectory was DISCARDED and replanned;
+    // MMP had demoted the verdict to logs — a -1004 exit with a 35 m terrain
+    // clearance violation
     // was published as "planning successful". With the gate on, a collision
     // audit failure fails the whole optimize call (manager's opt_success
     // false -> nothing published). Envelope violations still only log.
@@ -1785,7 +1806,8 @@ namespace ego_planner
       // DUAL-DOMAIN stats. The inverse point-mass model is only meaningful
       // for steady flight (v >= speed_min): below stall the required CL/T
       // explode by construction (a rest-start mission BEGINS below stall),
-      // and a peak taken over the spin-up ramp reads 1700%+ while the cruise
+      // and a peak taken over the initial-acceleration ramp reads 1700%+
+      // while the cruise
       // portion is clean — a misleading headline. So: CRUISE domain
       // (v >= speed_min) is the headline; the sub-stall ramp is reported
       // separately as a duration + its own peak, never mixed in.
@@ -1808,7 +1830,8 @@ namespace ego_planner
         if (!eval.valid) continue;
         // Below activation speed the model outputs are still finite (q-floor)
         // but not meaningful as envelope demands — count the TIME into the
-        // ramp so the reported spin-up duration covers 0 -> speed_min, not
+        // ramp so the reported initial-acceleration duration covers
+        // 0 -> speed_min, not
         // just activation -> speed_min (the old skip under-reported a
         // rest-start ramp by the 0-40 m/s third), while keeping such samples
         // out of ramp_peak/utilization.
@@ -1861,7 +1884,8 @@ namespace ego_planner
 
     // Terrain sweep via the heightmap: terrain is no longer voxelised into the
     // SDF, so the SDF pass below is boxes-only and terrain-BLIND — without this
-    // a converged-but-penetrating optimum logged a misleading "no collision".
+    // a converged but terrain-overlapping optimum logged a misleading
+    // "no collision".
     // Reports the worst clearance and WHERE, so dips are locatable.
     if (terrain_hgrad_) {
       double worst = std::numeric_limits<double>::infinity();
@@ -1984,10 +2008,11 @@ namespace ego_planner
     S.reserve(N + 1); Z.reserve(N + 1);
 
     // [ZDOF] Stage-0 z-corridor instrumentation (behavior-neutral, summarised
-    // after the passes). The design plan predicts gauntlet -1004 from a CLOSED
+    // after the passes). The design plan predicts complex-field stress-case
+    // -1004 from a CLOSED
     // z-corridor: where floor_surface (terrain+clearance / sea+cushion) exceeds
     // ceiling_surface (the per-piece cap), the vehicle has no feasible z and
-    // the soft penalties fight to a non-converged minimum. Measuring the gap
+    // the soft penalties conflict at a non-converged minimum. Measuring the gap
     // gives an early warning the later stages gate on.
     double zdof_min_gap = 1e30;   // min(ceil_surface - floor_surface) over samples
     int    zdof_infeasible = 0;   // sample count with floor > ceiling
@@ -2261,7 +2286,8 @@ namespace ego_planner
     // NOT necessary: the cap gates OFF within the clearance band, and the risk
     // down-pull is a FORCE, not a geometric surface, so the realistic
     // risk-driven -1004 keeps this gap OPEN (risk 4x -> -1004 with a 20 m
-    // terrain breach yet min_gap +0.55). That class is the [VDIAG-ZDOF-RISK]
+    // terrain-clearance violation yet min_gap +0.55). That class is the
+    // [VDIAG-ZDOF-RISK]
     // line below; the two together are the z-feasibility verdict.
     LOG_INFO("[VDIAG-ZDOF] z-corridor(geometric): min_gap=%.4f infeasible_samples=%d/%d "
              "gap@worst_clr=%.4f (worst_clr=%.4f) — %s",
@@ -2273,14 +2299,15 @@ namespace ego_planner
                  : "open everywhere");
 
     // [ZDOF-RISK] Stage-0 summary — FORCE half: the risk-effective ceiling the
-    // geometric gap is blind to. The gauntlet -1004 is not floor>cap; it is the
+    // geometric gap is blind to. The complex-field stress-case -1004 is not
+    // floor>cap; it is the
     // risk visibility down-pull (dv/dz >= 0) overpowering the terrain up-push
     // INSIDE the clearance band, dragging the vehicle below its safe clearance
     // while the cap-floor corridor stays open. Both fz are already recomputed
     // per sample above; scan where the terrain penalty is ACTIVE (Fterr>0 ==
     // genuinely in-band, taper-correct) and ask whether the risk down-force
     // wins there. margin = terr_up - risk_down; margin < 0 == risk-closed
-    // (duck-below / clearance-guarantee breach). This is the seed of the
+    // (below-band / clearance-guarantee violation). This is the seed of the
     // pre-flight feasibility check ("can this mission hold clearance under the
     // risk field, or must it duck?").
     double zdof_risk_margin_min = 1e30;   // min(terr_up - risk_down), in-band land
@@ -2302,7 +2329,7 @@ namespace ego_planner
              (zdof_risk_margin_min > 1e29) ? 0.0 : zdof_risk_margin_min,
              zdof_risk_closed, zdof_inband, zdof_risk_down_peak,
              (zdof_risk_closed > 0)
-                 ? "RISK OVERPOWERS TERRAIN in-band (duck-below / clearance breach)"
+                 ? "RISK OVERPOWERS TERRAIN in-band (below-band / clearance violation)"
                  : "terrain holds the band");
   }
 
@@ -2889,7 +2916,8 @@ namespace ego_planner
         // separate 2.5D-terrain (slot 8) and alt-floor (slot 6) penalties. Only
         // the GOVERNING floor is penalised: where the terrain-clearance floor is
         // higher it rules (cubic wei_obs — the safety floor that MUST hold; the
-        // heightmap sees the fine-DEM penetration the 10 m SDF misses; grad is
+        // heightmap sees the fine-DEM clearance violation the 10 m SDF misses;
+        // grad is
         // surface-normal so the path skirts slopes rather than spiking over
         // them); elsewhere the anchor rules (quadratic wei_alt — soft anti-sag,
         // nothing terrain-forced ever dives below mission altitude). Firing only
@@ -2989,7 +3017,8 @@ namespace ego_planner
         // (see optimizeFromPath), scalar alt_zhi_ otherwise. zhi_i is constant
         // w.r.t. the decision variables, so the gradients below are exact
         // either way. MUST MATCH logVerticalAttribution's cap recompute.
-        // TERRAIN-AWARE GATE — root fix for cap-vs-terrain penetration.
+        // TERRAIN-AWARE GATE — root fix for cap-vs-terrain clearance
+        // violation.
         // alt_zhi_ is a single SCALAR (front-end geodesic max z + headroom),
         // but the sparse-piece back-end corner-cuts across terrain HIGHER
         // than that scalar. There the cap ("come down to alt_zhi_") and the
@@ -3063,7 +3092,8 @@ namespace ego_planner
             static_cast<int>(ride_rough_pieces_.size()) == N) {
             const double r = ride_rough_pieces_(i);
             if (r > 1e-9) {
-                // HORIZONTAL speed only: the full |v|^2 form measured knoe
+                // HORIZONTAL speed only: the full |v|^2 form measured
+                // terrain-following
                 // clearance -4~-10 m — it taxed the climb/descent rate that
                 // terrain-following IS, flattening z over crests. Ground
                 // speed is the ride driver; vertical agility stays free.
@@ -3131,7 +3161,8 @@ namespace ego_planner
 
       // (A pass-1 beta/vel cache was tried here and REVERTED: forcing beta0
       // to memory every sample in the main pass disturbed its vectorization
-      // and cost ~3% net on the gauntlet A/B — recomputing is cheaper.)
+      // and cost ~3% net on the complex-field stress-case A/B — recomputing
+      // is cheaper.)
       if (piece_par) {
         // [PIECE-PAR] same piece-owned direct accumulation as the merged
         // pass: gdC block / gdT entry of piece pi are written only by pi's
@@ -3677,11 +3708,12 @@ namespace ego_planner
   // the moat. The ramp sits OUTSIDE the rim — full K at d <= reach, fading
   // over the outer kBarrierRampFrac band — mirroring how the front-end's
   // coarse grid bleeds its +K one cell past the rim (any cell whose center
-  // is inside slows the whole cell). The penetration equilibrium therefore
-  // lands OUTSIDE the true ellipsoid and the sensing volume stays untouched,
+  // is inside slows the whole cell). The boundary-contact equilibrium
+  // therefore lands OUTSIDE the true ellipsoid and the visibility volume
+  // stays untouched,
   // instead of the ~1-2 m designed clip an inside ramp allowed. Zones
   // holding the plan start/goal are exempt — same must-enter rule as
-  // prepareBarrier — so the back-end never fights a committed crossing.
+  // prepareBarrier — so the back-end never opposes a committed crossing.
   bool PolyTrajOptimizer::RiskGradCostP(const int i_dp,
                                            const Eigen::Vector3d &p,
                                            const Eigen::Vector3d &v,
@@ -4064,8 +4096,8 @@ namespace ego_planner
     // [ZONE-RELAX] Stage 3: zone-proximity cap relaxation (0 = off/legacy).
     node_->declare_parameter("optimization/alt_cap_zone_relax", 0.0);
     node_->get_parameter("optimization/alt_cap_zone_relax", alt_cap_zone_relax_);
-    // [SHADOW-CAP] H3: exposure-owned cap, hidden-margin below the LOS shadow
-    // ceiling in z-units (<=0 = off/legacy).
+    // [OCCLUSION-CAP] H3: visibility-aware cap, occlusion margin below the
+    // LOS shadow ceiling in z-units (<=0 = off/legacy).
     node_->declare_parameter("optimization/alt_cap_shadow_margin", 0.0);
     node_->get_parameter("optimization/alt_cap_shadow_margin", alt_cap_shadow_margin_);
     // [RIDE] H1: per-piece time-weight relief over rough terrain (0 = off).

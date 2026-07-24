@@ -318,7 +318,7 @@ void run(const Scenario &s, double alpha, double h_weight, const MapSpec &map) {
   double R = pathRisk(path, s.zones);
   double Ldirect = (s.goal - s.start).norm();
 
-  // Deepest penetration: how far inside any zone any waypoint sits.
+  // Maximum in-zone depth: how far inside any zone any waypoint sits.
   double max_depth = 0.0;
   for (const auto &p : path) {
     for (const auto &tz : s.zones) {

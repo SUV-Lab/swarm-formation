@@ -32,7 +32,7 @@ echo -e "${GREEN}인터넷 연결 확인됨${NC}"
 # 현재 시간 출력
 echo -e "${YELLOW}동기화 전 시간: $(date)${NC}"
 
-# NTP 서버 리스트 (한국 및 글로벌)
+# NTP 서버 목록
 NTP_SERVERS=(
     "time.google.com"
     "time.bora.net"

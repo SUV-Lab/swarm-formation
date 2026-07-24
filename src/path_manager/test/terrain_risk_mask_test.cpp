@@ -90,7 +90,7 @@ int main(int argc, char **argv)
   zone.reach = 10.0;
   zone.peak = 0.8;
   // Second zone ON the ridge crest with a 0.5-unit mast. With AGL grounding
-  // its emitter is 4.0 + 0.5 = 4.5, which sees over its own crest: the
+  // its source is 4.0 + 0.5 = 4.5, which sees over its own crest: the
   // east-side low query below is visible. Left ungrounded (z=0.5, below the
   // crest) the same query sits deep in shadow (ceiling z≈3.5) — the
   // assertion fails, so it pins the grounding, not just the viewshed.
@@ -127,7 +127,7 @@ int main(int argc, char **argv)
   expect(manager.getRiskVisibility(0, zone.center) > 0.999,
          "risk source is visible at zero range");
   expect(manager.getRiskVisibility(1, Eigen::Vector3d(6.5, 0.5, 1.0)) > 0.9,
-         "AGL-grounded ridge-top emitter sees past its own crest");
+         "AGL-grounded ridge-top source sees past its own crest");
 
   // Verify that the same field reaches RViz for the launch-default nonzero
   // drone id. The floor mesh should rise to the horizon behind the ridge;
@@ -219,15 +219,15 @@ int main(int argc, char **argv)
            "west heatmap cell is painted");
     int wr = 0, wg = 0, wb = 0;
     rgbAt(-6.5, 0.5, &wr, &wg, &wb);
-    expect(wr > wg && wr > wb, "west cell (detectable at ground level) is red");
-    // East of the ridge only the crest-top emitter sees the column, and only
+    expect(wr > wg && wr > wb, "west cell (visible at ground level) is red");
+    // East of the ridge only the crest-top source sees the column, and only
     // above its ellipsoid lower shell (~1.16 u AGL) -> mid warm ramp, much
-    // yellower than the ground-detectable west cell.
+    // yellower than the ground-visible west cell.
     int er = 0, eg = 0, eb = 0;
     rgbAt(6.5, 0.5, &er, &eg, &eb);
     expect(er > eb && eg > wg + 60,
            "east cell behind the ridge ramps toward yellow (raised floor)");
-    // Far-east rim: the crest emitter's ellipsoid lower shell there is
+    // Far-east rim: the crest source's ellipsoid lower shell there is
     // ~2.96 u AGL >= agl_max (2.0) -> explicit safe green, not transparent.
     int sr = 0, sg = 0, sb = 0;
     rgbAt(12.5, 0.5, &sr, &sg, &sb);
