@@ -956,7 +956,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // Near-point dedup BEFORE the terrain sweep (was after — ordering bug:
     // the 0.3 u filter deleted sweep-inserted terrain-lift vertices, silently
     // re-opening the exact clearance violation the sweep repaired; observed
-    // as the "simple=32 -> route=30" count mismatch on the regional corridor).
+    // as the "simple=32 -> route=30" count mismatch on the full-map corridor).
     // Here it only cleans guard/polish near-duplicates; the sweep then runs
     // on final geometry and NOTHING may delete its vertices afterwards
     // (the post-sweep pass below merges with max-z instead of deleting).
@@ -1179,7 +1179,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     logZProfileS("SIMPLE-PROFILE", simple_path);
     // Summary AFTER every mutation so the logged count equals the emitted
     // route (the old order printed simple=N, then the near filter deleted
-    // vertices -> "simple=32 vs route=30" confusion in the regional logs).
+    // vertices -> "simple=32 vs route=30" confusion in the full-map logs).
     if (log_manager_) {
         double max_risk_simple = 0.0;
         for (size_t k = 1; k < simple_path.size(); ++k) {

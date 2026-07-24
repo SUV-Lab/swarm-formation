@@ -65,9 +65,9 @@ namespace path_manager
   //   wy = origin_y + length_y - (col + 0.5) * res   (matrix COL spans Y, mirrored)
   // The historical form here ("X-mirror then -90° rotation about the centre")
   // composes to wx = (Lx+Ly)/2 - (row+.5)res, wy = (Lx+Ly)/2 - (col+.5)res —
-  // identical to the above ONLY when length_x == length_y. Every map before
-  // regional_terrain was square, so the planner agreed with the rendered mesh
-  // by luck; on regional_terrain (2991x4478) the two frames diverged by
+  // identical to the above ONLY when length_x == length_y. All maps preceding
+  // full_map were square, so the planner agreed with the rendered mesh by
+  // luck; on full_map (2991x4478) the two frames diverged by
   // (Ly-Lx)/2 = 1858.75 u per
   // axis (verified: the DEM peak rendered at (6263.75, 7443.75) while the
   // planner placed it at (8122.50, 5585.00)). Direct per-axis mirrors below.

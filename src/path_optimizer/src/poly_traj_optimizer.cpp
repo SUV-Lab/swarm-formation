@@ -142,7 +142,7 @@ namespace ego_planner
       // longer raises the whole route's ceiling — only its own +-kSwathR).
       const double kSwathR = 25.0;      // ~ one piece length of deviation slack
       // Sampling pitch = one DEM cell (2.3 u matched the 250 m
-      // regional_terrain grid;
+      // full_map grid;
       // corridor crops are 30-40 m, and a coarser-than-cell stride can step
       // clean over a one-cell ridge — the exact failure this floor guards).
       // Runs once per plan on a decision-variable-independent quantity, so

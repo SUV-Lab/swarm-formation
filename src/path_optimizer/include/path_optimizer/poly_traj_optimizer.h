@@ -178,7 +178,7 @@ namespace ego_planner
     std::function<bool(double, double, float *, float *, float *)> terrain_hgrad_;
     // DEM cell size in frame units (0 = unknown). The SWATH-TERRAIN FLOOR
     // sampling pitch tracks this: 2.3 u was sized for the 250 m
-    // regional_terrain grid
+    // full_map grid
     // and skips 6-8 cells at a stride on the 30-40 m corridor crops, so a
     // one-cell ridge inside the swath went unseen and the cap floor it exists
     // to provide silently vanished.

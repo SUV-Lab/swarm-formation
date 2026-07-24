@@ -489,7 +489,7 @@ public:
     void setGroundHeight(double h)      { ground_height_ = h; }
     // cell_u > 0 = DEM cell size in frame units. The chord/inner-chord
     // samplers must out-resolve the DEM: the legacy 0.5 u pitch was sized for
-    // the 250 m regional_terrain grid and skips whole cells of the 30-40 m corridor
+    // the 250 m full_map grid and skips whole cells of the 30-40 m corridor
     // crops (a one-cell ridge between samples passes untested). Half-cell
     // pitch is sufficient — the bilinear surface has no sub-cell features.
     void setTerrainHeightmap(std::function<float(double, double)> f,

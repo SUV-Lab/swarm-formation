@@ -250,14 +250,14 @@ namespace path_manager
         }
 
         // ESDF cache resolution:
-        //   manager/world  : map name (default "island_sample"); RViz
+        //   manager/world  : map name (default "small_island"); RViz
         //                    MapSelector overrides.
         // The old <world>.esdf disk cache is GONE: with terrain in the 2.5D
         // heightmap the static SDF is empty, so caching wrote ~3.6 GB of
         // constant free-space per world — and loading a PRE-heightmap cache
         // silently resurrected voxel terrain (double-count vs the heightmap
         // term). The boxes-only grid now builds instantly when terrain arrives.
-        node_->declare_parameter("manager/world", std::string("island_sample"));
+        node_->declare_parameter("manager/world", std::string("small_island"));
         std::string world_name;
         node_->get_parameter("manager/world", world_name);
         log_manager_->infof("world='%s' (no ESDF disk cache; boxes-only SDF builds on demand)",
@@ -506,7 +506,7 @@ namespace path_manager
                 },
                 // DEM cell in frame units — scales the SWATH-FLOOR sampling
                 // pitch to the actual grid (corridor 30 m vs
-                // regional_terrain 250 m).
+                // full_map 250 m).
                 terrain_data_.valid ? terrain_data_.resolution : 0.0);
             // Value + analytic slope of the same surface, for the terrain term
             // and alt-cap gate: cost and gradient must agree exactly (see
@@ -968,7 +968,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             },
             // DEM cell in frame units: the searcher scales its chord-sampling
             // pitch to half a cell (corridor 30 m crops need ~0.15 u, not the
-            // legacy 0.5 u sized for the 250 m regional_terrain grid).
+            // legacy 0.5 u sized for the 250 m full_map grid).
             terrain_data_.valid ? terrain_data_.resolution : 0.0);
         searcher_.setRiskAlpha(risk_weight_);
         searcher_.setRiskBarrier(risk_barrier_);
