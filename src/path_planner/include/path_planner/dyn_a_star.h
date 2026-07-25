@@ -114,6 +114,24 @@ private:
     double risk_alpha_ = 1.0;
     double risk_barrier_ = 0.0;   // finite "hard wall" K added inside non-exempt zones
     std::vector<char> zone_no_barrier_;  // per-zone: 1 = exempt (contains start/goal)
+    // [ZONE-AVOID] Lexicographic zone policy (2026-07-24): avoidance is not
+    // traded against detour length. Pass 1 DISCONNECTS (F=0) every
+    // non-exempt zone's visible volume; only if the goal is then unreachable
+    // does the soft finite-K field run, and pass 3 re-hardens the zones the
+    // soft route did not need. zone_soft_override_[i]=1 keeps zone i soft in
+    // hard mode (the pass-2 crossed set).
+    bool zone_avoid_lexico_ = true;
+    bool zone_hard_mode_ = false;
+    // True after a search whose final field was a HARD pass (1 or 3): the
+    // shortcut phase must then VETO chords touching the hard volume, or its
+    // soft cost margins re-enter zones the wave was forbidden to cross.
+    bool zone_lexico_hard_ = false;
+    int zone_avoid_pass_ = 0;
+    // Set by fm2ExtractGeodesic: did the descent actually reach the goal?
+    // (Aborted descents append the goal anyway — the [ZONE-AVOID] passes
+    // must not accept a truncated wall-chord as a "route".)
+    bool fm2_geo_reached_goal_ = false;
+    std::vector<char> zone_soft_override_;
     // SMHA* (Aine et al., IJRR 2016) shared-g, dual-heuristic A*, run
     // unconditionally for every query — NO binary mode switch.
     //
@@ -380,10 +398,16 @@ private:
 
     // Inside a barrier-applied zone? Zones containing the start/goal are exempt
     // (zone_no_barrier_) — they must be entered, so they stay soft (moat only).
-    inline bool insideBarrierZone(const Eigen::Vector3d &pos) const {
-        if (!risk_zones_ || risk_barrier_ <= 0.0) return false;
+    // First non-exempt zone whose VISIBLE ellipsoid volume contains pos
+    // (-1 = none). skip_soft_override skips zones the [ZONE-AVOID] pass-2
+    // route needed (they stay finite-K in hard passes).
+    inline int visibleBarrierZoneAt(const Eigen::Vector3d &pos,
+                                    bool skip_soft_override) const {
+        if (!risk_zones_ || risk_barrier_ <= 0.0) return -1;
         for (size_t i = 0; i < risk_zones_->size(); ++i) {
             if (i < zone_no_barrier_.size() && zone_no_barrier_[i]) continue;
+            if (skip_soft_override && i < zone_soft_override_.size() &&
+                zone_soft_override_[i]) continue;
             const auto &tz = (*risk_zones_)[i];
             const double rv = tz.vertical_reach > 0.0
                                   ? tz.vertical_reach : tz.reach;
@@ -398,11 +422,94 @@ private:
                 // boundary is the 0.5 contour of the optimizer's smooth LOS
                 // transition, i.e. the exact radial-horizon ceiling.
                 if (!risk_visibility_ || risk_visibility_(i, pos) > 0.5)
+                    return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+    inline bool insideBarrierZone(const Eigen::Vector3d &pos) const {
+        return visibleBarrierZoneAt(pos, false) >= 0;
+    }
+    // [ZONE-AVOID] hard-volume membership WITH standoff margin: ellipsoid
+    // inflated 5% and the LOS contour lowered to 0.35 (vs the soft barrier's
+    // 0.5 rim) so the zone-free geodesic stands OFF the visible rim instead
+    // of hugging it — rim-hugging routes parked the back-end in the steepest
+    // visibility gradients and lost the duck-below tug-of-war (measured:
+    // pull 6-7x terrain restoring, terrain penetration, audit reject).
+    inline bool insideHardZoneVol(const Eigen::Vector3d &pos) const {
+        if (!risk_zones_ || risk_barrier_ <= 0.0) return false;
+        constexpr double kInflate2 = 1.05 * 1.05;
+        constexpr double kHardVis = 0.35;
+        for (size_t i = 0; i < risk_zones_->size(); ++i) {
+            if (i < zone_no_barrier_.size() && zone_no_barrier_[i]) continue;
+            if (i < zone_soft_override_.size() && zone_soft_override_[i])
+                continue;
+            const auto &tz = (*risk_zones_)[i];
+            const double rv = tz.vertical_reach > 0.0
+                                  ? tz.vertical_reach : tz.reach;
+            if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
+            const Eigen::Vector3d d = pos - tz.center;
+            const double q2 = d.head<2>().squaredNorm() /
+                                  (tz.reach * tz.reach) +
+                              d.z() * d.z() / (rv * rv);
+            if (q2 < kInflate2) {
+                if (!risk_visibility_ || risk_visibility_(i, pos) > kHardVis)
                     return true;
             }
         }
         return false;
     }
+    // [ZONE-AVOID] volume to DISCONNECT in the current hard pass.
+    inline bool insideHardZone(const Eigen::Vector3d &pos) const {
+        return zone_hard_mode_ && insideHardZoneVol(pos);
+    }
+    // [ZONE-AVOID] Conservative CELL-scale hard test for the speed-map
+    // rasterization. Center-point tests alias badly here: the shadow
+    // sigmoid is ~0.1 u wide vs ~1 u coarse cells, so a cell whose CENTER
+    // reads "shadowed" can be mostly exposed — the wave then threads
+    // sub-cell "seams" that are not real corridors, and the extracted
+    // route triggers the optimizer's crossing marker despite a pass=1
+    // claim. Block a cell when the inflated ellipsoid intersects the cell
+    // AABB (closest-point test, separable per axis) AND any of the
+    // center/8-corner visibility probes clears the hard threshold. The
+    // half-cell geometric growth also covers the T-sampler's sub-cell
+    // corner-cuts during extraction.
+    inline bool insideHardZoneCell(const Eigen::Vector3d &c,
+                                   double hx, double hy, double hz) const {
+        if (!risk_zones_ || risk_barrier_ <= 0.0) return false;
+        constexpr double kInflate2 = 1.05 * 1.05;
+        constexpr double kHardVis = 0.35;
+        for (size_t i = 0; i < risk_zones_->size(); ++i) {
+            if (i < zone_no_barrier_.size() && zone_no_barrier_[i]) continue;
+            if (i < zone_soft_override_.size() && zone_soft_override_[i])
+                continue;
+            const auto &tz = (*risk_zones_)[i];
+            const double rv = tz.vertical_reach > 0.0
+                                  ? tz.vertical_reach : tz.reach;
+            if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
+            const double dx =
+                std::max(0.0, std::abs(tz.center.x() - c.x()) - hx);
+            const double dy =
+                std::max(0.0, std::abs(tz.center.y() - c.y()) - hy);
+            const double dz =
+                std::max(0.0, std::abs(tz.center.z() - c.z()) - hz);
+            const double q2 = (dx * dx + dy * dy) / (tz.reach * tz.reach) +
+                              dz * dz / (rv * rv);
+            if (q2 >= kInflate2) continue;
+            if (!risk_visibility_) return true;
+            if (risk_visibility_(i, c) > kHardVis) return true;
+            for (int sx = -1; sx <= 1; sx += 2)
+              for (int sy = -1; sy <= 1; sy += 2)
+                for (int sz = -1; sz <= 1; sz += 2) {
+                    const Eigen::Vector3d q(c.x() + sx * hx,
+                                            c.y() + sy * hy,
+                                            c.z() + sz * hz);
+                    if (risk_visibility_(i, q) > kHardVis) return true;
+                }
+        }
+        return false;
+    }
+
 
     // Altitude-band cost shared by the FM2 speed map and the shortcut cost
     // metric (zlo/zhi set per-search from the mission endpoints).
@@ -510,6 +617,10 @@ public:
         rough_slope0_ = std::max(0.0, slope0);
     }
     void setRiskBarrier(double k) { risk_barrier_ = (k > 0.0 ? k : 0.0); }
+    void setZoneAvoidLexico(bool on) { zone_avoid_lexico_ = on; }
+    // Last plan's [ZONE-AVOID] pass (0 = policy off / no zones,
+    // 1 = zone-free route, 2 = soft fallback, 3 = re-hardened).
+    int zoneAvoidPass() const { return zone_avoid_pass_; }
     void setSmhaW(double w) { smha_w_ = w; }
     void setFrontEnd(FrontEnd fe) { front_end_ = fe; }
     void setFm2CoarseK(int k) { fm2_coarse_k_ = (k >= 1 ? k : 1); }

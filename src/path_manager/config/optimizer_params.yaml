@@ -8,6 +8,13 @@
     manager/fm2_max_cells: 1640000000   # OOM guard; over this -> straight-line fallback
     manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
+    # [ZONE-AVOID] 사전식 존 회피(2026-07-24): 우회로가 존재하면 비용 비교 없이
+    # 무조건 회피(패스1: 비면제 존의 가시영역을 F=0으로 단절 후 도달성 검사).
+    # 도달 불가(존 벽이 임무를 실제로 막음)일 때만 소프트 K 필드로 최소체류·
+    # 최저노출 심으로 결단 횡단, 패스3가 불필요 존을 재차단. false = 기존
+    # 소프트 정책(싸면 진입). K 스윕(100~1000) 실측: 소프트 정책에선 어떤
+    # K로도 "싸면 진입"이 사라지지 않아 정책 자체를 바꾼 것.
+    manager/zone_avoid_lexicographic: true
     # [ROUGH] H2 terrain-roughness routing (2026-07-22): additive slope cost in
     # the FE shared field (FM2 speed map, A* edges, coarse heuristic, shortcut
     # acceptance, guard) — own currency, deliberately NOT risk_weight-scaled

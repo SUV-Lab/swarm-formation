@@ -498,10 +498,134 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
 
     if (front_end_ == FrontEnd::FM2) {
         auto tf0 = rclcpp::Clock().now();
-        fm2BuildSpeedMap();
-        fm2SolveEikonal(end_pt, start_pt);
+        // [ZONE-AVOID] Lexicographic zone policy: if ANY route that stays
+        // out of every visible zone volume exists, take it — avoidance is
+        // never traded against detour length ("cheap enough to cross" is
+        // not a thing). Only when a zone wall truly blocks the mission does
+        // the soft finite-K field run (decisive minimum-dwell crossing at
+        // the least-exposure seam), and pass 3 re-hardens every zone the
+        // soft route did not need so an unavoidable wall never softens the
+        // avoidable zones around it.
+        int zone_pass = 0;
+        zone_avoid_pass_ = 0;
+        zone_lexico_hard_ = false;
+        const bool lexico = zone_avoid_lexico_ && risk_zones_ &&
+                            !risk_zones_->empty() && risk_barrier_ > 0.0;
+        if (lexico) {
+            zone_soft_override_.assign(risk_zones_->size(), 0);
+            zone_hard_mode_ = true;
+            fm2BuildSpeedMap();
+            fm2SolveEikonal(end_pt, start_pt);
+            // Reachability = the probe geodesic actually reaches the goal.
+            // A finite T(start) alone is NOT enough: the field can be
+            // finite via routes the descent cannot follow (e.g. over the
+            // ellipsoid top), and an aborted descent appends the goal as a
+            // straight chord THROUGH the wall — accepting that as "pass 1"
+            // published a zone-crossing route labelled zone-free.
+            // A probe route only counts if the descent truly reached the
+            // goal AND never went below the surface: terrain keeps kFMin
+            // porosity even in hard mode (see fm2BuildSpeedMap), so the
+            // "reachable" wave may be a burrow under a zone wall.
+            auto probeRouteOk = [&](const std::vector<Eigen::Vector3d> &pr) {
+                if (pr.size() < 2) return false;
+                if (!fm2_geo_reached_goal_) {
+                    // Near-goal aborts are fine: the descent regularly
+                    // stalls a few cells short inside the (exempt) goal
+                    // zone and the appended goal closes it with a short
+                    // chord — reject only if the gap is long or the chord
+                    // clips the hard volume. (A start-side abort, e.g. the
+                    // seal test's 400 u gap, fails here and falls back.)
+                    const Eigen::Vector3d &last = pr[pr.size() - 2];
+                    const Eigen::Vector3d &gw = pr.back();
+                    const double rem = (gw - last).norm();
+                    if (rem > 25.0) return false;
+                    const int n = std::max(1, (int)std::ceil(rem / 0.5));
+                    for (int t = 0; t <= n; ++t) {
+                        const Eigen::Vector3d q =
+                            last + (double)t / n * (gw - last);
+                        if (insideHardZoneVol(q)) return false;
+                    }
+                }
+                if (!terrain_height_) return true;
+                for (const auto &q : pr) {
+                    if (q.z() <
+                        (double)terrain_height_(q.x(), q.y()) - 0.15)
+                        return false;
+                }
+                return true;
+            };
+            bool hard_ok = fm2_valid_ && std::isfinite(fm2SampleT(start_pt));
+            if (hard_ok) {
+                const std::vector<Eigen::Vector3d> probe1 =
+                    fm2ExtractGeodesic(start_pt, end_pt);
+                hard_ok = probeRouteOk(probe1);
+            }
+            if (hard_ok) {
+                zone_pass = 1;   // zone-free route exists
+            } else {
+                // Pass 2: legacy soft field — always connected.
+                zone_hard_mode_ = false;
+                fm2BuildSpeedMap();
+                fm2SolveEikonal(end_pt, start_pt);
+                std::vector<Eigen::Vector3d> probe;
+                if (fm2_valid_) probe = fm2ExtractGeodesic(start_pt, end_pt);
+                // Zones the soft route actually needs (visible-volume hits).
+                std::vector<char> crossed(risk_zones_->size(), 0);
+                for (const auto &pp : probe) {
+                    const int zi = visibleBarrierZoneAt(pp, false);
+                    if (zi >= 0) crossed[static_cast<size_t>(zi)] = 1;
+                }
+                zone_soft_override_ = crossed;
+                zone_hard_mode_ = true;
+                fm2BuildSpeedMap();
+                fm2SolveEikonal(end_pt, start_pt);
+                bool hard3_ok =
+                    fm2_valid_ && std::isfinite(fm2SampleT(start_pt));
+                if (hard3_ok) {
+                    const std::vector<Eigen::Vector3d> probe3 =
+                        fm2ExtractGeodesic(start_pt, end_pt);
+                    hard3_ok = probeRouteOk(probe3);
+                }
+                if (hard3_ok) {
+                    zone_pass = 3;   // needed zones soft, the rest hard
+                } else {
+                    // Rare: hardening the rest re-blocked the route (the
+                    // crossed set shifted the topology). Rebuild the plain
+                    // soft field so the extracted path and every downstream
+                    // consumer of fm2_F_/fm2_T_ see one consistent field.
+                    zone_hard_mode_ = false;
+                    fm2BuildSpeedMap();
+                    fm2SolveEikonal(end_pt, start_pt);
+                    zone_pass = 2;
+                }
+            }
+            // Chord veto in EVERY lexico pass, not just the hard ones. On
+            // the pass-2 soft field the raw geodesic still avoids every
+            // visible volume it can (it only crosses the zone_soft_override_
+            // set), but without the veto the SHORTCUT re-litigates that
+            // avoidance: its risk margins accept chords that clip a zone the
+            // raw route went around (observed: 337 km chain probe crossed
+            // 0/10 zones, simplified path clipped two). insideHardZoneVol
+            // skips override zones, so committed crossings simplify freely.
+            zone_lexico_hard_ = (zone_pass >= 1);
+            zone_avoid_pass_ = zone_pass;
+            int n_soft = 0;
+            for (char c : zone_soft_override_) n_soft += (c != 0);
+            if (log_manager_)
+                log_manager_->infof(
+                    "[ZONE-AVOID] pass=%d (%s), soft-crossings=%d/%zu",
+                    zone_pass,
+                    zone_pass == 1 ? "zone-free route"
+                    : zone_pass == 3 ? "wall crossed, rest re-hardened"
+                                     : "soft fallback",
+                    n_soft, risk_zones_->size());
+        } else {
+            fm2BuildSpeedMap();
+            fm2SolveEikonal(end_pt, start_pt);
+        }
         auto tf1 = rclcpp::Clock().now();
         if (fm2_valid_) fm2_path = fm2ExtractGeodesic(start_pt, end_pt);
+        zone_hard_mode_ = false;   // never leak into later consumers
         auto tf2 = rclcpp::Clock().now();
         double fm2_zmin = 1e9, fm2_zmax = -1e9;
         for (const auto &p : fm2_path) {
@@ -743,6 +867,12 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                             double *max_risk_out) -> bool {
         const bool need_risk = need_cost;
         if (checkOccupancy_esdf(a) || checkOccupancy_esdf(b)) return false;
+        // [ZONE-AVOID] after a hard pass the shortcut must not re-enter the
+        // hard volume: the soft risk margins below would happily accept a
+        // brief zone clip the wave was forbidden to make (observed leak:
+        // pass=1 route, then "front-end route crosses zone" via a chord).
+        if (zone_lexico_hard_ &&
+            (insideHardZoneVol(a) || insideHardZoneVol(b))) return false;
         double mx = need_risk ? std::max(getRiskCost(a), getRiskCost(b)) : 0.0;
         const double len = (b - a).norm();
         if (len > 1e-9) {
@@ -750,6 +880,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                 for (double sa = stride; sa < len; sa += 2.0 * stride) {
                     const Vector3d p = a + (sa / len) * (b - a);
                     if (checkOccupancy_esdf(p)) return false;
+                    if (zone_lexico_hard_ && insideHardZoneVol(p)) return false;
                     if (need_risk) mx = std::max(mx, getRiskCost(p));
                 }
                 if (stride <= terrain_stride_floor_) break;
@@ -1416,7 +1547,8 @@ void PathSearcher::fm2BuildSpeedMap()
     // callbacks) simply wait out the build (~seconds), which is the correct
     // semantic anyway: a mid-build obstacle change would tear the speed map.
     const auto sdf_bulk_guard = sdf_ ? sdf_->bulkReadGuard() : nullptr;
-    #pragma omp parallel for collapse(2) schedule(static)
+    long hard_blocked = 0;
+    #pragma omp parallel for collapse(2) schedule(static) reduction(+:hard_blocked)
     for (int k = 0; k < fcnz_; ++k)
       for (int j = 0; j < fcny_; ++j)
         for (int i = 0; i < fcnx_; ++i) {
@@ -1427,7 +1559,25 @@ void PathSearcher::fm2BuildSpeedMap()
             else if (virtual_ceil_height_ > -0.5 && w.z() > virtual_ceil_height_) blocked = true;
             else if (checkOccupancyBulk_esdf(w)) blocked = true;
             if (blocked) {
+                // kFMin porosity on purpose — in BOTH modes. It models
+                // surface-hugging: NOE seam corridors (terrain-to-shadow
+                // ceiling) are often thinner than a coarse cell, so a true
+                // terrain wall (F=0) disconnects them at this resolution
+                // (measured: every terrain-following mission fell back to
+                // pass=2). The price is that a hard-pass wave can BURROW
+                // under a zone wall through underground cells (huge but
+                // finite T) — that leak is caught after extraction by the
+                // below-terrain probe check in the [ZONE-AVOID] passes,
+                // not here.
                 fm2_F_[fm2Flat(i, j, k)] = kFMin;
+            } else if (zone_hard_mode_ &&
+                       insideHardZoneCell(w, 0.5 * cres, 0.5 * cres,
+                                          0.5 * cres_z)) {
+                ++hard_blocked;
+                // [ZONE-AVOID] hard pass: the visible zone volume is
+                // DISCONNECTED (F = 0, not kFMin) so reachability of the
+                // goal doubles as the "does a zone-free route exist" test.
+                fm2_F_[fm2Flat(i, j, k)] = 0.0f;
             } else {
                 // Free-space speed: risk slowdown (alpha*risk + finite barrier K
                 // inside non-exempt zones), modulated by obstacle distance.
@@ -1443,6 +1593,8 @@ void PathSearcher::fm2BuildSpeedMap()
                     (float)(1.0 / (1.0 + risk_cost));
             }
         }
+    if (zone_hard_mode_ && log_manager_)
+        log_manager_->infof("[ZONE-AVOID] hard-blocked %ld coarse cells", hard_blocked);
 }
 
 void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
@@ -1589,6 +1741,10 @@ void PathSearcher::fm2SolveEikonal(const Eigen::Vector3d &goal_world,
                 nk < 0 || nk >= fcnz_) continue;
             const int nf = fm2Flat(ni, nj, nk);
             if (frozen[nf]) continue;
+            // [ZONE-AVOID] F = 0 means DISCONNECTED (hard zone volume) —
+            // match the GPU semantics (live = F > 0) instead of crawling
+            // through at 1/max(F,1e-6) slowness.
+            if (fm2_F_[nf] <= 0.0f) continue;
             const float nt = solveQuad(ni, nj, nk);
             if (nt < fm2_T_[nf]) {
                 fm2_T_[nf] = nt;
@@ -1643,6 +1799,13 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
 {
     std::vector<Eigen::Vector3d> path;
     if (!fm2_valid_) return path;
+    // NOTE on sampling: strict-INF sampling near zone-hard cells was tried
+    // (repel the descent from F=0 walls) and REGRESSED every rim-hugging
+    // route — shadow seams and slalom gaps run within half a cell of the
+    // hard volume, so strict samples poisoned the seam and the descent
+    // aborted (r6/gauntlet fell to pass=2). Keep the renorm sampler: it
+    // slides along rims by design, and a descent that still cannot reach
+    // the goal is caught by the [ZONE-AVOID] extraction-success gate.
     const double fine_res = map_resolution_ > 1e-6 ? map_resolution_ : 1.0;
     const double fine_res_z = map_resolution_z_ > 1e-6 ? map_resolution_z_ : fine_res;
     const double cres = fine_res * static_cast<double>(fm2_coarse_k_);
@@ -1778,6 +1941,57 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
             bool dok;
             p_next = clampZ(discreteStep(p, dok));
             if (!dok) {
+                // Point-sampled recovery found no lower neighbour. That can
+                // be a trilinear artifact: on FIM block-noise plateaus the
+                // renorm blend at the CURRENT point reads below every
+                // neighbour sample, which stalled long extractions
+                // mid-route (observed: 337 km chain aborted at ~1900 u and
+                // shipped a 1600 u straight tail chord THROUGH two zones).
+                // Rescue on the RAW GRID: cell-to-cell descent is exactly
+                // the FMM's causal order, so a strictly lower neighbour
+                // CELL exists wherever T(cell) is finite and nonzero —
+                // immune to interpolation artifacts by construction.
+                const Eigen::Vector3d rc = (p - map_origin_)
+                    .cwiseQuotient(Eigen::Vector3d(cres, cres, cres_z));
+                const int ci = (int)std::floor(rc.x());
+                const int cj = (int)std::floor(rc.y());
+                const int ck = (int)std::floor(rc.z());
+                auto cellT = [&](int i, int j, int k) -> double {
+                    if (i < 0 || i >= fcnx_ || j < 0 || j >= fcny_ ||
+                        k < 0 || k >= fcnz_)
+                        return std::numeric_limits<double>::infinity();
+                    return (double)fm2_T_[fm2Flat(i, j, k)];
+                };
+                const double tc0 = cellT(ci, cj, ck);
+                double bt = tc0;
+                int bi = ci, bj = cj, bk = ck;
+                static const int OFF6[6][3] =
+                    {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+                for (auto &o : OFF6) {
+                    const int ni = ci + o[0], nj = cj + o[1], nk = ck + o[2];
+                    const double tn = cellT(ni, nj, nk);
+                    if (tn < bt) { bt = tn; bi = ni; bj = nj; bk = nk; }
+                }
+                if (bt < tc0 || (!std::isfinite(tc0) &&
+                                 std::isfinite(bt))) {
+                    // Land at the cell's xy center but KEEP the current z
+                    // (clamped into the target cell's z slab): the cell-T
+                    // monotone argument holds anywhere inside the cell, and
+                    // snapping z to the center pokes a shadow-hugging route
+                    // above the LOS ceiling (sigmoid width ~0.1 u < half a
+                    // z-cell) — observed as a visible rim graze at q2=0.83
+                    // that re-armed the crossing marker.
+                    const double zlo = map_origin_.z() + bk * cres_z;
+                    p_next = clampZ(Eigen::Vector3d(
+                        map_origin_.x() + (bi + 0.5) * cres,
+                        map_origin_.y() + (bj + 0.5) * cres,
+                        std::clamp(p.z(), zlo + 0.05 * cres_z,
+                                   zlo + 0.95 * cres_z)));
+                    ++n_recover;
+                    p = p_next;
+                    path.push_back(p);
+                    continue;
+                }
                 // No lower neighbour anywhere (numerical corner): last-resort
                 // nudge toward the goal — gated on occupancy. Zones stay
                 // nudgeable (traversable by design); walls/terrain/unreached
@@ -1800,10 +2014,11 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         p = p_next;
         path.push_back(p);
     }
+    fm2_geo_reached_goal_ = (p - goal_world).norm() < goal_tol;
     fprintf(stderr,
             "[GEODESIC] points=%zu recover_steps=%d (grad_fail=%d mono_rej=%d) reached_goal=%s\n",
             path.size(), n_recover, n_grad_fail, n_mono_rej,
-            ((p - goal_world).norm() < goal_tol ? "yes" : "NO(timeout!)"));
+            fm2_geo_reached_goal_ ? "yes" : "NO(timeout!)");
     path.push_back(goal_world);
 
     // Moving-average smoothing of z ONLY (endpoints pinned). The descent

@@ -3674,9 +3674,16 @@ namespace ego_planner
         if (q2 < 1.0) {
           if (risk_visibility_ && risk_visibility_(i, p, nullptr) <= 0.5)
             continue;
+          if (suppress_crossing_exempt_) {
+            LOG_INFO("[RISK] pass-1 route grazes zone %zu at "
+                     "(%.1f, %.1f, %.2f) q2=%.3f -> barrier stays armed",
+                     i, p.x(), p.y(), p.z(), q2);
+            break;
+          }
           zone_barrier_exempt_[i] = 1;
-          LOG_INFO("[RISK] front-end route crosses zone %zu -> barrier exempt (moat only)",
-                   i);
+          LOG_INFO("[RISK] front-end route crosses zone %zu at "
+                   "(%.1f, %.1f, %.2f) q2=%.3f -> barrier exempt (moat only)",
+                   i, p.x(), p.y(), p.z(), q2);
           break;
         }
       }

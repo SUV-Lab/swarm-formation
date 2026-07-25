@@ -1179,7 +1179,15 @@ void ReplanFSM::loadRiskZonesCallback(
     zones.reserve(msg->zones.size());
     size_t dropped = 0;
     for (const auto& z : msg->zones) {
-        if (z.reach <= 0.0 || z.peak <= 0.0) { ++dropped; continue; }
+        if (!std::isfinite(z.center.x) ||
+            !std::isfinite(z.center.y) ||
+            !std::isfinite(z.center.z) ||
+            !std::isfinite(z.reach) ||
+            !std::isfinite(z.peak) ||
+            z.reach <= 0.0 || z.peak <= 0.0) {
+            ++dropped;
+            continue;
+        }
         path_manager::RiskZone tz;
         tz.center = Eigen::Vector3d(z.center.x, z.center.y, z.center.z);
         tz.reach = z.reach;

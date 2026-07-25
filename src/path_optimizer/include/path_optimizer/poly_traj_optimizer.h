@@ -131,6 +131,13 @@ namespace ego_planner
     // keeps the same standoff at the ellipsoid rim that FM2 planned with.
     // 0 disables (moat-only sharing).
     double wei_risk_barrier_{0.0};
+    // [ZONE-AVOID] pass-1 plans commit to FULL avoidance: the front-end
+    // route only ever touches zones under the LOS shadow, where the
+    // visibility-gated barrier is already ~0. Crossing-marker exemptions
+    // would DISARM the barrier in the visible volume too (sub-cell
+    // densification points can poke over the 0.5 contour the route rode
+    // under), so they are suppressed for pass-1 plans.
+    bool suppress_crossing_exempt_{false};
 
     double swarm_clearance_;
     double max_vel_, max_acc_;
@@ -478,6 +485,9 @@ namespace ego_planner
     void setTerrainHeightGrad(std::function<bool(double, double, float *, float *, float *)> f) { terrain_hgrad_ = std::move(f); }
     void setControlPoints(const Eigen::MatrixXd &points);
     void setSwarmTrajs(SwarmTrajData *swarm_trajs_ptr);
+    void setSuppressCrossingExempt(bool on) {
+        suppress_crossing_exempt_ = on;
+    }
     void setDroneId(const int drone_id);
     void setFormation(const std::vector<Eigen::Vector3d>& formation_positions, int formation_size);
     void setRiskZones(const std::vector<RiskZone> &zones) {

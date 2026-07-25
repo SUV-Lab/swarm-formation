@@ -81,6 +81,8 @@ namespace path_manager
         node_->declare_parameter("optimization/alt_cap_headroom", 5.0);
         node_->declare_parameter("optimization/alt_floor_headroom", 0.5);
         node_->declare_parameter("manager/min_goal_agl", 1.0);
+        node_->declare_parameter("manager/align_start_vel_to_route", true);
+        node_->declare_parameter("manager/zone_avoid_lexicographic", true);
         node_->declare_parameter("manager/corner_fillet_radius", 0.0);
         // ESDF occupancy overlay (RViz debug aid). step=1.0m re-queries the SDF
         // hundreds of millions of times per (re)load — tens of seconds on the
@@ -171,6 +173,10 @@ namespace path_manager
         node_->get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_);
         node_->get_parameter("optimization/alt_floor_headroom", alt_floor_headroom_);
         node_->get_parameter("manager/min_goal_agl", min_goal_agl_);
+        node_->get_parameter("manager/align_start_vel_to_route",
+                             align_start_vel_to_route_);
+        node_->get_parameter("manager/zone_avoid_lexicographic",
+                             zone_avoid_lexico_);
         node_->get_parameter("manager/corner_fillet_radius", corner_fillet_radius_);
         node_->get_parameter("manager/esdf_viz_step", esdf_viz_step_);
         node_->get_parameter("manager/esdf_viz_enable", esdf_viz_enable_);
@@ -955,6 +961,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         // saddle, which matches what main-branch would also suffer under the
         // same debug configuration.
         searcher_.setObstacleMargin(obstacle_clearance_);
+        searcher_.setZoneAvoidLexico(zone_avoid_lexico_);
         searcher_.setGroundHeight(ground_height_);
         searcher_.setVirtualCeilHeight(virtual_ceil_height_);
         // 2.5D terrain heightmap for the front end (FM2 speed map / A* / shortcut):
@@ -1489,6 +1496,10 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                 "path max %.2f + %.2f; terrain owned by gated cap + 0.30 band)",
                 z_lo, z_hi, alt_floor_headroom_, path_max_z, alt_cap_headroom_);
         }
+        // [ZONE-AVOID] pass-1 = committed full avoidance: keep every zone
+        // barrier armed (see suppress_crossing_exempt_ in the optimizer).
+        poly_traj_opt_->setSuppressCrossingExempt(
+            searcher_.zoneAvoidPass() == 1);
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
             global_traj, local_traj, cap_ref);
