@@ -148,6 +148,11 @@ private:
     double initial_speed_unit_m_{100.0};
     bool use_commanded_initial_velocity_{false};
     bool use_commanded_initial_acceleration_{false};
+    // True when start_vel_ was SYNTHESIZED (default speed x first-leg chord)
+    // rather than commanded/trajectory-derived. planGlobalTraj may re-aim a
+    // synthesized velocity onto the route's actual initial direction
+    // ([VEL-ALIGN]); explicit vectors are never touched.
+    bool start_vel_synthesized_{false};
     Eigen::Vector3d commanded_initial_velocity_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d commanded_initial_acceleration_{Eigen::Vector3d::Zero()};
 

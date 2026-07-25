@@ -337,6 +337,13 @@ namespace path_manager
     // AGL floor shared by [GOAL AGL] and [START AGL].
     double minGoalAgl() const { return min_goal_agl_; }
 
+    // [VEL-ALIGN] The FSM synthesizes a default start velocity along the
+    // first-leg CHORD before any route exists; when flagged here,
+    // planGlobalTraj re-aims that velocity onto the front-end route's actual
+    // initial direction (manager/align_start_vel_to_route). Explicitly
+    // commanded / trajectory-derived velocities are never re-aimed.
+    void setStartVelSynthesized(bool s) { start_vel_synthesized_ = s; }
+
     // Dynamic obstacle interface (RViz-driven). Patches are layered on top of
     // the static terrain ESDF; the next plan picks them up via min(static,dyn).
     // Returns patch id (>= 0) on success, -1 if SDF not built yet or out of map.
@@ -490,6 +497,11 @@ namespace path_manager
     double alt_cap_headroom_{5.0};        // z-cap slack above the geodesic max; must fit sparse-piece quintic swell (~ FM2 coarse-cell band tolerance)
     double alt_floor_headroom_{0.5};      // z-floor slack below min(start,goal) z; stops min-jerk sags bouncing off the water/terrain clearance
     double min_goal_agl_{1.0};            // waypoints get z >= terrain elevation + this (frame z units); kills underground goals from fixed-z mission sources
+    // [VEL-ALIGN] see setStartVelSynthesized().
+    bool start_vel_synthesized_{false};
+    bool align_start_vel_to_route_{true};
+    // [ZONE-AVOID] lexicographic zone policy (see dyn_a_star.h).
+    bool zone_avoid_lexico_{true};
     double corner_fillet_radius_{0.0};    // legacy geometric fallback; 0 = off
     uint64_t esdf_viz_revision_{~0ull};   // last SDF revision published as cubes
     double esdf_viz_step_{4.0};           // ESDF occupancy-viz sample step [m]; coarse = cheap

@@ -601,6 +601,7 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
         start_pt_ = theoretical_pos;
         start_vel_ = theoretical_vel;
         start_acc_ = theoretical_acc;
+        start_vel_synthesized_ = false;  // trajectory-derived: real motion state
 
         double pos_error = (current_pos_ - theoretical_pos).norm();
         log_manager_->infof("Formation change - using TRAJECTORY position/vel/acc (error from actual: %.2fm)",
@@ -611,6 +612,7 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
     } else {
         start_pt_ = current_pos_;
         start_vel_.setZero();
+        start_vel_synthesized_ = false;
         // Provenance tag for the log below: the derived first-leg velocity
         // was repeatedly misread as an applied use_initial_velocity vector.
         const char *vel_src = "rest (zero)";
@@ -645,6 +647,10 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
             }
             start_vel_ = initial_direction * commanded_initial_speed_;
             vel_src = "initial_speed x first-leg direction (level)";
+            // Chord is only a PROXY for "cruising along the route" (the route
+            // does not exist yet) — mark it so planGlobalTraj can re-aim onto
+            // the front-end route's real initial direction ([VEL-ALIGN]).
+            start_vel_synthesized_ = true;
         }
         start_acc_ = use_commanded_initial_acceleration_
             ? commanded_initial_acceleration_
@@ -669,6 +675,7 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
     if (inject_init_state_) {
         start_vel_ = inject_init_vel_;
         start_acc_ = inject_init_acc_;
+        start_vel_synthesized_ = false;  // injected = explicit, never re-aim
         log_manager_->infof("[TEST] Injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
                    start_vel_(0), start_vel_(1), start_vel_(2),
                    start_acc_(0), start_acc_(1), start_acc_(2));
@@ -800,6 +807,7 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
 
     auto global_traj_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TIMING] Starting global trajectory planning");
+    path_manager_->setStartVelSynthesized(start_vel_synthesized_);
     plan_writer_active_.store(true, std::memory_order_release);   // [RACE-PROBE]
     bool success = path_manager_->planGlobalTraj(
         start_pt_, start_vel_, start_acc_,

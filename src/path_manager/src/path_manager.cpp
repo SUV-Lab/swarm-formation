@@ -866,9 +866,37 @@ namespace path_manager
             return false;
         }
 
+        // [VEL-ALIGN] A SYNTHESIZED start velocity (default speed x first-leg
+        // chord — the FSM knows no route before the front-end runs) is only a
+        // proxy for "already cruising along the route". Re-aim it onto the
+        // route's ACTUAL initial direction so the head boundary condition
+        // agrees with the path the optimizer is about to follow — otherwise
+        // the head piece launches down the chord at cruise speed and S-bends
+        // onto the route. Explicitly commanded / trajectory-derived
+        // velocities are never touched (start_vel_synthesized_ false).
+        Eigen::Vector3d start_vel_eff = start_vel;
+        if (align_start_vel_to_route_ && start_vel_synthesized_ &&
+            clean_path.size() >= 2) {
+            Eigen::Vector3d dir = clean_path[1] - clean_path[0];
+            dir.z() = 0.0;  // same LEVEL contract as the chord synthesis
+            if (dir.head<2>().norm() > 1.0e-9) {
+                dir.normalize();
+                const Eigen::Vector3d re_aimed = dir * start_vel.norm();
+                if ((re_aimed - start_vel).norm() > 1.0e-9) {
+                    log_manager_->infof(
+                        "[VEL-ALIGN] synthesized start vel re-aimed to the "
+                        "route's initial direction: (%.3f, %.3f, %.3f) -> "
+                        "(%.3f, %.3f, %.3f) u/s",
+                        start_vel.x(), start_vel.y(), start_vel.z(),
+                        re_aimed.x(), re_aimed.y(), re_aimed.z());
+                }
+                start_vel_eff = re_aimed;
+            }
+        }
+
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===
         bool opt_ok = optimizeStage(clean_path, full_route,
-                                    start_pos, start_vel, start_acc, wps,
+                                    start_pos, start_vel_eff, start_acc, wps,
                                     cap_ref);
 
         auto t_total_end = std::chrono::steady_clock::now();

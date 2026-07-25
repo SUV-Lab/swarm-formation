@@ -73,6 +73,13 @@
     manager/risk_mask_viz_volume_alpha: 0.54
     manager/risk_mask_viz_agl: 0.15     # fixed_agl diagnostic height (15 m)
     manager/risk_smha_w: 2.0            # SMHA* suboptimality bound (astar front-end only)
+    # [VEL-ALIGN] Re-aim the SYNTHESIZED default start velocity (initial_speed
+    # x first-leg chord, made before any route exists) onto the front-end
+    # route's actual initial direction, so the head boundary condition agrees
+    # with the path being followed (no cruise-speed S-bend off the chord on
+    # terrain-curved routes). Explicit use_initial_velocity vectors and
+    # trajectory-derived (replan) states are never re-aimed. false = legacy chord.
+    manager/align_start_vel_to_route: true
     manager/dyn_yaw_seed: -1                    # dynamic-obstacle (ship) spawn-orientation RNG seed.
                                         # (seed 60978556 reproduces the 2026-07-10 start-hump case
                                         # that led to the arc-varying cap — kept for regression.)
