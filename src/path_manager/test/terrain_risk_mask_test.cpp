@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <thread>
 
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 #include "path_manager/path_manager.h"
 
@@ -71,6 +73,8 @@ int main(int argc, char **argv)
   visualization_msgs::msg::Marker last_floor;
   bool got_floor = false;
   bool got_wire = false;
+  std_msgs::msg::Float64MultiArray last_profile;
+  int profile_messages = 0;
   auto marker_sub = node->create_subscription<visualization_msgs::msg::Marker>(
       "/viz/risk_field", rclcpp::QoS(128).reliable().transient_local(),
       [&](visualization_msgs::msg::Marker::SharedPtr marker) {
@@ -83,6 +87,14 @@ int main(int argc, char **argv)
             marker->type == visualization_msgs::msg::Marker::LINE_LIST)
           got_wire = true;
       });
+  auto profile_sub =
+      node->create_subscription<std_msgs::msg::Float64MultiArray>(
+          "/viz/risk_profile",
+          rclcpp::QoS(8).reliable().transient_local(),
+          [&](std_msgs::msg::Float64MultiArray::SharedPtr profile) {
+            last_profile = *profile;
+            ++profile_messages;
+          });
 
   path_manager::PathManager manager(node);
   path_manager::RiskZone zone;
@@ -129,6 +141,22 @@ int main(int argc, char **argv)
   expect(manager.getRiskVisibility(1, Eigen::Vector3d(6.5, 0.5, 1.0)) > 0.9,
          "AGL-grounded ridge-top source sees past its own crest");
 
+  // A query inside the physical half-cell border must retain the outer DEM
+  // cell height. Treating the missing bilinear stencil corner as z=0 creates
+  // a false downhill at cropped land edges. A genuinely off-map query remains
+  // unavailable.
+  auto edge_map = makeRidgeMap();
+  std::fill(edge_map->data.front().data.begin(),
+            edge_map->data.front().data.end(), 7.0f);
+  manager.setTerrainData(edge_map);
+  double edge_elevation = 0.0;
+  expect(manager.terrainElevation(9.9, 0.0, &edge_elevation) &&
+             std::abs(edge_elevation - 7.0) < 1e-6,
+         "DEM half-cell border clamps to the nearest terrain cell");
+  expect(!manager.terrainElevation(10.1, 0.0, &edge_elevation),
+         "query beyond the physical DEM boundary remains off-map");
+  manager.setTerrainData(makeRidgeMap());
+
   // Verify that the same field reaches RViz for the launch-default nonzero
   // drone id. The floor mesh should rise to the horizon behind the ridge;
   // unlike a 2-D clipped carpet, it preserves the fact that risk reappears
@@ -152,6 +180,83 @@ int main(int argc, char **argv)
   }
   expect(has_west_cell && has_far_east_cell && far_east_floor_is_raised,
          "RViz volume raises its far-side floor to the terrain horizon");
+
+  // === Versioned altitude risk-profile channel ===
+  // EmergencyStop supplies a valid stationary polynomial without invoking the
+  // global planner; the subsequent zone refresh must immediately publish the
+  // current trajectory against the rebuilt risk field.
+  manager.EmergencyStop(behind_low);
+  manager.setRiskZonesRuntime({zone, ridge_zone});
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  constexpr size_t kZoneCount = 2;
+  constexpr size_t kRecordWidth = 5 + 2 * kZoneCount;
+  const bool valid_v2 =
+      last_profile.data.size() >= 2 + kRecordWidth &&
+      last_profile.data[0] == 3.0 &&
+      last_profile.data[1] == static_cast<double>(kZoneCount) &&
+      (last_profile.data.size() - 2) % kRecordWidth == 0;
+  expect(valid_v2,
+         "risk profile publishes self-describing v3 fixed-width records");
+  if (valid_v2) {
+    const size_t b = 2;
+    const double x = last_profile.data[b + 1];
+    const double y = last_profile.data[b + 2];
+    const double z = last_profile.data[b + 3];
+    const Eigen::Vector3d sample(x, y, behind_low.z());
+    const double r0 = manager.getEffectiveRisk(0, sample);
+    const double r1 = manager.getEffectiveRisk(1, sample);
+    const double expected_combined = 1.0 - (1.0 - r0) * (1.0 - r1);
+    expect(std::abs(z - behind_low.z()) < 1e-12,
+           "profile record binds risk data to the source trajectory altitude");
+    expect(std::abs(last_profile.data[b + 4] - expected_combined) < 1e-12,
+           "profile combined risk exactly matches OR-combined effective risk");
+
+    const double floor0 = last_profile.data[b + 5];
+    const double top0 = last_profile.data[b + 6];
+    const double expected_top0 =
+        2.0 + 3.5 * std::sqrt(1.0 - 36.0 / 100.0);
+    expect(std::isfinite(floor0) && std::isfinite(top0) && floor0 < top0 &&
+               std::abs(top0 - expected_top0) < 1e-6,
+           "zone record preserves its own ellipsoid visible interval");
+    expect(std::abs(manager.getRiskVisibility(
+                        0, Eigen::Vector3d(x, y, floor0)) -
+                    0.5) < 1e-6,
+           "grounded visibility floor is inverted into raw trajectory z");
+  }
+
+  const int before_terrain_refresh = profile_messages;
+  manager.setTerrainData(makeRidgeMap());
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  expect(profile_messages > before_terrain_refresh,
+         "terrain replacement refreshes the current trajectory risk profile");
+
+  const int before_world_clear = profile_messages;
+  auto empty_world = std::make_shared<grid_map_msgs::msg::GridMap>();
+  manager.setTerrainData(empty_world);
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  expect(std::abs(manager.getRiskVisibility(0, behind_low) - 1.0) < 1e-12,
+         "world=none clears the planner DEM and restores no-terrain visibility");
+  expect(profile_messages > before_world_clear,
+         "world=none refreshes the current trajectory risk profile");
+  expect(manager.addDynamicSphere(Eigen::Vector3d(8.0, 8.0, 0.0), 0.5) == -2,
+         "world=none invalidates the old SDF so new obstacles defer to the next map");
+
+  manager.setRiskZonesRuntime({});
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  expect(last_profile.data.empty(),
+         "empty runtime zone set clears the latched risk profile");
 
   // === Draped heatmap channel (mode "heatmap", the launch default) ===
   // A second manager runs the heatmap mode; the fixture above stays on
@@ -236,6 +341,7 @@ int main(int argc, char **argv)
   }
   (void)heatmap_sub;
   (void)marker_sub;
+  (void)profile_sub;
 
   rclcpp::shutdown();
   std::cout << (failures == 0 ? "PASS" : "FAIL") << ": " << failures

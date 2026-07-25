@@ -8,6 +8,9 @@
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
 #include <Eigen/Eigen>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <vector>
 #include <map>
 #include <string>
@@ -112,18 +115,27 @@ namespace path_manager
       // that blocky surface appeared to overlap the finer bilinear terrain
       // the altitude/clearance panels display. Interpolating here makes the
       // optimizer's terrain match the panels' terrain, so grazes stop reading as
-      // pass-throughs. Water/edge (any NaN or out-of-range corner) keeps the old
-      // nearest-cell + invalid rule so the "water = no terrain" voxelisation is
-      // unchanged.
+      // pass-throughs. NaN water is blended with sea level; at the geometric
+      // map boundary the outer stencil sample is clamped to the nearest DEM
+      // cell so a cropped land edge does not become a fabricated downhill.
       constexpr float kInv = -std::numeric_limits<float>::infinity();
       const double fx = (terrain_world_x - origin_x) / resolution - 0.5;
       const double fy = (terrain_world_y - origin_y) / resolution - 0.5;
+      // The raster represents the physical rectangle extending half a cell
+      // beyond its outer cell centres. Queries outside that rectangle have no
+      // terrain; queries within its half-cell edge use replicated-border
+      // bilinear interpolation.
+      if (fx < -0.5 || fx > static_cast<double>(cols) - 0.5 ||
+          fy < -0.5 || fy > static_cast<double>(rows) - 0.5) {
+        return kInv;
+      }
       const int col0 = static_cast<int>(std::floor(fx));
       const int row0 = static_cast<int>(std::floor(fy));
 
       auto at = [&](int c, int r) -> float {
-        if (c < 0 || c >= cols || r < 0 || r >= rows) return kInv;
-        const int index = c * rows + r;  // Column-major
+        const int cc = std::clamp(c, 0, cols - 1);
+        const int rr = std::clamp(r, 0, rows - 1);
+        const int index = cc * rows + rr;  // Column-major
         if (index < 0 || index >= static_cast<int>(elevation.size())) return kInv;
         const float e = elevation[index];
         return std::isnan(e) ? kInv : e;
@@ -131,22 +143,10 @@ namespace path_manager
 
       const float e00 = at(col0, row0),     e10 = at(col0 + 1, row0);
       const float e01 = at(col0, row0 + 1), e11 = at(col0 + 1, row0 + 1);
-      // Blend invalid corners (water NaN / map edge) as SEA LEVEL 0 — exactly
-      // like the RViz panel's sampler — so the surface is C0-continuous across
-      // coastlines. The first version fell back to the nearest CELL value
-      // there, which JUMPS by the full land height as a query crosses a cell
-      // boundary at the coast; the optimizer's terrain term (weight 1e4) fed
-      // on that discontinuity and killed the line search (-1005/-1008) on
-      // island-dotted maps. Pure water (all four invalid) stays -inf so
-      // "water = no terrain" semantics are unchanged for the F-build and the
-      // terrain term alike.
-      // KNOWN LIMITATION (deferred): a partial-OOB stencil at the MAP EDGE
-      // (geometric boundary, not water) also 0-blends its out-of-grid corners,
-      // so land touching the grid edge reads a fabricated sea-level down-slope.
-      // Harmless while missions stay interior (all production worlds do). A fix
-      // must nearest-cell-clamp BOTH this and getElevationAndGrad TOGETHER
-      // (cost and gradient must share one surface) plus add an edge-mission
-      // regression — out of scope for the current audit.
+      // Blend NaN water corners as SEA LEVEL 0 — exactly like the RViz panel's
+      // sampler — so the surface is C0-continuous across coastlines. Pure
+      // water (all four invalid) stays -inf, preserving "water = no terrain"
+      // semantics for the front end and SDF construction.
       const bool n00 = (e00 == kInv), n10 = (e10 == kInv);
       const bool n01 = (e01 == kInv), n11 = (e11 == kInv);
       if (n00 && n10 && n01 && n11) return kInv;
@@ -208,12 +208,17 @@ namespace path_manager
       // gradient must come from the SAME surface.
       const double fx = (twx - origin_x) / resolution - 0.5;
       const double fy = (twy - origin_y) / resolution - 0.5;
+      if (fx < -0.5 || fx > static_cast<double>(cols) - 0.5 ||
+          fy < -0.5 || fy > static_cast<double>(rows) - 0.5) {
+        return false;
+      }
       const int col0 = static_cast<int>(std::floor(fx));
       const int row0 = static_cast<int>(std::floor(fy));
       constexpr float kInv = -std::numeric_limits<float>::infinity();
       auto at = [&](int c, int r) -> float {
-        if (c < 0 || c >= cols || r < 0 || r >= rows) return kInv;
-        const int index = c * rows + r;
+        const int cc = std::clamp(c, 0, cols - 1);
+        const int rr = std::clamp(r, 0, rows - 1);
+        const int index = cc * rows + rr;
         if (index < 0 || index >= static_cast<int>(elevation.size())) return kInv;
         const float e = elevation[index];
         return std::isnan(e) ? kInv : e;
@@ -222,37 +227,18 @@ namespace path_manager
       const float e01 = at(col0, row0 + 1), e11 = at(col0 + 1, row0 + 1);
       const bool n00 = (e00 == kInv), n10 = (e10 == kInv);
       const bool n01 = (e01 == kInv), n11 = (e11 == kInv);
-      // [WATER-FLOOR] all-water/off-DEM patch: report SEA LEVEL (h=0, flat)
-      // instead of "no terrain". Mixed coastal patches already blend NaN
-      // corners as 0, so this is the same surface extended continuously over
-      // open water — the optimizer's terrain band now prices the sea surface
-      // (a sub-stall recovery dive measured z=0.18 u over water with NOTHING
-      // but the w=200 altitude band resisting; the terrain floor is w=10000)
-      // and the audit sweep/profile measure clearance there instead of
-      // skipping water columns. getElevation (FE/SDF voxelisation) keeps its
-      // "water = no terrain" rule — only this grad accessor, whose sole
-      // consumer is the optimizer/audit lambda, gains the floor. Lakes on an
-      // inland DEM read 0 (under-floored vs their true surface) — still a
-      // floor where there was none.
+      // [WATER-FLOOR] all-water patch: report SEA LEVEL (h=0, flat) instead
+      // of "no terrain". Off-DEM queries were rejected by the physical-bound
+      // check above. Mixed coastal patches already blend NaN corners as 0, so
+      // this is the same surface extended continuously over open water. The
+      // front-end getElevation accessor retains its "water = no terrain"
+      // behavior; this gradient accessor gives the optimizer a sea-level
+      // safety floor.
       if (n00 && n10 && n01 && n11) {
-        // Distinguish IN-MAP open water (all four corners are valid grid
-        // cells that happen to be NaN) from OFF-DEM (all four corner indices
-        // are outside the grid). In-map water keeps the sea-level floor
-        // (design above: resist sub-stall dives over the sea). Off-DEM has no
-        // terrain data at all — return false, matching getElevation's off-map
-        // -inf, so the optimizer/audit never prices an off-map sample against
-        // a fake z=0 ground (which read a real cropped-out ridge as "safe").
-        auto in_grid = [&](int c, int r) {
-          return c >= 0 && c < cols && r >= 0 && r < rows;
-        };
-        const bool any_in_grid =
-            in_grid(col0, row0) || in_grid(col0 + 1, row0) ||
-            in_grid(col0, row0 + 1) || in_grid(col0 + 1, row0 + 1);
-        if (!any_in_grid) return false;   // off-DEM: no terrain
         *h = 0.0f;
         *dhdx = 0.0f;
         *dhdy = 0.0f;
-        return true;                      // in-map open water: sea-level floor
+        return true;
       }
       const double f00 = n00 ? 0.0 : e00;
       const double f10 = n10 ? 0.0 : e10;
@@ -472,11 +458,19 @@ namespace path_manager
     // The draped heatmap shows the ground-level visibility boundary, which is NOT
     // the flown risk — this line is.
     void publishTrajRisk(const poly_traj::Trajectory &traj);
-    // [RISK-PROFILE] altitude-panel channels: per arc-length sample along the
-    // plan, the risk-zone DOME cross-section (union vertical extent) and the
-    // visibility ROOF (altitude above which some zone has visibility; below =
-    // terrain-occluded).
-    // Quads [s, roof_z, dome_top_z, dome_bot_z]; NaN where no zone covers xy.
+    // [RISK-PROFILE] Versioned altitude-panel channel. Payload:
+    //   [3.0, N,
+    //    s, x, y, z, combined_risk,
+    //    floor_0, top_0, ..., floor_N-1, top_N-1,
+    //    ...]
+    // with one fixed-width record per dense trajectory sample. Geometry is in
+    // planning-frame units; combined_risk is the exact OR-combination used by
+    // /viz/traj_risk. Each finite [floor_i, top_i] is the visible portion of
+    // zone i's ellipsoid at (x,y), after terrain and grounded-visibility
+    // clipping. NaN/NaN means that zone has no visible vertical interval.
+    bool riskProfileVisibleInterval(size_t zone_index, double x, double y,
+                                    double *lower_z,
+                                    double *floor_z, double *top_z) const;
     void publishRiskProfile(const poly_traj::Trajectory &traj);
     double risk_smha_w_{2.0};
     std::string front_end_str_{"fm2"};

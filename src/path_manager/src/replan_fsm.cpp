@@ -139,8 +139,15 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // (e.g. "/drone" + std::to_string(drone_id_)) so topics don't collide.
     std::string topic_prefix = "";
 
-    optimized_path_pub_ = node_->create_publisher<path_manager::msg::PolyTraj>(topic_prefix + "/planning/trajectory", sensor_qos);
-    global_path_pub_ = node_->create_publisher<path_manager::msg::PolyTraj>(topic_prefix + "/planning/initial_trajectory", sensor_qos);
+    // Keep the latest polynomial available to panels/visualizers opened after
+    // planning completed. Volatile sensor subscribers remain compatible and
+    // continue receiving live publications.
+    auto trajectory_qos = sensor_qos;
+    trajectory_qos.transient_local();
+    optimized_path_pub_ = node_->create_publisher<path_manager::msg::PolyTraj>(
+        topic_prefix + "/planning/trajectory", trajectory_qos);
+    global_path_pub_ = node_->create_publisher<path_manager::msg::PolyTraj>(
+        topic_prefix + "/planning/initial_trajectory", trajectory_qos);
 
     rclcpp::SubscriptionOptions trajectory_cmd_options;
     trajectory_cmd_options.callback_group = subscription_callback_group_;

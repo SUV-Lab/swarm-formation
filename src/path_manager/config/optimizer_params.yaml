@@ -59,7 +59,10 @@
     manager/risk_mask_viz_step: 0.0     # <=0: auto; RViz cell size
     manager/risk_mask_viz_slice_offset: 0.0  # planar mode only: slice z offset
     manager/risk_mask_viz_threshold: 0.50    # visible side of horizon boundary
-    manager/risk_mask_viz_mode: heatmap3d # heatmap | heatmap3d | volume | fixed_agl | fixed_msl
+    manager/risk_mask_viz_mode: heatmap # heatmap | heatmap3d | volume | fixed_agl | fixed_msl
+                                        # heatmap: 지형 드레이프 2D — 빨강=바닥까지 피탐(위험),
+                                        # 초록=밴드 전체 은폐(안전). 안전/위험 구간이 한눈에 나뉘는 뷰.
+                                        # (2026-07-20 heatmap3d로 기본이 바뀌었다가 07-24 사용자 요청으로 복귀)
                                         # heatmap3d: 가시성 경계면을 실제 3D 표면으로 렌더 — 표면고도 =
                                         # 지형 + 가시성 기준고도 AGL ("이 지붕 아래는 지형 차폐"). 색 램프는
                                         # heatmap과 동일(빨강=바닥까지 가시, 초록/파랑=agl_max 캡 지붕).

@@ -1630,6 +1630,23 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
 
     traj_.setLocalTraj(stopMJO.getTraj(), rclcpp::Clock(RCL_ROS_TIME).now().seconds(), traj_.local_traj.drone_id);
 
+    // The stop trajectory replaces the previous route, so every latched
+    // route-derived diagnostic must change with it. Otherwise the altitude
+    // panel can combine a stationary marker with the old front-end floor/path
+    // and old risk colors.
+    if (terrain_influence_pub_) {
+        std_msgs::msg::Float64MultiArray clear;
+        terrain_influence_pub_->publish(clear);
+    }
+    if (simple_path_pub_) {
+        nav_msgs::msg::Path clear;
+        clear.header.frame_id = "map";
+        clear.header.stamp = node_->now();
+        simple_path_pub_->publish(clear);
+    }
+    publishTrajRisk(traj_.local_traj.traj);
+    publishRiskProfile(traj_.local_traj.traj);
+
     RCLCPP_WARN(node_->get_logger(), "EMERGENCY STOP executed at position (%.2f, %.2f, %.2f)",
                 stop_pos.x(), stop_pos.y(), stop_pos.z());
     if (log_manager_) {
@@ -2051,15 +2068,117 @@ void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
     traj_risk_pub_->publish(m);
 }
 
-// [RISK-PROFILE] Altitude-panel channels: the risk zones as they REALLY are
-// in 3-D, cut along the flight path. Per arc-length sample: the zone-union
-// DOME cross-section [dome_bot, dome_top] and the visibility ROOF (the
-// altitude above which at least one zone can see this column; flying BELOW
-// the roof inside a dome = terrain-occluded). The top-down heatmap cannot express
-// "under the roof" — the profile view can, which is exactly the ambiguity
-// the user hit ("looks like it passes through, but is it safe?").
-// Same math as the heatmap cells (single source of truth: effective
-// AGL-grounded zones + riskShadowCeiling + the configured sigmoid contour).
+bool PathManager::riskProfileVisibleInterval(size_t zone_index,
+                                             double x, double y,
+                                             double *lower_z,
+                                             double *floor_z,
+                                             double *top_z) const
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    if (lower_z) *lower_z = nan;
+    if (floor_z) *floor_z = nan;
+    if (top_z) *top_z = nan;
+    if (!floor_z || !top_z || zone_index >= risk_zones_.size())
+        return false;
+
+    const auto &zone = risk_zones_[zone_index];
+    if (!(zone.reach > 0.0) || !(zone.peak > 0.0) ||
+        !(risk_vertical_ratio_ > 0.0)) {
+        return false;
+    }
+
+    const double dx = x - zone.center.x();
+    const double dy = y - zone.center.y();
+    const double rho2 = dx * dx + dy * dy;
+    const double reach2 = zone.reach * zone.reach;
+    if (!(rho2 < reach2)) return false;
+
+    const double rv = zone.reach * risk_vertical_ratio_;
+    const double half_z =
+        rv * std::sqrt(std::max(0.0, 1.0 - rho2 / reach2));
+    const double ellipsoid_lower = zone.center.z() - half_z;
+    const double ellipsoid_upper = zone.center.z() + half_z;
+
+    // Keep the same sea/off-map convention used when risk-zone sources are
+    // grounded: finite positive DEM is land; pure water and off-DEM use MSL 0.
+    double ground = 0.0;
+    float terrain_h = 0.0f, terrain_gx = 0.0f, terrain_gy = 0.0f;
+    const bool has_ground_sample =
+        terrain_data_.valid &&
+        terrain_data_.getElevationAndGrad(
+            x, y, &terrain_h, &terrain_gx, &terrain_gy);
+    if (has_ground_sample && std::isfinite(terrain_h) && terrain_h > 0.0f)
+        ground = static_cast<double>(terrain_h);
+
+    double visible_floor = std::max(ellipsoid_lower, ground);
+    if (!(visible_floor < ellipsoid_upper)) return false;
+
+    // riskVisibilityValue is monotone in raw z. Find its configured contour
+    // in raw trajectory-z coordinates, rather than mistaking the effective
+    // (grounded) z contour for a trajectory altitude.
+    const double threshold = risk_mask_viz_threshold_;
+    if (threshold >= 1.0) return false;  // no finite visible interval
+    if (threshold > 0.0) {
+        const double ceiling = riskShadowCeiling(
+            zone_index, Eigen::Vector3d(x, y, zone.center.z()));
+        if (std::isfinite(ceiling)) {
+            const double w = std::max(1e-6, risk_mask_softness_);
+            const double z_eff_boundary =
+                ceiling + w * std::log(threshold / (1.0 - threshold));
+            double raw_z_boundary = z_eff_boundary;
+
+            if (risk_grounded_ && has_ground_sample) {
+                const double grounded_floor =
+                    static_cast<double>(terrain_h) +
+                    opt_obstacle_clearance_;
+                const double d =
+                    (z_eff_boundary - grounded_floor) / w;
+                if (d <= 0.0) {
+                    // smoothmax(z, grounded_floor) is strictly above its
+                    // asymptote for every finite z: the whole shell is visible.
+                    raw_z_boundary =
+                        -std::numeric_limits<double>::infinity();
+                } else if (d > 50.0) {
+                    // log(expm1(d)) = d + log(1-exp(-d)); this form avoids
+                    // overflow while retaining the exact inverse.
+                    raw_z_boundary =
+                        grounded_floor +
+                        w * (d + std::log1p(-std::exp(-d)));
+                } else {
+                    raw_z_boundary =
+                        grounded_floor + w * std::log(std::expm1(d));
+                }
+            }
+            visible_floor = std::max(visible_floor, raw_z_boundary);
+        }
+        // A non-finite horizon is the same full-visibility fallback used by
+        // riskVisibilityValue (mask disabled/not ready, source cell, etc.).
+    }
+
+    // [SHADOW-FULL] A column whose LOS boundary rises above the ellipsoid cap
+    // is FULLY shadowed inside the zone — the safest spot in the footprint,
+    // not "no zone". Reporting it as no-interval (old behavior) punched
+    // white holes into the panel's zone band that were indistinguishable
+    // from uncovered sky. Report a zero-height band AT the cap instead
+    // (detection floor == zone top): the red band degenerates to nothing and
+    // the shadow-safe fill covers the whole cross-section.
+    if (!(visible_floor < ellipsoid_upper)) {
+        if (lower_z) *lower_z = ellipsoid_lower;
+        *floor_z = ellipsoid_upper;
+        *top_z = ellipsoid_upper;
+        return true;
+    }
+    if (lower_z) *lower_z = ellipsoid_lower;
+    *floor_z = visible_floor;
+    *top_z = ellipsoid_upper;
+    return true;
+}
+
+// [RISK-PROFILE] Version 3 is self-describing, binds data to source xyz, and
+// preserves every zone's
+// separate visible vertical interval, so disjoint/overlapping zones cannot be
+// painted as one false union band. The risk scalar is evaluated at the actual
+// 3-D trajectory sample with the exact same OR-combination as /viz/traj_risk.
 void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
 {
     if (!risk_profile_pub_) return;
@@ -2072,17 +2191,16 @@ void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
     const double est_len = std::max(1.0, T * max_vel_);
     const int K = std::clamp(static_cast<int>(est_len / 1.0), 256, 16384);
     const double nan = std::numeric_limits<double>::quiet_NaN();
+    const size_t zone_count = risk_zones_.size();
+    // v4: per-zone TRIPLET (geometric lower, detection floor, geometric top)
+    // — the panel needs the cross-section lower bound to paint mid-air
+    // shadow-safe pockets between overlapping zones (a gap between zone A's
+    // cap and zone B's floor was indistinguishable from uncovered sky).
+    const size_t record_width = 5 + 3 * zone_count;
 
-    double vis_offset = 0.0;
-    if (risk_mask_viz_threshold_ > 1e-6 &&
-        risk_mask_viz_threshold_ < 1.0 - 1e-6) {
-        vis_offset = risk_mask_softness_ * std::log(
-            risk_mask_viz_threshold_ / (1.0 - risk_mask_viz_threshold_));
-    }
-    const double rv_ratio = risk_vertical_ratio_;
-    constexpr double kInf = std::numeric_limits<double>::infinity();
-
-    msg.data.reserve(4 * (K + 1));
+    msg.data.reserve(2 + record_width * static_cast<size_t>(K + 1));
+    msg.data.push_back(4.0);
+    msg.data.push_back(static_cast<double>(zone_count));
     double s = 0.0;
     Eigen::Vector3d prev = traj.getPos(0.0);
     for (int k = 0; k <= K; ++k) {
@@ -2090,51 +2208,32 @@ void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
         const Eigen::Vector3d p = traj.getPos(std::min(t, T - 1e-9));
         s += (p - prev).head<2>().norm();
         prev = p;
-        double ground = 0.0;
-        if (terrain_data_.valid) {
-            const float h = terrain_data_.getElevation(p.x(), p.y());
-            if (std::isfinite(h) && h > 0.0f) ground = static_cast<double>(h);
-        }
-        double roof = kInf, dome_top = -kInf, dome_bot = kInf;
-        bool covered = false;
-        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-            const auto &zone = risk_zones_[zi];
-            if (!(zone.reach > 0.0) || !(zone.peak > 0.0)) continue;
-            const double dx = p.x() - zone.center.x();
-            const double dy = p.y() - zone.center.y();
-            const double rho2 = dx * dx + dy * dy;
-            if (rho2 >= zone.reach * zone.reach) continue;
-            const double rv = zone.reach * rv_ratio;
-            const double half_z = rv * std::sqrt(std::max(
-                0.0, 1.0 - rho2 / (zone.reach * zone.reach)));
-            const double upper = zone.center.z() + half_z;
-            if (upper <= ground) continue;  // envelope fully underground
-            covered = true;
-            dome_top = std::max(dome_top, upper);
-            dome_bot = std::min(dome_bot,
-                                std::max(zone.center.z() - half_z, ground));
-            double det = std::max(zone.center.z() - half_z, ground);
-            const double horizon = riskShadowCeiling(
-                zi, Eigen::Vector3d(p.x(), p.y(), zone.center.z()));
-            if (std::isfinite(horizon)) det = std::max(det, horizon + vis_offset);
-            if (det < upper) roof = std::min(roof, det);
-        }
+
+        double survival = 1.0;
+        for (size_t zi = 0; zi < zone_count; ++zi)
+            survival *= (1.0 - riskZoneValue(zi, p));
+        const double combined_risk = 1.0 - survival;
+
         msg.data.push_back(s);
-        if (!covered) {
-            msg.data.push_back(nan);
-            msg.data.push_back(nan);
-            msg.data.push_back(nan);
-        } else {
-            // Full shadow (no zone can ever see this column): roof caps at
-            // the dome top — the visible band [roof, dome_top] is empty.
-            msg.data.push_back(std::isfinite(roof) ? roof : dome_top);
-            msg.data.push_back(dome_top);
-            msg.data.push_back(dome_bot);
+        msg.data.push_back(p.x());
+        msg.data.push_back(p.y());
+        msg.data.push_back(p.z());
+        msg.data.push_back(combined_risk);
+        for (size_t zi = 0; zi < zone_count; ++zi) {
+            double lower_z = nan;
+            double floor_z = nan;
+            double top_z = nan;
+            (void)riskProfileVisibleInterval(
+                zi, p.x(), p.y(), &lower_z, &floor_z, &top_z);
+            msg.data.push_back(lower_z);
+            msg.data.push_back(floor_z);
+            msg.data.push_back(top_z);
         }
     }
     risk_profile_pub_->publish(msg);
-    log_manager_->infof("[RISK-PROFILE] %d samples over %.1f u, zones=%zu",
-                        K + 1, s, risk_zones_.size());
+    log_manager_->infof(
+        "[RISK-PROFILE] v4: %d samples over %.1f u, zones=%zu, width=%zu",
+        K + 1, s, zone_count, record_width);
 }
 
 // Safe corridors are rendered POSITIVELY instead of being the absence of
@@ -2681,11 +2780,84 @@ void PathManager::publishEffectiveRiskField()
 }
 
 void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg) {
-    if (!msg || msg->layers.empty()) {
-        log_manager_->warnf("Received empty terrain GridMap");
+    if (!msg) {
+        log_manager_->warnf("Received null terrain GridMap");
         return;
     }
-    if (sdf_voxel_size_ <= 0.0 && msg->info.resolution > 1e-6) {
+
+    // world=none is published as an empty GridMap. It is an explicit state
+    // transition, not a malformed update: keeping the previous DEM here while
+    // RViz clears it would make the displayed terrain/risk field disagree with
+    // the one used for planning.
+    if (msg->layers.empty() && msg->data.empty()) {
+        const bool had_terrain = terrain_data_.valid;
+        const uint64_t next_generation = terrain_data_.generation + 1;
+        terrain_data_ = TerrainData{};
+        terrain_data_.generation = next_generation;
+        terrain_bbox_computed_ = false;
+        sdf_built_ = false;
+        // initOptimizer() may have captured a previous DEM resolution. Clear
+        // that sampling pitch together with the terrain state so optimizer
+        // swath/roughness checks cannot keep using a stale map cell size.
+        if (poly_traj_opt_) {
+            poly_traj_opt_->setTerrainHeightmap(
+                [this](double x, double y) -> float {
+                    return terrain_data_.valid
+                             ? terrain_data_.getElevation(x, y)
+                             : -std::numeric_limits<float>::infinity();
+                },
+                0.0);
+        }
+
+        // Every obstacle patch was tied to the old map/grid (including
+        // terrain-grounded z and infinite-column bounds), so it cannot safely
+        // survive an explicit world clear.
+        if (sdf_manager_.numActiveObstacles() > 0 ||
+            !dyn_patch_ids_.empty() || !pending_obstacles_.empty() ||
+            static_obstacles_applied_) {
+            clearDynamicObstacles();
+        }
+        // Invalidate the old grid itself as well as PathManager's latch.
+        // Otherwise hasData() stays true and an obstacle added while no world
+        // is loaded is immediately grounded at sea level, then survives the
+        // next DEM load instead of being deferred and re-grounded.
+        if (sdf_manager_.hasData() &&
+            !sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_)) {
+            log_manager_->warnf(
+                "[TERRAIN] failed to invalidate SDF grid after world clear");
+        }
+
+        refreshEffectiveRiskZones();
+        rebuildTerrainRiskMasks();  // no DEM -> the planner's ideal LOS fallback
+
+        if (terrain_influence_pub_) {
+            std_msgs::msg::Float64MultiArray clear;
+            terrain_influence_pub_->publish(clear);
+        }
+        if (traj_.local_traj.traj_id > 0 &&
+            traj_.local_traj.duration > 0.0 &&
+            std::isfinite(traj_.local_traj.duration)) {
+            publishTrajRisk(traj_.local_traj.traj);
+            publishRiskProfile(traj_.local_traj.traj);
+        }
+        publishTerrainStatus("No terrain map; planning without DEM");
+        log_manager_->infof(
+            had_terrain
+                ? "[TERRAIN] cleared previous DEM (world=none)"
+                : "[TERRAIN] empty world confirmed (no DEM loaded)");
+        return;
+    }
+
+    // A non-empty but malformed message is not an instruction to discard a
+    // valid map. Reject it and retain the last accepted DEM on both planner
+    // and panel sides.
+    if (!(msg->info.resolution > 0.0) || msg->data.empty()) {
+        log_manager_->warnf("Invalid non-empty terrain GridMap");
+        return;
+    }
+    if (sdf_voxel_size_auto_ && msg->info.resolution > 1e-6) {
+        sdf_voxel_size_ = msg->info.resolution;
+    } else if (sdf_voxel_size_ <= 0.0 && msg->info.resolution > 1e-6) {
         sdf_voxel_size_ = msg->info.resolution;
         sdf_voxel_size_auto_ = true;    // keep tracking the DEM cell on re-crop
         log_manager_->infof("[SDF] xy voxel auto-set to DEM cell: %.3f units",
@@ -2705,9 +2877,21 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
         return;
     }
 
+    if (static_cast<size_t>(elev_idx) >= msg->data.size()) {
+        log_manager_->warnf("Terrain GridMap elevation payload is missing");
+        return;
+    }
     const auto& elev_data = msg->data[elev_idx];
     if (elev_data.layout.dim.size() < 2) {
         log_manager_->warnf("Invalid terrain GridMap data layout");
+        return;
+    }
+    const size_t cols = elev_data.layout.dim[0].size;
+    const size_t rows = elev_data.layout.dim[1].size;
+    if (cols == 0 || rows == 0 ||
+        cols > std::numeric_limits<size_t>::max() / rows ||
+        elev_data.data.size() < cols * rows) {
+        log_manager_->warnf("Invalid terrain GridMap dimensions/data size");
         return;
     }
 
@@ -2769,6 +2953,20 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
     // the memo (keyed on generation) must see a new value or it serves stale
     // samples from the previous crop.
     ++terrain_data_.generation;
+
+    // The optimizer is commonly initialized before the first terrain message.
+    // Refresh both its callback and, crucially, its DEM-cell sampling pitch on
+    // every accepted map (including same-geometry data refreshes and
+    // full-map/corridor resolution changes).
+    if (poly_traj_opt_) {
+        poly_traj_opt_->setTerrainHeightmap(
+            [this](double x, double y) -> float {
+                return terrain_data_.valid
+                         ? terrain_data_.getElevation(x, y)
+                         : -std::numeric_limits<float>::infinity();
+            },
+            terrain_data_.resolution);
+    }
 
     // Return freed arenas to the OS after a map swap. Alternating small/large
     // corridor crops re-allocate every big grid (elevation, FM2 fields) at a
@@ -2832,6 +3030,23 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
     // viewshed and replace the ideal circular RViz fallback.
     refreshEffectiveRiskZones();
     rebuildTerrainRiskMasks();
+
+    // The displayed risk channels are evaluated against the terrain mask, so
+    // a DEM replacement invalidates them even when the trajectory itself did
+    // not change. Re-evaluate those channels immediately for the current
+    // trajectory. The terrain-influence channel is deliberately CLEARED, not
+    // recomputed here: it reads FM2 column/swath fields owned by the previous
+    // front-end run and only becomes meaningful again after replanning.
+    if (terrain_influence_pub_) {
+        std_msgs::msg::Float64MultiArray clear;
+        terrain_influence_pub_->publish(clear);
+    }
+    if (traj_.local_traj.traj_id > 0 &&
+        traj_.local_traj.duration > 0.0 &&
+        std::isfinite(traj_.local_traj.duration)) {
+        publishTrajRisk(traj_.local_traj.traj);
+        publishRiskProfile(traj_.local_traj.traj);
+    }
 }
 
 const PathManager::ObstacleMeshInfo& PathManager::meshFor(const std::string& model) const
@@ -2987,6 +3202,15 @@ void PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
     risk_zones_raw_ = zones;
     refreshEffectiveRiskZones();
     rebuildTerrainRiskMasks();
+    // Avoid leaving the altitude panel and colored trajectory latched to the
+    // previous zone set while waiting for another plan request. Empty zones
+    // intentionally flow through these publishers as clear/delete messages.
+    if (traj_.local_traj.traj_id > 0 &&
+        traj_.local_traj.duration > 0.0 &&
+        std::isfinite(traj_.local_traj.duration)) {
+        publishTrajRisk(traj_.local_traj.traj);
+        publishRiskProfile(traj_.local_traj.traj);
+    }
     if (log_manager_) {
         log_manager_->infof(
             "[risk_zones] runtime update: %zu zones now active",
@@ -3142,8 +3366,16 @@ bool PathManager::buildSDFForBounds(const Eigen::Vector3d &lo,
     // applies a unit upward/downward gradient only when the query point
     // crosses the plane — no clearance band, no lateral contamination.
 
-    if (!sdf_manager_.isInitialized()) {
-        sdf_manager_.initialize(res, res_z);
+    const Eigen::Vector3d current_voxel = sdf_manager_.voxelSizes();
+    if (!sdf_manager_.isInitialized() ||
+        std::abs(current_voxel.x() - res) > 1e-12 ||
+        std::abs(current_voxel.y() - res) > 1e-12 ||
+        std::abs(current_voxel.z() - res_z) > 1e-12) {
+        if (!sdf_manager_.initialize(res, res_z)) {
+            log_manager_->warnf(
+                "buildSDFForBounds: SDF initialization failed");
+            return false;
+        }
     }
     bool ok = sdf_manager_.buildEmpty(nx, ny, nz, lo);
     if (ok) {
