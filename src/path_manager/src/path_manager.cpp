@@ -894,6 +894,35 @@ namespace path_manager
             }
         }
 
+        // [STALL-FLOOR] A fixed-wing platform cannot fly below stall, so a
+        // commanded start speed under speed_min gives the optimizer an
+        // unsatisfiable head boundary: the dynamics min-speed hinge then
+        // out-pushes every soft spatial term and digs a "recovery dive"
+        // straight through terrain (rest start: dynamics_cost 62M, 4x -1005,
+        // audit clearance -0.79 -> nothing published). Assume the launch
+        // system delivers at least stall speed: raise the commanded speed
+        // onto the margin-backed floor — along the commanded direction when
+        // one exists, else along the route's initial direction (level).
+        const double v_floor = poly_traj_opt_
+            ? poly_traj_opt_->dynamicsMinSpeedFloorUnits() : 0.0;
+        if (v_floor > 0.0 && start_vel_eff.norm() < v_floor) {
+            Eigen::Vector3d dir = start_vel_eff;
+            if (dir.norm() < 1.0e-9 && clean_path.size() >= 2) {
+                dir = clean_path[1] - clean_path[0];
+                dir.z() = 0.0;
+            }
+            if (dir.norm() < 1.0e-9) dir = Eigen::Vector3d::UnitX();
+            dir.normalize();
+            log_manager_->warnf(
+                "[STALL-FLOOR] commanded start speed %.3f u/s is below the "
+                "platform stall floor %.3f u/s (%.0f m/s) — planning from "
+                "stall speed along (%.2f, %.2f, %.2f); the launch phase is "
+                "outside the planner's envelope",
+                start_vel_eff.norm(), v_floor,
+                v_floor * 100.0, dir.x(), dir.y(), dir.z());
+            start_vel_eff = dir * v_floor;
+        }
+
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===
         bool opt_ok = optimizeStage(clean_path, full_route,
                                     start_pos, start_vel_eff, start_acc, wps,

@@ -488,6 +488,18 @@ namespace ego_planner
     void setSuppressCrossingExempt(bool on) {
         suppress_crossing_exempt_ = on;
     }
+    // [STALL-FLOOR] Minimum feasible start speed in frame units (u/s): the
+    // fixed-wing envelope's margin-backed stall speed, 0 when the dynamics
+    // model is off. A head state PINNED below stall is unsatisfiable for the
+    // min-speed hinge, whose gradient out-pushes every soft spatial term —
+    // observed as a rest-start "recovery dive" through 30 m terrain
+    // (dynamics_cost 62M, 4x -1005, clearance -0.79). planGlobalTraj raises
+    // sub-stall commanded starts onto this floor instead of planning one.
+    double dynamicsMinSpeedFloorUnits() const {
+        if (!dynamics_enable_ || dyn_unit_xy_m_ <= 1e-9) return 0.0;
+        return dynamics_params_.speed_min_mps *
+               (1.0 + dynamics_params_.constraint_margin) / dyn_unit_xy_m_;
+    }
     void setDroneId(const int drone_id);
     void setFormation(const std::vector<Eigen::Vector3d>& formation_positions, int formation_size);
     void setRiskZones(const std::vector<RiskZone> &zones) {
