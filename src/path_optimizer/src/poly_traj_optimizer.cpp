@@ -1813,6 +1813,11 @@ namespace ego_planner
       // separately as a duration + its own peak, never mixed in.
       double util_peak = 0.0, util_peak_t = 0.0, util_sum = 0.0;
       double ramp_peak = 0.0, ramp_s = 0.0;
+      // [BANK-GATE] ballistic (near-zero-lift) time: bank readings are
+      // skipped there (see kBankMeaningfulLoadFactor) but the duration is
+      // still worth a number in the headline — a long ballistic stretch is
+      // its own flag.
+      double ballistic_s = 0.0;
       mmp_vehicle_dynamics::EnvelopeLimit peak_limit =
           mmp_vehicle_dynamics::EnvelopeLimit::None;
       mmp_vehicle_dynamics::Evaluation peak_eval;
@@ -1842,6 +1847,10 @@ namespace ego_planner
         mmp_vehicle_dynamics::EnvelopeLimit limit;
         const double util = mmp_vehicle_dynamics::envelopeUtilization(
             dynamics_params_, eval, &limit);
+        if (eval.load_factor <
+            mmp_vehicle_dynamics::kBankMeaningfulLoadFactor) {
+          ballistic_s += 0.01;
+        }
         if (eval.speed_mps < dynamics_params_.speed_min_mps) {
           ramp_s += 0.01;
           if (util > ramp_peak) ramp_peak = util;
@@ -1869,7 +1878,7 @@ namespace ego_planner
         LOG_INFO("[DYNAMICS] envelope(cruise) peak=%.1f%% (%s) mean=%.1f%% "
                  "p95=%.1f%% at t=%.1f; state V=%.1f m/s n=%.2f CL=%.2f "
                  "T=%.0f N q=%.0f Pa bank=%.1f deg; violations %d/%d; "
-                 "sub-stall ramp %.1f s (peak %.0f%%) (%s)",
+                 "sub-stall ramp %.1f s (peak %.0f%%) ballistic %.1f s (%s)",
                  100.0 * util_peak,
                  mmp_vehicle_dynamics::envelopeLimitName(peak_limit),
                  100.0 * util_sum / n_samp, 100.0 * util_p95,
@@ -1877,7 +1886,7 @@ namespace ego_planner
                  peak_eval.signed_lift_coefficient, peak_eval.thrust_required_n,
                  peak_eval.dynamic_pressure_pa,
                  peak_eval.bank_angle_rad * 180.0 / M_PI,
-                 n_viol, n_samp, ramp_s, 100.0 * ramp_peak,
+                 n_viol, n_samp, ramp_s, 100.0 * ramp_peak, ballistic_s,
                  (dynamics_enable_ && wei_dynamics_ > 0.0) ? "term on" : "term OFF");
       }
     }
