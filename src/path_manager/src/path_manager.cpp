@@ -2629,11 +2629,17 @@ void PathManager::publishEffectiveRiskField()
             wire.type = visualization_msgs::msg::Marker::LINE_LIST;
             wire.action = visualization_msgs::msg::Marker::ADD;
             wire.pose.orientation.w = 1.0;
-            wire.scale.x = std::max(0.08, 0.12 * step);
+            // Readability: the rim used to be a semi-transparent red line
+            // sitting directly ON the warm draped heatmap — red on red, and
+            // z-fighting with the drape. Opaque, wider, floated a hair above
+            // the drape, and backed by a darker halo underlay (published
+            // below) so the boundary reads on any background color.
+            wire.pose.position.z = 0.03;
+            wire.scale.x = std::max(0.14, 0.22 * step);
             wire.color.r = 1.0f;
             wire.color.g = 0.18f;
             wire.color.b = 0.02f;
-            wire.color.a = 0.58f;
+            wire.color.a = 1.0f;
             wire.lifetime = rclcpp::Duration(0, 0);
             auto shellPointVisible = [&](const Eigen::Vector3d &p) {
                 double ground = 0.0;
@@ -2685,7 +2691,20 @@ void PathManager::publishEffectiveRiskField()
                             zone.center.z() + rv * std::sin(b1)));
                 }
             }
-            if (!wire.points.empty()) risk_field_pub_->publish(wire);
+            if (!wire.points.empty()) {
+                // Cartographic halo: a wider near-black underlay one step
+                // closer to the drape; the bright rim renders on top of it.
+                visualization_msgs::msg::Marker halo = wire;
+                halo.ns = "effective_risk_volume_halo";
+                halo.scale.x = 2.0 * wire.scale.x;
+                halo.pose.position.z = 0.015;
+                halo.color.r = 0.08f;
+                halo.color.g = 0.0f;
+                halo.color.b = 0.0f;
+                halo.color.a = 0.85f;
+                risk_field_pub_->publish(halo);
+                risk_field_pub_->publish(wire);
+            }
         }
 
         if (!volume_mode && !heatmap_mode) {
