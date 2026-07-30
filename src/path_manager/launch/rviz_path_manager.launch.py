@@ -1,5 +1,7 @@
+import os
+
 from ament_index_python.packages import PackageNotFoundError
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
@@ -10,21 +12,30 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 def _dynamics_sim(optimizer_params):
-    """The 3-DoF follower node, or a notice when its package is absent.
+    """The trajectory-follower node, or a notice when it is not installed.
 
-    mmp_dynamics_sim lives in its own repository and is deliberately not one of
-    the MMP workspace's submodules, so a plain `git clone --recursive` does not
-    get it. This Node used to be unconditional, and launch tears the WHOLE tree
-    down when one entity raises — so a checkout without the package got no
-    path_manager either, and the RViz Start button (which forks this file) did
-    nothing at all with the error buried in the forked process's output.
+    Gated on the EXECUTABLE, not the package. mmp_dynamics_sim is a submodule of
+    the MMP workspace, so the package is present after a build — but the version
+    on its main branch is a Python 6-DoF sim whose entry points are
+    missile_sim_node / waypoint_sequencer / tracking_error_node. It is carried in
+    the tree for the upcoming merge with mmp_vehicle_dynamics and is not meant to
+    run yet. Checking the package would therefore pass and then die on a missing
+    executable, and launch tears the WHOLE tree down when one entity raises — so
+    path_manager would not come up either, and the RViz Start button (which forks
+    this file) would appear to do nothing, the error buried in the forked
+    process's output.
     """
+    exe = None
     try:
-        get_package_share_directory('mmp_dynamics_sim')
+        prefix = get_package_prefix('mmp_dynamics_sim')
+        cand = os.path.join(prefix, 'lib', 'mmp_dynamics_sim', 'dynamics_sim_node')
+        exe = cand if os.path.exists(cand) else None
     except PackageNotFoundError:
-        return LogInfo(msg='[rviz_path_manager] mmp_dynamics_sim not found — '
-                           'skipping the 3-DoF follower. Planning and RViz are '
-                           'unaffected; /dynamics/sim_state and '
+        pass
+    if exe is None:
+        return LogInfo(msg='[rviz_path_manager] dynamics_sim_node not installed '
+                           '— skipping the trajectory follower. Planning and '
+                           'RViz are unaffected; /dynamics/sim_state and '
                            '/dynamics/sim_path stay silent (their RViz displays '
                            'ship disabled).')
     # Integrates the same fixed-wing model used by the optimizer and
