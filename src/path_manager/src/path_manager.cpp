@@ -85,11 +85,6 @@ namespace path_manager
         node_->declare_parameter("manager/align_start_vel_to_route", true);
         node_->declare_parameter("manager/zone_avoid_lexicographic", true);
         node_->declare_parameter("manager/corner_fillet_radius", 0.0);
-        // ESDF occupancy overlay (RViz debug aid). step=1.0m re-queries the SDF
-        // hundreds of millions of times per (re)load — tens of seconds on the
-        // critical path. Default 4m: 64x cheaper, still fine for a 3 km map.
-        node_->declare_parameter("manager/esdf_viz_step", 4.0);
-        node_->declare_parameter("manager/esdf_viz_enable", true);
         node_->get_parameter("manager/max_vel", max_vel_);
         node_->get_parameter("manager/max_acc", max_acc_);
         node_->get_parameter("manager/length_per_piece", length_per_piece_);
@@ -181,8 +176,6 @@ namespace path_manager
         node_->get_parameter("manager/zone_avoid_lexicographic",
                              zone_avoid_lexico_);
         node_->get_parameter("manager/corner_fillet_radius", corner_fillet_radius_);
-        node_->get_parameter("manager/esdf_viz_step", esdf_viz_step_);
-        node_->get_parameter("manager/esdf_viz_enable", esdf_viz_enable_);
         // Dynamic-obstacle spawn-orientation RNG seed. FIXED by default so the
         // SAME mission spawns the SAME oriented obstacles -> reproducible plans.
         // (The box yaw is NOT "visual only": oriented boxes change the SDF and
@@ -231,12 +224,10 @@ namespace path_manager
         // the underfoot floor: max floor within this lateral radius. Shows
         // the constraints the route DODGED (a clean dodge leaves its cause
         // beside the path, invisible to an underfoot profile).
-        node_->declare_parameter("manager/floor_swath_halfwidth", 5.0);
         node_->get_parameter("obstacle_mesh_resource", obstacle_mesh_resource_);
         node_->get_parameter("obstacle_mesh_height", obstacle_mesh_height_);
         node_->get_parameter("obstacle_viz_scale", obstacle_viz_scale_);
         node_->get_parameter("manager/obstacle_ground_snap", obstacle_ground_snap_);
-        node_->get_parameter("manager/floor_swath_halfwidth", floor_swath_halfwidth_);
         if (obstacle_viz_scale_ < 1.0) obstacle_viz_scale_ = 1.0;
 
         // Visual mesh catalog: model name -> mesh resource + rendered native size [m]
@@ -295,84 +286,17 @@ namespace path_manager
             log_manager_->warnf("Invalid risk_zones param size: %zu (must be multiple of 5)", tz_params.size());
         }
 
-        node_->declare_parameter("obstacles", std::vector<double>{});
-        std::vector<double> obstacle_params;
-        node_->get_parameter("obstacles", obstacle_params);
-
-        // Parse obstacles with flexible format:
-        // Basic: [x, y, z] - uses default inflation
-        // Circle: [x, y, z, 0, radius]
-        // Rectangle: [x, y, z, 1, width, height]
-        // Primary obstacle format — 7 fixed fields per entry (ambiguity-free):
-        //   Circle:    [cx, cy, cz, 0, radius, 0,      height]
-        //   Rectangle: [cx, cy, cz, 1, width,  length, height]
-        // `height == 0` means infinite column (legacy semantics).
-        //
-        // Legacy accepted:
-        //   [x, y, z]  — plain point (also used as "no-obstacle" sentinel)
-        //
-        // Entries are dispatched by peeking at obstacle_params[i + 3]: a
-        // recognized shape_type (0 or 1) starts a 7-field record; anything
-        // else (including list end) falls back to the 3-field legacy form.
-        constexpr size_t kObsFields = 7;
-        size_t i = 0;
-        while (i + 3 <= obstacle_params.size()) {
-            Eigen::Vector3d center(obstacle_params[i + 0],
-                                   obstacle_params[i + 1],
-                                   obstacle_params[i + 2]);
-
-            const bool have_shape_field = (i + 3 < obstacle_params.size());
-            const int shape_type = have_shape_field
-                ? static_cast<int>(obstacle_params[i + 3])
-                : -1;
-            const bool is_full_record =
-                have_shape_field &&
-                (shape_type == 0 || shape_type == 1) &&
-                (i + kObsFields <= obstacle_params.size());
-
-            if (is_full_record) {
-                const double p1     = obstacle_params[i + 4];
-                const double p2     = obstacle_params[i + 5];
-                const double height = obstacle_params[i + 6];
-                if (shape_type == 0) {  // CIRCLE: p1=radius, p2 unused
-                    if (height > 0.0) {
-                        obstacle_centers_.emplace_back(center, p1, height, true);
-                    } else {
-                        obstacle_centers_.emplace_back(center, p1);
-                    }
-                } else {  // RECTANGLE: p1=width, p2=length
-                    if (height > 0.0) {
-                        obstacle_centers_.emplace_back(center, p1, p2, height);
-                    } else {
-                        obstacle_centers_.emplace_back(center, p1, p2);
-                    }
-                }
-                i += kObsFields;
-            } else {
-                // Legacy 3-field entry: plain point.
-                obstacle_centers_.emplace_back(center);
-                i += 3;
-            }
-        }
-
         // Latched so a late-joining altitude panel still gets the last
         // front-end route (transient_local pub serves volatile subs fine).
-        simple_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
+        front_end_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
             "/planning/front_end_path",
             rclcpp::QoS(1).reliable().transient_local());
-        search_path_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-            "/viz/debug/search_path", 10);
-        esdf_occ_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-            "/viz/debug/esdf_occupied", 1);
         // TRANSIENT_LOCAL so RViz, joining late, still gets the latest set.
         rclcpp::QoS dyn_qos(1);
         dyn_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
         dyn_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
         dyn_obstacle_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/viz/dynamic_obstacles", dyn_qos);
-        // Same latched QoS: the altitude panel may (re)join after the plan.
-        terrain_influence_pub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
-            "/viz/terrain_influence", dyn_qos);
         // The launch default is drone_id=1 and single-agent runs do not
         // necessarily create drone_0, so risk visualization cannot use the
         // terrain-status publisher's drone_0-only ownership rule. Multiple
@@ -775,90 +699,12 @@ namespace path_manager
         // (no ESDF cache on a fresh run), so they make it into this first plan.
         flushPendingObstacles();
 
-        // Static yaml obstacles ride the dynamic-patch layer (they are no
-        // longer baked into the terrain ESDF — see buildSDFForBounds). Apply
-        // once per process; the patches persist on the SDF afterwards.
-        if (!static_obstacles_applied_ && !obstacle_centers_.empty()) {
-            int applied = 0;
-            for (const auto &obs : obstacle_centers_) {
-                path_planner::sdf::PrimitiveSpec spec;
-                // Cube (L∞) footprint for circles too, matching the old bake:
-                // an analytic cylinder has zero horizontal SDF gradient on its
-                // axis, which pins L-BFGS at a saddle.
-                spec.kind = path_planner::sdf::PrimitiveKind::kCube;
-                const double r = (obs.param1 > 0) ? obs.param1 : 0.5;
-                const double sx = (obs.shape == ObstacleShape::CIRCLE) ? 2.0 * r : obs.param1;
-                const double sy = (obs.shape == ObstacleShape::CIRCLE) ? 2.0 * r : obs.param2;
-                // z_extent == 0 means "infinite column" (full span of the
-                // BUILT grid — read it from the SDF itself, since the grid
-                // may be world-wide rather than mission-scoped).
-                const Eigen::Vector3d grid_lo = sdf_manager_.origin();
-                const Eigen::Vector3d grid_hi =
-                    grid_lo + sdf_manager_.shape().cast<double>().cwiseProduct(
-                                  sdf_manager_.voxelSizes());
-                const double z0 = (obs.z_extent > 0.0) ? obs.center.z() : grid_lo.z();
-                const double z1 = (obs.z_extent > 0.0) ? obs.center.z() + obs.z_extent
-                                                       : grid_hi.z();
-                spec.center = Eigen::Vector3d(obs.center.x(), obs.center.y(),
-                                              0.5 * (z0 + z1));
-                spec.size = Eigen::Vector3d(sx, sy, std::max(z1 - z0, sdf_voxel_z_));
-                if (sdf_manager_.addObstacle(spec) >= 0) ++applied;
-                else log_manager_->warnf("static obstacle patch failed at (%.1f,%.1f)",
-                                         obs.center.x(), obs.center.y());
-            }
-            static_obstacles_applied_ = true;
-            log_manager_->infof("Applied %d/%zu static yaml obstacles as SDF patches",
-                                applied, obstacle_centers_.size());
-        }
-
         // SDF sanity probe at start/goal.
         {
             float d_start = sdf_manager_.getDistance(start_pos);
             float d_goal  = sdf_manager_.getDistance(wps.back());
             log_manager_->infof("SDF probe: start=%.3f m, goal=%.3f m (margin=%.2f)",
                                 d_start, d_goal, obstacle_clearance_);
-        }
-
-        // === ESDF occupancy visualization ===
-        // Sample the ESDF on a coarse grid and publish occupied voxels as a
-        // CUBE_LIST so the user can overlay them on the terrain mesh in RViz
-        // to confirm terrain → SDF mapping.
-        if (esdf_viz_enable_ && esdf_occ_pub_ &&
-            sdf_manager_.revision() != esdf_viz_revision_) {
-            esdf_viz_revision_ = sdf_manager_.revision();
-            // Re-sampling the whole mission volume (hundreds of millions of
-            // SDF queries -> tens of seconds) every plan is pointless while
-            // the SDF is unchanged; the revision gate republishes only after
-            // a rebuild/load or dynamic-obstacle change.
-            const double step = std::max(1.0, esdf_viz_step_);
-            Eigen::Vector3d lo = map_lower_bound_;
-            Eigen::Vector3d hi = map_upper_bound_;
-            visualization_msgs::msg::Marker cubes;
-            cubes.header.frame_id = "map";
-            cubes.header.stamp = node_->get_clock()->now();
-            cubes.ns = "esdf_occupied";
-            cubes.id = 0;
-            cubes.type = visualization_msgs::msg::Marker::CUBE_LIST;
-            cubes.action = visualization_msgs::msg::Marker::ADD;
-            cubes.pose.orientation.w = 1.0;
-            cubes.scale.x = step; cubes.scale.y = step; cubes.scale.z = step;
-            cubes.color.r = 1.0f; cubes.color.g = 0.1f; cubes.color.b = 0.1f; cubes.color.a = 0.4f;
-            for (double x = lo.x(); x <= hi.x(); x += step) {
-                for (double y = lo.y(); y <= hi.y(); y += step) {
-                    for (double z = lo.z(); z <= hi.z(); z += step) {
-                        Eigen::Vector3d p(x, y, z);
-                        float d = sdf_manager_.getDistance(p);
-                        if (std::isfinite(d) && d < 0.0f) {
-                            geometry_msgs::msg::Point pt;
-                            pt.x = x; pt.y = y; pt.z = z;
-                            cubes.points.push_back(pt);
-                        }
-                    }
-                }
-            }
-            log_manager_->infof("ESDF viz: %zu occupied cubes (step=%.1fm)",
-                                cubes.points.size(), step);
-            esdf_occ_pub_->publish(cubes);
         }
 
 
@@ -1256,45 +1102,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             pose.pose.orientation.w = 1.0;
             path_msg.poses.push_back(pose);
         }
-        simple_path_pub_->publish(path_msg);
-
-        // Front-end route as LINE_STRIP + SPHERE_LIST for debugging (cyan)
-        {
-            visualization_msgs::msg::Marker line;
-            line.header.frame_id = "map";
-            line.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
-            line.ns = "search_path_line";
-            line.id = 0;
-            line.type = visualization_msgs::msg::Marker::LINE_STRIP;
-            line.action = visualization_msgs::msg::Marker::ADD;
-            line.pose.orientation.w = 1.0;
-            line.scale.x = 1.5;
-            line.color.r = 0.0; line.color.g = 1.0; line.color.b = 1.0; line.color.a = 1.0;
-            line.lifetime = rclcpp::Duration(0, 0);
-            for (const auto &p : full_route) {
-                geometry_msgs::msg::Point pt;
-                pt.x = p.x(); pt.y = p.y(); pt.z = p.z();
-                line.points.push_back(pt);
-            }
-            search_path_pub_->publish(line);
-
-            visualization_msgs::msg::Marker dots;
-            dots.header = line.header;
-            dots.ns = "search_path_dots";
-            dots.id = 1;
-            dots.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-            dots.action = visualization_msgs::msg::Marker::ADD;
-            dots.pose.orientation.w = 1.0;
-            dots.scale.x = 2.5; dots.scale.y = 2.5; dots.scale.z = 2.5;
-            dots.color.r = 0.0; dots.color.g = 0.8; dots.color.b = 1.0; dots.color.a = 1.0;
-            dots.lifetime = rclcpp::Duration(0, 0);
-            for (const auto &p : full_route) {
-                geometry_msgs::msg::Point pt;
-                pt.x = p.x(); pt.y = p.y(); pt.z = p.z();
-                dots.points.push_back(pt);
-            }
-            search_path_pub_->publish(dots);
-        }
+        front_end_path_pub_->publish(path_msg);
 
         // === STEP 2.5: z-denoise of the shortcut vertices ===
         // The FM2 grid has only a few dozen z-cells over the whole map, so
@@ -1574,9 +1382,9 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         traj_.setGlobalTraj(global_traj, global_time);
         traj_.setLocalTraj(local_traj, local_time, traj_.local_traj.drone_id);
 
-        // [VIZ-TRAJ] The along-trajectory diagnostics (terrain floor underfoot,
-        // experienced risk, and the risk-visibility profile) must sample the
-        // OPTIMIZED trajectory that is actually flown and displayed
+        // [VIZ-TRAJ] The along-trajectory diagnostics (experienced risk and
+        // the risk-visibility profile) must sample the OPTIMIZED trajectory
+        // that is actually flown and displayed
         // (/planning/trajectory -> /viz/opt_trajectory), NOT the pre-L-BFGS
         // seed. They were wired to the seed (out_global): in zone missions the
         // optimizer dodges/ducks in xy, so the risk band and the colored risk
@@ -1589,7 +1397,6 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         // (~20% of the zones' reach, so the dome/roof were sampled well off the
         // flown path near the rims where they vary fastest), z up to 2.5 u.
         // Sample the flown trajectory so the overlay and the trajectory agree.
-        publishTerrainInfluence(local_traj);
         publishTrajRisk(local_traj);
         publishRiskProfile(local_traj);
 
@@ -1599,46 +1406,6 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             local_traj.getTotalDuration(), local_traj.getMaxVelRate());
 
         return true;
-}
-
-void PathManager::publishTerrainInfluence(const poly_traj::Trajectory &traj)
-{
-    if (!terrain_influence_pub_) return;
-    const double T = traj.getTotalDuration();
-    if (!(T > 0.0) || !std::isfinite(T)) return;
-
-    // ~2 samples per FM2 coarse column (~2.3 u) at cruise speed so the
-    // staircase edges resolve; capped for pathological durations.
-    const double est_len = std::max(1.0, T * max_vel_);
-    const int K = std::clamp(static_cast<int>(est_len / 1.0), 256, 16384);
-
-    // Triples [s, floor_underfoot, floor_swath]: the underfoot column floor
-    // plus the max floor within floor_swath_halfwidth_ — constraints the
-    // route dodged laterally never appear underfoot (that is what dodging
-    // means), so the swath channel is what explains avoidance climbs.
-    std_msgs::msg::Float64MultiArray msg;
-    msg.data.reserve(3 * (K + 1));
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    double s = 0.0;
-    Eigen::Vector3d prev = traj.getPos(0.0);
-    for (int k = 0; k <= K; ++k) {
-        const double t = T * static_cast<double>(k) / K;
-        const Eigen::Vector3d p = traj.getPos(t);
-        s += (p - prev).head<2>().norm();
-        prev = p;
-        const float h = searcher_.fm2ColumnFloor(p.x(), p.y());
-        const float w = searcher_.fm2SwathFloor(p.x(), p.y(), floor_swath_halfwidth_);
-        msg.data.push_back(s);
-        msg.data.push_back(std::isfinite(h) ? static_cast<double>(h) : nan);
-        msg.data.push_back(std::isfinite(w) ? static_cast<double>(w) : nan);
-    }
-    terrain_influence_pub_->publish(msg);
-    size_t floored = 0;
-    for (size_t i = 1; i < msg.data.size(); i += 3)
-        if (!std::isnan(msg.data[i])) ++floored;
-    log_manager_->infof("[TERRAIN-INFLUENCE] %d samples, %zu floored columns, "
-                        "swath=%.1f u, len=%.1f u",
-                        K + 1, floored, floor_swath_halfwidth_, s);
 }
 
 void PathManager::setFormationInfo(int drone_id, const std::string& formation_type,
@@ -1664,17 +1431,13 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
 
     // The stop trajectory replaces the previous route, so every latched
     // route-derived diagnostic must change with it. Otherwise the altitude
-    // panel can combine a stationary marker with the old front-end floor/path
+    // panel can combine a stationary marker with the old front-end path
     // and old risk colors.
-    if (terrain_influence_pub_) {
-        std_msgs::msg::Float64MultiArray clear;
-        terrain_influence_pub_->publish(clear);
-    }
-    if (simple_path_pub_) {
+    if (front_end_path_pub_) {
         nav_msgs::msg::Path clear;
         clear.header.frame_id = "map";
         clear.header.stamp = node_->now();
-        simple_path_pub_->publish(clear);
+        front_end_path_pub_->publish(clear);
     }
     publishTrajRisk(traj_.local_traj.traj);
     publishRiskProfile(traj_.local_traj.traj);
@@ -2910,8 +2673,7 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
         // terrain-grounded z and infinite-column bounds), so it cannot safely
         // survive an explicit world clear.
         if (sdf_manager_.numActiveObstacles() > 0 ||
-            !dyn_patch_ids_.empty() || !pending_obstacles_.empty() ||
-            static_obstacles_applied_) {
+            !dyn_patch_ids_.empty() || !pending_obstacles_.empty()) {
             clearDynamicObstacles();
         }
         // Invalidate the old grid itself as well as PathManager's latch.
@@ -2927,10 +2689,6 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
         refreshEffectiveRiskZones();
         rebuildTerrainRiskMasks();  // no DEM -> the planner's ideal LOS fallback
 
-        if (terrain_influence_pub_) {
-            std_msgs::msg::Float64MultiArray clear;
-            terrain_influence_pub_->publish(clear);
-        }
         if (traj_.local_traj.traj_id > 0 &&
             traj_.local_traj.duration > 0.0 &&
             std::isfinite(traj_.local_traj.duration)) {
@@ -3019,19 +2777,11 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
             if (sdf_voxel_size_auto_) {
                 sdf_voxel_size_ = msg->info.resolution;   // re-track DEM cell
             }
-            // Clear ALL patches (dynamic AND static-yaml) and reset the static
-            // latch: every patch was placed on the OLD grid/DEM — dynamic ones
-            // baked groundedCenter() on the old ground, and static yaml
-            // obstacles with an infinite column (z_extent==0) baked their z
-            // span from the old grid bounds. clearDynamicObstacles() wipes the
-            // patch layer and resets static_obstacles_applied_ so
-            // planGlobalTraj re-applies the yaml obstacles against the NEW grid
-            // (column z re-read from new bounds). Previously this ran only when
-            // dynamic patches existed, so a static-only config kept a stale
-            // short column with a free gap above it after a swap to a taller
-            // map.
+            // Clear ALL patches: every patch was placed on the OLD grid/DEM —
+            // they baked groundedCenter() on the old ground, so they cannot
+            // survive a geometry change.
             if (sdf_manager_.numActiveObstacles() > 0 ||
-                !dyn_patch_ids_.empty() || static_obstacles_applied_) {
+                !dyn_patch_ids_.empty()) {
                 clearDynamicObstacles();
             }
         }
@@ -3131,13 +2881,7 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
     // The displayed risk channels are evaluated against the terrain mask, so
     // a DEM replacement invalidates them even when the trajectory itself did
     // not change. Re-evaluate those channels immediately for the current
-    // trajectory. The terrain-influence channel is deliberately CLEARED, not
-    // recomputed here: it reads FM2 column/swath fields owned by the previous
-    // front-end run and only becomes meaningful again after replanning.
-    if (terrain_influence_pub_) {
-        std_msgs::msg::Float64MultiArray clear;
-        terrain_influence_pub_->publish(clear);
-    }
+    // trajectory.
     if (traj_.local_traj.traj_id > 0 &&
         traj_.local_traj.duration > 0.0 &&
         std::isfinite(traj_.local_traj.duration)) {
@@ -3259,11 +3003,6 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
 void PathManager::clearDynamicObstacles()
 {
     sdf_manager_.clearObstacles();
-    // clearObstacles() wipes ALL patches, including the static yaml obstacles
-    // applied in planGlobalTraj. Drop the once-per-process latch so the next
-    // plan re-applies them (re-applying also recomputes infinite-column z
-    // extents against the current grid, which may have changed).
-    static_obstacles_applied_ = false;
     dyn_patch_ids_.clear();
     dyn_patch_centers_.clear();
     dyn_patch_sizes_.clear();
@@ -3446,14 +3185,6 @@ bool PathManager::buildSDFForBounds(const Eigen::Vector3d &lo,
     if (!terrain_data_.valid) {
         log_manager_->infof("SDF: terrain_data_ INVALID (heightmap terrain unavailable)");
     }
-
-    // Geometry obstacles (obstacle_centers_) are NOT voxelised here any more.
-    // Baking them had two failure modes: with an ESDF cache in use they were
-    // silently absent (the build is skipped), and when the cache was first
-    // built they were permanently fused into the reusable "terrain" file.
-    // They are applied as dynamic patches after the SDF is ready instead
-    // (applyStaticObstaclePatches), which works identically for cache-loaded
-    // and freshly built SDFs and keeps the cache pure terrain.
 
     // NOTE: ground and virtual ceiling are NOT voxelised here. Folding them
     // into the SDF would drag the clearance band above/below the actual

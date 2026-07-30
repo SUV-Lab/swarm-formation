@@ -64,14 +64,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'scenario',
-            # Empty -> path_manager.launch.py falls back to scenario_empty
-            # (no obstacles). The old scenario_basic default planted a legacy
-            # test obstacle at the origin in every RViz-launched run.
-            default_value='',
-            description='Scenario configuration file (default: scenario_empty = none)'
-        ),
-        DeclareLaunchArgument(
             'drone_id',
             default_value='1',
             description='Target drone ID to run (0-5)'
@@ -97,7 +89,6 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(path_manager_launch),
             launch_arguments={
                 'enable_visualization': 'true',
-                'scenario': LaunchConfiguration('scenario'),
                 'drone_id': LaunchConfiguration('drone_id'),
                 'record_bag': LaunchConfiguration('record_bag'),
                 'disable_file_logging': LaunchConfiguration('disable_file_logging'),

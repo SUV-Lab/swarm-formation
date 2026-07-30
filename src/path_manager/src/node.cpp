@@ -9,7 +9,7 @@ int main(int argc, char **argv) {
 
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions{});
     path_manager::ReplanFSM ego_replan(node);
-    // init() will be called automatically when formation target is received
+    // The FSM idles until a /trajectory_command arrives (startMissionPlan).
     executor.add_node(node);
     executor.spin();
 

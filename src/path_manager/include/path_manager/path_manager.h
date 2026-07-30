@@ -33,26 +33,6 @@ using namespace ego_planner;
 
 namespace path_manager
 {
-  enum class ObstacleShape {
-    CIRCLE,
-    RECTANGLE
-  };
-
-  struct Obstacle {
-    Eigen::Vector3d center;       // base (bottom) position, xy at the axis
-    ObstacleShape shape;
-    double param1;  // Circle: radius, Rectangle: width (x-extent)
-    double param2;  // Circle: unused, Rectangle: length (y-extent)
-    double z_extent;  // vertical height above center.z; 0 = "infinite column" (back-compat)
-
-    Obstacle() : center(0, 0, 0), shape(ObstacleShape::CIRCLE), param1(-1.0), param2(0.0), z_extent(0.0) {}
-    Obstacle(const Eigen::Vector3d& c) : center(c), shape(ObstacleShape::CIRCLE), param1(-1.0), param2(0.0), z_extent(0.0) {}
-    Obstacle(const Eigen::Vector3d& c, double radius) : center(c), shape(ObstacleShape::CIRCLE), param1(radius), param2(0.0), z_extent(0.0) {}
-    Obstacle(const Eigen::Vector3d& c, double radius, double height, bool /*circle_with_height*/) : center(c), shape(ObstacleShape::CIRCLE), param1(radius), param2(0.0), z_extent(height) {}
-    Obstacle(const Eigen::Vector3d& c, double width, double length) : center(c), shape(ObstacleShape::RECTANGLE), param1(width), param2(length), z_extent(0.0) {}
-    Obstacle(const Eigen::Vector3d& c, double width, double length, double height) : center(c), shape(ObstacleShape::RECTANGLE), param1(width), param2(length), z_extent(height) {}
-  };
-
   // Terrain-occluded risk zone. The authored reach is the horizontal
   // reach; PathManager derives a vertical reach from risk_vertical_ratio_ and
   // supplies the resulting ellipsoid consistently to the front/back ends.
@@ -365,10 +345,6 @@ namespace path_manager
 
   private:
     std::shared_ptr<rclcpp::Node> node_;
-    std::vector<Obstacle> obstacle_centers_;
-    // Yaml obstacles are applied once as SDF dynamic patches (not baked into
-    // the terrain ESDF / its cache file) — see planGlobalTraj.
-    bool static_obstacles_applied_{false};
     std::vector<RiskZone> risk_zones_;
     // Searcher-facing copy of risk_zones_. PathSearcher::setRiskZones stores
     // a RAW POINTER to this vector, so it must outlive the plan call — a
@@ -503,9 +479,6 @@ namespace path_manager
     // [ZONE-AVOID] lexicographic zone policy (see dyn_a_star.h).
     bool zone_avoid_lexico_{true};
     double corner_fillet_radius_{0.0};    // legacy geometric fallback; 0 = off
-    uint64_t esdf_viz_revision_{~0ull};   // last SDF revision published as cubes
-    double esdf_viz_step_{4.0};           // ESDF occupancy-viz sample step [m]; coarse = cheap
-    bool   esdf_viz_enable_{true};        // publish the ESDF occupancy overlay at all
     bool astar_bypass_shortcut_{false};
     // Max z of the front-end route BEFORE the z-denoise filter (per plan, set
     // in planFrontEnd). The altitude cap must reference the COMMITTED profile,
@@ -531,7 +504,7 @@ namespace path_manager
     TerrainData terrain_data_;
 
     // ESDF map for SDF-based RRT* queries (phase 3).
-    // Built from terrain + obstacle_centers_ inside planGlobalTraj.
+    // Built from terrain inside planGlobalTraj.
     path_planner::sdf::SDFManager sdf_manager_;
     double sdf_voxel_size_ = 1.0;  // frame units
     bool sdf_voxel_size_auto_ = false;   // param was <=0: track the DEM cell on map change
@@ -594,9 +567,7 @@ namespace path_manager
     ego_planner::PolyTrajOptimizer::Ptr poly_traj_opt_;
     bool is_optimizer_initialized_;
 
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr simple_path_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr search_path_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr esdf_occ_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr front_end_path_pub_;
     // Terrain-masked horizontal slices on the existing RViz risk topic.
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr risk_field_pub_;
     // Draped visibility-boundary heatmap (GridMap, rendered by a second
@@ -610,16 +581,6 @@ namespace path_manager
     // Only drone_0's PathManager owns this publisher to avoid duplicate writes.
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr terrain_status_pub_;
     void publishTerrainStatus(const std::string &msg);
-    // The hard floor the FRONT-END actually saw along the final trajectory:
-    // per arc-length sample, the lowest free altitude of the FM2 speed-field
-    // column containing it (read from fm2_F_, so terrain+berth, box
-    // obstacles+margins and the ground plane are all captured exactly; NaN
-    // where nothing blocks). The altitude panel draws this as the "planner
-    // floor" ridgeline — terrain-only or disk-max guesses kept leaving climbs
-    // unexplained (invisible ships, coarse-column quantisation).
-    // Flat [s0,z0, s1,z1, ...] frame units.
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr terrain_influence_pub_;
-    void publishTerrainInfluence(const poly_traj::Trajectory &traj);
     // Tracks live patch ids so clearObstacles + visualization stay in sync.
     std::vector<int> dyn_patch_ids_;
     std::vector<Eigen::Vector3d> dyn_patch_centers_;
@@ -652,7 +613,6 @@ namespace path_manager
     double obstacle_mesh_height_{60.0};   // fixed building height [m] (spheres only)
     double obstacle_viz_scale_{1.0};      // mesh-only magnification (see decl site)
     bool obstacle_ground_snap_{true};     // base obstacles on terrain/sea surface
-    double floor_swath_halfwidth_{5.0};   // FE-floor swath radius, frame units
     // Grounded center for a dynamic obstacle: base at max(terrain, sea level)
     // under (x, y), center half_height above it. Falls back to the given
     // center when snapping is disabled.

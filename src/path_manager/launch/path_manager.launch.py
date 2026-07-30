@@ -52,18 +52,11 @@ def create_drone_nodes(context, *args, **kwargs):
     # Config paths
     pkg_share = FindPackageShare('path_manager')
     optimizer_file  = PathJoinSubstitution([pkg_share, 'config', 'optimizer_params.yaml'])
-
-    # Scenario config (obstacles)
-    scenario_config = context.perform_substitution(LaunchConfiguration('scenario'))
-    if scenario_config:
-        scenario_file = PathJoinSubstitution([pkg_share, 'config', 'scenarios', f'{scenario_config}.yaml'])
-        print(f"Using scenario config: {scenario_config}.yaml")
-    else:
-        # Default = NO obstacles. The old default (scenario_basic.yaml)
-        # silently planted a legacy test obstacle at (0,-8,0) — a 50 m
-        # infinite column near the origin — in every panel-launched run.
-        scenario_file = PathJoinSubstitution([pkg_share, 'config', 'scenarios', 'scenario_empty.yaml'])
-        print("No scenario specified, using default: scenario_empty.yaml (no obstacles)")
+    # The `scenario` yaml mechanism is gone (2026-07 structure audit): its last
+    # remaining file, scenario_empty.yaml, carried two string params read by
+    # nothing, and the static-obstacle pipeline it once fed was deleted.
+    # Obstacles are runtime-only now: /dynamic_obstacles/load via the
+    # ObstacleScenario panel or a mission yaml.
 
     # Load base drone hardware configuration
     drones_file = PathJoinSubstitution([pkg_share, 'config', 'drone_hardware.yaml'])
@@ -114,10 +107,9 @@ def create_drone_nodes(context, *args, **kwargs):
             params['manager/world'] = world_arg
         # Note: start_point will be received from TrajectoryCommand message
 
-        # Build parameter list with scenario config.
         # `params` goes LAST so launch-time overrides (e.g. manager/world from
         # the RViz LaunchControlPanel) win over the yaml defaults.
-        replan_params = [scenario_file, optimizer_file, drones_file, params]
+        replan_params = [optimizer_file, drones_file, params]
 
         # Node names keep the _drone_{i} suffix so multiple agents stay unique
         # when scaled up; topics are flat for the single agent (see topic_prefix
@@ -136,7 +128,6 @@ def create_drone_nodes(context, *args, **kwargs):
     # Build parameters for the visualization node
     viz_params = [
         drones_file,  # Base drone hardware
-        scenario_file,
         optimizer_file,
     ]
 
@@ -194,11 +185,6 @@ def generate_launch_description():
             'drone_id',
             default_value='1',
             description='Target drone ID to run (0-5)'
-        ),
-        DeclareLaunchArgument(
-            'scenario',
-            default_value='',
-            description='Scenario configuration file containing obstacles (default: scenario_empty = none)'
         ),
         DeclareLaunchArgument(
             'record_bag',

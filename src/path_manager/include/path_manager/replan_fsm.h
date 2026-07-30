@@ -5,16 +5,12 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
-#include <geometry_msgs/msg/point_stamped.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <Eigen/Dense>
-#include <atomic>
 #include <mutex>
 #include <map>
 #include "path_manager/msg/poly_traj.hpp"
-#include "path_manager/msg/formation_target.hpp"
 #include "formation_msgs/msg/trajectory_command.hpp"
-#include "path_manager/msg/position_command.hpp"
 #include "path_manager/msg/dynamic_obstacle_array.hpp"
 #include "path_manager/msg/dynamic_obstacle_spec.hpp"
 #include "path_manager/msg/risk_zone_array.hpp"
@@ -70,19 +66,9 @@ public:
     ReplanFSM(rclcpp::Node::SharedPtr node);
     ~ReplanFSM() {};
 
-    // [RACE-PROBE] temporary diagnostics: proves/refutes timer-vs-subscription
-    // concurrency on traj_ (set around planGlobalTraj, checked in the timer).
-    std::atomic<bool> plan_writer_active_{false};
-    std::atomic<int> race_overlap_count_{0};
-    
-    void init();
     void computeAndPublishPaths();
-    void formationTargetCallback(const path_manager::msg::FormationTarget::SharedPtr msg);
     void trajectoryCommandCallback(const formation_msgs::msg::TrajectoryCommand::SharedPtr msg);
     void terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg);
-    // RViz-driven dynamic obstacle layer. Click in RViz with the "Publish Point"
-    // tool → /clicked_point → spawn a fixed-radius sphere obstacle into the SDF.
-    void clickedPointCallback(const geometry_msgs::msg::PointStamped::SharedPtr msg);
     void clearObstaclesCallback(const std_msgs::msg::Empty::SharedPtr msg);
     void loadObstaclesCallback(
         const path_manager::msg::DynamicObstacleArray::SharedPtr msg);
@@ -107,8 +93,10 @@ private:
     void changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_call);
     bool callEmergencyStop(const Eigen::Vector3d& stop_pos);
     
-    // Formation target publishing (now receives pre-calculated targets)
-    void publishFormationTarget(const Eigen::Vector3d& target, const std::vector<Eigen::Vector3d>& waypoints = {}, bool formation_changed = false, const Eigen::Vector3d& formation_offset = Eigen::Vector3d::Zero());
+    // Mission entry point: resolves the start state from the commanded target
+    // and route, draws the waypoint markers, then runs the global plan.
+    void startMissionPlan(const Eigen::Vector3d& target,
+                          const std::vector<Eigen::Vector3d>& waypoints);
 
     std::shared_ptr<PathManager> path_manager_;
 
@@ -116,13 +104,11 @@ private:
     rclcpp::Publisher<path_manager::msg::PolyTraj>::SharedPtr global_path_pub_;
     rclcpp::Subscription<formation_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
     rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr terrain_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr clicked_point_sub_;
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr clear_obstacles_sub_;
     rclcpp::Subscription<path_manager::msg::DynamicObstacleArray>::SharedPtr
         load_obstacles_sub_;
     rclcpp::Subscription<path_manager::msg::RiskZoneArray>::SharedPtr
         load_risk_zones_sub_;
-    double dynamic_obstacle_radius_;  // m, applied to clicked-point spheres
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr waypoint_marker_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
 

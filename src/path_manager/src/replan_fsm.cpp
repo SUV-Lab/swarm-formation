@@ -187,18 +187,6 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
         std::bind(&ReplanFSM::terrainCallback, this, std::placeholders::_1),
         state_mutator_options);
 
-    // Dynamic obstacle injection: each click in RViz spawns a fixed-radius sphere.
-    if (!node_->has_parameter("manager/dynamic_obstacle_radius")) {
-        node_->declare_parameter<double>("manager/dynamic_obstacle_radius", 5.0);
-    }
-    dynamic_obstacle_radius_ =
-        node_->get_parameter("manager/dynamic_obstacle_radius").as_double();
-    // Separate topic from /clicked_point (used by TrajectoryCommandPanel for
-    // start/goal picking). Sphere-on-click is opt-in via a dedicated topic.
-    clicked_point_sub_ = node_->create_subscription<geometry_msgs::msg::PointStamped>(
-        "/dynamic_obstacles/click", 10,
-        std::bind(&ReplanFSM::clickedPointCallback, this, std::placeholders::_1),
-        state_mutator_options);
     clear_obstacles_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
         "/dynamic_obstacles/clear", 1,
         std::bind(&ReplanFSM::clearObstaclesCallback, this, std::placeholders::_1),
@@ -237,79 +225,14 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // groups the MultiThreadedExecutor runs the 10 ms tick CONCURRENTLY with
     // trajectoryCommandCallback -> planGlobalTraj, so the tick read traj_ and
     // exec_state_ while the planner wrote them (data race, proven empirically
-    // by the RACE-PROBE overlap counter). Sharing the group serializes them;
+    // with a temporary overlap counter). Sharing the group serializes them;
     // ticks during the multi-second plan are only flag-polling, so delaying
     // them until the plan finishes costs nothing in single-shot mode.
     timer_ = node_->create_wall_timer(10ms, std::bind(&ReplanFSM::computeAndPublishPaths, this), subscription_callback_group_);
     FSM_LOG_INFO("FSM timer created on the subscription callback group (10ms period, serialized with planning)");
 }
 
-void ReplanFSM::init()
-{
-    path_manager_->initOptimizer();
-    path_manager_->deliverTrajToOptimizer();
-
-    // Only plan global trajectory if we have a valid target
-    if (!have_target_) {
-        RCLCPP_WARN(node_->get_logger(), "No target set yet, skipping global trajectory planning");
-        log_manager_->warnf("No target set yet, skipping global trajectory planning");
-        return;
-    }
-
-    try {
-        resolveCommandedStartAgl();
-        Eigen::MatrixXd iniState = Eigen::MatrixXd::Zero(3, 3);
-        Eigen::MatrixXd finState = Eigen::MatrixXd::Zero(3, 3);
-        iniState.col(0) = start_pt_;
-        finState.col(0) = end_pt_;
-
-        // TEST: seed a non-zero initial vel/acc (otherwise cold-start plans from rest).
-        if (inject_init_state_) {
-            iniState.col(1) = inject_init_vel_;
-            iniState.col(2) = inject_init_acc_;
-            FSM_LOG_WARN("[TEST] init(): injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
-                         inject_init_vel_(0), inject_init_vel_(1), inject_init_vel_(2),
-                         inject_init_acc_(0), inject_init_acc_(1), inject_init_acc_(2));
-        }
-
-        bool success = path_manager_->planGlobalTraj(start_pt_, iniState.col(1), iniState.col(2),
-                                                     {end_pt_}, finState.col(1), finState.col(2));
-        if (success)
-        {
-            FSM_LOG_INFO("Success to generate global trajectory!!!");
-            // end_vel_.setZero();
-            have_target_ = true;
-
-            if (exec_state_ == WAIT_POSITION)
-                changeFSMExecState(GEN_NEW_TRAJ, "TRIG");
-            else if (exec_state_ == EXEC_TRAJ)
-                changeFSMExecState(SEQUENTIAL_START, "TRIG");
-                
-            if (enable_global_trajectory_pub_) {
-                path_manager::msg::PolyTraj msg;
-                globalTraj2ROSMsg(msg);
-                global_path_pub_->publish(msg);
-                FSM_LOG_INFO("Published global trajectory successfully!");
-            }
-        }
-        else
-        {
-            FSM_LOG_ERROR("Failed to generate global trajectory!!!");
-        }
-    } catch (const std::exception& e) {
-        FSM_LOG_ERROR("Exception during global trajectory planning: %s", e.what());
-    }
-}
-
 void ReplanFSM::computeAndPublishPaths() {
-    // [RACE-PROBE] timer tick while the subscription thread is inside
-    // planGlobalTraj == the two callback groups really do run concurrently.
-    if (plan_writer_active_.load(std::memory_order_acquire)) {
-        const int n = ++race_overlap_count_;
-        if (n == 1 || n % 100 == 0) {
-            log_manager_->warnf("[RACE-PROBE] timer executed DURING planGlobalTraj (overlap #%d)", n);
-        }
-    }
     static int fsm_num = 0;
     fsm_num++;
     if (fsm_num == 100) {
@@ -554,23 +477,23 @@ void ReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_cal
     exec_state_ = new_state;
 }
 
-void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget::SharedPtr msg) {
-    auto callback_start = std::chrono::high_resolution_clock::now();
+// Single entry point for starting a mission plan. This used to be a pair of
+// functions bridged by a ROS message that never went on the wire: the sender
+// built the message and then hand-delivered it to the receiver by shared_ptr,
+// so no publisher, subscriber or topic ever existed and the message only
+// carried arguments across a plain function call. The target and the route
+// waypoints are the only values that were ever read back out of it.
+void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
+                                 const std::vector<Eigen::Vector3d>& waypoints) {
+    auto plan_start = std::chrono::high_resolution_clock::now();
     double ros_time_start = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
 
-    if (msg->drone_id != drone_id_) {
+    if (target.z() < -0.1) {
         return;
     }
 
-    if (msg->target_position.z < -0.1) {
-        return;
-    }
-
-    FSM_LOG_INFO("[DEBUG TARGET] formationTargetCallback STARTED for drone %d at time %.3f!",
+    FSM_LOG_INFO("[DEBUG TARGET] startMissionPlan STARTED for drone %d at time %.3f!",
                  drone_id_, ros_time_start);
-    FSM_LOG_INFO("[DEBUG TARGET] Message header timestamp: %.3f, delay: %.3f ms",
-                 msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9,
-                 (ros_time_start - (msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9)) * 1000);
 
     // Mission progress: move next_mission to current, clear next
     // This signals that we're working on the "next" mission now (which becomes current)
@@ -644,13 +567,12 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
             // t=9.3 s on a dogleg whose real corner was 12.8 km away).
             // First waypoint == target for plain missions, so the simple
             // case is unchanged.
-            Eigen::Vector3d leg_end(msg->target_position.x,
-                                    msg->target_position.y, 0.0);
-            for (const auto &wp : msg->formation_positions) {
-                const double dx = wp.x - start_pt_.x();
-                const double dy = wp.y - start_pt_.y();
+            Eigen::Vector3d leg_end(target.x(), target.y(), 0.0);
+            for (const auto &wp : waypoints) {
+                const double dx = wp.x() - start_pt_.x();
+                const double dy = wp.y() - start_pt_.y();
                 if (dx * dx + dy * dy > 1.0e-6) {
-                    leg_end = Eigen::Vector3d(wp.x, wp.y, 0.0);
+                    leg_end = Eigen::Vector3d(wp.x(), wp.y(), 0.0);
                     break;
                 }
             }
@@ -698,38 +620,31 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
                    start_acc_(0), start_acc_(1), start_acc_(2));
     }
 
-    std::vector<Eigen::Vector3d> waypoints;
+    // The commanded waypoints are passed through as-is: they are already
+    // center points with any formation offset applied.
+    std::vector<Eigen::Vector3d> route = waypoints;
 
-    if (!msg->formation_positions.empty()) {
-        for (const auto& pos : msg->formation_positions) {
-            waypoints.emplace_back(pos.x, pos.y, pos.z);
-        }
-
+    if (!route.empty()) {
         log_manager_->infof(
-                   "Drone %d: Using %zu waypoints from formation_positions (already offset-applied)",
-                   drone_id_, waypoints.size());
+                   "Drone %d: Using %zu commanded waypoints (already offset-applied)",
+                   drone_id_, route.size());
 
-        end_pt_ = waypoints.back();
+        end_pt_ = route.back();
     } else {
-        Eigen::Vector3d my_target(
-            msg->target_position.x,
-            msg->target_position.y,
-            msg->target_position.z);
-
-        waypoints = { my_target };
-        end_pt_ = my_target;
+        route = { target };
+        end_pt_ = target;
 
         RCLCPP_INFO(node_->get_logger(),
-                   "Drone %d: Using single target_position as waypoint (already offset-applied)",
+                   "Drone %d: Using single target as waypoint (already offset-applied)",
                    drone_id_);
         log_manager_->infof(
-                   "Drone %d: Using single target_position as waypoint (already offset-applied)",
+                   "Drone %d: Using single target as waypoint (already offset-applied)",
                    drone_id_);
     }
 
     log_manager_->infof("start_pt_: %.2f, %.2f, %.2f", start_pt_(0), start_pt_(1), start_pt_(2));
-    log_manager_->infof("waypoints size: %zu", waypoints.size());
-    for (const auto& wp : waypoints) {
+    log_manager_->infof("waypoints size: %zu", route.size());
+    for (const auto& wp : route) {
         log_manager_->infof("waypoint: %.2f, %.2f, %.2f", wp(0), wp(1), wp(2));
     }
 
@@ -754,7 +669,7 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
         }
         marker.color.a = 1.0;
 
-        for (const auto& wp : waypoints) {
+        for (const auto& wp : route) {
             geometry_msgs::msg::Point p;
             p.x = wp(0);
             p.y = wp(1);
@@ -774,16 +689,16 @@ void ReplanFSM::formationTargetCallback(const path_manager::msg::FormationTarget
 
         waypoint_marker_pub_->publish(marker);
         log_manager_->infof("Drone %d: Published %zu waypoint markers to RViz (frame: %s, ns: %s)",
-                    drone_id_, waypoints.size(), marker.header.frame_id.c_str(), marker.ns.c_str());
+                    drone_id_, route.size(), marker.header.frame_id.c_str(), marker.ns.c_str());
     }
 
-    triggerGlobalPlan(waypoints);
+    triggerGlobalPlan(route);
 
-    auto callback_end = std::chrono::high_resolution_clock::now();
-    auto callback_duration = std::chrono::duration_cast<std::chrono::milliseconds>(callback_end - callback_start).count();
+    auto plan_end = std::chrono::high_resolution_clock::now();
+    auto plan_duration = std::chrono::duration_cast<std::chrono::milliseconds>(plan_end - plan_start).count();
     double ros_time_end = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-    FSM_LOG_INFO("[DEBUG TARGET] formationTargetCallback COMPLETED in %ld ms at time %.3f (total elapsed: %.3f ms)",
-                 callback_duration, ros_time_end, (ros_time_end - ros_time_start) * 1000);
+    FSM_LOG_INFO("[DEBUG TARGET] startMissionPlan COMPLETED in %ld ms at time %.3f (total elapsed: %.3f ms)",
+                 plan_duration, ros_time_end, (ros_time_end - ros_time_start) * 1000);
 }
 
 // [START AGL] The commanded seed start rides the same AGL contract as
@@ -825,11 +740,9 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     auto global_traj_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TIMING] Starting global trajectory planning");
     path_manager_->setStartVelSynthesized(start_vel_synthesized_);
-    plan_writer_active_.store(true, std::memory_order_release);   // [RACE-PROBE]
     bool success = path_manager_->planGlobalTraj(
         start_pt_, start_vel_, start_acc_,
         waypoints, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
-    plan_writer_active_.store(false, std::memory_order_release);  // [RACE-PROBE]
 
     auto global_traj_end = std::chrono::high_resolution_clock::now();
     auto global_traj_duration = std::chrono::duration_cast<std::chrono::milliseconds>(global_traj_end - global_traj_start).count();
@@ -857,11 +770,11 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         last_plan_succeeded_ = true;
 
         if (exec_state_ == WAIT_POSITION)
-            changeFSMExecState(SEQUENTIAL_START, "formationTargetCallback");
+            changeFSMExecState(SEQUENTIAL_START, "startMissionPlan");
         else if (exec_state_ == EXEC_TRAJ)
-            changeFSMExecState(SEQUENTIAL_START, "formationTargetCallback");  // Single-shot: new global plan already has local_traj
+            changeFSMExecState(SEQUENTIAL_START, "startMissionPlan");  // Single-shot: new global plan already has local_traj
 
-        // NOTE: Global trajectory publish removed from formationTargetCallback to prevent blocking
+        // NOTE: Global trajectory publish removed from the mission-plan path to prevent blocking
         // The global trajectory will be published in computeAndPublishPaths instead
         // This fixes the race condition that caused 20-60 second freezes during formation transitions
 
@@ -956,7 +869,7 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
     // ever set the start), so missions 2..N silently planned from the stale
     // first start / previous trajectory end — there is no odometry sub to
     // refresh current_pos_. A new mission drops the previous local trajectory
-    // so formationTargetCallback plans from the commanded start, not the old
+    // so startMissionPlan plans from the commanded start, not the old
     // trajectory position.
     if (!start_position_received_ || mission_changed) {
         Eigen::Vector3d new_start_pos(
@@ -995,12 +908,12 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
         msg->target_position.z
     );
 
-    // Waypoint-less command: the TARGET is the mission. Without this,
-    // publishFormationTarget's empty-waypoint fallback silently substituted
-    // current_formation_center_ — (0,0,0) on a fresh node — so a valid
-    // headless/CLI command (target set, waypoints omitted) planned a flight
-    // to the map corner while logging success. The RViz panel always fills
-    // waypoints[], which is why this stayed dormant.
+    // Waypoint-less command: the TARGET is the mission. The old message path
+    // substituted current_formation_center_ for an empty waypoint list —
+    // (0,0,0) on a fresh node — so a valid headless/CLI command (target set,
+    // waypoints omitted) planned a flight to the map corner while logging
+    // success. The RViz panel always fills waypoints[], which is why that
+    // stayed dormant; filling the route here keeps the target authoritative.
     if (waypoints.empty()) {
         waypoints.push_back(target_position);
         FSM_LOG_INFO("Trajectory command has no waypoints — using target_position "
@@ -1040,9 +953,8 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
                 formation_offset.x(), formation_offset.y(), formation_offset.z(),
                 waypoints.size());
 
-    // Build the formation target and trigger planning directly (no topic round-trip)
     last_plan_succeeded_ = false;  // also covers early returns before triggerGlobalPlan
-    publishFormationTarget(target_position, waypoints, false, formation_offset);
+    startMissionPlan(target_position, waypoints);
 
     if (!last_plan_succeeded_) {
         // Plan failed or was rejected (e.g. the optimizer's collision audit).
@@ -1067,82 +979,10 @@ void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryC
                  callback_duration, rclcpp::Clock(RCL_ROS_TIME).now().seconds());
 }
 
-void ReplanFSM::publishFormationTarget(const Eigen::Vector3d& target, const std::vector<Eigen::Vector3d>& waypoints, bool formation_changed, const Eigen::Vector3d& formation_offset) {
-    path_manager::msg::FormationTarget target_msg;
-
-    target_msg.header.stamp = node_->now();
-    target_msg.header.frame_id = "world";
-    target_msg.drone_id = drone_id_;
-
-    target_msg.target_position.x = target.x();
-    target_msg.target_position.y = target.y();
-    target_msg.target_position.z = target.z();
-
-    target_msg.target_velocity.x = 0.0;
-    target_msg.target_velocity.y = 0.0;
-    target_msg.target_velocity.z = 0.0;
-
-    target_msg.formation_type = current_formation_type_;
-    target_msg.formation_scale = current_formation_scale_;
-
-    // Store formation offset for next transition
-    target_msg.formation_offset.x = formation_offset.x();
-    target_msg.formation_offset.y = formation_offset.y();
-    target_msg.formation_offset.z = formation_offset.z();
-
-    if (!waypoints.empty()) {
-        // Simply pass waypoints as-is without adding offset
-        // The waypoints from the trajectory command are already center points
-        target_msg.formation_positions.reserve(waypoints.size());
-        for (const auto& wp : waypoints) {
-            geometry_msgs::msg::Point waypoint_pos;
-            waypoint_pos.x = wp.x();
-            waypoint_pos.y = wp.y();
-            waypoint_pos.z = wp.z();
-            target_msg.formation_positions.push_back(waypoint_pos);
-        }
-
-        log_manager_->infof("Publishing formation target with %zu waypoints for drone %d (no offset applied)",
-                   waypoints.size(), drone_id_);
-    } else {
-        // No waypoints: use current formation center as single waypoint
-        geometry_msgs::msg::Point formation_pos;
-        formation_pos.x = current_formation_center_.x();
-        formation_pos.y = current_formation_center_.y();
-        formation_pos.z = current_formation_center_.z();
-        target_msg.formation_positions.push_back(formation_pos);
-
-        log_manager_->infof("Publishing formation target with formation center for drone %d",
-                   drone_id_);
-    }
-
-    // Single-PC: call planning trigger directly instead of self-publishing to
-    // /formation_target (drops the topic round-trip). Same callback group
-    // (MutuallyExclusive) so threading behavior is unchanged.
-    formationTargetCallback(std::make_shared<path_manager::msg::FormationTarget>(target_msg));
-
-}
-
-
 void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg) {
     if (path_manager_) {
         path_manager_->setTerrainData(msg);
         FSM_LOG_INFO("Terrain data received and forwarded to PathManager");
-    }
-}
-
-void ReplanFSM::clickedPointCallback(
-    const geometry_msgs::msg::PointStamped::SharedPtr msg)
-{
-    if (!path_manager_) return;
-    Eigen::Vector3d c(msg->point.x, msg->point.y, msg->point.z);
-    int id = path_manager_->addDynamicSphere(c, dynamic_obstacle_radius_);
-    if (id < 0) {
-        FSM_LOG_WARN("Clicked-point obstacle rejected at (%.2f,%.2f,%.2f) "
-                     "(SDF not built yet?)", c.x(), c.y(), c.z());
-    } else {
-        FSM_LOG_INFO("Dynamic obstacle id=%d at (%.2f,%.2f,%.2f) r=%.2f",
-                     id, c.x(), c.y(), c.z(), dynamic_obstacle_radius_);
     }
 }
 

@@ -1,7 +1,0 @@
-/**:
-  ros__parameters:
-    # Empty scenario - no obstacles
-    # Useful for testing basic trajectory planning
-
-    scenario_name: "empty"
-    scenario_description: "Empty scenario for basic trajectory testing without obstacles"

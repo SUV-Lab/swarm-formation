@@ -36,9 +36,6 @@ find_package(ament_index_cpp REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PolyTraj.msg"
-  "msg/PositionCommand.msg"
-  "msg/FormationTarget.msg"
-  "msg/FormationCommand.msg"
   "msg/DynamicObstacleSpec.msg"
   "msg/DynamicObstacleArray.msg"
   "msg/RiskZoneSpec.msg"
