@@ -75,18 +75,23 @@ int main(int argc, char **argv)
   bool got_wire = false;
   std_msgs::msg::Float64MultiArray last_profile;
   int profile_messages = 0;
-  auto marker_sub = node->create_subscription<visualization_msgs::msg::Marker>(
-      "/viz/risk_field", rclcpp::QoS(128).reliable().transient_local(),
-      [&](visualization_msgs::msg::Marker::SharedPtr marker) {
-        if (marker->ns == "effective_risk_floor" && marker->id == 0 &&
-            marker->type == visualization_msgs::msg::Marker::TRIANGLE_LIST) {
-          last_floor = *marker;
-          got_floor = true;
-        }
-        if (marker->ns == "effective_risk_volume" && marker->id == 0 &&
-            marker->type == visualization_msgs::msg::Marker::LINE_LIST)
-          got_wire = true;
-      });
+  // One latched MarkerArray carries the whole field (element 0 is DELETEALL).
+  auto marker_sub =
+      node->create_subscription<visualization_msgs::msg::MarkerArray>(
+          "/viz/risk_field", rclcpp::QoS(1).reliable().transient_local(),
+          [&](visualization_msgs::msg::MarkerArray::SharedPtr array) {
+            for (const auto &marker : array->markers) {
+              if (marker.ns == "effective_risk_floor" && marker.id == 0 &&
+                  marker.type ==
+                      visualization_msgs::msg::Marker::TRIANGLE_LIST) {
+                last_floor = marker;
+                got_floor = true;
+              }
+              if (marker.ns == "effective_risk_volume" && marker.id == 0 &&
+                  marker.type == visualization_msgs::msg::Marker::LINE_LIST)
+                got_wire = true;
+            }
+          });
   auto profile_sub =
       node->create_subscription<std_msgs::msg::Float64MultiArray>(
           "/viz/risk_profile",

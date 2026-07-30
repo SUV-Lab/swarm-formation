@@ -567,8 +567,10 @@ namespace path_manager
     bool is_optimizer_initialized_;
 
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr front_end_path_pub_;
-    // Terrain-masked horizontal slices on the existing RViz risk topic.
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr risk_field_pub_;
+    // Terrain-masked risk visualization: ONE latched MarkerArray carries the
+    // whole picture (DELETEALL + every zone's markers), so a late joiner gets
+    // all of it or none of it. See publishEffectiveRiskField.
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr risk_field_pub_;
     // Draped visibility-boundary heatmap (GridMap, rendered by a second
     // grid_map_rviz_plugin display; see publishRiskHeatmap).
     rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr risk_heatmap_pub_;

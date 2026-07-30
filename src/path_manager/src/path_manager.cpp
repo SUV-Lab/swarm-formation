@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <utility>
 #include <malloc.h>
 
 namespace path_manager
@@ -301,11 +302,13 @@ namespace path_manager
         // necessarily create drone_0, so risk visualization cannot use the
         // terrain-status publisher's drone_0-only ownership rule. Multiple
         // planners publish an identical id/namespace set and are harmless.
-        rclcpp::QoS risk_qos(128);
-        risk_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
-        risk_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
-        risk_field_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-            "/viz/risk_field", risk_qos);
+        //
+        // Depth 1: the field is ONE MarkerArray per refresh, so the latched
+        // sample is the complete picture. The former per-marker burst needed a
+        // deep queue (7 markers x N zones) and still truncated silently past
+        // ~18 zones, leaving late joiners with a half-drawn field.
+        risk_field_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/viz/risk_field", rclcpp::QoS(1).reliable().transient_local());
         // One latched map; a second grid_map_rviz_plugin display drapes it
         // over the terrain (same message-layout contract as /terrain/grid_map).
         rclcpp::QoS heatmap_qos(1);
@@ -2262,15 +2265,21 @@ void PathManager::publishRiskHeatmap()
     }
 }
 
+// One MarkerArray per refresh is the entire risk field. Element 0 is a
+// DELETEALL (RViz honors it inside an array, ahead of the ADDs that follow —
+// the same technique publishDynamicObstacles uses), so a repaint is atomic and
+// the latched sample a late joiner receives is never a partial field. An empty
+// zone set therefore publishes an array holding only that DELETEALL.
 void PathManager::publishEffectiveRiskField()
 {
     if (!risk_field_pub_) return;
 
+    visualization_msgs::msg::MarkerArray arr;
     visualization_msgs::msg::Marker clear;
     clear.header.frame_id = "map";
     clear.header.stamp = node_->now();
     clear.action = visualization_msgs::msg::Marker::DELETEALL;
-    risk_field_pub_->publish(clear);
+    arr.markers.push_back(clear);
 
     // The draped GridMap channel (self-clearing when mode != "heatmap").
     publishRiskHeatmap();
@@ -2407,7 +2416,7 @@ void PathManager::publishEffectiveRiskField()
                     appendTriangle(v00, v11, v01);
                 }
             }
-            if (!floor.points.empty()) risk_field_pub_->publish(floor);
+            if (!floor.points.empty()) arr.markers.push_back(std::move(floor));
         }
 
         if (volume_mode || heatmap_mode) {
@@ -2514,8 +2523,8 @@ void PathManager::publishEffectiveRiskField()
                 halo.color.g = 0.0f;
                 halo.color.b = 0.0f;
                 halo.color.a = 0.85f;
-                risk_field_pub_->publish(halo);
-                risk_field_pub_->publish(wire);
+                arr.markers.push_back(std::move(halo));
+                arr.markers.push_back(std::move(wire));
             }
         }
 
@@ -2557,7 +2566,7 @@ void PathManager::publishEffectiveRiskField()
                     slice.colors.push_back(riskColor(risk, 2.0));
                 }
             }
-            if (!slice.points.empty()) risk_field_pub_->publish(slice);
+            if (!slice.points.empty()) arr.markers.push_back(std::move(slice));
         }
 
         visualization_msgs::msg::Marker source;
@@ -2578,7 +2587,7 @@ void PathManager::publishEffectiveRiskField()
         source.color.b = 0.0f;
         source.color.a = 1.0f;
         source.lifetime = rclcpp::Duration(0, 0);
-        risk_field_pub_->publish(source);
+        arr.markers.push_back(std::move(source));
 
         // A thin vertical reference visually anchors a ground risk source.
         double source_ground = 0.0;
@@ -2600,7 +2609,7 @@ void PathManager::publishEffectiveRiskField()
                 zone.center.x(), zone.center.y(), source_ground)));
             mast.points.push_back(point(zone.center));
             mast.lifetime = rclcpp::Duration(0, 0);
-            risk_field_pub_->publish(mast);
+            arr.markers.push_back(std::move(mast));
         }
 
         visualization_msgs::msg::Marker label;
@@ -2635,8 +2644,13 @@ void PathManager::publishEffectiveRiskField()
         }
         label.text = label_text;
         label.lifetime = rclcpp::Duration(0, 0);
-        risk_field_pub_->publish(label);
+        arr.markers.push_back(std::move(label));
     }
+
+    // Single atomic repaint. With no zones this is the lone DELETEALL, which
+    // is exactly the clear that EmergencyStop / a world change / an empty
+    // runtime zone set need.
+    risk_field_pub_->publish(arr);
 }
 
 void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg) {
