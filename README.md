@@ -10,13 +10,13 @@ ros2 launch path_manager rviz_path_manager.launch.py
 
 > **참고**:
 > - 시작점·목표점은 RViz의 MissionConfig 패널에서 미션 yaml을 로드해 설정합니다
-> - `scenario` 파라미터로 다양한 시나리오를 실행할 수 있습니다 (default, risk_zones 등)
+> - 장애물·위험지대는 RViz ObstacleScenario 패널에서 yaml 로 로드합니다
+>   (/mission/obstacles · /mission/risk_zones — scenario 런치 파라미터는 폐기)
 
 ### 주요 파라미터
 
 | 파라미터 | 설명 | 기본값 |
 |---------|------|--------|
-| `scenario` | 시나리오(장애물) 설정 파일 | scenario_empty (없음) |
 | `drone_id` | 실행할 드론 ID | 1 |
 | `world` | 지형 맵 이름 (비우면 optimizer_params 기본값) | (없음) |
 | `record_bag` | 궤적 토픽 rosbag 기록 | false |

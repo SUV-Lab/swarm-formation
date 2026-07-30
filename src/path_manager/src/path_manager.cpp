@@ -1092,7 +1092,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         }
 
         // Front-end route as nav_msgs/Path → mmp_visualization converts it to a
-        // RViz marker (/viz/simple_path).
+        // RViz marker (/viz/front_end_path).
         nav_msgs::msg::Path path_msg;
         path_msg.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
         path_msg.header.frame_id = "map";
