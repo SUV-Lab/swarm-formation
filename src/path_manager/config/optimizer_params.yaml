@@ -71,6 +71,10 @@
     manager/risk_heatmap_agl_max: 2.0   # heatmap ramp saturates at this visibility-boundary AGL (frame units)
     manager/risk_heatmap_max_dim: 768   # heatmap grid cells along the longer AABB side
     manager/risk_heatmap_offset: 1.0   # drape height above DEM in frame units (1.0 = 100 m; must clear the rendered mesh on slopes)
+    manager/risk_heatmap_preview_lift: 20.0  # [PREVIEW] extra lift BEFORE any DEM arrives (2 km): the
+                                        # pre-plan ideal field would otherwise sit at sea level and be
+                                        # buried inside the rendered terrain. Drops to 0 the moment the
+                                        # corridor map loads, so the before/after comparison is visible.
     manager/risk_heatmap_safe_transparent: false # false: floor >= agl_max cells paint GREEN ("safe in band"); true: transparent (imagery only). Shadow stays blue either way
     manager/risk_mask_viz_contours: 5   # clipped altitude contours in volume mode
     manager/risk_mask_viz_volume_alpha: 0.54

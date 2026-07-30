@@ -425,6 +425,10 @@ namespace path_manager
     // deviates from the bilinear DEM sample by up to ~half a cell on slopes
     // (76 m cells on big_terrain) — 0.05 u sank into hillsides.
     double risk_heatmap_offset_{0.30};
+    // [PREVIEW] Extra render lift applied ONLY while no DEM has arrived, so
+    // the ideal-field drape floats above the rendered terrain instead of
+    // being buried inside it (frame units; 20 = 2 km, above any terrain).
+    double risk_heatmap_preview_lift_{20.0};
     // Cells whose visibility boundary is at/above agl_max ("low risk unless you
     // climb") paint GREEN by default; true leaves them transparent instead
     // so the terrain imagery dominates. Occluded cells (never visible)

@@ -51,6 +51,7 @@ namespace path_manager
         node_->declare_parameter("manager/risk_heatmap_agl_max", 2.0);
         node_->declare_parameter("manager/risk_heatmap_max_dim", 768);
         node_->declare_parameter("manager/risk_heatmap_offset", 0.30);
+        node_->declare_parameter("manager/risk_heatmap_preview_lift", 20.0);
         node_->declare_parameter("manager/risk_heatmap_safe_transparent",
                                  false);
         node_->declare_parameter("manager/risk_mask_viz_contours", 5);
@@ -121,6 +122,8 @@ namespace path_manager
         risk_heatmap_max_dim_ = std::clamp(risk_heatmap_max_dim_, 64, 4096);
         node_->get_parameter("manager/risk_heatmap_offset",
                              risk_heatmap_offset_);
+        node_->get_parameter("manager/risk_heatmap_preview_lift",
+                             risk_heatmap_preview_lift_);
         risk_heatmap_offset_ = std::clamp(risk_heatmap_offset_, 0.0, 5.0);
         node_->get_parameter("manager/risk_heatmap_safe_transparent",
                              risk_heatmap_safe_transparent_);
@@ -2379,6 +2382,16 @@ void PathManager::publishRiskHeatmap()
     }
     const double rv_ratio = risk_vertical_ratio_;
 
+    // [PREVIEW] No DEM yet (before the first plan loads the corridor map):
+    // every column falls back to sea level, so the drape would be BURIED
+    // inside the rendered terrain mesh — the ideal-field preview was
+    // invisible exactly when the user wants to compare it against the
+    // terrain-masked result. Float the whole sheet above the tallest
+    // rendered terrain instead. Purely a render height; the field itself is
+    // the same ideal (unmasked) field it always was.
+    const double preview_lift =
+        terrain_data_.valid ? 0.0 : risk_heatmap_preview_lift_;
+
     size_t painted = 0;
     for (int row = 0; row < rows; ++row) {
         const double wx = x0 + length_x - (row + 0.5) * res;
@@ -2387,10 +2400,29 @@ void PathManager::publishRiskHeatmap()
             // Water/off-DEM columns sit at sea level 0 (same rule as
             // refreshEffectiveRiskZones / the marker modes).
             double ground = 0.0;
+            // Render height uses the MAX elevation within the cell, not the
+            // center: on steep ridges the terrain relief inside one coarse
+            // heatmap cell exceeds even the 100 m drape offset, so the
+            // terrain mesh pierced the drape and z-fought along the
+            // intersection line (herringbone bands tracing ridge lines).
+            // Semantic quantities (floor AGL, colors) keep the CENTER
+            // elevation; only the drawn surface rides the in-cell crest.
+            double ground_render = 0.0;
             if (terrain_data_.valid) {
                 const float h = terrain_data_.getElevation(wx, wy);
                 if (std::isfinite(h) && h > 0.0f)
                     ground = static_cast<double>(h);
+                ground_render = ground;
+                const double hr = 0.5 * res;
+                for (const auto &d :
+                     {std::pair<double, double>{-hr, -hr}, {-hr, hr},
+                      {hr, -hr}, {hr, hr}}) {
+                    const float hc = terrain_data_.getElevation(
+                        wx + d.first, wy + d.second);
+                    if (std::isfinite(hc))
+                        ground_render = std::max(
+                            ground_render, static_cast<double>(hc));
+                }
             }
             bool in_footprint = false;
             double floor_agl = kInf;
@@ -2451,7 +2483,8 @@ void PathManager::publishRiskHeatmap()
                 // clearance so the roof does not z-fight the terrain mesh.
                 lift = std::max(lift, 0.08);
             }
-            elevation.data[idx] = static_cast<float>(ground + lift);
+            elevation.data[idx] =
+                static_cast<float>(ground_render + lift + preview_lift);
             color.data[idx] = cell_color;
             ++painted;
         }
@@ -2629,12 +2662,17 @@ void PathManager::publishEffectiveRiskField()
             wire.type = visualization_msgs::msg::Marker::LINE_LIST;
             wire.action = visualization_msgs::msg::Marker::ADD;
             wire.pose.orientation.w = 1.0;
-            // Readability: the rim used to be a semi-transparent red line
-            // sitting directly ON the warm draped heatmap — red on red, and
-            // z-fighting with the drape. Opaque, wider, floated a hair above
-            // the drape, and backed by a darker halo underlay (published
-            // below) so the boundary reads on any background color.
-            wire.pose.position.z = 0.03;
+            // Readability: the rim used to be a semi-transparent red line on
+            // the warm draped heatmap — red on red. Opaque, wider, and
+            // backed by a darker halo underlay (published below) so the
+            // boundary reads on any background.
+            //
+            // In heatmap mode the ring is also DRAPED onto the terrain (see
+            // drapeZ): drawn at the ellipsoid equator's constant altitude it
+            // floated over valleys and sank into ridges, reading as a chain
+            // hanging in mid-air rather than a boundary. Membership and
+            // visibility are still evaluated on the TRUE ellipsoid geometry;
+            // only the drawn height follows the ground.
             wire.scale.x = std::max(0.14, 0.22 * step);
             wire.color.r = 1.0f;
             wire.color.g = 0.18f;
@@ -2648,11 +2686,22 @@ void PathManager::publishEffectiveRiskField()
                 return riskVisibilityValue(zi, p) >=
                        risk_mask_viz_threshold_;
             };
+            // Drawn height: terrain-following in heatmap mode (rides just
+            // above the drape), true geometry otherwise (volume/wire modes
+            // are showing the 3-D shell, where floating IS the point).
+            auto drapeZ = [&](const Eigen::Vector3d &p) {
+                if (!heatmap_mode) return p;
+                double ground = 0.0;
+                groundAt(p.x(), p.y(), &ground);
+                Eigen::Vector3d q = p;
+                q.z() = ground + risk_heatmap_offset_ + 0.05;
+                return q;
+            };
             auto appendSegment = [&](const Eigen::Vector3d &a,
                                      const Eigen::Vector3d &b) {
                 if (!shellPointVisible(a) || !shellPointVisible(b)) return;
-                wire.points.push_back(point(a));
-                wire.points.push_back(point(b));
+                wire.points.push_back(point(drapeZ(a)));
+                wire.points.push_back(point(drapeZ(b)));
             };
             const int ring_samples = 192;
             for (int li = 0; li < n_contours; ++li) {
@@ -2697,7 +2746,7 @@ void PathManager::publishEffectiveRiskField()
                 visualization_msgs::msg::Marker halo = wire;
                 halo.ns = "effective_risk_volume_halo";
                 halo.scale.x = 2.0 * wire.scale.x;
-                halo.pose.position.z = 0.015;
+                halo.pose.position.z = -0.01;
                 halo.color.r = 0.08f;
                 halo.color.g = 0.0f;
                 halo.color.b = 0.0f;
