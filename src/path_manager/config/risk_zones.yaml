@@ -15,7 +15,7 @@
     #          format used peak=100 "risk levels" — do not copy those.
     #
     # NOTE: this file is NOT loaded by path_manager.launch.py — zones
-    # normally arrive at runtime via /risk_zones/load (RViz
+    # normally arrive at runtime via /mission/risk_zones (RViz
     # ObstacleScenarioPanel, see mmp_terrain/data/scenarios/obstacles).
     # Kept only as a hand-loadable example with V3-correct values.
     # ============================================================

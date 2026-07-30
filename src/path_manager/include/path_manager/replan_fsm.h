@@ -5,16 +5,16 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
-#include <std_msgs/msg/empty.hpp>
 #include <Eigen/Dense>
 #include <mutex>
 #include <map>
+#include <vector>
 #include "path_manager/msg/poly_traj.hpp"
-#include "formation_msgs/msg/trajectory_command.hpp"
-#include "path_manager/msg/dynamic_obstacle_array.hpp"
-#include "path_manager/msg/dynamic_obstacle_spec.hpp"
-#include "path_manager/msg/risk_zone_array.hpp"
-#include "path_manager/msg/risk_zone_spec.hpp"
+#include "mmp_mission_msgs/msg/trajectory_command.hpp"
+#include "mmp_mission_msgs/msg/dynamic_obstacle_array.hpp"
+#include "mmp_mission_msgs/msg/dynamic_obstacle_spec.hpp"
+#include "mmp_mission_msgs/msg/risk_zone_array.hpp"
+#include "mmp_mission_msgs/msg/risk_zone_spec.hpp"
 #include "path_manager/path_manager.h"
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
@@ -67,13 +67,14 @@ public:
     ~ReplanFSM() {};
 
     void computeAndPublishPaths();
-    void trajectoryCommandCallback(const formation_msgs::msg::TrajectoryCommand::SharedPtr msg);
+    void trajectoryCommandCallback(const mmp_mission_msgs::msg::TrajectoryCommand::SharedPtr msg);
     void terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg);
-    void clearObstaclesCallback(const std_msgs::msg::Empty::SharedPtr msg);
+    // Obstacles have no separate clear verb: an empty DynamicObstacleArray with
+    // replace=true is the clear (see loadObstaclesCallback).
     void loadObstaclesCallback(
-        const path_manager::msg::DynamicObstacleArray::SharedPtr msg);
+        const mmp_mission_msgs::msg::DynamicObstacleArray::SharedPtr msg);
     void loadRiskZonesCallback(
-        const path_manager::msg::RiskZoneArray::SharedPtr msg);
+        const mmp_mission_msgs::msg::RiskZoneArray::SharedPtr msg);
     void polyTraj2ROSMsg(path_manager::msg::PolyTraj &msg);
     void globalTraj2ROSMsg(path_manager::msg::PolyTraj &msg);
     // Callback groups:
@@ -102,12 +103,11 @@ private:
 
     rclcpp::Publisher<path_manager::msg::PolyTraj>::SharedPtr optimized_path_pub_;
     rclcpp::Publisher<path_manager::msg::PolyTraj>::SharedPtr global_path_pub_;
-    rclcpp::Subscription<formation_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
+    rclcpp::Subscription<mmp_mission_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
     rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr terrain_sub_;
-    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr clear_obstacles_sub_;
-    rclcpp::Subscription<path_manager::msg::DynamicObstacleArray>::SharedPtr
+    rclcpp::Subscription<mmp_mission_msgs::msg::DynamicObstacleArray>::SharedPtr
         load_obstacles_sub_;
-    rclcpp::Subscription<path_manager::msg::RiskZoneArray>::SharedPtr
+    rclcpp::Subscription<mmp_mission_msgs::msg::RiskZoneArray>::SharedPtr
         load_risk_zones_sub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr waypoint_marker_pub_;
     rclcpp::TimerBase::SharedPtr timer_;
@@ -171,6 +171,12 @@ private:
     std::string current_mission_id_;    // Current mission being executed
     std::string next_mission_id_;       // Next mission to execute
     bool is_final_mission_;             // True if no more missions after current
+
+    // Authoritative copy of the risk zones this FSM has accepted from
+    // /mission/risk_zones. RiskZoneArray::replace decides whether an incoming
+    // batch overwrites this set or appends to it; the whole set is then pushed
+    // to PathManager (setRiskZonesRuntime is replace-only by contract).
+    std::vector<RiskZone> active_risk_zones_;
 
     std::unique_ptr<swarm_formation::LogManager> log_manager_;
 };

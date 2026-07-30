@@ -9,7 +9,7 @@ int main(int argc, char **argv) {
 
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions{});
     path_manager::ReplanFSM ego_replan(node);
-    // The FSM idles until a /trajectory_command arrives (startMissionPlan).
+    // The FSM idles until a /mission/trajectory_command arrives (startMissionPlan).
     executor.add_node(node);
     executor.spin();
 

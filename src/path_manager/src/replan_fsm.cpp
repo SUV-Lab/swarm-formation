@@ -155,8 +155,8 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     trajectory_cmd_options.callback_group = subscription_callback_group_;
     // Reliable: this is THE mission command. A best-effort reader may drop the
     // single Run message on a timing edge and the FSM would just sit there.
-    trajectory_cmd_sub_ = node_->create_subscription<formation_msgs::msg::TrajectoryCommand>(
-        topic_prefix + "/trajectory_command", rclcpp::QoS(5).reliable(),
+    trajectory_cmd_sub_ = node_->create_subscription<mmp_mission_msgs::msg::TrajectoryCommand>(
+        topic_prefix + "/mission/trajectory_command", rclcpp::QoS(5).reliable(),
         std::bind(&ReplanFSM::trajectoryCommandCallback, this, std::placeholders::_1),
         trajectory_cmd_options);
 
@@ -170,7 +170,7 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // pipeline, which READS that state). A subscription created without a
     // group lands on the node DEFAULT group, which the MultiThreadedExecutor
     // runs in parallel with subscription_callback_group_: at startup the
-    // latched /terrain/grid_map and the panel's /risk_zones/load both fired
+    // latched /terrain/grid_map and the panel's /mission/risk_zones both fired
     // rebuildTerrainRiskMasks() concurrently, and the two unsynchronized
     // std::vector reallocations (risk_zones_, terrain_risk_masks_) segfaulted
     // the node before WAIT_TARGET. None of these are hot paths, so
@@ -187,13 +187,15 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
         std::bind(&ReplanFSM::terrainCallback, this, std::placeholders::_1),
         state_mutator_options);
 
-    clear_obstacles_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
-        "/dynamic_obstacles/clear", 1,
-        std::bind(&ReplanFSM::clearObstaclesCallback, this, std::placeholders::_1),
-        state_mutator_options);
+    // No separate clear topic: an empty DynamicObstacleArray with replace=true
+    // is the clear verb (the /dynamic_obstacles/clear Empty topic was retired).
+    // reliable+transient_local, same as the zone sub below: the panel latches
+    // the scenario, and a volatile reader never collects a latch — a planner
+    // started after Load would silently plan with zero obstacles (the exact
+    // bug class fixed for zones in P0).
     load_obstacles_sub_ =
-        node_->create_subscription<path_manager::msg::DynamicObstacleArray>(
-            "/dynamic_obstacles/load", 1,
+        node_->create_subscription<mmp_mission_msgs::msg::DynamicObstacleArray>(
+            "/mission/obstacles", rclcpp::QoS(1).reliable().transient_local(),
             std::bind(&ReplanFSM::loadObstaclesCallback, this,
                       std::placeholders::_1),
             state_mutator_options);
@@ -213,8 +215,8 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
         // planner started after Load silently planned with ZERO zones. A TL
         // reader is what actually collects the latch.
         load_risk_zones_sub_ =
-            node_->create_subscription<path_manager::msg::RiskZoneArray>(
-                "/risk_zones/load", rclcpp::QoS(1).reliable().transient_local(),
+            node_->create_subscription<mmp_mission_msgs::msg::RiskZoneArray>(
+                "/mission/risk_zones", rclcpp::QoS(1).reliable().transient_local(),
                 std::bind(&ReplanFSM::loadRiskZonesCallback, this,
                           std::placeholders::_1),
                 risk_zone_options);
@@ -805,7 +807,7 @@ bool ReplanFSM::callEmergencyStop(const Eigen::Vector3d& stop_pos) {
 
 // trajectoryCommandCallback: receives a trajectory command (target position
 // and waypoints) from the RViz MissionConfig panel.
-void ReplanFSM::trajectoryCommandCallback(const formation_msgs::msg::TrajectoryCommand::SharedPtr msg) {
+void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::TrajectoryCommand::SharedPtr msg) {
     auto callback_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TRAJECTORY CMD] Received trajectory command (seq: %d, drone: %d) at time %.3f",
                  msg->sequence, msg->drone_id, rclcpp::Clock(RCL_ROS_TIME).now().seconds());
@@ -986,16 +988,11 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
     }
 }
 
-void ReplanFSM::clearObstaclesCallback(
-    const std_msgs::msg::Empty::SharedPtr /*msg*/)
-{
-    if (!path_manager_) return;
-    path_manager_->clearDynamicObstacles();
-    FSM_LOG_INFO("Dynamic obstacles cleared on request");
-}
-
+// Applies a dynamic-obstacle batch. msg->replace clears the live set first, so
+// an EMPTY array with replace=true is the "clear all obstacles" verb (the old
+// /dynamic_obstacles/clear std_msgs/Empty topic was retired in its favor).
 void ReplanFSM::loadObstaclesCallback(
-    const path_manager::msg::DynamicObstacleArray::SharedPtr msg)
+    const mmp_mission_msgs::msg::DynamicObstacleArray::SharedPtr msg)
 {
     if (!path_manager_) return;
     if (msg->replace) {
@@ -1007,7 +1004,7 @@ void ReplanFSM::loadObstaclesCallback(
     for (const auto& spec : msg->obstacles) {
         const Eigen::Vector3d c(spec.center.x, spec.center.y, spec.center.z);
         int id = -1;
-        if (spec.kind == path_manager::msg::DynamicObstacleSpec::KIND_CUBE) {
+        if (spec.kind == mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CUBE) {
             const Eigen::Vector3d size(spec.size.x, spec.size.y, spec.size.z);
             id = path_manager_->addDynamicBox(c, size, spec.model);
             if (id == -1) {
@@ -1015,7 +1012,7 @@ void ReplanFSM::loadObstaclesCallback(
                     "loadObstacles: addDynamicBox rejected at (%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f)",
                     c.x(), c.y(), c.z(), size.x(), size.y(), size.z());
             }
-        } else if (spec.kind == path_manager::msg::DynamicObstacleSpec::KIND_SPHERE) {
+        } else if (spec.kind == mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_SPHERE) {
             id = path_manager_->addDynamicSphere(c, spec.radius, spec.model);
             if (id == -1) {
                 FSM_LOG_WARN(
@@ -1035,8 +1032,13 @@ void ReplanFSM::loadObstaclesCallback(
                  added, deferred, skipped, msg->obstacles.size());
 }
 
+// Applies a risk-zone batch. msg->replace mirrors DynamicObstacleArray:
+// true overwrites the active set, false appends to it. The FSM owns the
+// accumulated set (active_risk_zones_) because setRiskZonesRuntime is
+// replace-only — before this, Append silently dropped previously loaded zones.
+// An EMPTY array with replace=true is therefore the "clear all zones" verb.
 void ReplanFSM::loadRiskZonesCallback(
-    const path_manager::msg::RiskZoneArray::SharedPtr msg)
+    const mmp_mission_msgs::msg::RiskZoneArray::SharedPtr msg)
 {
     if (!path_manager_) return;
     // Convert the wire format to PathManager's internal RiskZone struct.
@@ -1061,9 +1063,19 @@ void ReplanFSM::loadRiskZonesCallback(
                            // moat cap (1-1e-3) in getRiskNorm/RiskGradCostP
         zones.push_back(tz);
     }
-    path_manager_->setRiskZonesRuntime(zones);
-    FSM_LOG_INFO("loadRiskZones: %zu zones applied (dropped %zu invalid)",
-                 zones.size(), dropped);
+
+    const size_t previous = active_risk_zones_.size();
+    if (msg->replace) {
+        active_risk_zones_ = zones;
+    } else {
+        active_risk_zones_.insert(active_risk_zones_.end(),
+                                  zones.begin(), zones.end());
+    }
+    path_manager_->setRiskZonesRuntime(active_risk_zones_);
+    FSM_LOG_INFO(
+        "loadRiskZones: %s %zu zones (dropped %zu invalid), active set %zu -> %zu",
+        msg->replace ? "replaced with" : "appended", zones.size(), dropped,
+        previous, active_risk_zones_.size());
 }
 
 }  // namespace path_manager

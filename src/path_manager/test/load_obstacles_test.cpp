@@ -14,8 +14,8 @@
 #include <iostream>
 #include <string>
 
-#include "path_manager/msg/dynamic_obstacle_array.hpp"
-#include "path_manager/msg/dynamic_obstacle_spec.hpp"
+#include "mmp_mission_msgs/msg/dynamic_obstacle_array.hpp"
+#include "mmp_mission_msgs/msg/dynamic_obstacle_spec.hpp"
 
 namespace {
 
@@ -39,15 +39,15 @@ struct DispatchResult {
 };
 
 DispatchResult simulate_dispatch(
-    const path_manager::msg::DynamicObstacleArray& msg)
+    const mmp_mission_msgs::msg::DynamicObstacleArray& msg)
 {
   DispatchResult r;
   if (msg.replace) r.cleared = true;
   for (const auto& spec : msg.obstacles) {
-    if (spec.kind == path_manager::msg::DynamicObstacleSpec::KIND_CUBE) {
+    if (spec.kind == mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CUBE) {
       ++r.boxes;
     } else if (spec.kind ==
-               path_manager::msg::DynamicObstacleSpec::KIND_SPHERE) {
+               mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_SPHERE) {
       ++r.spheres;
     } else {
       ++r.skipped;
@@ -58,7 +58,7 @@ DispatchResult simulate_dispatch(
 
 void test_empty_array() {
   std::cout << "[test_empty_array]\n";
-  path_manager::msg::DynamicObstacleArray msg;
+  mmp_mission_msgs::msg::DynamicObstacleArray msg;
   auto r = simulate_dispatch(msg);
   check(r.boxes == 0 && r.spheres == 0, "empty: nothing added");
   check(r.skipped == 0, "empty: skipped == 0");
@@ -67,21 +67,21 @@ void test_empty_array() {
 
 void test_mixed_kinds() {
   std::cout << "[test_mixed_kinds]\n";
-  path_manager::msg::DynamicObstacleArray msg;
+  mmp_mission_msgs::msg::DynamicObstacleArray msg;
 
-  path_manager::msg::DynamicObstacleSpec cube;
-  cube.kind = path_manager::msg::DynamicObstacleSpec::KIND_CUBE;
+  mmp_mission_msgs::msg::DynamicObstacleSpec cube;
+  cube.kind = mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CUBE;
   cube.size.x = 1.0; cube.size.y = 1.0; cube.size.z = 1.0;
   cube.model = "building";
   msg.obstacles.push_back(cube);
 
-  path_manager::msg::DynamicObstacleSpec sphere;
-  sphere.kind = path_manager::msg::DynamicObstacleSpec::KIND_SPHERE;
+  mmp_mission_msgs::msg::DynamicObstacleSpec sphere;
+  sphere.kind = mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_SPHERE;
   sphere.radius = 5.0;
   msg.obstacles.push_back(sphere);
 
-  path_manager::msg::DynamicObstacleSpec cyl;
-  cyl.kind = path_manager::msg::DynamicObstacleSpec::KIND_CYLINDER;
+  mmp_mission_msgs::msg::DynamicObstacleSpec cyl;
+  cyl.kind = mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CYLINDER;
   msg.obstacles.push_back(cyl);
 
   auto r = simulate_dispatch(msg);
@@ -92,16 +92,16 @@ void test_mixed_kinds() {
 
 void test_replace_flag() {
   std::cout << "[test_replace_flag]\n";
-  path_manager::msg::DynamicObstacleArray msg;
+  mmp_mission_msgs::msg::DynamicObstacleArray msg;
   msg.replace = true;
-  path_manager::msg::DynamicObstacleSpec cube;
-  cube.kind = path_manager::msg::DynamicObstacleSpec::KIND_CUBE;
+  mmp_mission_msgs::msg::DynamicObstacleSpec cube;
+  cube.kind = mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CUBE;
   msg.obstacles.push_back(cube);
   auto r = simulate_dispatch(msg);
   check(r.cleared, "replace=true clears the existing set first");
   check(r.boxes == 1, "replace still dispatches the payload");
 
-  path_manager::msg::DynamicObstacleArray clear_only;
+  mmp_mission_msgs::msg::DynamicObstacleArray clear_only;
   clear_only.replace = true;
   auto rc = simulate_dispatch(clear_only);
   check(rc.cleared && rc.boxes == 0 && rc.spheres == 0,
@@ -110,10 +110,10 @@ void test_replace_flag() {
 
 void test_model_field_carried() {
   std::cout << "[test_model_field_carried]\n";
-  path_manager::msg::DynamicObstacleSpec s;
+  mmp_mission_msgs::msg::DynamicObstacleSpec s;
   check(s.model.empty(), "model defaults to empty (analytic-only obstacle)");
   s.model = "ship";
-  path_manager::msg::DynamicObstacleArray msg;
+  mmp_mission_msgs::msg::DynamicObstacleArray msg;
   msg.obstacles.push_back(s);
   check(msg.obstacles.front().model == "ship",
         "model string survives the wire format");
@@ -121,11 +121,11 @@ void test_model_field_carried() {
 
 void test_constants_match_spec() {
   std::cout << "[test_constants_match_spec]\n";
-  check(path_manager::msg::DynamicObstacleSpec::KIND_SPHERE == 0,
+  check(mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_SPHERE == 0,
         "KIND_SPHERE == 0");
-  check(path_manager::msg::DynamicObstacleSpec::KIND_CUBE == 1,
+  check(mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CUBE == 1,
         "KIND_CUBE == 1");
-  check(path_manager::msg::DynamicObstacleSpec::KIND_CYLINDER == 2,
+  check(mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CYLINDER == 2,
         "KIND_CYLINDER == 2");
 }
 

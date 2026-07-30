@@ -27,20 +27,20 @@ find_package(Eigen3 REQUIRED)
 find_package(path_optimizer REQUIRED)
 find_package(path_planner REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-find_package(formation_msgs REQUIRED)
+find_package(mmp_mission_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(grid_map_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 
+# Mission-authoring types (TrajectoryCommand, risk zones, dynamic obstacles)
+# live in mmp_mission_msgs. What remains here is the drone-to-drone trajectory
+# wire format, whose only external type is builtin_interfaces/Time.
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PolyTraj.msg"
-  "msg/DynamicObstacleSpec.msg"
-  "msg/DynamicObstacleArray.msg"
-  "msg/RiskZoneSpec.msg"
-  "msg/RiskZoneArray.msg"
-  DEPENDENCIES std_msgs builtin_interfaces nav_msgs geometry_msgs
+  DEPENDENCIES builtin_interfaces
 )
 
 add_library(${PROJECT_NAME}_lib
@@ -57,7 +57,7 @@ set(PATH_MANAGER_DEPENDENCIES
   path_optimizer
   path_planner
   geometry_msgs
-  formation_msgs
+  mmp_mission_msgs
   rosidl_default_runtime
   visualization_msgs
   grid_map_msgs
@@ -106,10 +106,11 @@ ament_target_dependencies(${PROJECT_NAME}_node
 )
 
 
-# Standalone sanity test for the DynamicObstacleArray dispatch loop.
+# Standalone sanity test for the DynamicObstacleArray dispatch loop. The array
+# type now lives in mmp_mission_msgs, so this target depends on that package
+# instead of this one's generated interfaces.
 add_executable(load_obstacles_test test/load_obstacles_test.cpp)
-rosidl_target_interfaces(load_obstacles_test
-  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+ament_target_dependencies(load_obstacles_test mmp_mission_msgs)
 
 # V3 scenario harness for risk-aware A*.
 add_executable(risk_scenarios_test test/risk_scenarios_test.cpp)
@@ -191,7 +192,7 @@ install(DIRECTORY config launch
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
-set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner formation_msgs rosidl_default_generators visualization_msgs grid_map_msgs)
+set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner mmp_mission_msgs rosidl_default_generators visualization_msgs grid_map_msgs)
 ament_export_dependencies(${EXPORT_DEPS})
 
 ament_package()

@@ -55,7 +55,7 @@ def create_drone_nodes(context, *args, **kwargs):
     # The `scenario` yaml mechanism is gone (2026-07 structure audit): its last
     # remaining file, scenario_empty.yaml, carried two string params read by
     # nothing, and the static-obstacle pipeline it once fed was deleted.
-    # Obstacles are runtime-only now: /dynamic_obstacles/load via the
+    # Obstacles are runtime-only now: /mission/obstacles via the
     # ObstacleScenario panel or a mission yaml.
 
     # Load base drone hardware configuration
@@ -144,7 +144,7 @@ def create_drone_nodes(context, *args, **kwargs):
     #   ros2 launch mmp_visualization mmp.launch.py
     # This allows unified visualization with terrain and all path planning topics
 
-    # Missions come from the RViz MissionConfig panel (/trajectory_command).
+    # Missions come from the RViz MissionConfig panel (/mission/trajectory_command).
     immediate_actions = [visualization_node]
 
     replan_nodes_delayed = TimerAction(
