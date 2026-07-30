@@ -139,6 +139,28 @@ rosidl_target_interfaces(${PROJECT_NAME}_node
   ${PROJECT_NAME} "rosidl_typesupport_cpp"
 )
 
+# Register the self-contained tests with ctest. They existed for months as
+# plain executables that `colcon test` never ran — a regression net that
+# catches nothing. risk_scenarios_test is NOT registered here: it is the
+# 154-case harness with fixture/argv conventions, driven by
+# tools/run_risk_harness.sh so its invocation stays pinned.
+if(BUILD_TESTING)
+  find_package(ament_cmake_test REQUIRED)
+  # GENERATE_RESULT_FOR_RETURN_CODE_ZERO: these are plain executables (own
+  # check() harness, no gtest), so run_test.py must synthesize the result xml
+  # from the exit code instead of expecting the binary to write one.
+  ament_add_test(load_obstacles_test
+    COMMAND $<TARGET_FILE:load_obstacles_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60)
+  # Spins its own node + intra-process pubs; needs a working RMW but no
+  # external nodes.
+  ament_add_test(terrain_risk_mask_test
+    COMMAND $<TARGET_FILE:terrain_risk_mask_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 300)
+endif()
+
 install(TARGETS ${PROJECT_NAME}_lib
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib

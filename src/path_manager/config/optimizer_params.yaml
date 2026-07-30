@@ -423,7 +423,7 @@
     manager/world: "small_island"       # fallback; RViz MapSelector overrides
     manager/dynamic_obstacle_radius: 50.0  # RViz "Publish Point" sphere radius, FRAME units (50 = 5 km; use 0.5 for 50 m)
     manager/esdf_viz_step: 4.0             # ESDF occupancy overlay sample step [m]; 1.0 = fine but ~30 s per (re)load
-    manager/esdf_viz_enable: true          # false = skip the overlay entirely (fastest planning)
+    manager/esdf_viz_enable: false         # overlay has NO consumer (no subscriber, no rviz display) yet cost an SDF sweep inside planGlobalTraj when true
 
     # ---- Logging ----
     enable_obstacles: true

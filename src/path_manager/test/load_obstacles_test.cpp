@@ -2,7 +2,9 @@
 //
 // This test does NOT exercise the rclcpp subscription path. It validates the
 // per-spec dispatch logic by constructing DynamicObstacleArray messages and
-// running the same loop body the callback executes.
+// running the same decisions the callback executes (replan_fsm.cpp
+// loadObstaclesCallback): CUBE -> addDynamicBox, SPHERE -> addDynamicSphere,
+// anything else skipped; msg.replace clears the existing set first.
 //
 // The wiring (subscription / publisher / network) is covered by the manual
 // RViz checklist documented in docs/research/manual_test_dynamic_obstacle.md.
@@ -22,25 +24,34 @@ int g_failed = 0;
 
 void check(bool cond, const std::string& label) {
   std::cout << "  " << (cond ? "[OK]   " : "[FAIL] ")
-            << std::left << std::setw(48) << label << "\n";
+            << std::left << std::setw(56) << label << "\n";
   if (cond) ++g_passed; else ++g_failed;
 }
 
-// Replicates the dispatch loop from ReplanFSM::loadObstaclesCallback
-// without depending on a real PathManager. Counts spheres that *would*
-// be added vs skipped.
-struct DispatchResult { size_t added = 0; size_t skipped = 0; };
+// Mirrors the dispatch decisions of ReplanFSM::loadObstaclesCallback without
+// depending on a real PathManager. Kinds must match the production order:
+// KIND_CUBE and KIND_SPHERE are both accepted; everything else is skipped.
+struct DispatchResult {
+  size_t boxes = 0;
+  size_t spheres = 0;
+  size_t skipped = 0;
+  bool cleared = false;
+};
 
 DispatchResult simulate_dispatch(
     const path_manager::msg::DynamicObstacleArray& msg)
 {
   DispatchResult r;
+  if (msg.replace) r.cleared = true;
   for (const auto& spec : msg.obstacles) {
-    if (spec.kind != path_manager::msg::DynamicObstacleSpec::KIND_SPHERE) {
+    if (spec.kind == path_manager::msg::DynamicObstacleSpec::KIND_CUBE) {
+      ++r.boxes;
+    } else if (spec.kind ==
+               path_manager::msg::DynamicObstacleSpec::KIND_SPHERE) {
+      ++r.spheres;
+    } else {
       ++r.skipped;
-      continue;
     }
-    ++r.added;
   }
   return r;
 }
@@ -49,45 +60,63 @@ void test_empty_array() {
   std::cout << "[test_empty_array]\n";
   path_manager::msg::DynamicObstacleArray msg;
   auto r = simulate_dispatch(msg);
-  check(r.added == 0, "empty: added == 0");
+  check(r.boxes == 0 && r.spheres == 0, "empty: nothing added");
   check(r.skipped == 0, "empty: skipped == 0");
-}
-
-void test_all_spheres() {
-  std::cout << "[test_all_spheres]\n";
-  path_manager::msg::DynamicObstacleArray msg;
-  for (int i = 0; i < 3; ++i) {
-    path_manager::msg::DynamicObstacleSpec s;
-    s.kind = path_manager::msg::DynamicObstacleSpec::KIND_SPHERE;
-    s.center.x = 1.0 * i; s.center.y = 2.0 * i; s.center.z = 3.0 * i;
-    s.radius = 4.0 + i;
-    msg.obstacles.push_back(s);
-  }
-  auto r = simulate_dispatch(msg);
-  check(r.added == 3, "3 spheres: added == 3");
-  check(r.skipped == 0, "3 spheres: skipped == 0");
+  check(!r.cleared, "empty: replace defaults to false (append)");
 }
 
 void test_mixed_kinds() {
   std::cout << "[test_mixed_kinds]\n";
   path_manager::msg::DynamicObstacleArray msg;
-  path_manager::msg::DynamicObstacleSpec sphere;
-  sphere.kind = path_manager::msg::DynamicObstacleSpec::KIND_SPHERE;
-  sphere.radius = 5.0;
-  msg.obstacles.push_back(sphere);
 
   path_manager::msg::DynamicObstacleSpec cube;
   cube.kind = path_manager::msg::DynamicObstacleSpec::KIND_CUBE;
   cube.size.x = 1.0; cube.size.y = 1.0; cube.size.z = 1.0;
+  cube.model = "building";
   msg.obstacles.push_back(cube);
+
+  path_manager::msg::DynamicObstacleSpec sphere;
+  sphere.kind = path_manager::msg::DynamicObstacleSpec::KIND_SPHERE;
+  sphere.radius = 5.0;
+  msg.obstacles.push_back(sphere);
 
   path_manager::msg::DynamicObstacleSpec cyl;
   cyl.kind = path_manager::msg::DynamicObstacleSpec::KIND_CYLINDER;
   msg.obstacles.push_back(cyl);
 
   auto r = simulate_dispatch(msg);
-  check(r.added == 1, "mixed: only the sphere counts");
-  check(r.skipped == 2, "mixed: cube+cylinder skipped");
+  check(r.boxes == 1, "mixed: cube dispatches to addDynamicBox");
+  check(r.spheres == 1, "mixed: sphere dispatches to addDynamicSphere");
+  check(r.skipped == 1, "mixed: cylinder is the only unsupported kind");
+}
+
+void test_replace_flag() {
+  std::cout << "[test_replace_flag]\n";
+  path_manager::msg::DynamicObstacleArray msg;
+  msg.replace = true;
+  path_manager::msg::DynamicObstacleSpec cube;
+  cube.kind = path_manager::msg::DynamicObstacleSpec::KIND_CUBE;
+  msg.obstacles.push_back(cube);
+  auto r = simulate_dispatch(msg);
+  check(r.cleared, "replace=true clears the existing set first");
+  check(r.boxes == 1, "replace still dispatches the payload");
+
+  path_manager::msg::DynamicObstacleArray clear_only;
+  clear_only.replace = true;
+  auto rc = simulate_dispatch(clear_only);
+  check(rc.cleared && rc.boxes == 0 && rc.spheres == 0,
+        "empty+replace acts as a pure clear");
+}
+
+void test_model_field_carried() {
+  std::cout << "[test_model_field_carried]\n";
+  path_manager::msg::DynamicObstacleSpec s;
+  check(s.model.empty(), "model defaults to empty (analytic-only obstacle)");
+  s.model = "ship";
+  path_manager::msg::DynamicObstacleArray msg;
+  msg.obstacles.push_back(s);
+  check(msg.obstacles.front().model == "ship",
+        "model string survives the wire format");
 }
 
 void test_constants_match_spec() {
@@ -104,8 +133,9 @@ void test_constants_match_spec() {
 
 int main() {
   test_empty_array();
-  test_all_spheres();
   test_mixed_kinds();
+  test_replace_flag();
+  test_model_field_carried();
   test_constants_match_spec();
   std::cout << "\n==== load_obstacles_test: passed=" << g_passed
             << " failed=" << g_failed << " ====\n";

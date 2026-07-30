@@ -192,15 +192,16 @@ int main(int argc, char **argv)
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   constexpr size_t kZoneCount = 2;
-  constexpr size_t kRecordWidth = 5 + 2 * kZoneCount;
-  const bool valid_v2 =
+  // v4 record: [s, x, y, z, combined, (lower_i, floor_i, top_i) x N]
+  constexpr size_t kRecordWidth = 5 + 3 * kZoneCount;
+  const bool valid_v4 =
       last_profile.data.size() >= 2 + kRecordWidth &&
-      last_profile.data[0] == 3.0 &&
+      last_profile.data[0] == 4.0 &&
       last_profile.data[1] == static_cast<double>(kZoneCount) &&
       (last_profile.data.size() - 2) % kRecordWidth == 0;
-  expect(valid_v2,
-         "risk profile publishes self-describing v3 fixed-width records");
-  if (valid_v2) {
+  expect(valid_v4,
+         "risk profile publishes self-describing v4 fixed-width records");
+  if (valid_v4) {
     const size_t b = 2;
     const double x = last_profile.data[b + 1];
     const double y = last_profile.data[b + 2];
@@ -214,13 +215,16 @@ int main(int argc, char **argv)
     expect(std::abs(last_profile.data[b + 4] - expected_combined) < 1e-12,
            "profile combined risk exactly matches OR-combined effective risk");
 
-    const double floor0 = last_profile.data[b + 5];
-    const double top0 = last_profile.data[b + 6];
+    const double lower0 = last_profile.data[b + 5];
+    const double floor0 = last_profile.data[b + 6];
+    const double top0 = last_profile.data[b + 7];
     const double expected_top0 =
         2.0 + 3.5 * std::sqrt(1.0 - 36.0 / 100.0);
     expect(std::isfinite(floor0) && std::isfinite(top0) && floor0 < top0 &&
                std::abs(top0 - expected_top0) < 1e-6,
            "zone record preserves its own ellipsoid visible interval");
+    expect(std::isfinite(lower0) && lower0 <= floor0,
+           "v4 triplet keeps geometric lower below the detection floor");
     expect(std::abs(manager.getRiskVisibility(
                         0, Eigen::Vector3d(x, y, floor0)) -
                     0.5) < 1e-6,

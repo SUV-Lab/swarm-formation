@@ -140,9 +140,11 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     std::string topic_prefix = "";
 
     // Keep the latest polynomial available to panels/visualizers opened after
-    // planning completed. Volatile sensor subscribers remain compatible and
-    // continue receiving live publications.
-    auto trajectory_qos = sensor_qos;
+    // planning completed. RELIABLE, not sensor/best-effort: a best-effort
+    // WRITER latches its sample but delivers it best-effort, so a late joiner
+    // could still miss the one message that matters. Reliable is stricter on
+    // the writer side and stays compatible with every best-effort subscriber.
+    auto trajectory_qos = rclcpp::QoS(5).reliable();
     trajectory_qos.transient_local();
     optimized_path_pub_ = node_->create_publisher<path_manager::msg::PolyTraj>(
         topic_prefix + "/planning/trajectory", trajectory_qos);
@@ -151,8 +153,10 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
 
     rclcpp::SubscriptionOptions trajectory_cmd_options;
     trajectory_cmd_options.callback_group = subscription_callback_group_;
+    // Reliable: this is THE mission command. A best-effort reader may drop the
+    // single Run message on a timing edge and the FSM would just sit there.
     trajectory_cmd_sub_ = node_->create_subscription<formation_msgs::msg::TrajectoryCommand>(
-        topic_prefix + "/trajectory_command", sensor_qos,
+        topic_prefix + "/trajectory_command", rclcpp::QoS(5).reliable(),
         std::bind(&ReplanFSM::trajectoryCommandCallback, this, std::placeholders::_1),
         trajectory_cmd_options);
 
@@ -214,9 +218,15 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     {
         rclcpp::SubscriptionOptions risk_zone_options;
         risk_zone_options.callback_group = subscription_callback_group_;
+        // transient_local: the ObstacleScenario panel LATCHES the zone set for
+        // exactly this case (its comment says "a planner restarted after the
+        // scenario was loaded still receives the last published zone set") —
+        // but a volatile reader never requests the latched sample, so a
+        // planner started after Load silently planned with ZERO zones. A TL
+        // reader is what actually collects the latch.
         load_risk_zones_sub_ =
             node_->create_subscription<path_manager::msg::RiskZoneArray>(
-                "/risk_zones/load", rclcpp::QoS(1).reliable(),
+                "/risk_zones/load", rclcpp::QoS(1).reliable().transient_local(),
                 std::bind(&ReplanFSM::loadRiskZonesCallback, this,
                           std::placeholders::_1),
                 risk_zone_options);

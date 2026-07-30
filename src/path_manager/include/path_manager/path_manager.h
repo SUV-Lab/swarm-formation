@@ -462,16 +462,18 @@ namespace path_manager
     // The draped heatmap shows the ground-level visibility boundary, which is NOT
     // the flown risk — this line is.
     void publishTrajRisk(const poly_traj::Trajectory &traj);
-    // [RISK-PROFILE] Versioned altitude-panel channel. Payload:
-    //   [3.0, N,
+    // [RISK-PROFILE] Versioned altitude-panel channel. Payload (v4):
+    //   [4.0, N,
     //    s, x, y, z, combined_risk,
-    //    floor_0, top_0, ..., floor_N-1, top_N-1,
+    //    lower_0, floor_0, top_0, ..., lower_N-1, floor_N-1, top_N-1,
     //    ...]
-    // with one fixed-width record per dense trajectory sample. Geometry is in
-    // planning-frame units; combined_risk is the exact OR-combination used by
-    // /viz/traj_risk. Each finite [floor_i, top_i] is the visible portion of
-    // zone i's ellipsoid at (x,y), after terrain and grounded-visibility
-    // clipping. NaN/NaN means that zone has no visible vertical interval.
+    // with one fixed-width record (5 + 3N) per dense trajectory sample.
+    // Geometry is in planning-frame units; combined_risk is the exact
+    // OR-combination used by /viz/traj_risk. Per zone: lower_i is the
+    // geometric ellipsoid lower bound, floor_i the grounded-visibility
+    // detection floor, top_i the geometric top — the triplet lets the panel
+    // distinguish a shadow-safe pocket between two zones from uncovered sky.
+    // NaN triplet means that zone has no visible vertical interval at (x,y).
     bool riskProfileVisibleInterval(size_t zone_index, double x, double y,
                                     double *lower_z,
                                     double *floor_z, double *top_z) const;
