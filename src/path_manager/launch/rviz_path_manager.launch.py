@@ -1,52 +1,48 @@
-import os
-
-from ament_index_python.packages import PackageNotFoundError
-from ament_index_python.packages import get_package_prefix
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import LogInfo
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
-def _dynamics_sim(optimizer_params):
-    """The trajectory-follower node, or a notice when it is not installed.
+def _follower(context, *args, **kwargs):
+    """Explicit follower slot, chosen by the `follower` launch argument.
 
-    Gated on the EXECUTABLE, not the package. mmp_dynamics_sim is a submodule of
-    the MMP workspace, so the package is present after a build — but the version
-    on its main branch is a Python 6-DoF sim whose entry points are
-    missile_sim_node / waypoint_sequencer / tracking_error_node. It is carried in
-    the tree for the upcoming merge with mmp_vehicle_dynamics and is not meant to
-    run yet. Checking the package would therefore pass and then die on a missing
-    executable, and launch tears the WHOLE tree down when one entity raises — so
-    path_manager would not come up either, and the RViz Start button (which forks
-    this file) would appear to do nothing, the error buried in the forked
-    process's output.
+    This used to probe the filesystem for a dynamics_sim_node executable —
+    honest while three follower implementations coexisted, but a probe hides
+    intent: nothing said WHICH follower a run wanted. Now the run says it.
+
+    - none (default): no follower. Planning and RViz are unaffected;
+      /dynamics/sim_state and /dynamics/sim_path stay silent (their RViz
+      displays ship disabled).
+    - missile_sim: the mmp_dynamics_sim submodule's Python 6-DoF node.
+      RESERVED until its mmp_traj_msgs/mmp_mission_msgs migration patch is
+      merged there — launching it before that dies on import, which is why it
+      is not the default.
+
+    Launch tears the whole tree down when one entity raises, so an invalid
+    value logs-and-skips instead of raising: the RViz Start button forks this
+    file, and a dead launch tree looks like "Start does nothing".
     """
-    exe = None
-    try:
-        prefix = get_package_prefix('mmp_dynamics_sim')
-        cand = os.path.join(prefix, 'lib', 'mmp_dynamics_sim', 'dynamics_sim_node')
-        exe = cand if os.path.exists(cand) else None
-    except PackageNotFoundError:
-        pass
-    if exe is None:
-        return LogInfo(msg='[rviz_path_manager] dynamics_sim_node not installed '
-                           '— skipping the trajectory follower. Planning and '
-                           'RViz are unaffected; /dynamics/sim_state and '
-                           '/dynamics/sim_path stay silent (their RViz displays '
-                           'ship disabled).')
-    # Integrates the same fixed-wing model used by the optimizer and
-    # publishes /dynamics/sim_state + /dynamics/sim_path + vehicle TF.
-    return Node(
-        package='mmp_dynamics_sim',
-        executable='dynamics_sim_node',
-        name='dynamics_sim_node',
-        output='screen',
-        parameters=[optimizer_params],
-    )
+    choice = context.perform_substitution(LaunchConfiguration('follower'))
+    if choice == 'none':
+        return [LogInfo(msg='[rviz_path_manager] follower:=none — no dynamics '
+                            'follower started.')]
+    if choice == 'missile_sim':
+        pkg_share = FindPackageShare('path_manager')
+        optimizer_params = PathJoinSubstitution(
+            [pkg_share, 'config', 'optimizer_params.yaml'])
+        return [Node(
+            package='mmp_dynamics_sim',
+            executable='missile_sim_node',
+            name='missile_sim_node',
+            output='screen',
+            parameters=[optimizer_params],
+        )]
+    return [LogInfo(msg=f'[rviz_path_manager] unknown follower "{choice}" '
+                        f'(expected none|missile_sim) — skipping.')]
 
 
 def generate_launch_description():
@@ -60,7 +56,6 @@ def generate_launch_description():
 
     pkg_share = FindPackageShare('path_manager')
     path_manager_launch = PathJoinSubstitution([pkg_share, 'launch', 'path_manager.launch.py'])
-    optimizer_params = PathJoinSubstitution([pkg_share, 'config', 'optimizer_params.yaml'])
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -84,6 +79,13 @@ def generate_launch_description():
             description='Terrain map name. Leave empty to fall back to '
                         'optimizer_params.yaml manager/world.'
         ),
+        DeclareLaunchArgument(
+            'follower',
+            default_value='none',
+            description='Dynamics follower to launch alongside the planner: '
+                        'none | missile_sim (reserved until the '
+                        'mmp_dynamics_sim message-migration patch lands).'
+        ),
         # Include base path_manager launch with RViz defaults
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(path_manager_launch),
@@ -96,5 +98,5 @@ def generate_launch_description():
             }.items()
         ),
 
-        _dynamics_sim(optimizer_params),
+        OpaqueFunction(function=_follower),
     ])

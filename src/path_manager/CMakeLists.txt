@@ -28,20 +28,16 @@ find_package(path_optimizer REQUIRED)
 find_package(path_planner REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
 find_package(mmp_mission_msgs REQUIRED)
+find_package(mmp_traj_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(grid_map_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 
-# Mission-authoring types (TrajectoryCommand, risk zones, dynamic obstacles)
-# live in mmp_mission_msgs. What remains here is the drone-to-drone trajectory
-# wire format, whose only external type is builtin_interfaces/Time.
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/PolyTraj.msg"
-  DEPENDENCIES builtin_interfaces
-)
+# This package generates no interfaces of its own. Mission-authoring types
+# (TrajectoryCommand, risk zones, dynamic obstacles) live in mmp_mission_msgs;
+# the trajectory wire format (PolyTraj) lives in mmp_traj_msgs.
 
 add_library(${PROJECT_NAME}_lib
   src/path_manager.cpp
@@ -58,7 +54,7 @@ set(PATH_MANAGER_DEPENDENCIES
   path_planner
   geometry_msgs
   mmp_mission_msgs
-  rosidl_default_runtime
+  mmp_traj_msgs
   visualization_msgs
   grid_map_msgs
 )
@@ -90,7 +86,6 @@ endif()
 
 target_include_directories(${PROJECT_NAME}_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp>
   $<INSTALL_INTERFACE:include>
   ${EIGEN3_INCLUDE_DIRS}
 )
@@ -119,23 +114,12 @@ target_link_libraries(risk_scenarios_test
   yaml-cpp)
 ament_target_dependencies(risk_scenarios_test
   ${PATH_MANAGER_DEPENDENCIES})
-rosidl_target_interfaces(risk_scenarios_test
-  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 add_executable(terrain_risk_mask_test test/terrain_risk_mask_test.cpp)
 target_link_libraries(terrain_risk_mask_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(terrain_risk_mask_test
   ${PATH_MANAGER_DEPENDENCIES})
-rosidl_target_interfaces(terrain_risk_mask_test
-  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
-
-rosidl_target_interfaces(${PROJECT_NAME}_lib
-  ${PROJECT_NAME} "rosidl_typesupport_cpp"
-)
-rosidl_target_interfaces(${PROJECT_NAME}_node
-  ${PROJECT_NAME} "rosidl_typesupport_cpp"
-)
 
 # Register the self-contained tests with ctest. They existed for months as
 # plain executables that `colcon test` never ran — a regression net that
@@ -192,7 +176,7 @@ install(DIRECTORY config launch
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
-set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner mmp_mission_msgs rosidl_default_generators visualization_msgs grid_map_msgs)
+set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner mmp_mission_msgs mmp_traj_msgs visualization_msgs grid_map_msgs)
 ament_export_dependencies(${EXPORT_DEPS})
 
 ament_package()

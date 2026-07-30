@@ -9,7 +9,7 @@
 #include <mutex>
 #include <map>
 #include <vector>
-#include "path_manager/msg/poly_traj.hpp"
+#include "mmp_traj_msgs/msg/poly_traj.hpp"
 #include "mmp_mission_msgs/msg/trajectory_command.hpp"
 #include "mmp_mission_msgs/msg/dynamic_obstacle_array.hpp"
 #include "mmp_mission_msgs/msg/dynamic_obstacle_spec.hpp"
@@ -75,8 +75,8 @@ public:
         const mmp_mission_msgs::msg::DynamicObstacleArray::SharedPtr msg);
     void loadRiskZonesCallback(
         const mmp_mission_msgs::msg::RiskZoneArray::SharedPtr msg);
-    void polyTraj2ROSMsg(path_manager::msg::PolyTraj &msg);
-    void globalTraj2ROSMsg(path_manager::msg::PolyTraj &msg);
+    void polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg);
+    void globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg);
     // Callback groups:
     // - timer_callback_group: FSM timer only (MutuallyExclusive, dedicated for 10ms timer)
     // - subscription_callback_group: Formation and broadcast subscriptions (MutuallyExclusive)
@@ -101,8 +101,8 @@ private:
 
     std::shared_ptr<PathManager> path_manager_;
 
-    rclcpp::Publisher<path_manager::msg::PolyTraj>::SharedPtr optimized_path_pub_;
-    rclcpp::Publisher<path_manager::msg::PolyTraj>::SharedPtr global_path_pub_;
+    rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr optimized_path_pub_;
+    rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr global_path_pub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
     rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr terrain_sub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::DynamicObstacleArray>::SharedPtr

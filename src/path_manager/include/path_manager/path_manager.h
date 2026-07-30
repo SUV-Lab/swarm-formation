@@ -16,7 +16,6 @@
 #include <string>
 #include <chrono>
 #include <random>
-#include "path_manager/msg/poly_traj.hpp"
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>

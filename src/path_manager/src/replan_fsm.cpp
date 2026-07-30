@@ -146,9 +146,9 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // the writer side and stays compatible with every best-effort subscriber.
     auto trajectory_qos = rclcpp::QoS(5).reliable();
     trajectory_qos.transient_local();
-    optimized_path_pub_ = node_->create_publisher<path_manager::msg::PolyTraj>(
+    optimized_path_pub_ = node_->create_publisher<mmp_traj_msgs::msg::PolyTraj>(
         topic_prefix + "/planning/trajectory", trajectory_qos);
-    global_path_pub_ = node_->create_publisher<path_manager::msg::PolyTraj>(
+    global_path_pub_ = node_->create_publisher<mmp_traj_msgs::msg::PolyTraj>(
         topic_prefix + "/planning/initial_trajectory", trajectory_qos);
 
     rclcpp::SubscriptionOptions trajectory_cmd_options;
@@ -353,7 +353,7 @@ void ReplanFSM::computeAndPublishPaths() {
     }
 }
 
-void ReplanFSM::polyTraj2ROSMsg(path_manager::msg::PolyTraj &msg)
+void ReplanFSM::polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
 {
     if (!path_manager_) {
         RCLCPP_ERROR(node_->get_logger(), "PathManager is not initialized!");
@@ -363,14 +363,11 @@ void ReplanFSM::polyTraj2ROSMsg(path_manager::msg::PolyTraj &msg)
     auto data = &path_manager_->traj_.local_traj;
 
     msg.drone_id = drone_id_;
-    msg.traj_id = data->traj_id;
     msg.order = 5;
 
     const double s = data->start_time;
     msg.start_time.sec     = static_cast<int32_t>(std::floor(s));
     msg.start_time.nanosec = static_cast<uint32_t>(std::llround((s - msg.start_time.sec) * 1e9));
-
-    msg.is_final_mission = is_final_mission_;
 
     Eigen::VectorXd durs = data->traj.getDurations();
     int piece_num = data->traj.getPieceNum();
@@ -393,7 +390,7 @@ void ReplanFSM::polyTraj2ROSMsg(path_manager::msg::PolyTraj &msg)
     }
 }
 
-void ReplanFSM::globalTraj2ROSMsg(path_manager::msg::PolyTraj &msg) 
+void ReplanFSM::globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
 {
     if (!path_manager_) {
         RCLCPP_ERROR(node_->get_logger(), "PathManager is not initialized!");
@@ -439,14 +436,14 @@ bool ReplanFSM::planFromGlobalTraj(int trial_times) {
         // local_traj was already set by planGlobalTraj() — publish and go
         log_manager_->infof("[planFromGlobalTraj] Using pre-optimized trajectory (duration=%.3f)", local_traj->duration);
 
-        path_manager::msg::PolyTraj msg;
+        mmp_traj_msgs::msg::PolyTraj msg;
         polyTraj2ROSMsg(msg);
         optimized_path_pub_->publish(msg);
 
         have_local_traj_ = true;
 
         if (enable_global_trajectory_pub_) {
-            path_manager::msg::PolyTraj msg2;
+            mmp_traj_msgs::msg::PolyTraj msg2;
             globalTraj2ROSMsg(msg2);
             global_path_pub_->publish(msg2);
         }
@@ -798,7 +795,7 @@ bool ReplanFSM::callEmergencyStop(const Eigen::Vector3d& stop_pos) {
 
     path_manager_->EmergencyStop(stop_pos);
 
-    path_manager::msg::PolyTraj msg;
+    mmp_traj_msgs::msg::PolyTraj msg;
     polyTraj2ROSMsg(msg);
     optimized_path_pub_->publish(msg);
 
