@@ -99,6 +99,18 @@ namespace ego_planner
 
     double wei_obs_;
     bool collision_reject_{true};  // discard (not publish) audit-failed trajs
+    // [CONV-REJECT] Non-convergence publication gate: an L-BFGS failure exit
+    // whose envelope-audit violation fraction exceeds the threshold is a
+    // structurally unconverged iterate (the r3 goal-in-zone deadlock measured
+    // 18.4% vs <1% on every healthy plan) — discard it like a collision
+    // instead of publishing pretzel loops that happen to clear terrain.
+    bool audit_env_reject_{true};
+    double audit_env_viol_max_{0.25};  // violation fraction threshold
+    double last_env_viol_frac_{0.0};   // set by the envelope audit each plan
+    // Sticky per-solve: true if ANY lbfgs pass exited -1004, even when a
+    // restart later ends on a SUCCESS code (plateau test) — the gate must
+    // still see the non-convergence.
+    bool last_solve_hit_maxiter_{false};
 
     // [LBFGS-TUNE] solver knobs exposed as ROS params (optimization/lbfgs_*)
     // so parameter sweeps run without rebuilds. Defaults == the long-standing
@@ -292,6 +304,21 @@ namespace ego_planner
     // Per-zone: 1 = contains the plan start/goal, barrier OFF (moat only).
     // Same must-enter exemption rule as the front-end's prepareBarrier.
     std::vector<char> zone_barrier_exempt_;
+    // [GNRON] Endpoint moat taper — MUST mirror the front-end's (dyn_a_star
+    // endpointTaper): a containment-exempt zone's moat fades to zero within
+    // taper_radius of the contained mission point, killing the "punish
+    // approaching where you must go" deadlock (fixed endpoint vs
+    // non-vanishing risk gradient vs the min-speed floor -> -1004 loops).
+    // C1 smoothstep, applied with its gradient in RiskGradCostP. Planning
+    // cost only; the metrics / TRAJ-RISK display keep the untapered moat.
+    // Anchors are ALL mission points (start + every waypoint): the front-end
+    // plans per segment and tapers each segment's endpoints, so an interior
+    // waypoint inside a zone is a taper anchor there — the backend must
+    // price the same field or it re-creates the deadlock at that waypoint.
+    double risk_goal_taper_radius_{0.0};  // frame units; <=0 = off
+    std::vector<Eigen::Vector3d> taper_anchors_;
+    // Per zone: indices into taper_anchors_ contained in that zone.
+    std::vector<std::vector<int>> zone_taper_anchors_;
     // Altitude band: quadratic penalty on z above alt_zhi_ (geodesic max +
     // headroom — keeps the sparse-piece quintic from ballooning above the
     // front-end's committed profile) and below alt_zlo_ (mission min −
@@ -466,6 +493,11 @@ namespace ego_planner
     // published with a warning log. Swarm-Formation had this; MMP had demoted
     // it to logs-only.
     void setCollisionReject(bool on) { collision_reject_ = on; }
+    // [CONV-REJECT] gate knobs (optimization/audit_envelope_reject*, see yaml).
+    void setEnvelopeReject(bool on, double viol_max) {
+        audit_env_reject_ = on;
+        audit_env_viol_max_ = std::max(0.0, viol_max);
+    }
     void setLbfgsParams(int mem, double geps, int past, double delta,
                         int maxls, double fdec, double scurv)
     {
@@ -502,12 +534,18 @@ namespace ego_planner
     }
     void setDroneId(const int drone_id);
     void setFormation(const std::vector<Eigen::Vector3d>& formation_positions, int formation_size);
+    // [GNRON] endpoint moat taper radius (frame units); <=0 = off. Must be
+    // fed the SAME value as the front-end's setRiskGoalTaperRadius.
+    void setRiskGoalTaperRadius(double r) {
+        risk_goal_taper_radius_ = (r > 0.0 ? r : 0.0);
+    }
     void setRiskZones(const std::vector<RiskZone> &zones) {
         risk_zones_ = zones;
         use_risk_zones_ = !zones.empty();
         // Stale exemptions must not outlive the zone list they were computed
         // for; prepareRiskBarrier() recomputes them per plan.
         zone_barrier_exempt_.clear();
+        zone_taper_anchors_.clear();
         // Hoist the per-zone constants RiskGradCostP needs before its AABB
         // rejects: they depend only on zone geometry, and recomputing them per
         // constraint point was the entire per-zone cost for far zones.
@@ -530,10 +568,13 @@ namespace ego_planner
         risk_shadow_ceiling_ = std::move(f);
     }
 
-    // Mark zones containing the plan start/goal as barrier-exempt (they must
-    // be entered, so they stay soft) — mirrors dyn_a_star.h prepareBarrier.
-    // Call once per plan, after setRiskZones, before optimizing.
-    void prepareRiskBarrier(const Eigen::Vector3d &start, const Eigen::Vector3d &goal);
+    // Mark zones containing ANY mission point (start + every waypoint) as
+    // barrier-exempt (they must be entered, so they stay soft) — mirrors
+    // dyn_a_star.h prepareBarrier, which runs per segment and therefore
+    // anchors every interior waypoint too. Call once per plan, after
+    // setRiskZones, before optimizing.
+    void prepareRiskBarrier(const Eigen::Vector3d &start,
+                            const std::vector<Eigen::Vector3d> &mission_pts);
 
     // Extend the exemption to zones the FRONT-END ROUTE already crosses: the
     // front-end's finite barrier permits crossing when every alternative is

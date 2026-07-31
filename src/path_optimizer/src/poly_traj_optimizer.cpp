@@ -28,7 +28,7 @@ namespace ego_planner
     // front-end): must be recomputed per plan since zones and endpoints
     // both change at runtime. Zones the front-end route itself crosses are
     // exempt too — the crossing is a committed front-end decision.
-    prepareRiskBarrier(start_pos, waypoints.back());
+    prepareRiskBarrier(start_pos, waypoints);
     markFrontEndCrossings(clean_path);
 
     // Arc-varying cap reference: mirror EVERY clean_path insertion below on
@@ -412,8 +412,16 @@ namespace ego_planner
         clean_path.back() - clean_path[clean_path.size() - 2];
     approach_dir.z() = 0.0;
     if (approach_dir.norm() < 1e-6) {
-        // Degenerate (near-vertical final chord): keep the 3D direction.
-        approach_dir = clean_path.back() - clean_path[clean_path.size() - 2];
+        // Degenerate (near-vertical final chord). The old fallback kept the
+        // 3D direction — pinning the tail DIVING at full cruise speed, an
+        // unflyable boundary condition for a min-speed fixed wing. Walk back
+        // along the path for the last chord with a real horizontal
+        // component and enter level along THAT azimuth instead.
+        for (size_t k = clean_path.size() - 1; k-- > 0;) {
+            Eigen::Vector3d cand = clean_path.back() - clean_path[k];
+            cand.z() = 0.0;
+            if (cand.norm() > 1e-6) { approach_dir = cand; break; }
+        }
     }
     if (approach_dir.norm() < 1e-9) {
         // Coincident final points (e.g. start == goal): normalize() on a
@@ -1636,6 +1644,8 @@ namespace ego_planner
         prof_grad_ms_ = prof_vt_ms_ = prof_cb_ms_ = 0.0;
 
     int restarts = 0;
+    int maxiter_restarts = 0;
+    last_solve_hit_maxiter_ = false;
     for (;;) {
         result = lbfgs::lbfgs_optimize(
             variable_num_,
@@ -1658,10 +1668,27 @@ namespace ego_planner
         // with fresh curvature memory recovers the same way. Only re-restart
         // from a FINITE iterate — a non-finite final_cost cannot recover and
         // would just burn the restart budget on garbage.
+        // MAXIMUMITERATION joined the list with the [CONV-REJECT] gate: an
+        // iterate that burned the budget while still descending deserves a
+        // fresh-memory re-entry (ego-planner ladder), and whatever still
+        // fails after the cap is caught by the envelope gate below instead
+        // of being published. Two asymmetries vs the line-search codes:
+        // (1) capped re-entries — each -1004 pass costs the full iteration
+        //     budget (~1 s). Cap 3, not the ladder's 4: the r3 goal-in-zone
+        //     fix case converges on its SECOND max-iter re-entry (a cap of 1
+        //     regressed it straight into the reject gate), while 3 still
+        //     bounds a structurally stuck instance to ~4 s;
+        // (2) the flag is sticky for the gate: a -1004 that restarts and
+        //     then exits via the past/delta plateau test (LBFGS_STOP, a
+        //     SUCCESS code) must not launder the non-convergence out of the
+        //     gate condition.
+        const bool is_maxiter = result == lbfgs::LBFGSERR_MAXIMUMITERATION;
+        if (is_maxiter) last_solve_hit_maxiter_ = true;
         const bool recoverable =
             result == lbfgs::LBFGSERR_MAXIMUMLINESEARCH ||
             result == lbfgs::LBFGSERR_ROUNDING_ERROR ||
-            result == lbfgs::LBFGSERR_MINIMUMSTEP;
+            result == lbfgs::LBFGSERR_MINIMUMSTEP ||
+            (is_maxiter && maxiter_restarts < 3);
         // lbfgs_optimize reverts x(=q)/g to the best ACCEPTED iterate on a
         // line-search failure but does NOT revert fx — so final_cost can hold
         // the REJECTED trial's cost. The most common -1008 trigger is a
@@ -1680,6 +1707,7 @@ namespace ego_planner
             break;
         }
         ++restarts;
+        if (is_maxiter) ++maxiter_restarts;
         LOG_WARN("[L-BFGS] recoverable line-search failure %d (%s) at cost=%.1f — "
                  "restart %d/4 from current iterate with fresh curvature memory",
                  result, lbfgs::lbfgs_strerror(result), final_cost, restarts);
@@ -1723,6 +1751,31 @@ namespace ego_planner
                 log_manager_->warnf(
                     "[REJECT] collision audit failed — trajectory DISCARDED "
                     "(optimization/collision_reject, nothing published)");
+            return false;
+        }
+        // [CONV-REJECT] Non-convergence gate. The collision audit alone let
+        // the r3 goal-in-zone deadlock through: a -1004 mid-iterate full of
+        // pretzel loops cleared terrain by 40 m and was published as
+        // "planning successful". Failure exit code alone is NOT enough to
+        // reject (a near-converged max-iter iterate with a clean envelope is
+        // fine to fly) — require the envelope audit to condemn it too.
+        // last_solve_hit_maxiter_ keeps a -1004 visible even when a restart
+        // later exits through the plateau test's SUCCESS code. Calibration
+        // (post-cruise sub-stall counting included): healthy plans <1%,
+        // CONVERGED goal-in-zone solutions 13-22% (rough but flyable — the
+        // soft envelope penalty chose the trade, publish and let the panel
+        // show it), unconverged deadlock iterates 33%+ — threshold 0.25
+        // splits them (optimization/audit_envelope_violation_max).
+        if (audit_env_reject_ &&
+            (result < 0 || last_solve_hit_maxiter_) &&
+            last_env_viol_frac_ > audit_env_viol_max_) {
+            if (log_manager_)
+                log_manager_->warnf(
+                    "[REJECT] unconverged trajectory (L-BFGS %d, envelope "
+                    "violations %.1f%% > %.1f%%) — DISCARDED "
+                    "(optimization/audit_envelope_reject, nothing published)",
+                    result, 100.0 * last_env_viol_frac_,
+                    100.0 * audit_env_viol_max_);
             return false;
         }
     }
@@ -1783,6 +1836,9 @@ namespace ego_planner
   }
   bool PolyTrajOptimizer::checkCollision(void)
   {
+    // [CONV-REJECT] a fresh audit must not inherit the previous plan's
+    // envelope verdict (the gate reads this after we return).
+    last_env_viol_frac_ = 0.0;
     poly_traj::Trajectory traj = jerkOpt_.getTraj();
     // Sweep the FULL duration. The inherited ego-planner heuristic audited
     // only the first 2/3 (idx = k/3*2) — sensible for a rolling local replan
@@ -1826,6 +1882,14 @@ namespace ego_planner
       utilization_all.reserve(static_cast<size_t>(T_end / 0.01) + 2);
       // dt matches the metrics panel's dynamics-violation row (100 Hz) so the
       // two report identical peaks.
+      // [CONV-REJECT] The gate reads n_viol/n_samp, so the counting domain is
+      // load-bearing: the legitimate REST-START ramp (before the trajectory
+      // ever reaches speed_min) stays out of the statistics, but sub-min-speed
+      // dwell AFTER cruise entry is a genuine minimum-speed envelope
+      // violation (isWithinEnvelope counts it) — without this, an unconverged
+      // iterate whose infeasibility manifests as mid-flight speed collapse
+      // scored ~0% and sailed through the gate.
+      bool reached_cruise = false;
       for (double tt = 0.0; tt < T_end; tt += 0.01) {
         const Eigen::Vector3d pm = S.cwiseProduct(traj.getPos(tt));
         const Eigen::Vector3d vm = S.cwiseProduct(traj.getVel(tt));
@@ -1842,6 +1906,7 @@ namespace ego_planner
         // out of ramp_peak/utilization.
         if (eval.speed_mps < dynamics_params_.model_activation_speed_mps) {
           ramp_s += 0.01;
+          if (reached_cruise) { ++n_samp; ++n_viol; }
           continue;
         }
         mmp_vehicle_dynamics::EnvelopeLimit limit;
@@ -1854,8 +1919,10 @@ namespace ego_planner
         if (eval.speed_mps < dynamics_params_.speed_min_mps) {
           ramp_s += 0.01;
           if (util > ramp_peak) ramp_peak = util;
+          if (reached_cruise) { ++n_samp; ++n_viol; }
           continue;
         }
+        reached_cruise = true;
         ++n_samp;
         util_sum += util;
         utilization_all.push_back(util);
@@ -1868,6 +1935,15 @@ namespace ego_planner
           peak_limit = limit;
           peak_eval = eval;
         }
+      }
+      if (n_samp > 0) {
+        last_env_viol_frac_ =
+            static_cast<double>(n_viol) / static_cast<double>(n_samp);
+      } else if (dynamics_enable_) {
+        // A trajectory that never once reaches cruise speed is unflyable for
+        // this airframe; leaving the reset 0.0 would make the gate inert for
+        // exactly the flights the model condemned wholesale.
+        last_env_viol_frac_ = 1.0;
       }
       if (n_samp > 0) {
         const size_t p95_index = (utilization_all.size() * 95) / 100;
@@ -3638,10 +3714,13 @@ namespace ego_planner
   }
 
   // Same must-enter rule as the front-end's prepareBarrier (dyn_a_star.h):
-  // a zone containing the plan start or goal cannot be avoided, so its
-  // barrier is dropped and only the shared moat prices the crossing.
-  void PolyTrajOptimizer::prepareRiskBarrier(const Eigen::Vector3d &start,
-                                             const Eigen::Vector3d &goal)
+  // a zone containing ANY mission point (the front-end plans per segment,
+  // so every interior waypoint is a segment endpoint there) cannot be
+  // avoided, so its barrier is dropped and only the shared moat prices the
+  // crossing.
+  void PolyTrajOptimizer::prepareRiskBarrier(
+      const Eigen::Vector3d &start,
+      const std::vector<Eigen::Vector3d> &mission_pts)
   {
     zone_barrier_exempt_.assign(risk_zones_.size(), 0);
     auto in_zone = [this](const Eigen::Vector3d &p, const RiskZone &tz,
@@ -3656,11 +3735,24 @@ namespace ego_planner
       if (q2 >= 1.0) return false;
       return !risk_visibility_ || risk_visibility_(zi, p, nullptr) > 0.5;
     };
+    taper_anchors_.clear();
+    taper_anchors_.push_back(start);
+    for (const auto &wp : mission_pts) taper_anchors_.push_back(wp);
+    zone_taper_anchors_.assign(risk_zones_.size(), {});
     for (size_t i = 0; i < risk_zones_.size(); ++i) {
-      if (in_zone(start, risk_zones_[i], i) ||
-          in_zone(goal, risk_zones_[i], i)) {
-        zone_barrier_exempt_[i] = 1;
-        LOG_INFO("[RISK] zone %zu contains start/goal -> barrier exempt (moat only)", i);
+      for (size_t a = 0; a < taper_anchors_.size(); ++a) {
+        if (in_zone(taper_anchors_[a], risk_zones_[i], i)) {
+          zone_barrier_exempt_[i] = 1;
+          // [GNRON] containment-exempt zones also get the mission-point moat
+          // taper (crossing-exempt zones from markFrontEndCrossings do NOT).
+          zone_taper_anchors_[i].push_back(static_cast<int>(a));
+        }
+      }
+      if (zone_barrier_exempt_[i]) {
+        LOG_INFO("[RISK] zone %zu contains %zu mission point(s) -> barrier "
+                 "exempt (moat only%s)", i, zone_taper_anchors_[i].size(),
+                 risk_goal_taper_radius_ > 0.0
+                     ? ", endpoint moat tapered" : "");
       }
     }
   }
@@ -3789,19 +3881,46 @@ namespace ego_planner
             risk_visibility_(zi, p, &grad_visibility), 0.0, 1.0);
       }
 
+      // [GNRON] mission-point moat taper for containment-exempt zones — C1
+      // smoothstep of distance-to-anchor, identical to the front-end's
+      // endpointTaper so both stages price one field (anchors = every
+      // mission point the front-end's per-segment searches tapered).
+      // Gradient carried so the vanishing factor is invisible to the line
+      // search.
+      double tf = 1.0;
+      Eigen::Vector3d grad_tf = Eigen::Vector3d::Zero();
+      if (risk_goal_taper_radius_ > 0.0 && zi < zone_taper_anchors_.size()) {
+        for (const int a : zone_taper_anchors_[zi]) {
+          const Eigen::Vector3d dpe = p - taper_anchors_[static_cast<size_t>(a)];
+          const double dist = dpe.norm();
+          const double x = dist / risk_goal_taper_radius_;
+          if (x >= 1.0) continue;
+          const double s = x * x * (3.0 - 2.0 * x);
+          Eigen::Vector3d grad_s = Eigen::Vector3d::Zero();
+          if (dist > 1e-9) {
+            grad_s = (6.0 * x * (1.0 - x) /
+                      (risk_goal_taper_radius_ * dist)) * dpe;
+          }
+          grad_tf = grad_tf * s + tf * grad_s;
+          tf *= s;
+        }
+      }
+
       // Shared terrain-masked moat. Product rule makes the LOS shadow edge
       // usable by L-BFGS while preserving the old radial gradient.
       if (q < 1.0) {
         const double u = 1.0 - q;
         const double base_m = tz.peak * u * u;
-        const double m = std::min(base_m * visibility, kMoatCap);
+        const double m = std::min(base_m * visibility * tf, kMoatCap);
         Sm *= (1.0 - m);
         Eigen::Vector3d grad_base_m = Eigen::Vector3d::Zero();
         if (m < kMoatCap && q > 1e-9) {
           grad_base_m = (tz.peak * 2.0 * u * -1.0) * grad_q;
         }
         if (m < kMoatCap && (1.0 - m) > 1e-9) {
-          Gm += (visibility * grad_base_m + base_m * grad_visibility) /
+          Gm += (tf * visibility * grad_base_m +
+                 tf * base_m * grad_visibility +
+                 base_m * visibility * grad_tf) /
                 (1.0 - m);
         }
       }
@@ -3970,7 +4089,12 @@ namespace ego_planner
     node_->get_parameter("optimization/dynamics_unit_z_m", dyn_unit_z_m_);
     auto dynamics_param = [this](const char *name, double default_value,
                                  double &value) {
-      node_->declare_parameter(name, default_value);
+      // Guarded: path_manager's initSearcher declares
+      // optimization/dynamics_flight_path_max_deg first (geodesic slope cap
+      // reads the shared model's limit); an unguarded re-declare here would
+      // throw ParameterAlreadyDeclaredException on the first plan.
+      if (!node_->has_parameter(name))
+        node_->declare_parameter(name, default_value);
       node_->get_parameter(name, value);
     };
     dynamics_param("optimization/dynamics_mass_kg", 1300.0,

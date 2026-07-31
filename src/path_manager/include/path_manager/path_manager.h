@@ -361,6 +361,9 @@ namespace path_manager
     void refreshEffectiveRiskZones();
     double risk_weight_;
     double risk_barrier_{100.0};   // front-end finite "hard wall" inside zones
+    // [GNRON] endpoint moat taper radius, frame units (<=0 off). Fed to BOTH
+    // the front-end field and the optimizer cost so they price one field.
+    double risk_goal_taper_radius_{30.0};
     // Rv / Rh for the compact ellipsoidal risk envelope. Keeping this
     // independent of the LOS mask separates geometric risk coverage from
     // terrain visibility.

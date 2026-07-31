@@ -1899,6 +1899,23 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         }
         return clampZ(from - slen * dir_unit);
     };
+    // Fixed-wing slope shear: the field is direction-blind, so wherever its
+    // gradient asks for a climb/dive steeper than the shared model's
+    // flight-path-angle cap, shear the step onto that cone (keep the xy
+    // heading, cap |dz|). A near-pure-vertical gradient (no horizontal
+    // component to follow) is left alone — shrinking it to nothing would
+    // stall the descent into the straight-chord fallback, a worse seed than
+    // a short steep segment. The [GNRON] taper removes the one field regime
+    // (endpoint moat funnel) that produced those verticals in practice.
+    auto slopeLimit = [&](Eigen::Vector3d d) {
+        if (geo_slope_tan_max_ <= 0.0) return d;
+        const double hxy = d.head<2>().norm();
+        if (hxy > 1e-9 && std::abs(d.z()) > geo_slope_tan_max_ * hxy) {
+            d.z() = std::copysign(geo_slope_tan_max_ * hxy, d.z());
+            d.normalize();
+        }
+        return d;
+    };
     // Nearest-cell occupancy on the speed map (blocked cells carry F = kFMin;
     // free cells sit orders above it). Only the last-resort nudge needs this:
     // every other step is vetted by the monotone T-guard, which blocked cells
@@ -1924,9 +1941,10 @@ std::vector<Eigen::Vector3d> PathSearcher::fm2ExtractGeodesic(
         if (gradT(p, g1)) {
             // RK2 (midpoint) smooth descent on the trilinear field.
             Eigen::Vector3d g2;
-            const Eigen::Vector3d pmid = anisoStep(p, g1.normalized(), 0.5 * step);
+            const Eigen::Vector3d pmid =
+                anisoStep(p, slopeLimit(g1.normalized()), 0.5 * step);
             const Eigen::Vector3d g = gradT(pmid, g2) ? g2 : g1;
-            p_next = anisoStep(p, g.normalized(), step);
+            p_next = anisoStep(p, slopeLimit(g.normalized()), step);
             // Monotonicity guard: T strictly decreases along a geodesic. A step
             // that does NOT lower T overshot a narrow valley — the interp-gradient
             // zigzag that otherwise burns the whole iteration budget and then

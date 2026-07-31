@@ -114,6 +114,24 @@ private:
     double risk_alpha_ = 1.0;
     double risk_barrier_ = 0.0;   // finite "hard wall" K added inside non-exempt zones
     std::vector<char> zone_no_barrier_;  // per-zone: 1 = exempt (contains start/goal)
+    // [GNRON] Goal-radius risk taper (Ge & Cui 2000 transplanted to the
+    // eikonal field): a zone the mission endpoint sits INSIDE cannot be
+    // avoided, yet its moat kept pricing the approach — the cost-optimal
+    // entry then degenerates to hover-high + vertical plunge (the moat
+    // ellipsoid is 0.35-flat, so crossing it vertically is cheapest), which
+    // the fixed-wing back-end cannot fly. Fading that zone's moat to zero
+    // within taper_radius of the endpoint restores the endpoint as the
+    // field's minimum, so the geodesic descends on a flyable slant instead.
+    // PLANNING cost only — display/metrics risk stays untapered.
+    double risk_goal_taper_radius_ = 0.0;  // frame units; <=0 = off
+    Eigen::Vector3d taper_start_{0.0, 0.0, 0.0};
+    Eigen::Vector3d taper_goal_{0.0, 0.0, 0.0};
+    std::vector<unsigned char> zone_taper_;  // bit0: start inside, bit1: goal inside
+    // Max |dz|/|dxy| the geodesic extraction may follow (tan of the shared
+    // model's flight-path-angle limit). <=0 = off. Applied only when a
+    // horizontal direction exists — a pure-vertical gradient is left alone
+    // so the descent can never stall (the taper removes that regime anyway).
+    double geo_slope_tan_max_ = 0.0;
     // [ZONE-AVOID] Lexicographic zone policy (2026-07-24): avoidance is not
     // traded against detour length. Pass 1 DISCONNECTS (F=0) every
     // non-exempt zone's visible volume; only if the goal is then unreachable
@@ -334,6 +352,25 @@ private:
         return std::min(r, kRoughCostCap);
     }
 
+    // [GNRON] Per-zone endpoint taper factor in [0, 1]: 0 at a contained
+    // endpoint, 1 at/beyond taper_radius (C1 smoothstep — same rationale as
+    // the barrier ramp: kinked factors are what L-BFGS line searches die on;
+    // the front-end shares the shape so both stages price one field).
+    inline double endpointTaper(size_t zi, const Eigen::Vector3d &pos) const {
+        if (risk_goal_taper_radius_ <= 0.0 || zi >= zone_taper_.size() ||
+            zone_taper_[zi] == 0)
+            return 1.0;
+        double f = 1.0;
+        for (int b = 0; b < 2; ++b) {
+            if (!(zone_taper_[zi] & (1u << b))) continue;
+            const Eigen::Vector3d &e = (b == 0) ? taper_start_ : taper_goal_;
+            const double x = (pos - e).norm() / risk_goal_taper_radius_;
+            if (x >= 1.0) continue;
+            f *= x * x * (3.0 - 2.0 * x);
+        }
+        return f;
+    }
+
     // Normalized OR-moat risk in [0, 1] (no alpha scaling). Used by the
     // inadmissible heuristic so its inflation factor stays dimensionless.
     inline double getRiskNorm(const Eigen::Vector3d &pos) const {
@@ -362,7 +399,8 @@ private:
                 visibility = std::clamp(risk_visibility_(zi, pos), 0.0, 1.0);
                 if (visibility <= 0.0) continue;
             }
-            const double moat = tz.peak * u * u * visibility;
+            const double moat =
+                tz.peak * u * u * visibility * endpointTaper(zi, pos);
             constexpr double kMoatCap = 1.0 - 1e-3;
             survival *= (1.0 - std::min(moat, kMoatCap));
         }
@@ -373,6 +411,7 @@ private:
     // Call once per search before evaluating risk costs.
     void prepareBarrier(const Eigen::Vector3d &start, const Eigen::Vector3d &goal) {
         zone_no_barrier_.clear();
+        zone_taper_.clear();
         if (!risk_zones_) return;
         zone_no_barrier_.assign(risk_zones_->size(), 0);
         // Same ellipsoidal membership as getRiskNorm/insideBarrierZone.
@@ -389,10 +428,19 @@ private:
             if (q2 >= 1.0) return false;
             return !risk_visibility_ || risk_visibility_(zi, p) > 0.5;
         };
+        taper_start_ = start;
+        taper_goal_ = goal;
+        zone_taper_.assign(risk_zones_->size(), 0);
         for (size_t i = 0; i < risk_zones_->size(); ++i) {
             const auto &tz = (*risk_zones_)[i];
-            if (in_zone(start, tz, i) || in_zone(goal, tz, i))
-                zone_no_barrier_[i] = 1;
+            const bool s_in = in_zone(start, tz, i);
+            const bool g_in = in_zone(goal, tz, i);
+            if (s_in || g_in) zone_no_barrier_[i] = 1;
+            // [GNRON] taper only zones exempted BY CONTAINMENT — zones later
+            // exempted for other reasons (soft-override crossings) keep their
+            // full moat: crossing them is priced, entering "home" is not.
+            zone_taper_[i] = static_cast<unsigned char>(
+                (s_in ? 1u : 0u) | (g_in ? 2u : 0u));
         }
     }
 
@@ -617,6 +665,15 @@ public:
         rough_slope0_ = std::max(0.0, slope0);
     }
     void setRiskBarrier(double k) { risk_barrier_ = (k > 0.0 ? k : 0.0); }
+    // [GNRON] radius (frame units) of the endpoint moat taper; <=0 = off.
+    void setRiskGoalTaperRadius(double r) {
+        risk_goal_taper_radius_ = (r > 0.0 ? r : 0.0);
+    }
+    // Geodesic-extraction slope limit, tan of the shared flight-path-angle
+    // cap; <=0 = off.
+    void setGeodesicSlopeTanMax(double t) {
+        geo_slope_tan_max_ = (t > 0.0 ? t : 0.0);
+    }
     void setZoneAvoidLexico(bool on) { zone_avoid_lexico_ = on; }
     // Last plan's [ZONE-AVOID] pass (0 = policy off / no zones,
     // 1 = zone-free route, 2 = soft fallback, 3 = re-hardened).

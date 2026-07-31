@@ -34,6 +34,10 @@ namespace path_manager
         node_->declare_parameter("manager/length_per_piece", 3.0);
         node_->declare_parameter("manager/risk_weight", 1.0);
         node_->declare_parameter("manager/risk_barrier", 100.0);
+        // [GNRON] endpoint moat taper radius (frame units; <=0 off): fade a
+        // must-enter zone's moat to zero near the contained endpoint so the
+        // approach to the mission point is not priced against it.
+        node_->declare_parameter("manager/risk_goal_taper_radius", 30.0);
         node_->declare_parameter("manager/risk_terrain_mask_enable", true);
         node_->declare_parameter("manager/risk_zone_agl", false);
         node_->declare_parameter("manager/risk_vertical_ratio", 0.35);
@@ -91,6 +95,8 @@ namespace path_manager
         node_->get_parameter("manager/length_per_piece", length_per_piece_);
         node_->get_parameter("manager/risk_weight", risk_weight_);
         node_->get_parameter("manager/risk_barrier", risk_barrier_);
+        node_->get_parameter("manager/risk_goal_taper_radius",
+                             risk_goal_taper_radius_);
         node_->get_parameter("manager/risk_terrain_mask_enable",
                              risk_terrain_mask_enable_);
         node_->get_parameter("manager/risk_zone_agl", risk_zone_agl_);
@@ -417,6 +423,29 @@ namespace path_manager
                     node_->declare_parameter("optimization/collision_reject", true);
                 node_->get_parameter("optimization/collision_reject", reject_on);
                 poly_traj_opt_->setCollisionReject(reject_on);
+
+                // [CONV-REJECT] non-convergence gate: an L-BFGS failure exit
+                // whose envelope violations exceed the threshold is discarded
+                // like a collision (healthy plans <1%; the r3 goal-in-zone
+                // deadlock 18.4%).
+                bool env_reject_on = true;
+                double env_viol_max = 0.25;
+                if (!node_->has_parameter("optimization/audit_envelope_reject"))
+                    node_->declare_parameter(
+                        "optimization/audit_envelope_reject", true);
+                if (!node_->has_parameter(
+                        "optimization/audit_envelope_violation_max"))
+                    node_->declare_parameter(
+                        "optimization/audit_envelope_violation_max", 0.25);
+                node_->get_parameter("optimization/audit_envelope_reject",
+                                     env_reject_on);
+                node_->get_parameter(
+                    "optimization/audit_envelope_violation_max", env_viol_max);
+                poly_traj_opt_->setEnvelopeReject(env_reject_on, env_viol_max);
+
+                // [GNRON] endpoint moat taper — same radius as the front-end
+                // (wired in initSearcher) so both stages price one field.
+                poly_traj_opt_->setRiskGoalTaperRadius(risk_goal_taper_radius_);
 
                 // [LBFGS-TUNE] solver knobs for no-rebuild parameter sweeps.
                 // Defaults reproduce the hardcoded values exactly.
@@ -903,6 +932,21 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             terrain_data_.valid ? terrain_data_.resolution : 0.0);
         searcher_.setRiskAlpha(risk_weight_);
         searcher_.setRiskBarrier(risk_barrier_);
+        searcher_.setRiskGoalTaperRadius(risk_goal_taper_radius_);
+        // Fixed-wing slope cap for the geodesic extraction, from the SHARED
+        // dynamics model's flight-path-angle limit (single authority — the
+        // same number the optimizer's envelope terms enforce).
+        {
+            double fpa_deg = 30.0;
+            if (!node_->has_parameter(
+                    "optimization/dynamics_flight_path_max_deg"))
+                node_->declare_parameter(
+                    "optimization/dynamics_flight_path_max_deg", 30.0);
+            node_->get_parameter("optimization/dynamics_flight_path_max_deg",
+                                 fpa_deg);
+            searcher_.setGeodesicSlopeTanMax(
+                std::tan(fpa_deg * M_PI / 180.0));
+        }
         searcher_.setSmhaW(risk_smha_w_);
         searcher_.setFrontEnd(front_end_str_ == "fm2"
             ? path_planner::search::PathSearcher::FrontEnd::FM2

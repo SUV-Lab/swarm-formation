@@ -8,6 +8,16 @@
     manager/fm2_max_cells: 1640000000   # OOM guard; over this -> straight-line fallback
     manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
+    manager/risk_goal_taper_radius: 30.0 # [GNRON] 종단점을 품은 존의 moat를 그 종단점 반경
+                                        # 안에서 C1 smoothstep으로 0까지 감쇠 (Ge & Cui 2000의
+                                        # 도달불능-목표 처방을 eikonal 장에 이식). 반드시 들어가야
+                                        # 하는 지점으로의 접근을 벌주면 비용최적 진입이 "높이
+                                        # 떠서 수직 낙하"로 퇴화하고(r3 goal-in-zone -1004 루프)
+                                        # 고정익 백엔드가 그 시드를 풀 수 없다. 반경 30 u = 3 km
+                                        # ≈ 순항 선회반경(~1.8 km)의 1.7배 + 최대강하각으로
+                                        # 250 m 고도차를 소화하는 활공거리 여유. 전단·백엔드
+                                        # 양쪽에 동일 적용; 패널/TRAJ-RISK 표시 위험은 원본 유지.
+                                        # <=0 = off.
     # [ZONE-AVOID] 사전식 존 회피(2026-07-24): 우회로가 존재하면 비용 비교 없이
     # 무조건 회피(패스1: 비면제 존의 가시영역을 F=0으로 단절 후 도달성 검사).
     # 도달 불가(존 벽이 임무를 실제로 막음)일 때만 소프트 K 필드로 최소체류·
@@ -198,6 +208,18 @@
                                         # Selective by design: a -1004 WITHOUT terrain overlap
                                         # (e.g. rest-start dynamics) still publishes. false =
                                         # old behavior (audit logs only).
+    optimization/audit_envelope_reject: true # [CONV-REJECT] 미수렴 게시 차단: L-BFGS가 실패
+                                        # 코드로 끝났고 envelope 감사 위반율이 임계를 넘으면
+                                        # 궤적을 폐기(충돌 감사와 동급). 지형 충돌만 보던 감사
+                                        # 구멍으로 r3 goal-in-zone의 -1004 프레첼 루프가 40 m
+                                        # 여유로 통과·게시됐던 것의 안전망. 실패 코드 단독으론
+                                        # 거부하지 않는다(거의 수렴한 max-iter 해는 통과).
+    optimization/audit_envelope_violation_max: 0.25 # 위반율 임계. 코퍼스 보정
+                                        # (순항 진입 후 실속 이하 체류 포함 집계 기준):
+                                        # 정상 플랜 <1%, 수렴한 goal-in-zone 해 13~22%
+                                        # (거칠지만 비행 가능 — 게시하고 패널이 보여줌),
+                                        # 미수렴 교착 반복해 33%+ — 0.25가 가른다.
+                                        # 순항에 한 번도 못 오르는 궤적은 위반율 1.0.
     optimization/weight_ground_barrier: 4000000.0  # crash-plane half-space below
                                        # manager/ground_height. BARRIER class, not a
                                        # preference: the equilibrium dip below the
