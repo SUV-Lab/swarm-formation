@@ -1778,6 +1778,20 @@ namespace ego_planner
                     100.0 * audit_env_viol_max_);
             return false;
         }
+        // Hard ceiling, exit code irrelevant: the sweep caught SUCCESS exits
+        // carrying 45-50%-violation loop trajectories (goal-in-zone 200-800 m
+        // band) that the failure-class condition above cannot see.
+        if (audit_env_reject_ &&
+            last_env_viol_frac_ > audit_env_viol_hard_max_) {
+            if (log_manager_)
+                log_manager_->warnf(
+                    "[REJECT] envelope-condemned trajectory (L-BFGS %d, "
+                    "violations %.1f%% > hard ceiling %.1f%%) — DISCARDED "
+                    "(optimization/audit_envelope_violation_hard_max)",
+                    result, 100.0 * last_env_viol_frac_,
+                    100.0 * audit_env_viol_hard_max_);
+            return false;
+        }
     }
 
     // Per-term vertical-force attribution on the converged trajectory —

@@ -105,7 +105,12 @@ namespace ego_planner
     // 18.4% vs <1% on every healthy plan) — discard it like a collision
     // instead of publishing pretzel loops that happen to clear terrain.
     bool audit_env_reject_{true};
-    double audit_env_viol_max_{0.25};  // violation fraction threshold
+    double audit_env_viol_max_{0.25};  // threshold for FAILURE-class exits
+    // Hard ceiling regardless of exit code: the robustness sweep caught the
+    // optimizer CONVERGING (Success, no -1004 en route) onto 45-50%-violation
+    // loop trajectories in the goal-in-zone mid-altitude band — an exit-code
+    // gate alone cannot see those. Acceptable rough solutions measure <=22%.
+    double audit_env_viol_hard_max_{0.30};
     double last_env_viol_frac_{0.0};   // set by the envelope audit each plan
     // Sticky per-solve: true if ANY lbfgs pass exited -1004, even when a
     // restart later ends on a SUCCESS code (plateau test) — the gate must
@@ -494,9 +499,10 @@ namespace ego_planner
     // it to logs-only.
     void setCollisionReject(bool on) { collision_reject_ = on; }
     // [CONV-REJECT] gate knobs (optimization/audit_envelope_reject*, see yaml).
-    void setEnvelopeReject(bool on, double viol_max) {
+    void setEnvelopeReject(bool on, double viol_max, double hard_max) {
         audit_env_reject_ = on;
         audit_env_viol_max_ = std::max(0.0, viol_max);
+        audit_env_viol_hard_max_ = std::max(0.0, hard_max);
     }
     void setLbfgsParams(int mem, double geps, int past, double delta,
                         int maxls, double fdec, double scurv)

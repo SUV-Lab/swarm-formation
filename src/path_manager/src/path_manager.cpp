@@ -430,6 +430,7 @@ namespace path_manager
                 // deadlock 18.4%).
                 bool env_reject_on = true;
                 double env_viol_max = 0.25;
+                double env_viol_hard = 0.30;
                 if (!node_->has_parameter("optimization/audit_envelope_reject"))
                     node_->declare_parameter(
                         "optimization/audit_envelope_reject", true);
@@ -437,11 +438,19 @@ namespace path_manager
                         "optimization/audit_envelope_violation_max"))
                     node_->declare_parameter(
                         "optimization/audit_envelope_violation_max", 0.25);
+                if (!node_->has_parameter(
+                        "optimization/audit_envelope_violation_hard_max"))
+                    node_->declare_parameter(
+                        "optimization/audit_envelope_violation_hard_max", 0.30);
                 node_->get_parameter("optimization/audit_envelope_reject",
                                      env_reject_on);
                 node_->get_parameter(
                     "optimization/audit_envelope_violation_max", env_viol_max);
-                poly_traj_opt_->setEnvelopeReject(env_reject_on, env_viol_max);
+                node_->get_parameter(
+                    "optimization/audit_envelope_violation_hard_max",
+                    env_viol_hard);
+                poly_traj_opt_->setEnvelopeReject(env_reject_on, env_viol_max,
+                                                  env_viol_hard);
 
                 // [GNRON] endpoint moat taper — same radius as the front-end
                 // (wired in initSearcher) so both stages price one field.

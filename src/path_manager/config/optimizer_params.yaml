@@ -214,12 +214,18 @@
                                         # 구멍으로 r3 goal-in-zone의 -1004 프레첼 루프가 40 m
                                         # 여유로 통과·게시됐던 것의 안전망. 실패 코드 단독으론
                                         # 거부하지 않는다(거의 수렴한 max-iter 해는 통과).
-    optimization/audit_envelope_violation_max: 0.25 # 위반율 임계. 코퍼스 보정
-                                        # (순항 진입 후 실속 이하 체류 포함 집계 기준):
-                                        # 정상 플랜 <1%, 수렴한 goal-in-zone 해 13~22%
-                                        # (거칠지만 비행 가능 — 게시하고 패널이 보여줌),
-                                        # 미수렴 교착 반복해 33%+ — 0.25가 가른다.
+    optimization/audit_envelope_violation_max: 0.25 # 실패계열(음수 코드/-1004 경유)
+                                        # 임계. 코퍼스 보정(순항 진입 후 실속 이하 체류
+                                        # 포함 집계): 정상 <1%, 수렴한 goal-in-zone 해
+                                        # 13~22%(거칠지만 비행 가능 — 게시하고 패널이
+                                        # 보여줌), 미수렴 교착 반복해 33%+ — 0.25가 가른다.
                                         # 순항에 한 번도 못 오르는 궤적은 위반율 1.0.
+    optimization/audit_envelope_violation_hard_max: 0.30 # 종료 코드 무관 경성 상한.
+                                        # 48런 강건성 스윕에서 -1004 없이 Success로
+                                        # "수렴"한 45~50% 위반 루프 궤적이 실재 확인됨
+                                        # (goal-in-zone 200~800 m 대역) — 실패계열
+                                        # 조건만으로는 못 본다. 수용 계열 최대 22% 대비
+                                        # 여유를 두고 0.30.
     optimization/weight_ground_barrier: 4000000.0  # crash-plane half-space below
                                        # manager/ground_height. BARRIER class, not a
                                        # preference: the equilibrium dip below the
