@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.actions import LogInfo
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -80,6 +80,11 @@ def generate_launch_description():
                         'optimizer_params.yaml manager/world.'
         ),
         DeclareLaunchArgument(
+            'debug',
+            default_value=EnvironmentVariable('MMP_DEBUG', default_value='0'),
+            description='Debug mode passthrough (see path_manager.launch.py)'
+        ),
+        DeclareLaunchArgument(
             'follower',
             default_value='none',
             description='Dynamics follower to launch alongside the planner: '
@@ -91,6 +96,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(path_manager_launch),
             launch_arguments={
                 'enable_visualization': 'true',
+                'debug': LaunchConfiguration('debug'),
                 'drone_id': LaunchConfiguration('drone_id'),
                 'record_bag': LaunchConfiguration('record_bag'),
                 'disable_file_logging': LaunchConfiguration('disable_file_logging'),

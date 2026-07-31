@@ -9,6 +9,7 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.substitutions import (
+    EnvironmentVariable,
     LaunchConfiguration,
     PathJoinSubstitution,
 )
@@ -43,6 +44,16 @@ def create_drone_nodes(context, *args, **kwargs):
     else:
         os.environ['SWARM_DISABLE_FILE_LOGGING'] = '0'
         print("File logging enabled (logs will be saved to ./logs/runtime)")
+
+    # Debug mode: one switch for pipeline-stage topics + verbose logs. The
+    # RViz Start button forks this launch WITHOUT arguments, so the switch
+    # travels as the MMP_DEBUG environment variable (set by mmp.launch.py
+    # debug:=true and inherited through rviz2 into the fork); an explicit
+    # debug:=true launch argument also works.
+    debug_str = context.perform_substitution(LaunchConfiguration('debug'))
+    debug_mode = debug_str.lower() in ('1', 'true')
+    if debug_mode:
+        print('DEBUG MODE: /debug/pipeline + verbose logs enabled')
 
     # Target drone ID
     drone_id_str = context.perform_substitution(LaunchConfiguration('drone_id'))
@@ -105,6 +116,9 @@ def create_drone_nodes(context, *args, **kwargs):
         # Otherwise the yaml default stays in effect.
         if world_arg:
             params['manager/world'] = world_arg
+        if debug_mode:
+            params['manager/debug_pipeline_viz'] = True
+            params['enable_debug_logs'] = True
         # Note: start_point will be received from TrajectoryCommand message
 
         # `params` goes LAST so launch-time overrides (e.g. manager/world from
@@ -181,6 +195,13 @@ def create_drone_nodes(context, *args, **kwargs):
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'debug',
+            default_value=EnvironmentVariable('MMP_DEBUG', default_value='0'),
+            description='Debug mode: publish /debug/pipeline stage geometry '
+                        'and enable verbose logs (inherited from MMP_DEBUG '
+                        'when launched via the RViz Start button)'
+        ),
         DeclareLaunchArgument(
             'drone_id',
             default_value='1',

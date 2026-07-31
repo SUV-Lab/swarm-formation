@@ -571,6 +571,17 @@ namespace path_manager
     // whole picture (DELETEALL + every zone's markers), so a late joiner gets
     // all of it or none of it. See publishEffectiveRiskField.
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr risk_field_pub_;
+    // [DEBUG-PIPELINE] Stage-by-stage geometry for "which stage broke it"
+    // debugging: the front-end/initial/final trajectories already have their
+    // own channels, but the two intermediates between them did not — the
+    // shortcut vertices (what the front end committed) and the sparse inner
+    // points (what MINCO is actually seeded with). Debug-mode only: the
+    // publisher exists only when manager/debug_pipeline_viz is true, so the
+    // topic is absent — not merely silent — outside debug mode.
+    bool debug_pipeline_viz_{false};
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr debug_pipeline_pub_;
+    void publishPipelineDebug(const std::vector<Eigen::Vector3d> &shortcut_route,
+                              const std::vector<Eigen::Vector3d> &inner_points);
     // Draped visibility-boundary heatmap (GridMap, rendered by a second
     // grid_map_rviz_plugin display; see publishRiskHeatmap).
     rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr risk_heatmap_pub_;

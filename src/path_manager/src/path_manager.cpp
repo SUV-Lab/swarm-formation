@@ -309,6 +309,21 @@ namespace path_manager
         // ~18 zones, leaving late joiners with a half-drawn field.
         risk_field_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/viz/risk_field", rclcpp::QoS(1).reliable().transient_local());
+        // [DEBUG-PIPELINE] debug-mode only (see the member comment). Off by
+        // default: the esdf overlay taught us that always-on debug output
+        // with no watcher is pure cost — here the publisher itself is only
+        // created in debug mode, so `ros2 topic list` tells the truth.
+        node_->declare_parameter("manager/debug_pipeline_viz", false);
+        node_->get_parameter("manager/debug_pipeline_viz", debug_pipeline_viz_);
+        if (debug_pipeline_viz_) {
+            debug_pipeline_pub_ =
+                node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+                    "/debug/pipeline",
+                    rclcpp::QoS(1).reliable().transient_local());
+            RCLCPP_INFO(node_->get_logger(),
+                        "[DEBUG-PIPELINE] /debug/pipeline enabled "
+                        "(shortcut_points + inner_points per plan)");
+        }
         // One latched map; a second grid_map_rviz_plugin display drapes it
         // over the terrain (same message-layout contract as /terrain/grid_map).
         rclcpp::QoS heatmap_qos(1);
@@ -1247,6 +1262,8 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             "A* shortcut %zu pts → sparse pieces %zu pts (max_seg %.1f)",
             full_route.size(), clean_path.size(), max_seg);
 
+        publishPipelineDebug(full_route, clean_path);
+
         if (clean_path.size() < 2) {
             log_manager_->errorf("clean_path too short");
             return false;
@@ -1792,6 +1809,89 @@ double PathManager::riskVisibility(size_t zone_index,
 // view where color == cost: sample the OR-combined terrain-masked moat field
 // along the planned trajectory and paint the path green (0) -> yellow -> red
 // (>= peak-ish). Latched, one marker per plan.
+// [DEBUG-PIPELINE] The two invisible stages between the existing channels:
+//   /viz/front_end_path      FM2 avoidance path            (existing)
+//   shortcut_points  <-- the vertices the front end COMMITTED (this)
+//   inner_points     <-- the sparse seed MINCO receives       (this)
+//   /viz/global_trajectory   initial min-jerk               (existing)
+//   /viz/opt_trajectory      optimized final                (existing)
+// One latched MarkerArray per plan (element 0 = DELETEALL), same atomicity
+// contract as /viz/risk_field. Debug mode only.
+void PathManager::publishPipelineDebug(
+    const std::vector<Eigen::Vector3d> &shortcut_route,
+    const std::vector<Eigen::Vector3d> &inner_points)
+{
+    if (!debug_pipeline_viz_ || !debug_pipeline_pub_) return;
+
+    visualization_msgs::msg::MarkerArray arr;
+    visualization_msgs::msg::Marker clear;
+    clear.header.frame_id = "map";
+    clear.header.stamp = node_->now();
+    clear.action = visualization_msgs::msg::Marker::DELETEALL;
+    arr.markers.push_back(clear);
+
+    auto sphere_list = [&](const char *ns, double scale,
+                           float r, float g, float b) {
+        visualization_msgs::msg::Marker m;
+        m.header.frame_id = "map";
+        m.header.stamp = node_->now();
+        m.ns = ns;
+        m.id = 0;
+        m.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+        m.action = visualization_msgs::msg::Marker::ADD;
+        m.pose.orientation.w = 1.0;
+        m.scale.x = m.scale.y = m.scale.z = scale;
+        m.color.r = r; m.color.g = g; m.color.b = b; m.color.a = 0.95f;
+        return m;
+    };
+
+    // Shortcut vertices: what the front end committed. Orange, chunky.
+    auto sc = sphere_list("shortcut_points", 0.9, 1.0f, 0.55f, 0.10f);
+    for (const auto &p : shortcut_route) {
+        geometry_msgs::msg::Point q;
+        q.x = p.x(); q.y = p.y(); q.z = p.z();
+        sc.points.push_back(q);
+    }
+    arr.markers.push_back(std::move(sc));
+
+    // Index labels so a bad vertex can be named, not pointed at. Thinned on
+    // long routes to keep RViz responsive.
+    const size_t n = shortcut_route.size();
+    const size_t stride = n > 120 ? (n + 119) / 120 : 1;
+    for (size_t i = 0; i < n; i += stride) {
+        visualization_msgs::msg::Marker t;
+        t.header.frame_id = "map";
+        t.header.stamp = node_->now();
+        t.ns = "shortcut_index";
+        t.id = static_cast<int>(i);
+        t.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+        t.action = visualization_msgs::msg::Marker::ADD;
+        t.pose.position.x = shortcut_route[i].x();
+        t.pose.position.y = shortcut_route[i].y();
+        t.pose.position.z = shortcut_route[i].z() + 1.4;
+        t.pose.orientation.w = 1.0;
+        t.scale.z = 1.2;
+        t.color.r = 1.0f; t.color.g = 0.75f; t.color.b = 0.35f;
+        t.color.a = 0.9f;
+        t.text = std::to_string(i);
+        arr.markers.push_back(std::move(t));
+    }
+
+    // MINCO seed: the sparse pieces the optimizer actually starts from. Cyan,
+    // small — dense enough that size must stay subtle next to the shortcut.
+    auto ip = sphere_list("inner_points", 0.35, 0.15f, 0.80f, 0.95f);
+    for (const auto &p : inner_points) {
+        geometry_msgs::msg::Point q;
+        q.x = p.x(); q.y = p.y(); q.z = p.z();
+        ip.points.push_back(q);
+    }
+    arr.markers.push_back(std::move(ip));
+
+    debug_pipeline_pub_->publish(arr);
+    log_manager_->infof("[DEBUG-PIPELINE] published %zu shortcut + %zu inner points",
+                        shortcut_route.size(), inner_points.size());
+}
+
 void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
 {
     if (!traj_risk_pub_) return;
