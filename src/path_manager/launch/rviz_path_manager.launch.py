@@ -14,13 +14,13 @@ def _follower(context, *args, **kwargs):
     honest while three follower implementations coexisted, but a probe hides
     intent: nothing said WHICH follower a run wanted. Now the run says it.
 
-    - none (default): no follower. Planning and RViz are unaffected;
-      /dynamics/sim_state and /dynamics/sim_path stay silent (their RViz
-      displays ship disabled).
+    - shared_3dof (default): mmp_vehicle_dynamics' C++ follower — same model
+      as the optimizer's cost term. Publishes /dynamics/sim_state + sim_path
+      and the drone_0_base / drone_0_chase TFs the follow camera targets.
+    - none: no follower; /dynamics stays silent.
     - missile_sim: the mmp_dynamics_sim submodule's Python 6-DoF node.
       RESERVED until its mmp_traj_msgs/mmp_mission_msgs migration patch is
-      merged there — launching it before that dies on import, which is why it
-      is not the default.
+      merged there — launching it before that dies on import.
 
     Launch tears the whole tree down when one entity raises, so an invalid
     value logs-and-skips instead of raising: the RViz Start button forks this
@@ -30,6 +30,17 @@ def _follower(context, *args, **kwargs):
     if choice == 'none':
         return [LogInfo(msg='[rviz_path_manager] follower:=none — no dynamics '
                             'follower started.')]
+    if choice == 'shared_3dof':
+        pkg_share = FindPackageShare('path_manager')
+        optimizer_params = PathJoinSubstitution(
+            [pkg_share, 'config', 'optimizer_params.yaml'])
+        return [Node(
+            package='mmp_vehicle_dynamics',
+            executable='dynamics_sim_node',
+            name='dynamics_sim_node',
+            output='screen',
+            parameters=[optimizer_params],
+        )]
     if choice == 'missile_sim':
         pkg_share = FindPackageShare('path_manager')
         optimizer_params = PathJoinSubstitution(
@@ -86,10 +97,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'follower',
-            default_value='none',
-            description='Dynamics follower to launch alongside the planner: '
-                        'none | missile_sim (reserved until the '
-                        'mmp_dynamics_sim message-migration patch lands).'
+            default_value='shared_3dof',
+            description='Dynamics follower: shared_3dof (C++, same model as '
+                        'the optimizer) | none | missile_sim (reserved until '
+                        'the mmp_dynamics_sim message-migration patch lands).'
         ),
         # Include base path_manager launch with RViz defaults
         IncludeLaunchDescription(
