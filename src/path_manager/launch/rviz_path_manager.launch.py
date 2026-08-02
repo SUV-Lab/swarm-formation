@@ -42,16 +42,14 @@ def _follower(context, *args, **kwargs):
             parameters=[optimizer_params],
         )]
     if choice == 'missile_sim':
-        pkg_share = FindPackageShare('path_manager')
-        optimizer_params = PathJoinSubstitution(
-            [pkg_share, 'config', 'optimizer_params.yaml'])
-        return [Node(
-            package='mmp_dynamics_sim',
-            executable='missile_sim_node',
-            name='missile_sim_node',
-            output='screen',
-            parameters=[optimizer_params],
-        )]
+        # Reserved slot. mmp_dynamics_sim still imports the deleted
+        # path_manager.msg / formation_msgs packages, so launching it fails at
+        # import — announce the reason instead of spawning a node that dies.
+        # Enable once its message-migration patch lands
+        # (docs/notes/scratch_dynsim_msg_migration.patch).
+        return [LogInfo(msg='[rviz_path_manager] follower:=missile_sim is '
+                            'reserved — mmp_dynamics_sim awaits its message '
+                            'migration; no follower started.')]
     return [LogInfo(msg=f'[rviz_path_manager] unknown follower "{choice}" '
                         f'(expected none|missile_sim) — skipping.')]
 
