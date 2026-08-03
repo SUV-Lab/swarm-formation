@@ -440,6 +440,21 @@ namespace path_manager
     // The draped heatmap shows the ground-level visibility boundary, which is NOT
     // the flown risk — this line is.
     void publishTrajRisk(const poly_traj::Trajectory &traj);
+    // Trajectory tube markers (/viz/opt_trajectory, /viz/global_trajectory,
+    // /viz/front_end_path). SPHERE_LIST: a line has no thickness edge-on and
+    // vanishes at some camera angles; dense spheres read as a tube from every
+    // direction. Rendered here since 2026-08 — the planner owns every /viz
+    // channel derived from its own data (the old mmp_visualization bridge
+    // node is gone). Same topics/QoS/namespaces, so RViz configs, the
+    // altitude panel, and dump_geometry are unaffected.
+    void publishTubeMarker(
+        const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+        const std::vector<Eigen::Vector3d> &pts, const std::string &ns_prefix,
+        float r, float g, float b, float a);
+    void publishTrajTube(
+        const poly_traj::Trajectory &traj,
+        const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+        const std::string &ns_prefix, float r, float g, float b, float a);
     // [RISK-PROFILE] Versioned altitude-panel channel. Payload (v4):
     //   [4.0, N,
     //    s, x, y, z, combined_risk,
@@ -570,6 +585,11 @@ namespace path_manager
     bool is_optimizer_initialized_;
 
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr front_end_path_pub_;
+    // Trajectory tube channels (see publishTrajTube).
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr opt_traj_tube_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr global_traj_tube_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr front_end_tube_pub_;
+    double path_scale_ = 1.5;  // tube diameter, frame units (1 u = 100 m)
     // Terrain-masked risk visualization: ONE latched MarkerArray carries the
     // whole picture (DELETEALL + every zone's markers), so a late joiner gets
     // all of it or none of it. See publishEffectiveRiskField.

@@ -57,7 +57,6 @@ def _follower(context, *args, **kwargs):
 def generate_launch_description():
     """
     RViz simulation launch file for path_manager
-    Automatically sets: enable_visualization=true
 
     Usage:
         ros2 launch path_manager rviz_path_manager.launch.py
@@ -104,7 +103,6 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(path_manager_launch),
             launch_arguments={
-                'enable_visualization': 'true',
                 'debug': LaunchConfiguration('debug'),
                 'drone_id': LaunchConfiguration('drone_id'),
                 'record_bag': LaunchConfiguration('record_bag'),

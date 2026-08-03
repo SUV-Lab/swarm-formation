@@ -7,7 +7,6 @@ from launch.actions import (
     SetEnvironmentVariable,
     TimerAction,
 )
-from launch.conditions import IfCondition
 from launch.substitutions import (
     EnvironmentVariable,
     LaunchConfiguration,
@@ -139,27 +138,13 @@ def create_drone_nodes(context, *args, **kwargs):
             )
         )
 
-    # Build parameters for the visualization node
-    viz_params = [
-        drones_file,  # Base drone hardware
-        optimizer_file,
-    ]
-
-    visualization_node = Node(
-        package='mmp_visualization',
-        executable='mmp_visualization_node',
-        name='mmp_visualization_node',
-        output='screen',
-        parameters=viz_params,
-        condition=IfCondition(LaunchConfiguration('enable_visualization'))
-    )
-
-    # NOTE: RViz is now launched separately via:
-    #   ros2 launch mmp_visualization mmp.launch.py
-    # This allows unified visualization with terrain and all path planning topics
+    # NOTE: RViz is launched separately via:
+    #   ros2 launch mmp_launch mmp.launch.py
+    # Trajectory tube markers (/viz/opt_trajectory etc.) are published by the
+    # planner itself since 2026-08 — the old bridge node is gone.
 
     # Missions come from the RViz MissionConfig panel (/mission/trajectory_command).
-    immediate_actions = [visualization_node]
+    immediate_actions = []
 
     replan_nodes_delayed = TimerAction(
         period=0.0,
@@ -211,11 +196,6 @@ def generate_launch_description():
             'record_bag',
             default_value='false',
             description='Enable rosbag recording for trajectory topics'
-        ),
-        DeclareLaunchArgument(
-            'enable_visualization',
-            default_value='false',
-            description='Enable path visualization node'
         ),
         DeclareLaunchArgument(
             'disable_file_logging',

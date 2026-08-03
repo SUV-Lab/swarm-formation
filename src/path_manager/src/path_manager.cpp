@@ -298,6 +298,19 @@ namespace path_manager
         front_end_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
             "/planning/front_end_path",
             rclcpp::QoS(1).reliable().transient_local());
+        // Trajectory tube channels (see publishTrajTube in the header). Same
+        // latched QoS as the /planning sources they mirror.
+        const auto tube_qos = rclcpp::QoS(1).reliable().transient_local();
+        opt_traj_tube_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
+            "/viz/opt_trajectory", tube_qos);
+        global_traj_tube_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
+            "/viz/global_trajectory", tube_qos);
+        front_end_tube_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
+            "/viz/front_end_path", tube_qos);
+        // Tube diameter; parameterized because the right size depends on the
+        // map scale being viewed (5.0 read as a 500 m sausage nationwide).
+        node_->declare_parameter("path_scale", 1.5);
+        node_->get_parameter("path_scale", path_scale_);
         // TRANSIENT_LOCAL so RViz, joining late, still gets the latest set.
         rclcpp::QoS dyn_qos(1);
         dyn_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
@@ -1139,8 +1152,8 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                 dbg_risk_sum / std::max<size_t>(1, full_route.size()));
         }
 
-        // Front-end route as nav_msgs/Path → mmp_visualization converts it to a
-        // RViz marker (/viz/front_end_path).
+        // Front-end route: nav_msgs/Path for programmatic consumers plus the
+        // tube marker render (/viz/front_end_path).
         nav_msgs::msg::Path path_msg;
         path_msg.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
         path_msg.header.frame_id = "map";
@@ -1154,6 +1167,10 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             path_msg.poses.push_back(pose);
         }
         front_end_path_pub_->publish(path_msg);
+        // ns matches the retired bridge node ("opt_path_drone_<id>" — the
+        // shipped RViz configs filter on it).
+        publishTubeMarker(front_end_tube_pub_, full_route, "opt_path_drone_",
+                          0.12f, 0.39f, 1.0f, 0.7f);
 
         // === STEP 2.5: z-denoise of the shortcut vertices ===
         // The FM2 grid has only a few dozen z-cells over the whole map, so
@@ -1452,6 +1469,13 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         // Sample the flown trajectory so the overlay and the trajectory agree.
         publishTrajRisk(local_traj);
         publishRiskProfile(local_traj);
+        // Tube renders of the flown (optimized) and seed (global) trajectories.
+        // Reference trajectory: pale + translucent, a faint "tunnel" the
+        // cursor sphere and the flown path pass through.
+        publishTrajTube(local_traj, opt_traj_tube_pub_, "opt_path_drone_",
+                        0.55f, 0.72f, 1.0f, 0.22f);
+        publishTrajTube(global_traj, global_traj_tube_pub_, "global_path_drone_",
+                        0.59f, 0.71f, 1.0f, 0.85f);
 
         auto t_opt_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] trajectory optimization: %.1f ms, duration=%.3f max_vel=%.3f",
@@ -1494,6 +1518,8 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
     }
     publishTrajRisk(traj_.local_traj.traj);
     publishRiskProfile(traj_.local_traj.traj);
+    publishTrajTube(traj_.local_traj.traj, opt_traj_tube_pub_, "opt_path_drone_",
+                    0.55f, 0.72f, 1.0f, 0.22f);
 
     RCLCPP_WARN(node_->get_logger(), "EMERGENCY STOP executed at position (%.2f, %.2f, %.2f)",
                 stop_pos.x(), stop_pos.y(), stop_pos.z());
@@ -1923,6 +1949,48 @@ void PathManager::publishPipelineDebug(
     debug_pipeline_pub_->publish(arr);
     log_manager_->infof("[DEBUG-PIPELINE] published %zu shortcut + %zu inner points",
                         shortcut_route.size(), inner_points.size());
+}
+
+void PathManager::publishTubeMarker(
+    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+    const std::vector<Eigen::Vector3d> &pts, const std::string &ns_prefix,
+    float r, float g, float b, float a)
+{
+    if (!pub || pts.empty()) return;
+    visualization_msgs::msg::Marker m;
+    m.header.frame_id = "map";
+    m.header.stamp = node_->now();
+    const int drone_id = std::max(0, traj_.local_traj.drone_id);
+    m.ns = ns_prefix + std::to_string(drone_id);
+    m.id = drone_id;
+    m.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+    m.action = visualization_msgs::msg::Marker::ADD;
+    m.pose.orientation.w = 1.0;  // identity quaternion (avoids RViz cull/flicker)
+    m.scale.x = m.scale.y = m.scale.z = path_scale_;
+    m.color.r = r; m.color.g = g; m.color.b = b; m.color.a = a;
+    m.points.reserve(pts.size());
+    for (const auto &p : pts) {
+        geometry_msgs::msg::Point gp;
+        gp.x = p.x(); gp.y = p.y(); gp.z = p.z();
+        m.points.push_back(gp);
+    }
+    pub->publish(m);
+}
+
+void PathManager::publishTrajTube(
+    const poly_traj::Trajectory &traj,
+    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+    const std::string &ns_prefix, float r, float g, float b, float a)
+{
+    const double T = traj.getDurations().sum();
+    if (T <= 1e-6) return;
+    // 0.1 s sampling plus the exact endpoint — the density the retired
+    // bridge node used; dense enough to read as a tube at map scale.
+    std::vector<Eigen::Vector3d> pts;
+    pts.reserve(static_cast<size_t>(T / 0.1) + 2);
+    for (double t = 0.0; t < T; t += 0.1) pts.push_back(traj.getPos(t));
+    pts.push_back(traj.getPos(T - 1e-9));
+    publishTubeMarker(pub, pts, ns_prefix, r, g, b, a);
 }
 
 void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
