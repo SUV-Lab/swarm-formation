@@ -2,10 +2,10 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>swarm_graph</name>
-  <version>0.0.0</version>
+  <version>1.0.0</version>
   <description>SwarmGraph library for swarm formation and graph-based analysis</description>
   <maintainer email="mywww5371@naver.com">limgyeonghun</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <build_depend>rclcpp</build_depend>

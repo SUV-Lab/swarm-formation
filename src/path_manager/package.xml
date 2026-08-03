@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>path_manager</name>
-  <version>0.0.1</version>
+  <version>1.0.0</version>
   <description>Path management package for planning and optimizing trajectories</description>
   <maintainer email="mywww5371@naver.com">limgyeonghun</maintainer>
   <license>Apache-2.0</license>
