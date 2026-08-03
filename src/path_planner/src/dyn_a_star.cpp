@@ -1560,7 +1560,7 @@ void PathSearcher::fm2BuildSpeedMap()
             else if (checkOccupancyBulk_esdf(w)) blocked = true;
             if (blocked) {
                 // kFMin porosity on purpose — in BOTH modes. It models
-                // surface-hugging: NOE seam corridors (terrain-to-shadow
+                // low-clearance terrain-following seam corridors (terrain-to-shadow
                 // ceiling) are often thinner than a coarse cell, so a true
                 // terrain wall (F=0) disconnects them at this resolution
                 // (measured: every terrain-following mission fell back to
