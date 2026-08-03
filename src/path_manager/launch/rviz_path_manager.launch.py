@@ -18,7 +18,7 @@ def _follower(context, *args, **kwargs):
       as the optimizer's cost term. Publishes /dynamics/sim_state + sim_path
       and the drone_0_base / drone_0_chase TFs the follow camera targets.
     - none: no follower; /dynamics stays silent.
-    - missile_sim: the mmp_dynamics_sim submodule's Python 6-DoF node.
+    - vehicle_sim: the mmp_dynamics_sim submodule's vehicle dynamics node.
       RESERVED until its mmp_traj_msgs/mmp_mission_msgs migration patch is
       merged there — launching it before that dies on import.
 
@@ -41,17 +41,17 @@ def _follower(context, *args, **kwargs):
             output='screen',
             parameters=[optimizer_params],
         )]
-    if choice == 'missile_sim':
+    if choice == 'vehicle_sim':
         # Reserved slot. mmp_dynamics_sim still imports the deleted
         # path_manager.msg / formation_msgs packages, so launching it fails at
         # import — announce the reason instead of spawning a node that dies.
         # Enable once its message-migration patch lands
         # (docs/notes/scratch_dynsim_msg_migration.patch).
-        return [LogInfo(msg='[rviz_path_manager] follower:=missile_sim is '
+        return [LogInfo(msg='[rviz_path_manager] follower:=vehicle_sim is '
                             'reserved — mmp_dynamics_sim awaits its message '
                             'migration; no follower started.')]
     return [LogInfo(msg=f'[rviz_path_manager] unknown follower "{choice}" '
-                        f'(expected none|missile_sim) — skipping.')]
+                        f'(expected shared_3dof|none|vehicle_sim) — skipping.')]
 
 
 def generate_launch_description():
@@ -97,7 +97,7 @@ def generate_launch_description():
             'follower',
             default_value='shared_3dof',
             description='Dynamics follower: shared_3dof (C++, same model as '
-                        'the optimizer) | none | missile_sim (reserved until '
+                        'the optimizer) | none | vehicle_sim (reserved until '
                         'the mmp_dynamics_sim message-migration patch lands).'
         ),
         # Include base path_manager launch with RViz defaults

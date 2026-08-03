@@ -3,7 +3,7 @@
   <name>path_manager</name>
   <version>0.0.1</version>
   <description>Path management package for planning and optimizing trajectories</description>
-  <maintainer email="your@email.com">Your Name</maintainer>
+  <maintainer email="mywww5371@naver.com">limgyeonghun</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

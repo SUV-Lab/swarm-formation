@@ -4,7 +4,7 @@
   <name>swarm_graph</name>
   <version>0.0.0</version>
   <description>SwarmGraph library for swarm formation and graph-based analysis</description>
-  <maintainer email="dladks123@gmail.com">suv</maintainer>
+  <maintainer email="mywww5371@naver.com">limgyeonghun</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
