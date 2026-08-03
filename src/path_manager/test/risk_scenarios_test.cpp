@@ -406,7 +406,7 @@ void run(const Scenario &s, double alpha, double h_weight, const MapSpec &map) {
 int main(int argc, char **argv) {
   std::string yaml_path = (argc > 1)
       ? argv[1]
-      : "src/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml";
+      : "src/terrain/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml";
 
   LoadResult loaded;
   try {

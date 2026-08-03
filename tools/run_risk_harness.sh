@@ -2,12 +2,12 @@
 # Canonical invocation of the risk_scenarios_test harness (the "154/0" gate).
 #
 # The harness resolves its fixture RELATIVE TO CWD
-# ("src/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml"), and its argv is
+# ("src/terrain/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml"), and its argv is
 # positional: yaml, alpha, h_weight, front_end, fm2_k, fm2_star, barrier.
 # That tribal knowledge lived in throwaway scratch scripts; this pins it.
 #
 # Run inside the dev container from anywhere:
-#   bash src/mmp_path_planning/tools/run_risk_harness.sh [outfile]
+#   bash src/planning/mmp_path_planning/tools/run_risk_harness.sh [outfile]
 # Exit code is the harness exit code. Output goes to stdout and, when an
 # outfile is given, is tee'd there for baseline diffing:
 #   bash .../run_risk_harness.sh /tmp/baseline_p0.txt
@@ -23,7 +23,7 @@ set +u
 [ -f "$WS/install/setup.bash" ] && source "$WS/install/setup.bash"
 set -u
 BIN="$WS/install/path_manager/lib/path_manager/risk_scenarios_test"
-FIXTURE="$WS/src/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml"
+FIXTURE="$WS/src/terrain/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml"
 [ -x "$BIN" ] || { echo "harness not built: $BIN (colcon build --packages-up-to path_manager)" >&2; exit 2; }
 [ -f "$FIXTURE" ] || { echo "fixture missing: $FIXTURE" >&2; exit 2; }
 
