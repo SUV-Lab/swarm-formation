@@ -213,7 +213,7 @@ namespace path_manager
 
         // Building-mesh rendering of dynamic obstacles (see publishDynamicObstacles).
         node_->declare_parameter("obstacle_mesh_resource",
-                                 std::string("package://mmp_visualization/meshes/building.dae"));
+                                 std::string("package://mmp_viz_assets/meshes/building.dae"));
         node_->declare_parameter("obstacle_mesh_height", 60.0);
         // VISUAL-ONLY mesh magnification. Since the scenario-yaml unit fix,
         // obstacles render at true physical size — a 160 m ship is sub-pixel
@@ -239,12 +239,12 @@ namespace path_manager
 
         // Visual mesh catalog: model name -> mesh resource + rendered native size [m]
         // (mesh base at z=0, XY centered). Add a model = drop a .dae in
-        // mmp_visualization/meshes/ + one line here (measure size with trimesh).
+        // mmp_viz_assets/meshes/ + one line here (measure size with trimesh).
         mesh_catalog_["building"] = { obstacle_mesh_resource_,
                                       Eigen::Vector3d(16.374, 13.358, 17.345) };
-        mesh_catalog_["car"]      = { "package://mmp_visualization/meshes/car.dae",
+        mesh_catalog_["car"]      = { "package://mmp_viz_assets/meshes/car.dae",
                                       Eigen::Vector3d(17.679, 10.093, 4.620) };
-        mesh_catalog_["ship"]     = { "package://mmp_visualization/meshes/simple_ship.dae",
+        mesh_catalog_["ship"]     = { "package://mmp_viz_assets/meshes/simple_ship.dae",
                                       Eigen::Vector3d(9.972, 42.275, 10.234) };
 
         // Per-model override of obstacle_viz_scale (<= 0 inherits the global).

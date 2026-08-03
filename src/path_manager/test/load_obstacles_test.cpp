@@ -80,14 +80,16 @@ void test_mixed_kinds() {
   sphere.radius = 5.0;
   msg.obstacles.push_back(sphere);
 
-  mmp_mission_msgs::msg::DynamicObstacleSpec cyl;
-  cyl.kind = mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CYLINDER;
-  msg.obstacles.push_back(cyl);
+  // Only KIND_SPHERE and KIND_CUBE exist; every other kind value must be
+  // skipped rather than dispatched.
+  mmp_mission_msgs::msg::DynamicObstacleSpec unknown;
+  unknown.kind = 2;
+  msg.obstacles.push_back(unknown);
 
   auto r = simulate_dispatch(msg);
   check(r.boxes == 1, "mixed: cube dispatches to addDynamicBox");
   check(r.spheres == 1, "mixed: sphere dispatches to addDynamicSphere");
-  check(r.skipped == 1, "mixed: cylinder is the only unsupported kind");
+  check(r.skipped == 1, "mixed: unknown kind is the only skipped spec");
 }
 
 void test_replace_flag() {
@@ -125,8 +127,6 @@ void test_constants_match_spec() {
         "KIND_SPHERE == 0");
   check(mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CUBE == 1,
         "KIND_CUBE == 1");
-  check(mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_CYLINDER == 2,
-        "KIND_CYLINDER == 2");
 }
 
 }  // namespace

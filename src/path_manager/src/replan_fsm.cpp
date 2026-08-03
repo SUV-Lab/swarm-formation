@@ -1018,7 +1018,7 @@ void ReplanFSM::loadObstaclesCallback(
             }
         } else {
             FSM_LOG_WARN(
-                "loadObstacles: skipping unsupported spec kind=%u (cylinder not exposed)",
+                "loadObstacles: skipping unsupported spec kind=%u",
                 spec.kind);
             ++skipped;
             continue;

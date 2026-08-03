@@ -18,9 +18,11 @@ def _follower(context, *args, **kwargs):
       as the optimizer's cost term. Publishes /dynamics/sim_state + sim_path
       and the drone_0_base / drone_0_chase TFs the follow camera targets.
     - none: no follower; /dynamics stays silent.
-    - vehicle_sim: the mmp_dynamics_sim submodule's vehicle dynamics node.
-      RESERVED until its mmp_traj_msgs/mmp_mission_msgs migration patch is
-      merged there — launching it before that dies on import.
+    - vehicle_sim: RESERVED for the external vehicle-dynamics follower. Its
+      previous incarnation (the mmp_dynamics_sim submodule) was removed from
+      the workspace 2026-08 pending a restructure that consumes
+      mmp_vehicle_dynamics' Python bindings instead of carrying its own
+      physics; the slot stays so the restructured package plugs back in.
 
     Launch tears the whole tree down when one entity raises, so an invalid
     value logs-and-skips instead of raising: the RViz Start button forks this
@@ -42,14 +44,12 @@ def _follower(context, *args, **kwargs):
             parameters=[optimizer_params],
         )]
     if choice == 'vehicle_sim':
-        # Reserved slot. mmp_dynamics_sim still imports the deleted
-        # path_manager.msg / formation_msgs packages, so launching it fails at
-        # import — announce the reason instead of spawning a node that dies.
-        # Enable once its message-migration patch lands
-        # (docs/notes/scratch_dynsim_msg_migration.patch).
+        # Reserved slot: the external follower package was removed from the
+        # workspace pending its restructure (see docstring) — announce the
+        # reason instead of spawning a node that cannot exist.
         return [LogInfo(msg='[rviz_path_manager] follower:=vehicle_sim is '
-                            'reserved — mmp_dynamics_sim awaits its message '
-                            'migration; no follower started.')]
+                            'reserved — the external vehicle-sim follower is '
+                            'being restructured; no follower started.')]
     return [LogInfo(msg=f'[rviz_path_manager] unknown follower "{choice}" '
                         f'(expected shared_3dof|none|vehicle_sim) — skipping.')]
 
@@ -97,8 +97,8 @@ def generate_launch_description():
             'follower',
             default_value='shared_3dof',
             description='Dynamics follower: shared_3dof (C++, same model as '
-                        'the optimizer) | none | vehicle_sim (reserved until '
-                        'the mmp_dynamics_sim message-migration patch lands).'
+                        'the optimizer) | none | vehicle_sim (reserved for '
+                        'the restructured external follower).'
         ),
         # Include base path_manager launch with RViz defaults
         IncludeLaunchDescription(

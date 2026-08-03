@@ -23,6 +23,8 @@
   <depend>ament_index_cpp</depend>
 
   <exec_depend>nav_msgs</exec_depend>
+  <!-- package://mmp_viz_assets/meshes/* (dynamic-obstacle mesh catalog) -->
+  <exec_depend>mmp_viz_assets</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
