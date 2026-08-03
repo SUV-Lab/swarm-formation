@@ -345,31 +345,11 @@ namespace path_manager
         risk_heatmap_pub_ = node_->create_publisher<grid_map_msgs::msg::GridMap>(
             "/viz/risk_heatmap", heatmap_qos);
 
-        // Terrain ESDF cache status (drone_0 only, latched).
-        if (drone_id == 0) {
-            rclcpp::QoS status_qos(1);
-            status_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
-            status_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
-            terrain_status_pub_ = node_->create_publisher<std_msgs::msg::String>(
-                "/planning/terrain_status", status_qos);
-
-            // (The old "ESDF cache missing/ready" startup check is gone with
-            // the cache itself — the boxes-only SDF builds instantly when
-            // terrain arrives; see setTerrainData.)
-        }
-
         // Terrain may arrive after construction. This first call publishes an
         // ideal circular fallback; setTerrainData() replaces it with the DEM-
         // masked field as soon as the heightmap is ready.
         refreshEffectiveRiskZones();
         rebuildTerrainRiskMasks();
-    }
-
-    void PathManager::publishTerrainStatus(const std::string &msg) {
-        if (!terrain_status_pub_) return;
-        std_msgs::msg::String m;
-        m.data = msg;
-        terrain_status_pub_->publish(m);
     }
 
     void PathManager::initOptimizer(bool force_reinit)
@@ -2862,7 +2842,6 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
             publishTrajRisk(traj_.local_traj.traj);
             publishRiskProfile(traj_.local_traj.traj);
         }
-        publishTerrainStatus("No terrain map; planning without DEM");
         log_manager_->infof(
             had_terrain
                 ? "[TERRAIN] cleared previous DEM (world=none)"
@@ -3032,8 +3011,6 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
         if (computeTerrainBBox(&lo, &hi)) {
             if (buildSDFForBounds(lo, hi)) {
                 sdf_built_ = true;
-                publishTerrainStatus(
-                    "SDF ready (boxes-only grid; terrain via heightmap)");
                 flushPendingObstacles();
             }
         }
