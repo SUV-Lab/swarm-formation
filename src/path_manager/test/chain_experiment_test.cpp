@@ -95,10 +95,26 @@ int main(int argc, char **argv)
                  "optimizer_params.yaml";
   const int segments = argc > 2 ? std::atoi(argv[2]) : 3;
 
-  bool with_zone = false, with_segdiff = false;
+  bool with_zone = false, with_segdiff = false, with_twice = false,
+       with_failrestore = false, with_altcap = false;
   for (int a = 3; a < argc; ++a) {
-    if (std::string(argv[a]) == "zone") with_zone = true;
-    if (std::string(argv[a]) == "segdiff") with_segdiff = true;
+    const std::string v(argv[a]);
+    if (v == "zone") with_zone = true;
+    if (v == "segdiff") with_segdiff = true;
+    // twice: plan the SAME mission twice in one process. If the scope-guard
+    // restore leaks a segment override, the second BASELINE (always planned
+    // with mission-wide params) solves a different problem and its duration
+    // shifts — bitwise-equal durations are the restore proof.
+    if (v == "twice") with_twice = true;
+    // failrestore: seg2 gets an unflyable ceiling (0.5 u/s = 50 m/s, far
+    // below stall) so a segment run FAILS mid-chain with overrides applied;
+    // the chain must fall back to the baseline AND the restore must still
+    // happen (verified by the second plan's baseline).
+    if (v == "failrestore") with_failrestore = true;
+    // altcap: overrides one of the four PathManager-consumed optimization/*
+    // values (alt_cap_headroom) on seg2 — end-to-end proof of the re-read
+    // fix: the [ALT] z-band log line for seg2's solve shifts by +0.8 u.
+    if (v == "altcap") with_altcap = true;
   }
 
   rclcpp::NodeOptions options;
@@ -114,6 +130,16 @@ int main(int argc, char **argv)
         std::vector<std::string>{"optimization/max_vel=1.8"});
     std::cout << "segdiff: seg1 weight_time=1000, seg" << segments
               << " max_vel=1.8\n";
+  } else if (with_failrestore) {
+    node->declare_parameter(
+        "chain/seg2/params",
+        std::vector<std::string>{"optimization/max_vel=0.5"});
+    std::cout << "failrestore: seg2 max_vel=0.5 (sub-stall, must fail)\n";
+  } else if (with_altcap) {
+    node->declare_parameter(
+        "chain/seg2/params",
+        std::vector<std::string>{"optimization/alt_cap_headroom=1.2"});
+    std::cout << "altcap: seg2 alt_cap_headroom=1.2 (default 0.4)\n";
   }
 
   auto pm = std::make_shared<path_manager::PathManager>(node);
@@ -199,6 +225,30 @@ int main(int argc, char **argv)
   expect((chained.getJuncPos(chained.getPieceNum()) -
           baseline.getJuncPos(baseline.getPieceNum())).norm() < 1e-6,
          "chained and baseline end at the same resolved goal");
+
+  if (with_failrestore) {
+    // The sub-stall segment must have failed and the chain degraded to the
+    // baseline (identical trajectory in the local slot).
+    expect(std::abs(ct - bt) < 1e-9 &&
+               chained.getPieceNum() == baseline.getPieceNum(),
+           "unflyable segment fell back to the baseline");
+  }
+  if (with_twice || with_failrestore) {
+    // Restore proof: a second plan in the SAME process. Its baseline always
+    // runs with mission-wide parameters — if the scope guard leaked any
+    // segment override, the second baseline solves a different problem and
+    // its duration/piece count shifts.
+    const double base1 = bt;
+    const int base1_pieces = baseline.getPieceNum();
+    const bool ok2 = chain.plan(start_pos, start_vel, start_acc, goal,
+                                /*start_vel_synthesized=*/true);
+    expect(ok2, "second plan in the same process succeeds");
+    const poly_traj::Trajectory &base2 = pm->traj_.global_traj.traj;
+    expect(std::abs(base2.getTotalDuration() - base1) < 1e-9 &&
+               base2.getPieceNum() == base1_pieces,
+           "second baseline identical — mission-wide parameters were "
+           "restored after the first chain");
+  }
 
   rclcpp::shutdown();
   std::cout << (failures == 0 ? "PASS" : "FAIL") << ": " << failures
