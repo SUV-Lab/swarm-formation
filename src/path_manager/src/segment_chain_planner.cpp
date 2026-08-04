@@ -742,39 +742,45 @@ double SegmentChainPlanner::clearJunctionTime(
   // times can therefore neither coincide nor invert, at ANY segment count —
   // a total-duration window here let ±10% nudges cross once segments > 4.
   const double lo = t_prev + 0.2 * span;
-  const auto in_window = [&](double cand) { return cand >= lo; };
-  const auto clear = [&](double cand) {
-    return !nearRiskZone(traj.getPos(cand));
-  };
-  if (in_window(t_nominal) && clear(t_nominal)) return t_nominal;
-  // Nearest-to-nominal zone-clear candidate wins (the original policy)...
-  double calmest = std::max(t_nominal, lo);
-  double calmest_a = traj.getAcc(calmest).norm();
-  for (double step = 0.08; step <= 0.40 + 1e-9; step += 0.08) {
+  // A junction is a handoff, and a handoff mid-maneuver pins a hard BC in
+  // the field's fiercest gradient. r3 taught it inside a zone gauntlet
+  // (|a| = 0.111 junction trapped the next solve: bank 55 deg, terrain
+  // overlap; |a| = 0.030 six seconds later chained cleanly) — but r4
+  // taught that calmness must be the RULE, not the zone-blanketed
+  // fallback: a 337 km terrain-following baseline is maneuvering at the
+  // equal-time nominal too (|a| = 0.082, 0.84 g), and the segment solve
+  // diverged into a 500 s sub-stall iterate. So: among the window's
+  // zone-clear candidates take the CALMEST baseline state; only a fully
+  // blanketed window falls back to the calmest candidate regardless of
+  // zones (and says so — the risk comparison is contaminated there).
+  double clear_t = -1.0, clear_a = std::numeric_limits<double>::infinity();
+  double any_t = std::max(t_nominal, lo);
+  double any_a = traj.getAcc(any_t).norm();
+  for (double step = 0.0; step <= 0.40 + 1e-9; step += 0.08) {
     for (const double sgn : {+1.0, -1.0}) {
       const double cand = t_nominal + sgn * step * span;
-      if (!in_window(cand)) continue;
-      if (clear(cand)) {
-        log_->infof("[CHAIN] junction @%.1f s nudged to %.1f s (clear of "
-                    "zone moat+taper)", t_nominal, cand);
-        return cand;
-      }
+      if (cand < lo) continue;
       const double a = traj.getAcc(cand).norm();
-      if (a < calmest_a) { calmest = cand; calmest_a = a; }
+      if (a < any_a) { any_t = cand; any_a = a; }
+      if (!nearRiskZone(traj.getPos(cand)) && a < clear_a) {
+        clear_t = cand;
+        clear_a = a;
+      }
+      if (step == 0.0) break;  // nominal has no sign
     }
   }
-  // ...but when the window is blanketed by zones (r3-class gauntlets), fall
-  // back to the CALMEST baseline state in it, not the nominal time. A
-  // junction is a handoff, and a handoff mid-maneuver pins a hard BC in the
-  // field's fiercest gradient: observed on r3, the equal-time junction
-  // (|a| = 0.111 u/s^2, banking through the zone saddle) trapped the final
-  // segment's solve in a condemned basin (bank 55 deg, 41% envelope
-  // violations, terrain overlap), while a steady-state junction 30 s
-  // earlier (|a| = 0.030) chained cleanly through the same field.
+  if (clear_t >= 0.0) {
+    if (std::abs(clear_t - t_nominal) > 1e-9) {
+      log_->infof("[CHAIN] junction @%.1f s moved to %.1f s (calmest "
+                  "zone-clear state in the window, |a|=%.3f u/s^2)",
+                  t_nominal, clear_t, clear_a);
+    }
+    return clear_t;
+  }
   log_->warnf("[CHAIN] junction @%.1f s: window blanketed by zones — taking "
               "the calmest baseline state @%.1f s (|a|=%.3f u/s^2)",
-              t_nominal, calmest, calmest_a);
-  return calmest;
+              t_nominal, any_t, any_a);
+  return any_t;
 }
 
 bool SegmentChainPlanner::nearRiskZone(const Eigen::Vector3d &p) const
