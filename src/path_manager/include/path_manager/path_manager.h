@@ -276,12 +276,45 @@ namespace path_manager
     // zones; the final segment's re-run swung west over 1,080 m terrain and
     // died in line search with a terrain overlap). Inheriting the slice makes
     // the stage-1 contract literal: same conditions, only split.
+    // front_end_only: [CHAIN-PAR] stop after the committed front-end
+    // products are retained (lastCommittedRoute/CapRef) — the route-based
+    // contract authoring needs the route, not a full solve.
     bool planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
                         const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
                         bool junction_goal = false, bool junction_head = false,
                         const std::vector<Eigen::Vector3d> *route_override = nullptr,
-                        const std::vector<double> *cap_ref_override = nullptr);
+                        const std::vector<double> *cap_ref_override = nullptr,
+                        bool front_end_only = false);
+
+    // [CHAIN-PAR] A fully configured, INDEPENDENT optimizer instance (same
+    // configuration sequence initOptimizer applies to the member instance:
+    // params, SDF, terrain callbacks, risk zones, gates). Workers own one
+    // each so segment solves can run concurrently; the shared surfaces they
+    // read are safe by design (SDF static layer read-only, dynamic patches
+    // under shared_mutex, terrain ELEV-MEMO thread_local, risk masks const).
+    std::unique_ptr<ego_planner::PolyTrajOptimizer> makeConfiguredOptimizer();
+
+    // [CHAIN-PAR] Solve ONE route slice with pinned boundary states on the
+    // GIVEN optimizer instance. Touches no PathManager mutable state (no
+    // traj_, no viz, no per-plan member writes) — safe to call from worker
+    // threads with distinct instances. slice/cap by value: the optimizer
+    // mutates its path in place.
+    bool solveSlice(ego_planner::PolyTrajOptimizer &opt,
+                    std::vector<Eigen::Vector3d> slice,
+                    std::vector<double> cap,
+                    const Eigen::Vector3d &head_pos,
+                    const Eigen::Vector3d &head_vel,
+                    const Eigen::Vector3d &head_acc,
+                    const Eigen::Vector3d &goal_pos,
+                    const Eigen::Vector3d &end_vel,
+                    const Eigen::Vector3d &end_acc,
+                    bool suppress_crossing_exempt,
+                    poly_traj::Trajectory *out) const;
+
+    // [CHAIN-PAR] read-only bits the chain planner needs for authoring.
+    double maxVel() const { return max_vel_; }
+    int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
 
     // [CHAIN] committed front-end products of the most recent plan, retained
     // for the chain planner to slice (clean_path as handed to the optimizer,

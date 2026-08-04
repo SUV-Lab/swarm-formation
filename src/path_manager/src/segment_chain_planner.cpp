@@ -4,6 +4,7 @@
 #include <chrono>
 #include <limits>
 #include <map>
+#include <thread>
 
 #include "path_manager/terminal_phase.h"
 
@@ -75,6 +76,26 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     return pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
                                Eigen::Vector3d::Zero(),
                                Eigen::Vector3d::Zero());
+  }
+
+  // [CHAIN-PAR] route-parallel mode replaces the whole baseline flow.
+  {
+    const auto dp = [&](const char *n, bool def) {
+      if (!node_->has_parameter(n)) node_->declare_parameter(n, def);
+      bool v = def;
+      node_->get_parameter(n, v);
+      return v;
+    };
+    const bool author = dp("chain/author_from_route", false);
+    const bool par = dp("chain/parallel", false);
+    if (author) {
+      return planRouteParallel(start_pos, start_vel, start_acc, waypoints,
+                               start_vel_synthesized, par);
+    } else if (par) {
+      log_->warnf("[CHAIN] chain/parallel needs chain/author_from_route "
+                  "(the baseline is inherently sequential) — running the "
+                  "sequential baseline flow");
+    }
   }
 
   const auto t_wall = std::chrono::steady_clock::now();
@@ -350,6 +371,278 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
               "(baseline %.1f s), planned in %.1f ms wall",
               segments_, chained.getPieceNum(), chained.getTotalDuration(), T,
               wall_ms);
+  return true;
+}
+
+bool SegmentChainPlanner::authorContractsFromRoute(
+    const std::vector<Eigen::Vector3d> &route,
+    std::vector<Contract> *contracts) const
+{
+  const int M = static_cast<int>(route.size());
+  if (M < segments_ + 1 || !contracts) return false;
+  std::vector<double> s(static_cast<size_t>(M), 0.0);
+  for (int i = 1; i < M; ++i)
+    s[i] = s[i - 1] + (route[i] - route[i - 1]).norm();
+  const double S = s.back();
+  if (S < 1e-6) return false;
+  const double span = S / segments_;
+  const double cruise = pm_->maxVel();
+
+  // Discrete 3D curvature per interior vertex: turn angle over the mean
+  // chord — the a-priori stand-in for the baseline's |a| (= v^2 * kappa).
+  std::vector<double> kappa(static_cast<size_t>(M), 0.0);
+  for (int i = 1; i + 1 < M; ++i) {
+    const Eigen::Vector3d a = route[i] - route[i - 1];
+    const Eigen::Vector3d b = route[i + 1] - route[i];
+    const double la = a.norm(), lb = b.norm();
+    if (la < 1e-9 || lb < 1e-9) continue;
+    const double c =
+        std::max(-1.0, std::min(1.0, a.dot(b) / (la * lb)));
+    kappa[static_cast<size_t>(i)] = std::acos(c) / (0.5 * (la + lb));
+  }
+
+  contracts->clear();
+  double s_prev = 0.0;
+  for (int j = 1; j < segments_; ++j) {
+    const double target = j * span;
+    const double lo = s_prev + 0.2 * span;
+    const double hi = target + 0.4 * span;
+    int best = -1, best_any = -1;
+    double best_score = std::numeric_limits<double>::infinity();
+    double best_any_score = best_score;
+    for (int i = 1; i + 1 < M; ++i) {
+      if (s[i] < lo || s[i] > hi) continue;
+      // Calmness dominates, balance breaks ties: kappa is rad/u (a gentle
+      // route sits at ~0.001-0.01, a hard corner at 0.05+), the balance
+      // term at most 0.4 — the 100x scale makes a real bend outweigh any
+      // imbalance while flat stretches sort by balance.
+      const double score =
+          kappa[static_cast<size_t>(i)] * 100.0 +
+          std::abs(s[i] - target) / span;
+      if (score < best_any_score) { best_any = i; best_any_score = score; }
+      if (nearRiskZone(route[i])) continue;
+      if (score < best_score) { best = i; best_score = score; }
+    }
+    if (best < 0) {
+      log_->warnf("[CHAIN-PAR] junction %d: window blanketed by zones — "
+                  "calmest candidate regardless (risk comparison "
+                  "contaminated there)", j);
+      best = best_any;
+    }
+    if (best < 0) return false;
+    Contract c;
+    c.t = s[best] / std::max(1e-9, cruise);
+    c.pos = route[best];
+    Eigen::Vector3d dir = route[best + 1] - route[best - 1];
+    if (dir.norm() < 1e-9) dir = Eigen::Vector3d::UnitX();
+    c.vel = dir.normalized() * cruise;
+    c.acc = Eigen::Vector3d::Zero();
+    log_->infof("[CHAIN-PAR] contract %d @s=%.1f u (target %.1f): "
+                "pos=(%.2f, %.2f, %.2f) |v|=%.3f kappa=%.4f rad/u",
+                j, s[best], target, c.pos.x(), c.pos.y(), c.pos.z(),
+                c.vel.norm(), kappa[static_cast<size_t>(best)]);
+    contracts->push_back(c);
+    s_prev = s[best];
+  }
+  return true;
+}
+
+bool SegmentChainPlanner::planRouteParallel(
+    const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
+    const Eigen::Vector3d &start_acc,
+    const std::vector<Eigen::Vector3d> &waypoints,
+    bool start_vel_synthesized, bool run_parallel)
+{
+  const auto t_wall = std::chrono::steady_clock::now();
+  const auto ms_since = [](const std::chrono::steady_clock::time_point &t0) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - t0)
+        .count();
+  };
+
+  // Single-shot fallback for anything the route mode cannot author.
+  const auto fallback = [&](const char *why) {
+    log_->warnf("[CHAIN-PAR] %s — falling back to the single-shot plan", why);
+    pm_->setStartVelSynthesized(start_vel_synthesized);
+    return pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
+                               Eigen::Vector3d::Zero(),
+                               Eigen::Vector3d::Zero());
+  };
+
+  // === 1. front-end only: commit the route (AGL/bbox/SDF/zone binding
+  // happen here exactly once) ===
+  log_->infof("[CHAIN-PAR] route-%s plan, %d segments (no baseline)",
+              run_parallel ? "parallel" : "sequential", segments_);
+  pm_->setStartVelSynthesized(false);
+  if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
+                           Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
+                           false, false, nullptr, nullptr,
+                           /*front_end_only=*/true)) {
+    log_->errorf("[CHAIN-PAR] front-end failed — nothing to author on");
+    return false;
+  }
+  const std::vector<Eigen::Vector3d> route = pm_->lastCommittedRoute();
+  const std::vector<double> cap = pm_->lastCommittedCapRef();
+  const double fe_ms = ms_since(t_wall);
+
+  // === 2. author contracts + slices on the route ===
+  std::vector<Contract> contracts;
+  if (!authorContractsFromRoute(route, &contracts))
+    return fallback("route too small to author junctions on");
+  std::vector<RouteSlice> slices =
+      sliceCommittedRoute(route, cap, contracts);
+  if (slices.size() != static_cast<size_t>(segments_))
+    return fallback("committed route did not slice cleanly");
+
+  // Segment 1's head is the MISSION start: replicate [VEL-ALIGN] (the
+  // route is known here) and the [STALL-FLOOR] the bypassed planGlobalTraj
+  // path would have applied.
+  Eigen::Vector3d v0 = start_vel;
+  if (start_vel_synthesized && route.size() >= 2) {
+    Eigen::Vector3d dir = route[1] - route[0];
+    dir.z() = 0.0;
+    if (dir.head<2>().norm() > 1e-9)
+      v0 = dir.normalized() * start_vel.norm();
+  }
+  if (const auto *dyn = pm_->dynamicsParams()) {
+    double um = 100.0;
+    if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+      um = node_->get_parameter("optimization/dynamics_unit_xy_m")
+               .as_double();
+    const double floor =
+        dyn->speed_min_mps * (1.0 + dyn->constraint_margin) / um;
+    if (floor > 0.0 && v0.norm() < floor) {
+      Eigen::Vector3d dir = v0;
+      if (dir.norm() < 1e-9 && route.size() >= 2) {
+        dir = route[1] - route[0];
+        dir.z() = 0.0;
+      }
+      if (dir.norm() < 1e-9) dir = Eigen::Vector3d::UnitX();
+      log_->warnf("[CHAIN-PAR] start speed %.3f below stall floor %.3f — "
+                  "raised (same contract as [STALL-FLOOR])",
+                  v0.norm(), floor);
+      v0 = dir.normalized() * floor;
+    }
+  }
+  const double author_ms = ms_since(t_wall) - fe_ms;
+
+  // === 3. per-worker optimizer instances (serial: setParam snapshots
+  // node params, and inner OpenMP is pinned to 1 thread while N worker
+  // threads exist) ===
+  rclcpp::Parameter saved_rpt;
+  bool had_rpt = node_->has_parameter("optimization/risk_parallel_threads");
+  if (had_rpt)
+    saved_rpt = node_->get_parameter("optimization/risk_parallel_threads");
+  if (run_parallel) {
+    // The solver is ALREADY internally parallel (OpenMP over the risk
+    // term), so segment threads mostly REDISTRIBUTE cores rather than add
+    // compute. Pinning workers to 1 inner thread measured SLOWER than
+    // sequential (each solve lost its 32 cores); share the machine
+    // instead: cores / segments inner threads per worker.
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    const int per =
+        std::max(1, static_cast<int>(hw) / std::max(1, segments_));
+    log_->infof("[CHAIN-PAR] %u cores / %d workers -> %d inner threads "
+                "each", hw, segments_, per);
+    node_->set_parameters(
+        {rclcpp::Parameter("optimization/risk_parallel_threads", per)});
+  }
+  std::vector<std::unique_ptr<ego_planner::PolyTrajOptimizer>> opts;
+  for (int i = 0; i < segments_; ++i)
+    opts.push_back(pm_->makeConfiguredOptimizer());
+  if (run_parallel && had_rpt) node_->set_parameters({saved_rpt});
+  const bool sup = pm_->zoneAvoidPassNow() == 1;
+
+  // === 4. solve — the same worker body, threaded or looped ===
+  std::vector<poly_traj::Trajectory> runs(static_cast<size_t>(segments_));
+  std::vector<char> ok(static_cast<size_t>(segments_), 0);
+  std::vector<double> solve_ms(static_cast<size_t>(segments_), 0.0);
+  const auto worker = [&](int i) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool last = (i + 1 == segments_);
+    const size_t ui = static_cast<size_t>(i);
+    const Eigen::Vector3d hp = i ? contracts[ui - 1].pos : start_pos;
+    const Eigen::Vector3d hv = i ? contracts[ui - 1].vel : v0;
+    const Eigen::Vector3d ha = i ? contracts[ui - 1].acc : start_acc;
+    const Eigen::Vector3d gp = slices[ui].path.back();
+    const Eigen::Vector3d ev =
+        last ? Eigen::Vector3d::Zero() : contracts[ui].vel;
+    const Eigen::Vector3d ea =
+        last ? Eigen::Vector3d::Zero() : contracts[ui].acc;
+    ok[ui] = pm_->solveSlice(*opts[ui], slices[ui].path, slices[ui].cap,
+                             hp, hv, ha, gp, ev, ea, sup, &runs[ui])
+                 ? 1
+                 : 0;
+    solve_ms[ui] = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count();
+  };
+  const auto t_solve = std::chrono::steady_clock::now();
+  if (run_parallel) {
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(segments_));
+    for (int i = 0; i < segments_; ++i) workers.emplace_back(worker, i);
+    for (auto &w : workers) w.join();
+  } else {
+    for (int i = 0; i < segments_; ++i) worker(i);
+  }
+  const double solve_wall_ms = ms_since(t_solve);
+
+  for (int i = 0; i < segments_; ++i) {
+    if (!ok[static_cast<size_t>(i)]) {
+      // No baseline exists in this mode: a failed segment fails the plan.
+      log_->errorf("[CHAIN-PAR] segment %d/%d FAILED — no baseline to fall "
+                   "back to, mission plan rejected", i + 1, segments_);
+      return false;
+    }
+  }
+
+  // === 5. stitch, report, terminal, store, evaluate ===
+  poly_traj::Trajectory chained = runs.front();
+  for (size_t i = 1; i < runs.size(); ++i) chained.append(runs[i]);
+
+  const poly_traj::Trajectory no_baseline;  // report skips the comparison
+  logChainReport(no_baseline, runs, contracts, chained,
+                 std::vector<SegmentOverrides>(
+                     static_cast<size_t>(segments_)));
+
+  std::vector<double> phase_ends;
+  std::vector<std::string> phase_names;
+  double acc_t = 0.0;
+  for (size_t i = 0; i < runs.size(); ++i) {
+    acc_t += runs[i].getTotalDuration();
+    phase_ends.push_back(acc_t);
+    phase_names.push_back("seg" + std::to_string(i + 1));
+  }
+  const double t_pre_terminal = chained.getTotalDuration();
+  appendTerminalPhase(&chained);
+  if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
+    phase_ends.push_back(chained.getTotalDuration());
+    phase_names.push_back("terminal");
+  }
+
+  const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+  // No baseline: both slots carry the chained product (the comparison
+  // channel simply mirrors the flight in this mode).
+  pm_->traj_.setGlobalTraj(chained, now_s);
+  pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
+  pm_->publishTrajectoryViz(chained, chained);
+  logFinalEvaluation(chained, phase_ends, phase_names);
+
+  std::string per;
+  for (size_t i = 0; i < solve_ms.size(); ++i) {
+    char b[32];
+    snprintf(b, sizeof b, "%s%.0f", i ? "/" : "", solve_ms[i]);
+    per += b;
+  }
+  log_->infof("[CHAIN-PAR] %s: front-end %.0f ms + author %.0f ms + solves "
+              "[%s] ms (wall %.0f, max %.0f) => TOTAL %.0f ms | %d pieces, "
+              "%.1f s flight",
+              run_parallel ? "PARALLEL" : "sequential", fe_ms, author_ms,
+              per.c_str(), solve_wall_ms,
+              *std::max_element(solve_ms.begin(), solve_ms.end()),
+              ms_since(t_wall), chained.getPieceNum(),
+              chained.getTotalDuration());
   return true;
 }
 
@@ -847,6 +1140,11 @@ void SegmentChainPlanner::logChainReport(
   }
 
   // Baseline vs chain, at matched arc fractions (durations differ).
+  // [CHAIN-PAR] route mode has no baseline — the comparison is skipped.
+  if (baseline.getPieceNum() == 0) {
+    log_->infof("[CHAIN-REPORT] (route mode: no baseline to compare "
+                "against)");
+  } else {
   const ArcTable ab = buildArcTable(baseline, 400);
   const ArcTable ac = buildArcTable(chained, 400);
   double dev_max = 0.0, dev_sum = 0.0, dev_max_s = 0.0;
@@ -872,6 +1170,7 @@ void SegmentChainPlanner::logChainReport(
   log_->infof("[CHAIN-REPORT] deviation vs baseline @matched arc: mean "
               "%.2f u, max %.2f u @s=%.1f u (%.1f km)",
               dev_sum / (kSweep + 1), dev_max, dev_max_s, dev_max_s * 0.1);
+  }
 
   // One-line verdict for the log grep: seams are the stage-1 acceptance
   // criterion; the deviation numbers are context, not a gate.

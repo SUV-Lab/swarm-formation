@@ -380,16 +380,36 @@ namespace path_manager
         // Reset state in case of partial initialization
         is_optimizer_initialized_ = false;
         poly_traj_opt_.reset();
-        
+
         try {
             RCLCPP_INFO(node_->get_logger(), "Initializing optimizer for drone %d...", traj_.local_traj.drone_id);
-            
+            poly_traj_opt_ = makeConfiguredOptimizer();
+            // Only mark as initialized after all steps succeed
+            is_optimizer_initialized_ = true;
+            RCLCPP_INFO(node_->get_logger(), "Optimizer initialized successfully for drone %d", traj_.local_traj.drone_id);
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(node_->get_logger(), "Exception during optimizer initialization: %s", e.what());
+            poly_traj_opt_.reset();  // Reset to nullptr on failure
+            is_optimizer_initialized_ = false;
+            throw;  // Re-throw the exception
+        } catch (...) {
+            RCLCPP_ERROR(node_->get_logger(), "Unknown exception during optimizer initialization");
+            poly_traj_opt_.reset();
+            is_optimizer_initialized_ = false;
+            throw;
+        }
+    }
+
+    std::unique_ptr<ego_planner::PolyTrajOptimizer>
+    PathManager::makeConfiguredOptimizer()
+    {
+        {
             // Check prerequisites
             if (!node_) {
                 throw std::runtime_error("Node is null");
             }
 
-            poly_traj_opt_ = std::make_unique<ego_planner::PolyTrajOptimizer>();
+            auto poly_traj_opt_ = std::make_unique<ego_planner::PolyTrajOptimizer>();
 
             // Set LogManager for unified logging
             poly_traj_opt_->setLogManager(log_manager_);
@@ -540,19 +560,12 @@ namespace path_manager
                     return riskShadowCeiling(zi, p);
                 });
 
-            // Only mark as initialized after all steps succeed
-            is_optimizer_initialized_ = true;
-            RCLCPP_INFO(node_->get_logger(), "Optimizer initialized successfully for drone %d", traj_.local_traj.drone_id);
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(node_->get_logger(), "Exception during optimizer initialization: %s", e.what());
-            poly_traj_opt_.reset();  // Reset to nullptr on failure
-            is_optimizer_initialized_ = false;
-            throw;  // Re-throw the exception
-        } catch (...) {
-            RCLCPP_ERROR(node_->get_logger(), "Unknown exception during optimizer initialization");
-            poly_traj_opt_.reset();
-            is_optimizer_initialized_ = false;
-            throw;
+            // NOTE: the local unique_ptr deliberately shadows the member of
+            // the same name so this configuration body — moved verbatim from
+            // initOptimizer — reads unchanged. initOptimizer assigns the
+            // returned instance to the member; [CHAIN-PAR] workers keep
+            // their own.
+            return poly_traj_opt_;
         }
     }
 
@@ -561,7 +574,8 @@ namespace path_manager
                                      const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
                                      bool junction_goal, bool junction_head,
                                      const std::vector<Eigen::Vector3d> *route_override,
-                                     const std::vector<double> *cap_ref_override)
+                                     const std::vector<double> *cap_ref_override,
+                                     bool front_end_only)
     {
         log_manager_->infof("Planning global trajectory with %zu waypoints", waypoints.size());
         auto t_total_start = std::chrono::steady_clock::now();
@@ -810,6 +824,14 @@ namespace path_manager
         // mutate clean_path.
         last_clean_path_ = clean_path;
         last_cap_ref_ = cap_ref;
+        if (front_end_only) {
+            // [CHAIN-PAR] route-based contract authoring needs only the
+            // committed front-end products retained above.
+            log_manager_->infof("[CHAIN-PAR] front-end only: %zu vertices "
+                                "committed, optimization skipped",
+                                clean_path.size());
+            return true;
+        }
 
         // [VEL-ALIGN] A SYNTHESIZED start velocity (default speed x first-leg
         // chord — the FSM knows no route before the front-end runs) is only a
@@ -1545,6 +1567,49 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             local_traj.getTotalDuration(), local_traj.getMaxVelRate());
 
         return true;
+}
+
+// [CHAIN-PAR] One slice, one optimizer instance, no shared mutable state:
+// the z-band is a compact per-slice rendition of optimizeStage's (committed
+// max from slice+cap plus headroom; floor from the slice minimum with the
+// ground cushion), and everything else the solve needs lives inside the
+// given instance. No traj_ writes, no viz, no timing members — thread-safe
+// against siblings by construction.
+bool PathManager::solveSlice(ego_planner::PolyTrajOptimizer &opt,
+                             std::vector<Eigen::Vector3d> slice,
+                             std::vector<double> cap,
+                             const Eigen::Vector3d &head_pos,
+                             const Eigen::Vector3d &head_vel,
+                             const Eigen::Vector3d &head_acc,
+                             const Eigen::Vector3d &goal_pos,
+                             const Eigen::Vector3d &end_vel,
+                             const Eigen::Vector3d &end_acc,
+                             bool suppress_crossing_exempt,
+                             poly_traj::Trajectory *out) const
+{
+    if (slice.size() < 2 || !out) return false;
+    double path_max_z = std::max(head_pos.z(), goal_pos.z());
+    double path_min_z = std::min(head_pos.z(), goal_pos.z());
+    for (const auto &p : slice) {
+        path_max_z = std::max(path_max_z, p.z());
+        path_min_z = std::min(path_min_z, p.z());
+    }
+    // cap_ref carries the committed (pre-denoise-restored) ceiling per
+    // vertex — the slice-local stand-in for fe_raw_max_z_.
+    for (const double c : cap) path_max_z = std::max(path_max_z, c);
+    const double z_hi = path_max_z + alt_cap_headroom_;
+    double z_lo = path_min_z - alt_floor_headroom_;
+    if (ground_height_ > -0.5) {
+        z_lo = std::max(z_lo, ground_height_ + 0.5 * alt_floor_headroom_);
+    }
+    opt.setAltitudeBand(z_lo, z_hi, weight_altitude_);
+    opt.setSuppressCrossingExempt(suppress_crossing_exempt);
+
+    poly_traj::Trajectory out_global;
+    const std::vector<Eigen::Vector3d> goal_wps{goal_pos};
+    return opt.optimizeFromPath(slice, head_pos, head_vel, head_acc,
+                                goal_wps, max_vel_, out_global, *out, cap,
+                                end_vel, end_acc);
 }
 
 // [CHAIN] Republish the along-trajectory channels for an externally

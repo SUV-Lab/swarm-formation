@@ -98,6 +98,21 @@ private:
   };
   std::vector<SegmentOverrides> readSegmentOverrides() const;
 
+  // [CHAIN-PAR] Route-parallel mode (chain/author_from_route [+
+  // chain/parallel]): NO baseline solve. One front-end-only pass commits
+  // the route (~0.3 s even at 337 km); junction contracts are authored on
+  // it — zone-clear, low-CURVATURE (the a-priori calm: a = v^2 * kappa)
+  // and arc-balanced — as (vertex, 3D tangent x cruise, a = 0), which at
+  // calm vertices is measurably what the unsplit optimum flies there
+  // (r4: |a| = 0.002). Segments then solve on per-worker optimizer
+  // instances, concurrently when chain/parallel is set. No baseline means
+  // no fallback: a failed segment fails the mission plan.
+  bool planRouteParallel(const Eigen::Vector3d &start_pos,
+                         const Eigen::Vector3d &start_vel,
+                         const Eigen::Vector3d &start_acc,
+                         const std::vector<Eigen::Vector3d> &waypoints,
+                         bool start_vel_synthesized, bool run_parallel);
+
   // [STAGE-4] Whole-flight evaluation of the FINAL stitched product — the
   // one artifact no per-solve audit ever sees whole (and the terminal
   // phase not at all): terrain clearance, flight-envelope utilization
@@ -142,6 +157,11 @@ private:
       const std::vector<Eigen::Vector3d> &route,
       const std::vector<double> &cap,
       const std::vector<Contract> &contracts) const;
+
+  // [CHAIN-PAR] see planRouteParallel. Contract.t carries pseudo-time
+  // (arc / cruise) for the logs.
+  bool authorContractsFromRoute(const std::vector<Eigen::Vector3d> &route,
+                                std::vector<Contract> *contracts) const;
 
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;
