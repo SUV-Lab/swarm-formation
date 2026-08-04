@@ -127,8 +127,12 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     int chain_segments = 3;
     node_->declare_parameter("chain/segments", 3);
     node_->get_parameter("chain/segments", chain_segments);
+    bool chain_inherit_route = true;
+    node_->declare_parameter("chain/inherit_route", true);
+    node_->get_parameter("chain/inherit_route", chain_inherit_route);
     chain_planner_ = std::make_unique<SegmentChainPlanner>(
-        node_, path_manager_, log_manager_.get(), chain_segments);
+        node_, path_manager_, log_manager_.get(), chain_segments,
+        chain_inherit_route);
     if (chain_enable_) {
         FSM_LOG_WARN("[CHAIN] segment-chained planning ENABLED "
                      "(%d segments per mission)", chain_planner_->segments());

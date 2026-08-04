@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 namespace path_manager {
 
@@ -52,9 +53,9 @@ double timeAtArcFrac(const ArcTable &a, double frac)
 SegmentChainPlanner::SegmentChainPlanner(rclcpp::Node::SharedPtr node,
                                          std::shared_ptr<PathManager> path_manager,
                                          swarm_formation::LogManager *log_manager,
-                                         int segments)
+                                         int segments, bool inherit_route)
     : node_(node), pm_(path_manager), log_(log_manager),
-      segments_(std::max(2, segments)) {}
+      segments_(std::max(2, segments)), inherit_route_(inherit_route) {}
 
 bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                                const Eigen::Vector3d &start_vel,
@@ -118,6 +119,25 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     contracts.push_back(c);
   }
 
+  // Baseline's committed front-end products, sliced per span. Copied out
+  // before the segment runs overwrite the manager's last-plan retention.
+  std::vector<RouteSlice> slices;
+  if (inherit_route_) {
+    slices = sliceCommittedRoute(pm_->lastCommittedRoute(),
+                                 pm_->lastCommittedCapRef(), contracts);
+    if (slices.size() != static_cast<size_t>(segments_)) {
+      log_->warnf("[CHAIN] committed route did not slice cleanly (%zu/%d) — "
+                  "falling back to per-span front-end search",
+                  slices.size(), segments_);
+      slices.clear();
+    } else {
+      for (size_t j = 0; j < slices.size(); ++j) {
+        log_->infof("[CHAIN] slice %zu: %zu vertices (cap %zu)",
+                    j + 1, slices[j].path.size(), slices[j].cap.size());
+      }
+    }
+  }
+
   // === Chained segment runs (sequential; each is a full pipeline run) ===
   std::vector<poly_traj::Trajectory> runs;
   for (int i = 0; i < segments_; ++i) {
@@ -144,9 +164,13 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     // ([VEL-ALIGN]) and never floor ([STALL-FLOOR]) them: the neighbour's
     // tail pins the same state verbatim.
     pm_->setStartVelSynthesized(i == 0 ? start_vel_synthesized : false);
+    const RouteSlice *slice =
+        (i < static_cast<int>(slices.size())) ? &slices[i] : nullptr;
     if (!pm_->planGlobalTraj(head_pos, head_vel, head_acc, goal,
                              end_vel, end_acc, /*junction_goal=*/!last,
-                             /*junction_head=*/i != 0)) {
+                             /*junction_head=*/i != 0,
+                             slice ? &slice->path : nullptr,
+                             slice ? &slice->cap : nullptr)) {
       // Degrade loudly to the baseline: the mission still flies, and the
       // failed experiment is visible in the log, not in the sky.
       log_->warnf("[CHAIN] segment %d/%d FAILED — restoring and flying the "
@@ -183,6 +207,79 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   return true;
 }
 
+std::vector<SegmentChainPlanner::RouteSlice>
+SegmentChainPlanner::sliceCommittedRoute(
+    const std::vector<Eigen::Vector3d> &route,
+    const std::vector<double> &cap,
+    const std::vector<Contract> &contracts) const
+{
+  if (route.size() < 2) return {};
+  const bool has_cap = cap.size() == route.size();
+
+  // Forward polyline projection of every contract position. The contract was
+  // sampled from the OPTIMIZED baseline, which deviates from the committed
+  // route by design — projection finds where to cut; the injected slice
+  // endpoint is the contract position itself, so route endpoint == BC.
+  struct Cut { size_t seg; double u; Eigen::Vector3d pos; double cap; };
+  std::vector<Cut> cuts;
+  size_t seg0 = 0;
+  for (const auto &c : contracts) {
+    double best_d2 = std::numeric_limits<double>::max();
+    Cut best{seg0, 0.0, c.pos, 0.0};
+    for (size_t i = seg0; i + 1 < route.size(); ++i) {
+      const Eigen::Vector3d &a = route[i];
+      const Eigen::Vector3d ab = route[i + 1] - a;
+      const double len2 = ab.squaredNorm();
+      double u = (len2 > 1e-12) ? (c.pos - a).dot(ab) / len2 : 0.0;
+      u = std::min(1.0, std::max(0.0, u));
+      const double d2 = (a + u * ab - c.pos).squaredNorm();
+      if (d2 < best_d2) { best_d2 = d2; best.seg = i; best.u = u; }
+    }
+    best.cap = has_cap ? std::max(cap[best.seg], cap[best.seg + 1]) : 0.0;
+    // A cut landing at or before the previous one means the projection
+    // folded back (self-crossing route) — the caller falls back to per-span
+    // search rather than planning a backwards slice.
+    if (!cuts.empty() && (best.seg < cuts.back().seg ||
+                          (best.seg == cuts.back().seg &&
+                           best.u <= cuts.back().u))) {
+      return {};
+    }
+    cuts.push_back(best);
+    seg0 = best.seg;
+  }
+
+  // Virtual cuts at the two mission ends make every slice the same shape.
+  std::vector<Cut> all;
+  all.push_back({0, 0.0, route.front(), has_cap ? cap.front() : 0.0});
+  all.insert(all.end(), cuts.begin(), cuts.end());
+  all.push_back({route.size() - 2, 1.0, route.back(),
+                 has_cap ? cap.back() : 0.0});
+
+  std::vector<RouteSlice> slices;
+  for (size_t j = 0; j + 1 < all.size(); ++j) {
+    const Cut &a = all[j], &b = all[j + 1];
+    RouteSlice s;
+    auto push = [&](const Eigen::Vector3d &p, double cp) {
+      if (!s.path.empty() && (p - s.path.back()).norm() < 1e-3) {
+        // Coincident with the previous vertex: keep the larger cap so the
+        // dedup never tightens the ceiling.
+        if (has_cap && !s.cap.empty())
+          s.cap.back() = std::max(s.cap.back(), cp);
+        return;
+      }
+      s.path.push_back(p);
+      if (has_cap) s.cap.push_back(cp);
+    };
+    push(a.pos, a.cap);
+    for (size_t i = a.seg + 1; i <= b.seg; ++i)
+      push(route[i], has_cap ? cap[i] : 0.0);
+    push(b.pos, b.cap);
+    if (s.path.size() < 2) return {};  // degenerate span
+    slices.push_back(std::move(s));
+  }
+  return slices;
+}
+
 double SegmentChainPlanner::clearJunctionTime(
     double t_nominal, double t_prev, double span,
     const poly_traj::Trajectory &traj) const
@@ -193,22 +290,39 @@ double SegmentChainPlanner::clearJunctionTime(
   // times can therefore neither coincide nor invert, at ANY segment count —
   // a total-duration window here let ±10% nudges cross once segments > 4.
   const double lo = t_prev + 0.2 * span;
-  const auto ok = [&](double cand) {
-    return cand >= lo && !nearRiskZone(traj.getPos(cand));
+  const auto in_window = [&](double cand) { return cand >= lo; };
+  const auto clear = [&](double cand) {
+    return !nearRiskZone(traj.getPos(cand));
   };
-  if (ok(t_nominal)) return t_nominal;
+  if (in_window(t_nominal) && clear(t_nominal)) return t_nominal;
+  // Nearest-to-nominal zone-clear candidate wins (the original policy)...
+  double calmest = std::max(t_nominal, lo);
+  double calmest_a = traj.getAcc(calmest).norm();
   for (double step = 0.08; step <= 0.40 + 1e-9; step += 0.08) {
     for (const double sgn : {+1.0, -1.0}) {
       const double cand = t_nominal + sgn * step * span;
-      if (!ok(cand)) continue;
-      log_->infof("[CHAIN] junction @%.1f s nudged to %.1f s (clear of "
-                  "zone moat+taper)", t_nominal, cand);
-      return cand;
+      if (!in_window(cand)) continue;
+      if (clear(cand)) {
+        log_->infof("[CHAIN] junction @%.1f s nudged to %.1f s (clear of "
+                    "zone moat+taper)", t_nominal, cand);
+        return cand;
+      }
+      const double a = traj.getAcc(cand).norm();
+      if (a < calmest_a) { calmest = cand; calmest_a = a; }
     }
   }
-  // Nothing in the window clears; keep the nominal time (the caller logs
-  // the contamination warning) but never violate monotonicity.
-  return std::max(t_nominal, lo);
+  // ...but when the window is blanketed by zones (r3-class gauntlets), fall
+  // back to the CALMEST baseline state in it, not the nominal time. A
+  // junction is a handoff, and a handoff mid-maneuver pins a hard BC in the
+  // field's fiercest gradient: observed on r3, the equal-time junction
+  // (|a| = 0.111 u/s^2, banking through the zone saddle) trapped the final
+  // segment's solve in a condemned basin (bank 55 deg, 41% envelope
+  // violations, terrain overlap), while a steady-state junction 30 s
+  // earlier (|a| = 0.030) chained cleanly through the same field.
+  log_->warnf("[CHAIN] junction @%.1f s: window blanketed by zones — taking "
+              "the calmest baseline state @%.1f s (|a|=%.3f u/s^2)",
+              t_nominal, calmest, calmest_a);
+  return calmest;
 }
 
 bool SegmentChainPlanner::nearRiskZone(const Eigen::Vector3d &p) const

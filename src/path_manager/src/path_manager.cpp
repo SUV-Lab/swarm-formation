@@ -543,7 +543,9 @@ namespace path_manager
     bool PathManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                                      const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
                                      const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
-                                     bool junction_goal, bool junction_head)
+                                     bool junction_goal, bool junction_head,
+                                     const std::vector<Eigen::Vector3d> *route_override,
+                                     const std::vector<double> *cap_ref_override)
     {
         log_manager_->infof("Planning global trajectory with %zu waypoints", waypoints.size());
         auto t_total_start = std::chrono::steady_clock::now();
@@ -769,9 +771,29 @@ namespace path_manager
         // === STEP 2~3: front-end search + densification ===
         std::vector<Eigen::Vector3d> full_route, clean_path;
         std::vector<double> cap_ref;
-        if (!planFrontEnd(start_pos, wps, full_route, clean_path, cap_ref)) {
+        if (route_override && route_override->size() >= 2) {
+            // [CHAIN] Inherited committed route (see the header comment):
+            // the optimizer re-solves this exact geometry; no re-litigation
+            // of the route homotopy, the altitude band/cap tables inherit
+            // the baseline's committed profile over the span.
+            clean_path = *route_override;
+            full_route = clean_path;
+            if (cap_ref_override) cap_ref = *cap_ref_override;
+            fe_raw_max_z_ = -1e9;
+            for (const auto &p : clean_path)
+                fe_raw_max_z_ = std::max(fe_raw_max_z_, p.z());
+            log_manager_->infof(
+                "[CHAIN] inherited committed route: %zu vertices, cap_ref "
+                "%zu, committed max z %.2f (front-end search skipped)",
+                clean_path.size(), cap_ref.size(), fe_raw_max_z_);
+        } else if (!planFrontEnd(start_pos, wps, full_route, clean_path, cap_ref)) {
             return false;
         }
+        // [CHAIN] retain the committed products for the chain planner to
+        // slice — copied BEFORE the optimizer's midpoint/lead-in insertions
+        // mutate clean_path.
+        last_clean_path_ = clean_path;
+        last_cap_ref_ = cap_ref;
 
         // [VEL-ALIGN] A SYNTHESIZED start velocity (default speed x first-leg
         // chord — the FSM knows no route before the front-end runs) is only a

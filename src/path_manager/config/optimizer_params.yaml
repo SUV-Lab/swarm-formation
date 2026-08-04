@@ -9,6 +9,13 @@
     # 보장된다. off면 기존 단일 계획 그대로.
     chain/enable: false
     chain/segments: 3
+    # inherit_route (기본 on): 체인 run이 자기 구간의 FM2를 다시 돌리지 않고
+    # baseline이 커밋한 전단 경로의 해당 구간을 그대로 상속. sub-run의 자체
+    # eikonal은 같은 구간에서 다른 경로 위상을 고를 수 있고(r3 실측: baseline은
+    # 존 사이 동쪽 안부, 재실행은 서쪽 1,080 m 산악 → 지형 충돌로 기각), 그건
+    # "같은 조건, 분할만"이라는 1단계 전제 위반이다. off = 구간별 전단 재실행
+    # (구간별 FM 조건 차등이 목적인 2단계 모드).
+    chain/inherit_route: true
 
     # ---- Front-end (FM2 / A*) ----
     manager/front_end: fm2              # fm2 | astar(ablation baseline)

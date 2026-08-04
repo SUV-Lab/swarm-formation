@@ -267,10 +267,27 @@ namespace path_manager
     // above hard stall), so a converged baseline legitimately cruises below
     // it and above stall — exactly where junctions land on zone/terrain
     // missions.
+    // route_override/cap_ref_override: [CHAIN] a pre-committed front-end
+    // route (a slice of the baseline's committed clean_path + cap_ref).
+    // When given, the front-end search is SKIPPED and the optimizer re-solves
+    // this exact geometry. A sub-mission's own eikonal, seeing only its span,
+    // can pick a DIFFERENT route homotopy than the baseline took through that
+    // span (observed on r3: baseline threads the eastern saddle between two
+    // zones; the final segment's re-run swung west over 1,080 m terrain and
+    // died in line search with a terrain overlap). Inheriting the slice makes
+    // the stage-1 contract literal: same conditions, only split.
     bool planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
                         const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
-                        bool junction_goal = false, bool junction_head = false);
+                        bool junction_goal = false, bool junction_head = false,
+                        const std::vector<Eigen::Vector3d> *route_override = nullptr,
+                        const std::vector<double> *cap_ref_override = nullptr);
+
+    // [CHAIN] committed front-end products of the most recent plan, retained
+    // for the chain planner to slice (clean_path as handed to the optimizer,
+    // BEFORE its midpoint/lead-in insertions, with its paired cap_ref).
+    const std::vector<Eigen::Vector3d>& lastCommittedRoute() const { return last_clean_path_; }
+    const std::vector<double>& lastCommittedCapRef() const { return last_cap_ref_; }
 
     void deliverTrajToOptimizer(void) {
         if (isOptimizerInitialized()) {
@@ -526,6 +543,9 @@ namespace path_manager
     // not the filtered one — the moving average planes crest maxima (~34 m
     // observed) and an under-referenced cap grinds against the terrain band.
     double fe_raw_max_z_{-1e9};
+    // [CHAIN] see lastCommittedRoute().
+    std::vector<Eigen::Vector3d> last_clean_path_;
+    std::vector<double> last_cap_ref_;
     Eigen::Vector3d map_lower_bound_;
     Eigen::Vector3d map_upper_bound_;
     std::vector<LocalTrajData> swarm_traj_;

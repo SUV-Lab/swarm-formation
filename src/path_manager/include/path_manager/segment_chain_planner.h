@@ -34,10 +34,17 @@ namespace path_manager {
 // degrades to today's behavior, loudly.
 class SegmentChainPlanner {
 public:
+  // inherit_route (default on): chained runs re-solve a SLICE of the
+  // baseline's committed front-end route instead of re-running FM2 on their
+  // span. A sub-mission's own eikonal can pick a different route homotopy
+  // than the baseline took there (observed on r3: west over 1,080 m terrain
+  // instead of the baseline's eastern saddle — line-search death + terrain
+  // overlap). Off = re-litigate the front end per span (the stage-2 mode,
+  // where per-span FM conditions are the point).
   SegmentChainPlanner(rclcpp::Node::SharedPtr node,
                       std::shared_ptr<PathManager> path_manager,
                       swarm_formation::LogManager *log_manager,
-                      int segments);
+                      int segments, bool inherit_route = true);
 
   // Chained plan of one mission. Same contract as planGlobalTraj: on true,
   // path_manager->traj_ holds a flyable local trajectory (the chained result,
@@ -83,10 +90,29 @@ private:
                       const std::vector<Contract> &contracts,
                       const poly_traj::Trajectory &chained) const;
 
+  // One chained run's share of the baseline's committed route: the vertices
+  // between two cut points, with the exact contract positions injected as
+  // the slice endpoints (so route endpoint == boundary condition) and the
+  // cap reference carried in lockstep.
+  struct RouteSlice {
+    std::vector<Eigen::Vector3d> path;
+    std::vector<double> cap;
+  };
+  // Cuts the committed route at every contract position by forward polyline
+  // projection (each cut searched from the previous cut's segment on, so
+  // slices advance monotonically along the route). Returns one slice per
+  // segment; empty result means the geometry did not slice cleanly (caller
+  // falls back to per-span front-end search).
+  std::vector<RouteSlice> sliceCommittedRoute(
+      const std::vector<Eigen::Vector3d> &route,
+      const std::vector<double> &cap,
+      const std::vector<Contract> &contracts) const;
+
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;
   swarm_formation::LogManager *log_;  // FSM-owned, outlives this component
   int segments_;
+  bool inherit_route_;
 };
 
 }  // namespace path_manager
