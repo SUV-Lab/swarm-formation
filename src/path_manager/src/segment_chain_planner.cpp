@@ -400,8 +400,47 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     s[i] = s[i - 1] + (route[i] - route[i - 1]).norm();
   const double S = s.back();
   if (S < 1e-6) return false;
-  const double span = S / segments_;
   const double cruise = pm_->maxVel();
+
+  // [DIFF-BAL] Segment SOLVE cost is driven by what the optimizer must
+  // fight — risk-zone stretches dominate the per-iteration cost and
+  // terrain-following arms the terrain term — not by arc length: measured
+  // on r4, arc-balanced tenths still spread 3 ms .. 2.2 s and the slowest
+  // segment IS the parallel wall. Weight each interval by a difficulty
+  // density and place junctions at equal cumulative WEIGHT; selection
+  // (zone-clear, calm, grade) is unchanged, only the balance space moves.
+  // Densities are coarse deliberately (3x zone, up to 3x terrain-following
+  // over the [ROUGH] 1.0..2.5 u AGL fade) — balance needs ranking, not
+  // prediction. DEFAULT OFF: measured on r4, warping the windows into
+  // weight-space compresses them over easy stretches, starves the calm
+  // candidate pool and pushed a junction onto a bendier vertex — segment 2
+  // envelope-rejected at 28.7% and the whole plan failed. Arc balance at
+  // fine N already delivers (N=10: 4.35x, +0.1% flight); revisit together
+  // with a junction-shift retry.
+  bool diff_balance = false;
+  if (!node_->has_parameter("chain/difficulty_balance"))
+    node_->declare_parameter("chain/difficulty_balance", false);
+  node_->get_parameter("chain/difficulty_balance", diff_balance);
+  std::vector<double> w(static_cast<size_t>(M), 0.0);
+  for (int i = 1; i < M; ++i) {
+    const double len = (route[i] - route[i - 1]).norm();
+    double dens = 1.0;
+    if (diff_balance) {
+      const Eigen::Vector3d mid = 0.5 * (route[i] + route[i - 1]);
+      if (nearRiskZone(mid)) dens += 3.0;
+      double g = 0.0;
+      if (pm_->terrainElevation(mid.x(), mid.y(), &g)) {
+        const double agl = mid.z() - g;
+        if (agl < 2.5)
+          dens += 3.0 * std::min(1.0, std::max(0.0, (2.5 - agl) / 1.5));
+      }
+    }
+    w[static_cast<size_t>(i)] = w[static_cast<size_t>(i - 1)] + len * dens;
+  }
+  const double W = w.back();
+  const double span_w = W / segments_;
+
+  const double span = S / segments_;
 
   // Sustainable grade at cruise: the THRUST-LIMITED climb, not just the
   // fpa cap. A junction is pinned at full cruise with a = 0, so the solver
@@ -442,16 +481,17 @@ bool SegmentChainPlanner::authorContractsFromRoute(
   }
 
   contracts->clear();
-  double s_prev = 0.0;
+  double w_prev = 0.0;
   for (int j = 1; j < segments_; ++j) {
-    const double target = j * span;
-    const double lo = s_prev + 0.2 * span;
-    const double hi = target + 0.4 * span;
+    const double target = j * span_w;
+    const double lo = w_prev + 0.2 * span_w;
+    const double hi = target + 0.4 * span_w;
     int best = -1, best_any = -1;
     double best_score = std::numeric_limits<double>::infinity();
     double best_any_score = best_score;
     for (int i = 1; i + 1 < M; ++i) {
-      if (s[i] < lo || s[i] > hi) continue;
+      if (w[static_cast<size_t>(i)] < lo || w[static_cast<size_t>(i)] > hi)
+        continue;
       // Calmness dominates, balance breaks ties: kappa is rad/u (a gentle
       // route sits at ~0.001-0.01, a hard corner at 0.05+), the balance
       // term at most 0.4 — the 100x scale makes a real bend outweigh any
@@ -464,7 +504,7 @@ bool SegmentChainPlanner::authorContractsFromRoute(
               : 1e3;
       const double score =
           kappa[static_cast<size_t>(i)] * 100.0 +
-          std::abs(s[i] - target) / span +
+          std::abs(w[static_cast<size_t>(i)] - target) / span_w +
           std::max(0.0, grade_i - tan_grade_max) * 100.0;
       if (score < best_any_score) { best_any = i; best_any_score = score; }
       if (nearRiskZone(route[i])) continue;
@@ -503,12 +543,13 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     }
     c.vel = dir.normalized() * cruise;
     c.acc = Eigen::Vector3d::Zero();
-    log_->infof("[CHAIN-PAR] contract %d @s=%.1f u (target %.1f): "
-                "pos=(%.2f, %.2f, %.2f) |v|=%.3f kappa=%.4f rad/u",
-                j, s[best], target, c.pos.x(), c.pos.y(), c.pos.z(),
+    log_->infof("[CHAIN-PAR] contract %d @s=%.1f u (w-share %.2f, target "
+                "%.2f): pos=(%.2f, %.2f, %.2f) |v|=%.3f kappa=%.4f rad/u",
+                j, s[best], w[static_cast<size_t>(best)] / span_w,
+                target / span_w, c.pos.x(), c.pos.y(), c.pos.z(),
                 c.vel.norm(), kappa[static_cast<size_t>(best)]);
     contracts->push_back(c);
-    s_prev = s[best];
+    w_prev = w[static_cast<size_t>(best)];
   }
   return true;
 }
@@ -657,10 +698,13 @@ bool SegmentChainPlanner::planRouteParallel(
 
   for (int i = 0; i < segments_; ++i) {
     if (!ok[static_cast<size_t>(i)]) {
-      // No baseline exists in this mode: a failed segment fails the plan.
-      log_->errorf("[CHAIN-PAR] segment %d/%d FAILED — no baseline to fall "
-                   "back to, mission plan rejected", i + 1, segments_);
-      return false;
+      // No baseline exists in this mode — degrade to the single-shot plan
+      // instead of rejecting the mission: a marginal per-segment gate trip
+      // (measured: 28.7% vs the 25% envelope gate) must cost speed, not
+      // the flight.
+      char why[96];
+      snprintf(why, sizeof why, "segment %d/%d failed", i + 1, segments_);
+      return fallback(why);
     }
   }
 
