@@ -84,11 +84,26 @@ private:
                            const poly_traj::Trajectory &traj) const;
   bool nearRiskZone(const Eigen::Vector3d &p) const;
 
+  // [STAGE-2] Per-segment requirement overrides, from chain/seg<i>/params
+  // (string array of "param=value"). Values parse against the DECLARED
+  // parameter's type; unknown names skip loudly. Only optimization/* takes
+  // effect per segment — the segment run is preceded by a forced optimizer
+  // re-init, whose setParam re-reads the whole optimizer parameter surface;
+  // manager/FSM-side parameters load at startup and are warned about.
+  // Mission-wide values are restored on every exit path: the baseline, the
+  // next mission, and any fallback all plan with pristine parameters.
+  struct SegmentOverrides {
+    std::vector<rclcpp::Parameter> params;
+    std::string label;  // "a=b, c=d" for the report; empty = none
+  };
+  std::vector<SegmentOverrides> readSegmentOverrides() const;
+
   // Stage-1 seam verification + baseline comparison ([CHAIN-REPORT]).
   void logChainReport(const poly_traj::Trajectory &baseline,
                       const std::vector<poly_traj::Trajectory> &runs,
                       const std::vector<Contract> &contracts,
-                      const poly_traj::Trajectory &chained) const;
+                      const poly_traj::Trajectory &chained,
+                      const std::vector<SegmentOverrides> &overrides) const;
 
   // One chained run's share of the baseline's committed route: the vertices
   // between two cut points, with the exact contract positions injected as

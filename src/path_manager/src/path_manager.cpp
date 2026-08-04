@@ -398,6 +398,22 @@ namespace path_manager
             poly_traj_opt_->setParam(node_);
             poly_traj_opt_->setDroneId(traj_.local_traj.drone_id);
 
+            // Four optimization/* values are consumed by PathManager, not by
+            // setParam — re-read them on every (forced) re-init, or a
+            // per-segment override ([CHAIN] chain/seg<i>/params) is a silent
+            // no-op, and alt_cap_headroom DESYNCHRONIZES from the optimizer's
+            // own copy (alt_cap_headroom_opt_), which setParam does re-read:
+            // the scalar cap and the arc-varying envelope must share one
+            // headroom (see the note at its declaration in setParam).
+            node_->get_parameter("optimization/obstacle_clearance",
+                                 opt_obstacle_clearance_);
+            node_->get_parameter("optimization/weight_altitude",
+                                 weight_altitude_);
+            node_->get_parameter("optimization/alt_cap_headroom",
+                                 alt_cap_headroom_);
+            node_->get_parameter("optimization/alt_floor_headroom",
+                                 alt_floor_headroom_);
+
             // Wire SDF-based obstacle avoidance into the optimizer.
             poly_traj_opt_->setSDFManager(&sdf_manager_);
             // Strictly below the front-end margin: a margin-respecting path then

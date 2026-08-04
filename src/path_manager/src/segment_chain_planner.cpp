@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <map>
 
 namespace path_manager {
 
@@ -95,6 +96,33 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     return true;
   }
 
+  // === [STAGE-2] per-segment requirement overrides (read before the
+  // contracts: a slow segment's ceiling must shape its junction speeds) ===
+  const std::vector<SegmentOverrides> seg_over = readSegmentOverrides();
+  bool any_over = false;
+  for (const auto &so : seg_over) any_over |= !so.params.empty();
+  // Effective speed ceiling per segment: its optimization/max_vel override,
+  // else the mission-wide value. A junction pinned FASTER than a bounding
+  // segment's ceiling is a self-contradictory hard BC — the solve brakes
+  // through a state its own feasibility term condemns and the envelope
+  // audit prices the transient as violations (measured: 34.7% > the 30%
+  // hard gate on a 1.8 u/s segment fed 2.0 u/s boundaries).
+  double vmax_global = std::numeric_limits<double>::infinity();
+  if (node_->has_parameter("optimization/max_vel"))
+    vmax_global = node_->get_parameter("optimization/max_vel").as_double();
+  std::vector<double> seg_vmax(static_cast<size_t>(segments_), vmax_global);
+  for (int i = 0; i < segments_; ++i)
+    for (const auto &p : seg_over[static_cast<size_t>(i)].params)
+      if (p.get_name() == "optimization/max_vel")
+        seg_vmax[static_cast<size_t>(i)] = p.as_double();
+  if (seg_vmax.front() < vmax_global - 1e-12 &&
+      start_vel.norm() > seg_vmax.front() + 1e-9) {
+    log_->warnf("[CHAIN] mission start speed %.3f exceeds segment 1's "
+                "ceiling %.3f — the head BC is externally given and stays;"
+                " expect envelope pressure at the head",
+                start_vel.norm(), seg_vmax.front());
+  }
+
   // === Junction contracts sampled from the baseline ===
   std::vector<Contract> contracts;
   const double span = T / segments_;
@@ -106,6 +134,22 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     c.pos = baseline.getPos(c.t);
     c.vel = baseline.getVel(c.t);
     c.acc = baseline.getAcc(c.t);
+    // Junction speed = min ceiling of the two segments it bounds, direction
+    // preserved. Both sides pin the SAME rescaled state, so the seam stays
+    // exact; the faster neighbour absorbs the deceleration in its interior,
+    // where its own ceiling allows it. Only an OVERRIDE-lowered ceiling may
+    // rewrite a contract: the mission-wide optimization/max_vel is a SOFT
+    // cubic penalty the converged baseline sits ~0.4% above by design, so
+    // comparing against it would clip every junction of every mission and
+    // silently change the stage-1 (no-override) contracts.
+    const double vcap = std::min(seg_vmax[static_cast<size_t>(i - 1)],
+                                 seg_vmax[static_cast<size_t>(i)]);
+    if (vcap < vmax_global - 1e-12 && c.vel.norm() > vcap + 1e-9) {
+      log_->infof("[CHAIN] contract %d speed %.3f -> %.3f u/s "
+                  "(slow-segment ceiling, direction kept)",
+                  i, c.vel.norm(), vcap);
+      c.vel *= vcap / c.vel.norm();
+    }
     log_->infof("[CHAIN] contract %d @t=%.1f/%.1f s: pos=(%.2f, %.2f, %.2f) "
                 "|v|=%.3f u/s vz=%+.3f |a|=%.3f u/s^2",
                 i, c.t, T, c.pos.x(), c.pos.y(), c.pos.z(),
@@ -138,10 +182,57 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     }
   }
 
+  // Union of pristine (mission-wide) values of every overridden parameter.
+  std::map<std::string, rclcpp::Parameter> pristine;
+  if (any_over) {
+    for (const auto &so : seg_over)
+      for (const auto &p : so.params)
+        if (!pristine.count(p.get_name()))
+          pristine.emplace(p.get_name(), node_->get_parameter(p.get_name()));
+  }
+  // Mission-wide values must survive EVERY exit path (segment failure
+  // returns early with the baseline restored; the next mission's baseline
+  // must plan pristine). Local classes share the member function's access.
+  struct ParamRestore {
+    SegmentChainPlanner *self{nullptr};
+    const std::map<std::string, rclcpp::Parameter> *vals{nullptr};
+    ~ParamRestore() {
+      if (!self || !vals || vals->empty()) return;
+      try {
+        std::vector<rclcpp::Parameter> back;
+        for (const auto &kv : *vals) back.push_back(kv.second);
+        self->node_->set_parameters(back);
+        self->pm_->initOptimizer(/*force_reinit=*/true);
+        self->pm_->deliverTrajToOptimizer();
+        self->log_->infof("[CHAIN] mission-wide parameters restored "
+                          "(%zu overridden)", vals->size());
+      } catch (const std::exception &e) {
+        self->log_->errorf("[CHAIN] parameter restore FAILED: %s — the next "
+                           "plan may run with segment overrides!", e.what());
+      }
+    }
+  } restore_guard{any_over ? this : nullptr, &pristine};
+
   // === Chained segment runs (sequential; each is a full pipeline run) ===
   std::vector<poly_traj::Trajectory> runs;
   for (int i = 0; i < segments_; ++i) {
     const bool last = (i + 1 == segments_);
+    if (any_over) {
+      // Pristine + this segment's overrides — a segment never inherits a
+      // neighbour's values. The forced re-init re-reads the whole optimizer
+      // parameter surface (setParam is re-entrant for exactly this).
+      std::map<std::string, rclcpp::Parameter> eff = pristine;
+      for (const auto &p : seg_over[i].params) eff[p.get_name()] = p;
+      std::vector<rclcpp::Parameter> apply;
+      apply.reserve(eff.size());
+      for (const auto &kv : eff) apply.push_back(kv.second);
+      node_->set_parameters(apply);
+      pm_->initOptimizer(/*force_reinit=*/true);
+      pm_->deliverTrajToOptimizer();
+      if (!seg_over[i].label.empty())
+        log_->infof("[CHAIN] segment %d/%d requirement overrides: %s",
+                    i + 1, segments_, seg_over[i].label.c_str());
+    }
     const Eigen::Vector3d head_pos = (i == 0) ? start_pos : contracts[i - 1].pos;
     const Eigen::Vector3d head_vel = (i == 0) ? start_vel : contracts[i - 1].vel;
     const Eigen::Vector3d head_acc = (i == 0) ? start_acc : contracts[i - 1].acc;
@@ -150,10 +241,30 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     // plan would end.
     const std::vector<Eigen::Vector3d> goal =
         last ? waypoints : std::vector<Eigen::Vector3d>{contracts[i].pos};
-    const Eigen::Vector3d end_vel =
+    Eigen::Vector3d end_vel =
         last ? Eigen::Vector3d::Zero() : contracts[i].vel;
-    const Eigen::Vector3d end_acc =
+    Eigen::Vector3d end_acc =
         last ? Eigen::Vector3d::Zero() : contracts[i].acc;
+    // A slow LAST segment cannot take the default arrival contract — that
+    // would pin its tail at the mission-wide cruise speed, above its own
+    // ceiling. Prescribe the same level entry (the baseline's own arrival
+    // direction) at the segment's ceiling instead.
+    if (last && seg_vmax[static_cast<size_t>(i)] < vmax_global - 1e-12) {
+      const Eigen::Vector3d base_tail =
+          baseline.getJuncVel(baseline.getPieceNum());
+      if (base_tail.norm() > seg_vmax[static_cast<size_t>(i)] + 1e-9) {
+        Eigen::Vector3d dir = base_tail;
+        dir.z() = 0.0;  // level, like the arrival contract (no-op: the
+                        // baseline tail is already level by that contract)
+        if (dir.norm() > 1e-9) {
+          end_vel = dir.normalized() * seg_vmax[static_cast<size_t>(i)];
+          end_acc = Eigen::Vector3d::Zero();
+          log_->infof("[CHAIN] arrival contract at the segment ceiling: "
+                      "|v|=%.3f u/s level along the baseline approach",
+                      end_vel.norm());
+        }
+      }
+    }
 
     log_->infof("[CHAIN] segment %d/%d: head (%.2f, %.2f, %.2f) |v|=%.3f -> "
                 "%s (%.2f, %.2f, %.2f)",
@@ -196,7 +307,7 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
   pm_->publishTrajectoryViz(chained, baseline);
 
-  logChainReport(baseline, runs, contracts, chained);
+  logChainReport(baseline, runs, contracts, chained, seg_over);
 
   const double wall_ms = std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - t_wall).count();
@@ -205,6 +316,89 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
               segments_, chained.getPieceNum(), chained.getTotalDuration(), T,
               wall_ms);
   return true;
+}
+
+std::vector<SegmentChainPlanner::SegmentOverrides>
+SegmentChainPlanner::readSegmentOverrides() const
+{
+  std::vector<SegmentOverrides> out(static_cast<size_t>(segments_));
+  for (int i = 0; i < segments_; ++i) {
+    const std::string pname = "chain/seg" + std::to_string(i + 1) + "/params";
+    if (!node_->has_parameter(pname))
+      node_->declare_parameter(pname, std::vector<std::string>{});
+    std::vector<std::string> specs;
+    node_->get_parameter(pname, specs);
+    auto &so = out[static_cast<size_t>(i)];
+    for (const std::string &spec : specs) {
+      const size_t eq = spec.find('=');
+      if (eq == std::string::npos || eq == 0 || eq + 1 >= spec.size()) {
+        log_->warnf("[CHAIN] seg%d override '%s' is not name=value — skipped",
+                    i + 1, spec.c_str());
+        continue;
+      }
+      const std::string name = spec.substr(0, eq);
+      const std::string val = spec.substr(eq + 1);
+      if (!node_->has_parameter(name)) {
+        log_->warnf("[CHAIN] seg%d override '%s': no such parameter — "
+                    "skipped (typo, or its consumer never declared it)",
+                    i + 1, name.c_str());
+        continue;
+      }
+      if (name.rfind("optimization/", 0) != 0) {
+        log_->warnf("[CHAIN] seg%d override '%s': only optimization/* is "
+                    "re-read per segment (manager/FSM parameters load at "
+                    "startup) — the value will be set but its consumer "
+                    "will not see it this mission", i + 1, name.c_str());
+      }
+      try {
+        switch (node_->get_parameter(name).get_type()) {
+          case rclcpp::ParameterType::PARAMETER_DOUBLE: {
+            // Full-token parse: stod/stoll silently accept trailing garbage
+            // ("1.8x" -> 1.8), which would truncate a typo into a plausible
+            // value while the report label testifies the typo was applied.
+            size_t pos = 0;
+            const double d = std::stod(val, &pos);
+            if (pos != val.size())
+              throw std::invalid_argument("trailing '" + val.substr(pos) + "'");
+            so.params.emplace_back(name, d);
+            break;
+          }
+          case rclcpp::ParameterType::PARAMETER_INTEGER: {
+            size_t pos = 0;
+            const long long v = std::stoll(val, &pos);
+            if (pos != val.size())
+              throw std::invalid_argument("trailing '" + val.substr(pos) + "'");
+            so.params.emplace_back(name, static_cast<int64_t>(v));
+            break;
+          }
+          case rclcpp::ParameterType::PARAMETER_BOOL: {
+            // Strict spellings only: "True"/"yes"/"on" silently meaning
+            // false is exactly the typo class the label would then lie about.
+            if (val == "true" || val == "1")
+              so.params.emplace_back(name, true);
+            else if (val == "false" || val == "0")
+              so.params.emplace_back(name, false);
+            else
+              throw std::invalid_argument("bool wants true/false/1/0");
+            break;
+          }
+          case rclcpp::ParameterType::PARAMETER_STRING:
+            so.params.emplace_back(name, val);
+            break;
+          default:
+            log_->warnf("[CHAIN] seg%d override '%s': unsupported parameter "
+                        "type — skipped", i + 1, name.c_str());
+            continue;
+        }
+      } catch (const std::exception &e) {
+        log_->warnf("[CHAIN] seg%d override '%s': value parse failed (%s) — "
+                    "skipped", i + 1, spec.c_str(), e.what());
+        continue;
+      }
+      so.label += (so.label.empty() ? "" : ", ") + spec;
+    }
+  }
+  return out;
 }
 
 std::vector<SegmentChainPlanner::RouteSlice>
@@ -339,18 +533,26 @@ void SegmentChainPlanner::logChainReport(
     const poly_traj::Trajectory &baseline,
     const std::vector<poly_traj::Trajectory> &runs,
     const std::vector<Contract> &contracts,
-    const poly_traj::Trajectory &chained) const
+    const poly_traj::Trajectory &chained,
+    const std::vector<SegmentOverrides> &overrides) const
 {
-  log_->infof("[CHAIN-REPORT] ===== stage-1 split verification =====");
+  log_->infof("[CHAIN-REPORT] ===== split verification =====");
 
   // Per-run shape: piece counts and durations reveal a span whose sub-plan
   // diverged wildly from its share of the baseline (e.g. a junction that
-  // forced a detour the unsplit optimum never took).
+  // forced a detour the unsplit optimum never took). Mean speed makes the
+  // stage-2 requirement differentiation legible next to its override list.
   for (size_t i = 0; i < runs.size(); ++i) {
     const ArcTable at = buildArcTable(runs[i], 200);
-    log_->infof("[CHAIN-REPORT] run %zu/%zu: %d pieces, %.1f s, %.1f u arc",
-                i + 1, runs.size(), runs[i].getPieceNum(),
-                runs[i].getTotalDuration(), at.total);
+    const double dur = runs[i].getTotalDuration();
+    const std::string &lbl =
+        (i < overrides.size()) ? overrides[i].label : std::string();
+    log_->infof("[CHAIN-REPORT] run %zu/%zu: %d pieces, %.1f s, %.1f u arc, "
+                "mean %.3f u/s%s%s",
+                i + 1, runs.size(), runs[i].getPieceNum(), dur, at.total,
+                dur > 1e-9 ? at.total / dur : 0.0,
+                lbl.empty() ? "" : " | overrides: ",
+                lbl.empty() ? "" : lbl.c_str());
   }
 
   // Seam continuity. Both sides of every junction were solved against the

@@ -16,6 +16,13 @@
     # "같은 조건, 분할만"이라는 1단계 전제 위반이다. off = 구간별 전단 재실행
     # (구간별 FM 조건 차등이 목적인 2단계 모드).
     chain/inherit_route: true
+    # [STAGE-2] 구간별 요구조건 차등: chain/seg<i>/params 에 "이름=값" 문자열
+    # 배열. 구간 실행 직전 옵티마이저를 강제 재초기화해 optimization/* 전체를
+    # 다시 읽으므로 그 계열만 구간별로 실제 반영된다(manager/*는 기동 시 1회
+    # 로드 — 지정하면 경고). 값 타입은 선언된 파라미터 타입을 따르고, 미션이
+    # 끝나면(실패·폴백 포함) 전역값이 자동 복원된다. 예:
+    #   chain/seg1/params: ["optimization/weight_time=1000.0"]
+    #   chain/seg3/params: ["optimization/max_vel=1.8"]
 
     # ---- Front-end (FM2 / A*) ----
     manager/front_end: fm2              # fm2 | astar(ablation baseline)

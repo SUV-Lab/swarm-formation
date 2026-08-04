@@ -10,11 +10,16 @@
 //
 // Run inside the dev container from the workspace root:
 //   ./install/path_manager/lib/path_manager/chain_experiment_test \
-//       [optimizer_params.yaml] [segments] [zone]
-// The optional literal "zone" plants one risk zone straddling the first
-// junction's nominal position, exercising the moat+taper nudge: the junction
-// must move off its equal-time station (log: "[CHAIN] junction ... nudged")
-// and the seams must stay exact regardless.
+//       [optimizer_params.yaml] [segments] [zone] [segdiff]
+// Optional literals (any order after the first two args):
+//   zone     — plants one risk zone straddling the first junction's nominal
+//              position, exercising the moat+taper nudge: the junction must
+//              move off its equal-time station and seams stay exact.
+//   segdiff  — stage-2 per-segment requirement overrides: segment 1 prices
+//              time 4x (optimization/weight_time=1000), the last segment
+//              lowers its speed ceiling (optimization/max_vel=1.8). The
+//              [CHAIN-REPORT] mean-speed column shows the differentiation;
+//              the seam audit must stay at solver noise regardless.
 // The [CHAIN]/[CHAIN-REPORT] narrative lands in ./logs/runtime/ (LogManager
 // is file-only); this binary prints the machine-checkable verdicts to stdout.
 #include <algorithm>
@@ -90,10 +95,26 @@ int main(int argc, char **argv)
                  "optimizer_params.yaml";
   const int segments = argc > 2 ? std::atoi(argv[2]) : 3;
 
+  bool with_zone = false, with_segdiff = false;
+  for (int a = 3; a < argc; ++a) {
+    if (std::string(argv[a]) == "zone") with_zone = true;
+    if (std::string(argv[a]) == "segdiff") with_segdiff = true;
+  }
+
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", params});
   auto node = std::make_shared<rclcpp::Node>("chain_experiment", options);
   node->declare_parameter("drone_id", 0);
+  if (with_segdiff) {
+    node->declare_parameter(
+        "chain/seg1/params",
+        std::vector<std::string>{"optimization/weight_time=1000.0"});
+    node->declare_parameter(
+        "chain/seg" + std::to_string(segments) + "/params",
+        std::vector<std::string>{"optimization/max_vel=1.8"});
+    std::cout << "segdiff: seg1 weight_time=1000, seg" << segments
+              << " max_vel=1.8\n";
+  }
 
   auto pm = std::make_shared<path_manager::PathManager>(node);
   pm->initOptimizer();
@@ -103,7 +124,7 @@ int main(int argc, char **argv)
   // Optional zone on the first junction's nominal station (x=130 for 3
   // segments): reach 5 + taper 30 forces the nudge but leaves the ±40%-span
   // window (±40 u) enough room to clear.
-  if (argc > 3 && std::string(argv[3]) == "zone") {
+  if (with_zone) {
     path_manager::RiskZone zone;
     zone.center = Eigen::Vector3d(130.0, 150.0, 2.0);
     zone.reach = 5.0;
