@@ -252,9 +252,16 @@ namespace path_manager
 
     void initOptimizer(bool force_reinit = false);
     bool isOptimizerInitialized() const { return is_optimizer_initialized_ && poly_traj_opt_ != nullptr; }
+    // end_vel/end_acc: [CHAIN] prescribed tail boundary state, forwarded to
+    // the optimizer. Zero end_vel (what every non-chain caller passes) keeps
+    // the arrival contract — see optimizeFromPath. junction_goal marks the
+    // final waypoint as a mid-route junction between chained segment plans:
+    // its z is ABSOLUTE (sampled from a trajectory that already flies there),
+    // so the [GOAL AGL] reinterpretation must not re-add the terrain under it.
     bool planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
-                        const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc);
+                        const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+                        bool junction_goal = false);
 
     void deliverTrajToOptimizer(void) {
         if (isOptimizerInitialized()) {
@@ -572,14 +579,18 @@ namespace path_manager
                       std::vector<double> &cap_ref);
 
     // Stage 2 (trajectory optimization): MINCO initial trajectory + L-BFGS.
-    // Takes the front-end path; sets traj_ global/local. Returns true on success.
+    // Takes the front-end path; sets traj_ global/local. Returns true on
+    // success. end_vel/end_acc: prescribed tail BC, forwarded verbatim to
+    // optimizeFromPath (zero end_vel = arrival contract).
     bool optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                        const std::vector<Eigen::Vector3d> &full_route,
                        const Eigen::Vector3d &start_pos,
                        const Eigen::Vector3d &start_vel,
                        const Eigen::Vector3d &start_acc,
                        const std::vector<Eigen::Vector3d> &waypoints,
-                       const std::vector<double> &cap_ref);
+                       const std::vector<double> &cap_ref,
+                       const Eigen::Vector3d &end_vel,
+                       const Eigen::Vector3d &end_acc);
 
     ego_planner::PolyTrajOptimizer::Ptr poly_traj_opt_;
     bool is_optimizer_initialized_;

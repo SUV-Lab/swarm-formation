@@ -542,7 +542,8 @@ namespace path_manager
 
     bool PathManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                                      const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
-                                     const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc)
+                                     const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+                                     bool junction_goal)
     {
         log_manager_->infof("Planning global trajectory with %zu waypoints", waypoints.size());
         auto t_total_start = std::chrono::steady_clock::now();
@@ -561,7 +562,15 @@ namespace path_manager
         // legacy over-water missions behave identically.
         std::vector<Eigen::Vector3d> wps = waypoints;
         if (terrain_data_.valid) {
-            for (auto &wp : wps) {
+            for (size_t wi = 0; wi < wps.size(); ++wi) {
+                auto &wp = wps[wi];
+                // [CHAIN] A junction goal's z is ABSOLUTE — sampled from a
+                // trajectory the baseline plan actually flies — not AGL.
+                // Re-adding the terrain elevation here would lift the goal
+                // off the junction contract and break the chained head/tail
+                // match at the seam. Interior waypoints (if any) keep their
+                // AGL semantics: they are genuine mission points.
+                if (junction_goal && wi + 1 == wps.size()) continue;
                 const double agl = std::max(wp.z(), min_goal_agl_);
                 const float elev = terrain_data_.getElevation(wp.x(), wp.y());
                 const double base =
@@ -824,7 +833,7 @@ namespace path_manager
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===
         bool opt_ok = optimizeStage(clean_path, full_route,
                                     start_pos, start_vel_eff, start_acc, wps,
-                                    cap_ref);
+                                    cap_ref, end_vel, end_acc);
 
         auto t_total_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] === TOTAL planGlobalTraj: %.1f ms ===",
@@ -1328,7 +1337,9 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                                 const Eigen::Vector3d &start_vel,
                                 const Eigen::Vector3d &start_acc,
                                 const std::vector<Eigen::Vector3d> &waypoints,
-                                const std::vector<double> &cap_ref)
+                                const std::vector<double> &cap_ref,
+                                const Eigen::Vector3d &end_vel,
+                                const Eigen::Vector3d &end_acc)
 {
         // Stage 2 = trajectory optimization. The optimizer owns the MINCO
         // initial-trajectory build + L-BFGS; we only pass the front-end path
@@ -1440,7 +1451,7 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             searcher_.zoneAvoidPass() == 1);
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
-            global_traj, local_traj, cap_ref);
+            global_traj, local_traj, cap_ref, end_vel, end_acc);
         if (!opt_success) {
             log_manager_->errorf("Trajectory optimization failed");
             return false;

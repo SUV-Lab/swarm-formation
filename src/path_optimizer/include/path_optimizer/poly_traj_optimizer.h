@@ -615,6 +615,16 @@ namespace ego_planner
     // cap. Must be the same size as clean_path on entry — a mismatch logs a
     // warning and falls back to the scalar cap (never silently mis-indexed).
     // Empty = scalar cap only.
+    //
+    // end_vel/end_acc: [CHAIN] prescribed tail boundary state. A non-zero
+    // end_vel pins the tail PVA verbatim (end_acc rides the same gate; zero
+    // acceleration is a legitimate prescribed value) instead of deriving the
+    // arrival contract — used when the "goal" is a mid-route junction between
+    // chained segment plans, where the neighbouring segment starts from this
+    // exact state. Zero end_vel (the default) keeps the arrival contract:
+    // level entry along the final chord at full cruise speed, acc = 0. A
+    // zero PRESCRIBED velocity cannot be expressed — it is sub-stall and
+    // unflyable for this platform, so the sentinel costs nothing.
     bool optimizeFromPath(std::vector<Eigen::Vector3d> &clean_path,
                           const Eigen::Vector3d &start_pos,
                           const Eigen::Vector3d &start_vel,
@@ -623,7 +633,9 @@ namespace ego_planner
                           double max_vel,
                           poly_traj::Trajectory &out_global,
                           poly_traj::Trajectory &out_local,
-                          const std::vector<double> &cap_ref_z = {});
+                          const std::vector<double> &cap_ref_z = {},
+                          const Eigen::Vector3d &end_vel = Eigen::Vector3d::Zero(),
+                          const Eigen::Vector3d &end_acc = Eigen::Vector3d::Zero());
 
     void setDesiredFormation(int type);
 

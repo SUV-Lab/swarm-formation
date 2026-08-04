@@ -22,7 +22,9 @@ namespace ego_planner
                                            double max_vel,
                                            poly_traj::Trajectory &out_global,
                                            poly_traj::Trajectory &out_local,
-                                           const std::vector<double> &cap_ref_z)
+                                           const std::vector<double> &cap_ref_z,
+                                           const Eigen::Vector3d &end_vel,
+                                           const Eigen::Vector3d &end_acc)
   {
     // Barrier exemptions for this plan (same start/goal rule as the
     // front-end): must be recomputed per plan since zones and endpoints
@@ -401,6 +403,19 @@ namespace ego_planner
       time_vec(i) = std::max(0.05, seg_len / (des_vel * std::max(0.2, f)));
     }
 
+    Eigen::Vector3d traj_end_vel, traj_end_acc;
+    if (end_vel.squaredNorm() > 1e-18) {
+      // [CHAIN] Prescribed junction tail: the caller pins the exact PVA the
+      // neighbouring chained segment starts from. Verbatim — no level
+      // projection, no speed rewrite — so both sides of the junction share
+      // one hard BC and the stitched trajectory is C2 there by construction.
+      traj_end_vel = end_vel;
+      traj_end_acc = end_acc;
+      LOG_INFO("[CHAIN] tail BC prescribed: vel=(%.3f, %.3f, %.3f) u/s "
+               "(|v|=%.3f), acc=(%.3f, %.3f, %.3f)",
+               end_vel.x(), end_vel.y(), end_vel.z(), end_vel.norm(),
+               end_acc.x(), end_acc.y(), end_acc.z());
+    } else {
     // Arrival contract: full cruise speed at the goal (a separate control
     // planner takes over there) — but LEVEL. Pinning the tail's velocity to
     // the last chord's 3D direction gave it a DESCENT component whenever the
@@ -430,8 +445,9 @@ namespace ego_planner
         approach_dir = Eigen::Vector3d::UnitX();
     }
     approach_dir.normalize();
-    Eigen::Vector3d traj_end_vel = approach_dir * max_vel;
-    Eigen::Vector3d traj_end_acc = Eigen::Vector3d::Zero();
+    traj_end_vel = approach_dir * max_vel;
+    traj_end_acc = Eigen::Vector3d::Zero();
+    }
 
     poly_traj::MinJerkOpt globalMJO;
     Eigen::Matrix<double, 3, 3> headState, tailState;
