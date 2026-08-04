@@ -96,7 +96,8 @@ int main(int argc, char **argv)
   const int segments = argc > 2 ? std::atoi(argv[2]) : 3;
 
   bool with_zone = false, with_segdiff = false, with_twice = false,
-       with_failrestore = false, with_altcap = false, with_terminal = false;
+       with_failrestore = false, with_altcap = false, with_terminal = false,
+       with_tinyturn = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -105,6 +106,12 @@ int main(int argc, char **argv)
     // chain. The whole-trajectory junction audit then covers its internal
     // Hermite joints AND the handoff seam under the same 1e-6 threshold.
     if (v == "terminal") with_terminal = true;
+    // tinyturn: terminal with turns=0.05 — small enough that no curvature
+    // hold fits and the TRIANGLE profile branch runs. The exit-heading
+    // budget check below is what pins its turn arithmetic (a factor-of-2
+    // error once delivered half the requested heading change, invisibly to
+    // every continuity check).
+    if (v == "tinyturn") with_tinyturn = true;
     // twice: plan the SAME mission twice in one process. If the scope-guard
     // restore leaks a segment override, the second BASELINE (always planned
     // with mission-wide params) solves a different problem and its duration
@@ -146,8 +153,11 @@ int main(int argc, char **argv)
     std::cout << "altcap: seg2 alt_cap_headroom=1.2 (default 0.4)\n";
   }
 
+  if (with_tinyturn) with_terminal = true;
+  const double helix_turns = with_tinyturn ? 0.05 : 1.0;
   if (with_terminal) {
     node->declare_parameter("chain/terminal/enable", true);
+    if (with_tinyturn) node->declare_parameter("chain/terminal/turns", 0.05);
   }
 
   auto pm = std::make_shared<path_manager::PathManager>(node);
@@ -246,21 +256,56 @@ int main(int argc, char **argv)
            "terminal helix exits at the configured AGL");
     expect(std::abs(exit_v.z()) < 1e-9 && exit_a.norm() < 1e-9,
            "terminal helix exits level and unaccelerated");
-    expect(ct > bt + 30.0,
+    expect(ct > bt + (with_tinyturn ? 5.0 : 30.0),
            "terminal helix genuinely extends the flight");
-    // Constant-speed regression net: piece durations mismatched to their
-    // sampled arcs once put a ±1.6% speed ripple (and a spurious tangential
-    // acceleration) into the "constant-speed" helix. Sample deep inside it.
-    double v_min = std::numeric_limits<double>::infinity(), v_max = 0.0;
-    for (double tt = ct - 150.0; tt < ct - 5.0; tt += 0.1) {
-      const double s = chained.getVel(tt).head<2>().norm();
-      v_min = std::min(v_min, s);
-      v_max = std::max(v_max, s);
+
+    // Heading budget: exit heading vs the helix ENTRY heading (= the
+    // baseline's arrival direction — the handoff contract) must differ by
+    // exactly -2*pi*turns for a right helix, wrapped. Full turn closes to
+    // 0; turns=0.05 must read -18 deg — the triangle branch once delivered
+    // half of it, invisible to every continuity check.
+    const Eigen::Vector3d in_v = baseline.getJuncVel(baseline.getPieceNum());
+    double dth = std::atan2(exit_v.y(), exit_v.x()) -
+                 std::atan2(in_v.y(), in_v.x());
+    while (dth > M_PI) dth -= 2.0 * M_PI;
+    while (dth < -M_PI) dth += 2.0 * M_PI;
+    double want = -2.0 * M_PI * helix_turns;  // right turn
+    while (want < -M_PI) want += 2.0 * M_PI;
+    std::cout << "helix heading change " << dth * 180.0 / M_PI
+              << " deg (want " << want * 180.0 / M_PI << ")\n";
+    expect(std::abs(dth - want) < 0.01,
+           "helix delivers the requested turn angle");
+
+    if (!with_tinyturn) {
+      // Constant-speed regression net: piece durations mismatched to their
+      // sampled arcs once put a ±1.6% speed ripple and a spurious
+      // tangential acceleration (~37% of centripetal) into the
+      // "constant-speed" helix. Sample deep inside the hold phase.
+      double v_min = std::numeric_limits<double>::infinity(), v_max = 0.0;
+      double tang_max = 0.0, lat_max = 0.0;
+      for (double tt = ct - 150.0; tt < ct - 5.0; tt += 0.1) {
+        const Eigen::Vector3d vv = chained.getVel(tt);
+        const Eigen::Vector3d aa = chained.getAcc(tt);
+        const double s = vv.head<2>().norm();
+        v_min = std::min(v_min, s);
+        v_max = std::max(v_max, s);
+        const Eigen::Vector2d vh = vv.head<2>().normalized();
+        tang_max = std::max(tang_max,
+                            std::abs(aa.head<2>().dot(vh)));
+        lat_max = std::max(lat_max, aa.head<2>().norm());
+      }
+      const double cent = v_min * v_min / 58.0;  // v^2/R at default radius
+      std::cout << "helix horizontal speed in [" << v_min << ", " << v_max
+                << "] u/s; tangential acc max " << tang_max
+                << " (centripetal " << cent << "), lateral acc max "
+                << lat_max << "\n";
+      expect((v_max - v_min) / std::max(1e-9, v_min) < 0.005,
+             "helix speed ripple below 0.5% (constant-speed phase)");
+      expect(tang_max < 0.02 * cent,
+             "no spurious tangential acceleration (< 2% of centripetal)");
+      expect(lat_max < 1.05 * cent + 0.02,
+             "lateral acceleration bounded by v^2/R (turn radius honored)");
     }
-    std::cout << "helix horizontal speed in [" << v_min << ", " << v_max
-              << "] u/s\n";
-    expect((v_max - v_min) / std::max(1e-9, v_min) < 0.005,
-           "helix speed ripple below 0.5% (constant-speed phase)");
   }
 
   if (with_failrestore) {
