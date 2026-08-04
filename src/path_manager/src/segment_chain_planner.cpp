@@ -198,8 +198,14 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   struct ParamRestore {
     SegmentChainPlanner *self{nullptr};
     const std::map<std::string, rclcpp::Parameter> *vals{nullptr};
-    ~ParamRestore() {
-      if (!self || !vals || vals->empty()) return;
+    bool done{false};
+    // Explicitly invoked BEFORE the final evaluation on every path — the
+    // stitched flight must be judged against MISSION-WIDE parameters and
+    // the mission-wide dynamics model, not whichever segment's overrides
+    // happened to be applied last. The destructor is only the backstop.
+    void restore() {
+      if (done || !self || !vals || vals->empty()) return;
+      done = true;
       try {
         std::vector<rclcpp::Parameter> back;
         for (const auto &kv : *vals) back.push_back(kv.second);
@@ -213,6 +219,7 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                            "plan may run with segment overrides!", e.what());
       }
     }
+    ~ParamRestore() { restore(); }
   } restore_guard{any_over ? this : nullptr, &pristine};
 
   // === Chained segment runs (sequential; each is a full pipeline run) ===
@@ -292,6 +299,9 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
       pm_->traj_.setGlobalTraj(baseline, now_s);
       pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
       pm_->publishTrajectoryViz(baseline, baseline);
+      restore_guard.restore();  // judge the flight under mission-wide params
+      logFinalEvaluation(baseline, {baseline.getTotalDuration()},
+                         {"baseline"});
       return true;
     }
     runs.push_back(pm_->traj_.local_traj.traj);
@@ -301,10 +311,28 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   poly_traj::Trajectory chained = runs.front();
   for (size_t i = 1; i < runs.size(); ++i) chained.append(runs[i]);
 
+  // All segments planned — restore mission-wide parameters NOW, so the
+  // terminal build and the final evaluation run under the mission's own
+  // model, not the last segment's overrides.
+  restore_guard.restore();
+
   // Report on the CHAIN portion (baseline deviation stays apples-to-apples),
   // then append the optional prescribed terminal phase before storage.
   logChainReport(baseline, runs, contracts, chained, seg_over);
+  std::vector<double> phase_ends;
+  std::vector<std::string> phase_names;
+  double acc_t = 0.0;
+  for (size_t i = 0; i < runs.size(); ++i) {
+    acc_t += runs[i].getTotalDuration();
+    phase_ends.push_back(acc_t);
+    phase_names.push_back("seg" + std::to_string(i + 1));
+  }
+  const double t_pre_terminal = chained.getTotalDuration();
   appendTerminalPhase(&chained);
+  if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
+    phase_ends.push_back(chained.getTotalDuration());
+    phase_names.push_back("terminal");
+  }
 
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
   // GLOBAL slot = the baseline OPTIMIZED trajectory (comparison reference,
@@ -314,6 +342,8 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
   pm_->publishTrajectoryViz(chained, baseline);
 
+  logFinalEvaluation(chained, phase_ends, phase_names);
+
   const double wall_ms = std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - t_wall).count();
   log_->infof("[CHAIN] chained %d segments: %d pieces, %.1f s flight "
@@ -321,6 +351,159 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
               segments_, chained.getPieceNum(), chained.getTotalDuration(), T,
               wall_ms);
   return true;
+}
+
+void SegmentChainPlanner::logFinalEvaluation(
+    const poly_traj::Trajectory &flight,
+    const std::vector<double> &phase_ends,
+    const std::vector<std::string> &phase_names) const
+{
+  const double T = flight.getTotalDuration();
+  if (T <= 1e-9 || phase_ends.empty() ||
+      phase_ends.size() != phase_names.size())
+    return;
+
+  const mmp_vehicle_dynamics::Parameters *dyn = pm_->dynamicsParams();
+  const auto param_or = [&](const char *n, double def) {
+    return node_->has_parameter(n) ? node_->get_parameter(n).as_double()
+                                   : def;
+  };
+  const double um_xy = param_or("optimization/dynamics_unit_xy_m", 100.0);
+  const double um_z = param_or("optimization/dynamics_unit_z_m", 100.0);
+  const double clr_band = param_or("optimization/obstacle_clearance", 0.3);
+  const Eigen::Vector3d S(um_xy, um_xy, um_z);
+
+  struct PhaseStat {
+    double min_agl{std::numeric_limits<double>::infinity()};
+    double min_agl_t{0.0};
+    double agl_sum{0.0};
+    int n{0}, n_below_band{0}, n_below_ground{0};
+    int env_n{0}, env_viol{0};
+    double util_peak{0.0};
+    mmp_vehicle_dynamics::EnvelopeLimit peak_limit{
+        mmp_vehicle_dynamics::EnvelopeLimit::None};
+    double risk_max{0.0}, risk_int{0.0};
+  };
+  std::vector<PhaseStat> st(phase_ends.size());
+
+  const double dt = 0.1;
+  const size_t nz = pm_->numRiskZones();
+  // Same counting doctrine as the solver's [CONV-REJECT] audit, latch
+  // included: the pre-cruise ramp (a rest-start mission legitimately
+  // begins below stall) stays out of the statistics, but sub-min-speed
+  // dwell AFTER cruise entry counts into BOTH counters — dropping it from
+  // both made the evaluator blind to mid-flight speed collapse, the exact
+  // ~0%-scored failure the solver's latch was built to kill (review find:
+  // a sub-stall arrival contract fed a 300 s helix that scored "0.0%").
+  bool reached_cruise = false;
+  for (double t = 0.0; t < T; t += dt) {
+    size_t ph = 0;
+    while (ph + 1 < phase_ends.size() && t >= phase_ends[ph]) ++ph;
+    PhaseStat &s = st[ph];
+    const Eigen::Vector3d p = flight.getPos(t);
+    double g = 0.0;
+    pm_->terrainElevation(p.x(), p.y(), &g);  // false: sea level 0
+    const double agl = p.z() - g;
+    if (agl < s.min_agl) { s.min_agl = agl; s.min_agl_t = t; }
+    s.agl_sum += agl;
+    ++s.n;
+    if (agl < clr_band) ++s.n_below_band;
+    if (agl < 0.0) ++s.n_below_ground;
+    if (dyn) {
+      const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
+          *dyn, S.cwiseProduct(p), S.cwiseProduct(flight.getVel(t)),
+          S.cwiseProduct(flight.getAcc(t)));
+      if (ev.valid && ev.speed_mps >= dyn->speed_min_mps) {
+        reached_cruise = true;
+        ++s.env_n;
+        mmp_vehicle_dynamics::EnvelopeLimit lim;
+        const double u =
+            mmp_vehicle_dynamics::envelopeUtilization(*dyn, ev, &lim);
+        if (!mmp_vehicle_dynamics::isWithinEnvelope(*dyn, ev)) ++s.env_viol;
+        if (u > s.util_peak) { s.util_peak = u; s.peak_limit = lim; }
+      } else if (reached_cruise) {
+        ++s.env_n;
+        ++s.env_viol;
+      }
+    }
+    if (nz > 0) {
+      double keep = 1.0;
+      for (size_t zi = 0; zi < nz; ++zi)
+        keep *= 1.0 - pm_->getEffectiveRisk(zi, p);
+      const double r = 1.0 - keep;
+      s.risk_max = std::max(s.risk_max, r);
+      s.risk_int += r * dt;
+    }
+  }
+
+  log_->infof("[FINAL-EVAL] ===== whole-flight evaluation: %.1f s, %d "
+              "pieces, %zu phase(s) =====",
+              T, flight.getPieceNum(), phase_ends.size());
+  double t0 = 0.0;
+  PhaseStat tot;
+  for (size_t ph = 0; ph < phase_ends.size(); ++ph) {
+    const PhaseStat &s = st[ph];
+    if (s.n > 0) {
+      // A phase with dynamics on but ZERO cruise-domain samples has no
+      // measurement — "0.0%" would print no-data as a clean reading.
+      char env[96];
+      if (!dyn) {
+        snprintf(env, sizeof env, "env model off");
+      } else if (s.env_n == 0) {
+        snprintf(env, sizeof env, "env NO CRUISE DATA (pre-cruise ramp)");
+      } else {
+        snprintf(env, sizeof env, "env viol %5.1f%% peak %5.1f%% (%s)",
+                 100.0 * s.env_viol / s.env_n, 100.0 * s.util_peak,
+                 mmp_vehicle_dynamics::envelopeLimitName(s.peak_limit));
+      }
+      log_->infof(
+          "[FINAL-EVAL] %-9s %6.1f s | AGL min %7.3f@%.0fs mean %6.2f u, "
+          "<band %4.1f%%, underground %s | %s | risk max %.3f, "
+          "exposure %.1f s",
+          phase_names[ph].c_str(), phase_ends[ph] - t0, s.min_agl,
+          s.min_agl_t, s.agl_sum / s.n, 100.0 * s.n_below_band / s.n,
+          s.n_below_ground ? "YES" : "no", env, s.risk_max, s.risk_int);
+    }
+    t0 = phase_ends[ph];
+    if (s.min_agl < tot.min_agl) {
+      tot.min_agl = s.min_agl;
+      tot.min_agl_t = s.min_agl_t;
+    }
+    tot.n += s.n;
+    tot.n_below_band += s.n_below_band;
+    tot.n_below_ground += s.n_below_ground;
+    tot.env_n += s.env_n;
+    tot.env_viol += s.env_viol;
+    tot.risk_max = std::max(tot.risk_max, s.risk_max);
+    tot.risk_int += s.risk_int;
+    if (s.util_peak > tot.util_peak) {
+      tot.util_peak = s.util_peak;
+      tot.peak_limit = s.peak_limit;
+    }
+  }
+  const double viol_pct =
+      tot.env_n ? 100.0 * tot.env_viol / tot.env_n : 0.0;
+  // A flight that never once reaches cruise is unflyable for this airframe
+  // — the solver's own degenerate rule (viol := 1.0), mirrored here so
+  // no-data can never read as clean.
+  const bool no_cruise = dyn != nullptr && tot.env_n == 0;
+  const bool clean =
+      tot.n_below_ground == 0 && !no_cruise && viol_pct < 25.0;
+  if (clean) {
+    log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
+                "%.1f%% (peak %.1f%% %s), risk exposure %.1f s",
+                tot.min_agl, viol_pct, 100.0 * tot.util_peak,
+                mmp_vehicle_dynamics::envelopeLimitName(tot.peak_limit),
+                tot.risk_int);
+  } else {
+    log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s(AGL min %.3f u "
+                "@%.0fs, env viol %.1f%%) — the stitched flight carries "
+                "hazards no per-solve audit saw",
+                tot.n_below_ground ? "TERRAIN OVERLAP " : "",
+                no_cruise ? "NEVER REACHES CRUISE " : "",
+                !no_cruise && viol_pct >= 25.0 ? "ENVELOPE " : "",
+                tot.min_agl, tot.min_agl_t, viol_pct);
+  }
 }
 
 void SegmentChainPlanner::appendTerminalPhase(

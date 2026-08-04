@@ -98,6 +98,18 @@ private:
   };
   std::vector<SegmentOverrides> readSegmentOverrides() const;
 
+  // [STAGE-4] Whole-flight evaluation of the FINAL stitched product — the
+  // one artifact no per-solve audit ever sees whole (and the terminal
+  // phase not at all): terrain clearance, flight-envelope utilization
+  // (shared mmp_vehicle_dynamics model) and OR-combined risk exposure,
+  // sampled at 10 Hz, per phase and total, ending in a CLEAN/CHECK
+  // verdict line. Informational, never a gate: publication already
+  // happened under the per-solve audits; this block is where the stitched
+  // flight's remaining blind spots become visible.
+  void logFinalEvaluation(const poly_traj::Trajectory &flight,
+                          const std::vector<double> &phase_ends,
+                          const std::vector<std::string> &phase_names) const;
+
   // [STAGE-3] Optional PRESCRIBED terminal phase (chain/terminal/enable):
   // a helix descent of genuinely different character — analytic geometry,
   // no optimizer — appended after the chain from its handoff state (level,

@@ -368,6 +368,13 @@ namespace path_manager
     double riskGoalTaperRadius() const { return risk_goal_taper_radius_; }
     void publishTrajectoryViz(const poly_traj::Trajectory &opt,
                               const poly_traj::Trajectory &reference);
+    // [FINAL-EVAL] shared flight-dynamics model pass-through (null when the
+    // optimizer is uninitialized or the dynamics model is off).
+    const mmp_vehicle_dynamics::Parameters* dynamicsParams() const {
+        return (isOptimizerInitialized() && poly_traj_opt_->dynamicsEnabled())
+                   ? &poly_traj_opt_->dynamicsParams()
+                   : nullptr;
+    }
     // Read-only inspection hooks for metrics/tests. These expose the same
     // precomputed field consumed by FM2/A* and MINCO; no second LOS model.
     double getRiskVisibility(size_t zone_index,

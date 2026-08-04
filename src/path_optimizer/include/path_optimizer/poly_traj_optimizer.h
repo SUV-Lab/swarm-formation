@@ -538,6 +538,13 @@ namespace ego_planner
         return dynamics_params_.speed_min_mps *
                (1.0 + dynamics_params_.constraint_margin) / dyn_unit_xy_m_;
     }
+    // [FINAL-EVAL] the shared flight-dynamics model, for whole-flight audits
+    // outside the solver (the stitched chain+terminal product includes a
+    // prescribed phase no per-solve audit ever saw).
+    bool dynamicsEnabled() const { return dynamics_enable_; }
+    const mmp_vehicle_dynamics::Parameters& dynamicsParams() const {
+        return dynamics_params_;
+    }
     void setDroneId(const int drone_id);
     void setFormation(const std::vector<Eigen::Vector3d>& formation_positions, int formation_size);
     // [GNRON] endpoint moat taper radius (frame units); <=0 = off. Must be
