@@ -1,8 +1,53 @@
 #include "path_manager/segment_chain_planner.h"
 
+#include <algorithm>
 #include <chrono>
 
 namespace path_manager {
+
+namespace {
+
+// Dense (t, cumulative arc) table. Baseline and chain have different total
+// durations, so the deviation sweep compares them at matched ARC fractions —
+// matching normalized time would skew everything after the first seam.
+struct ArcTable {
+  std::vector<double> t, s;
+  double total{0.0};
+};
+
+ArcTable buildArcTable(const poly_traj::Trajectory &traj, int samples)
+{
+  ArcTable a;
+  const double T = traj.getTotalDuration();
+  a.t.reserve(samples + 1);
+  a.s.reserve(samples + 1);
+  Eigen::Vector3d prev = traj.getPos(0.0);
+  double s = 0.0;
+  for (int k = 0; k <= samples; ++k) {
+    const double tt = std::min(T, k * T / samples);
+    const Eigen::Vector3d p = traj.getPos(tt);
+    s += (p - prev).norm();
+    prev = p;
+    a.t.push_back(tt);
+    a.s.push_back(s);
+  }
+  a.total = s;
+  return a;
+}
+
+double timeAtArcFrac(const ArcTable &a, double frac)
+{
+  const double target = frac * a.total;
+  const auto it = std::lower_bound(a.s.begin(), a.s.end(), target);
+  const size_t i = static_cast<size_t>(std::distance(a.s.begin(), it));
+  if (i == 0) return a.t.front();
+  if (i >= a.s.size()) return a.t.back();
+  const double s0 = a.s[i - 1], s1 = a.s[i];
+  const double w = (s1 > s0) ? (target - s0) / (s1 - s0) : 0.0;
+  return a.t[i - 1] + w * (a.t[i] - a.t[i - 1]);
+}
+
+}  // namespace
 
 SegmentChainPlanner::SegmentChainPlanner(rclcpp::Node::SharedPtr node,
                                          std::shared_ptr<PathManager> path_manager,
@@ -167,20 +212,82 @@ void SegmentChainPlanner::logChainReport(
     const std::vector<Contract> &contracts,
     const poly_traj::Trajectory &chained) const
 {
-  (void)baseline;
-  (void)contracts;
-  (void)chained;
-  // Seam continuity: both sides of every junction were solved against the
-  // SAME hard PVA contract, so these deltas are solver arithmetic, not
-  // geometry — anything above ~1e-6 means a BC was mangled on the way in.
+  log_->infof("[CHAIN-REPORT] ===== stage-1 split verification =====");
+
+  // Per-run shape: piece counts and durations reveal a span whose sub-plan
+  // diverged wildly from its share of the baseline (e.g. a junction that
+  // forced a detour the unsplit optimum never took).
+  for (size_t i = 0; i < runs.size(); ++i) {
+    const ArcTable at = buildArcTable(runs[i], 200);
+    log_->infof("[CHAIN-REPORT] run %zu/%zu: %d pieces, %.1f s, %.1f u arc",
+                i + 1, runs.size(), runs[i].getPieceNum(),
+                runs[i].getTotalDuration(), at.total);
+  }
+
+  // Seam continuity. Both sides of every junction were solved against the
+  // SAME hard PVA contract, so dP/dV/dA are solver arithmetic, not geometry —
+  // anything above 1e-6 means a BC was mangled on the way in (the historical
+  // failure mode: [GOAL AGL] re-adding terrain under a junction z). The two
+  // tail/head-vs-contract columns say WHICH side broke. Jerk is EXPECTED to
+  // jump: the seam is C2 by contract while MINCO's internal joints are C4 —
+  // that jump is the intrinsic price of splitting, report it, don't gate it.
+  double worst_seam = 0.0;
   for (size_t i = 0; i + 1 < runs.size(); ++i) {
     const auto &a = runs[i];
     const auto &b = runs[i + 1];
     const Eigen::Vector3d dp = a.getJuncPos(a.getPieceNum()) - b.getJuncPos(0);
     const Eigen::Vector3d dv = a.getJuncVel(a.getPieceNum()) - b.getJuncVel(0);
     const Eigen::Vector3d da = a.getJuncAcc(a.getPieceNum()) - b.getJuncAcc(0);
+    const Eigen::Vector3d dj =
+        a.getJer(a.getTotalDuration()) - b.getJer(0.0);
+    const double tail_err =
+        (a.getJuncPos(a.getPieceNum()) - contracts[i].pos).norm();
+    const double head_err = (b.getJuncPos(0) - contracts[i].pos).norm();
+    worst_seam = std::max({worst_seam, dp.norm(), dv.norm(), da.norm()});
     log_->infof("[CHAIN-REPORT] seam %zu: |dP|=%.3e u |dV|=%.3e u/s "
-                "|dA|=%.3e u/s^2", i + 1, dp.norm(), dv.norm(), da.norm());
+                "|dA|=%.3e u/s^2 | jerk jump |dJ|=%.3f u/s^3 | "
+                "tail-vs-contract %.3e, head-vs-contract %.3e",
+                i + 1, dp.norm(), dv.norm(), da.norm(), dj.norm(),
+                tail_err, head_err);
+  }
+
+  // Baseline vs chain, at matched arc fractions (durations differ).
+  const ArcTable ab = buildArcTable(baseline, 400);
+  const ArcTable ac = buildArcTable(chained, 400);
+  double dev_max = 0.0, dev_sum = 0.0, dev_max_s = 0.0;
+  constexpr int kSweep = 100;
+  for (int k = 0; k <= kSweep; ++k) {
+    const double frac = static_cast<double>(k) / kSweep;
+    const Eigen::Vector3d pb = baseline.getPos(timeAtArcFrac(ab, frac));
+    const Eigen::Vector3d pc = chained.getPos(timeAtArcFrac(ac, frac));
+    const double d = (pb - pc).norm();
+    dev_sum += d;
+    if (d > dev_max) {
+      dev_max = d;
+      dev_max_s = frac * ab.total;
+    }
+  }
+  log_->infof("[CHAIN-REPORT] baseline %.1f s / %.1f u arc vs chained "
+              "%.1f s / %.1f u arc (%+.2f%% time, %+.2f%% arc)",
+              baseline.getTotalDuration(), ab.total,
+              chained.getTotalDuration(), ac.total,
+              100.0 * (chained.getTotalDuration() /
+                       std::max(1e-9, baseline.getTotalDuration()) - 1.0),
+              100.0 * (ac.total / std::max(1e-9, ab.total) - 1.0));
+  log_->infof("[CHAIN-REPORT] deviation vs baseline @matched arc: mean "
+              "%.2f u, max %.2f u @s=%.1f u (%.1f km)",
+              dev_sum / (kSweep + 1), dev_max, dev_max_s, dev_max_s * 0.1);
+
+  // One-line verdict for the log grep: seams are the stage-1 acceptance
+  // criterion; the deviation numbers are context, not a gate.
+  if (worst_seam < 1e-6) {
+    log_->infof("[CHAIN-REPORT] verdict: PASS — all seams C2-continuous "
+                "(worst |d(P,V,A)| = %.3e)", worst_seam);
+  } else {
+    log_->warnf("[CHAIN-REPORT] verdict: CHECK — seam discontinuity %.3e "
+                "above 1e-6: a boundary condition was altered between the "
+                "contract and the solve (AGL rewrite? re-aimed head vel?)",
+                worst_seam);
   }
 }
 
