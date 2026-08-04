@@ -97,7 +97,7 @@ int main(int argc, char **argv)
 
   bool with_zone = false, with_segdiff = false, with_twice = false,
        with_failrestore = false, with_altcap = false, with_terminal = false,
-       with_tinyturn = false;
+       with_tinyturn = false, with_route = false, with_par = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -112,6 +112,13 @@ int main(int argc, char **argv)
     // error once delivered half the requested heading change, invisibly to
     // every continuity check).
     if (v == "tinyturn") with_tinyturn = true;
+    // route / par: the baseline-free contract-authoring mode, sequential
+    // and threaded — the audit found the headline feature had zero test
+    // coverage. Assertions reuse the whole-trajectory junction sweep plus
+    // route-specific storage semantics (both slots carry the chained
+    // flight).
+    if (v == "route") with_route = true;
+    if (v == "par") { with_route = true; with_par = true; }
     // twice: plan the SAME mission twice in one process. If the scope-guard
     // restore leaks a segment override, the second BASELINE (always planned
     // with mission-wide params) solves a different problem and its duration
@@ -157,7 +164,20 @@ int main(int argc, char **argv)
   const double helix_turns = with_tinyturn ? 0.05 : 1.0;
   if (with_terminal) {
     node->declare_parameter("chain/terminal/enable", true);
-    if (with_tinyturn) node->declare_parameter("chain/terminal/turns", 0.05);
+    if (with_tinyturn) {
+      node->declare_parameter("chain/terminal/turns", 0.05);
+      // The tiny arc cuts across hills the full turn avoids; a higher exit
+      // AGL keeps the whole descent above terrain — the underground gate
+      // (audit find) DISCARDS a cutting helix, and this fixture's heading
+      // assertions need the helix appended.
+      node->declare_parameter("chain/terminal/final_agl", 1.2);
+    }
+  }
+  if (with_route) {
+    node->declare_parameter("chain/author_from_route", true);
+    if (with_par) node->declare_parameter("chain/parallel", true);
+    std::cout << (with_par ? "route-parallel" : "route-sequential")
+              << " mode\n";
   }
 
   auto pm = std::make_shared<path_manager::PathManager>(node);
@@ -252,7 +272,8 @@ int main(int argc, char **argv)
     const Eigen::Vector3d exit_a = chained.getJuncAcc(M);
     double ground = 0.0;
     pm->terrainElevation(exit_p.x(), exit_p.y(), &ground);
-    expect(std::abs(exit_p.z() - ground - 0.15) < 0.02,
+    const double want_agl = with_tinyturn ? 1.2 : 0.15;
+    expect(std::abs(exit_p.z() - ground - want_agl) < 0.02,
            "terminal helix exits at the configured AGL");
     expect(std::abs(exit_v.z()) < 1e-9 && exit_a.norm() < 1e-9,
            "terminal helix exits level and unaccelerated");
@@ -308,6 +329,14 @@ int main(int argc, char **argv)
     }
   }
 
+  if (with_route) {
+    // Route mode has no baseline solve: both container slots must carry the
+    // SAME chained flight (the comparison channel mirrors it), and the
+    // whole-trajectory junction sweep above already covered its seams.
+    expect(std::abs(bt - ct) < 1e-9 &&
+               baseline.getPieceNum() == chained.getPieceNum(),
+           "route mode stores the chained flight in both slots");
+  }
   if (with_failrestore) {
     // The sub-stall segment must have failed and the chain degraded to the
     // baseline (identical trajectory in the local slot).

@@ -334,8 +334,11 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
       const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
       pm_->traj_.setGlobalTraj(baseline, now_s);
       pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
+      // Restore BEFORE both readouts: the risk viz and [FINAL-EVAL] must
+      // describe this baseline under MISSION-WIDE parameters, not the
+      // failed segment's overrides — same order as the success path.
+      restore_guard.restore();
       pm_->publishTrajectoryViz(baseline, baseline);
-      restore_guard.restore();  // judge the flight under mission-wide params
       logFinalEvaluation(baseline, {baseline.getTotalDuration()},
                          {"baseline"});
       return true;
@@ -437,10 +440,8 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     }
     w[static_cast<size_t>(i)] = w[static_cast<size_t>(i - 1)] + len * dens;
   }
-  const double W = w.back();
-  const double span_w = W / segments_;
-
-  const double span = S / segments_;
+  const double W_total = w.back();
+  const double span_w = W_total / segments_;
 
   // Sustainable grade at cruise: the THRUST-LIMITED climb, not just the
   // fpa cap. A junction is pinned at full cruise with a = 0, so the solver
@@ -617,8 +618,13 @@ bool SegmentChainPlanner::planRouteParallel(
     if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
       um = node_->get_parameter("optimization/dynamics_unit_xy_m")
                .as_double();
+    // Same degenerate-unit guard as dynamicsMinSpeedFloorUnits(): an
+    // unguarded division turned dynamics_unit_xy_m=0 into an INFINITE
+    // stall floor (audit find).
     const double floor =
-        dyn->speed_min_mps * (1.0 + dyn->constraint_margin) / um;
+        um <= 1e-9
+            ? 0.0
+            : dyn->speed_min_mps * (1.0 + dyn->constraint_margin) / um;
     if (floor > 0.0 && v0.norm() < floor) {
       Eigen::Vector3d dir = v0;
       if (dir.norm() < 1e-9 && route.size() >= 2) {
@@ -889,10 +895,13 @@ void SegmentChainPlanner::logFinalEvaluation(
       tot.env_n ? 100.0 * tot.env_viol / tot.env_n : 0.0;
   // A flight that never once reaches cruise is unflyable for this airframe
   // — the solver's own degenerate rule (viol := 1.0), mirrored here so
-  // no-data can never read as clean.
+  // no-data can never read as clean. The envelope threshold is the SAME
+  // configurable gate the per-solve audit uses, not a second number.
+  const double viol_max_pct =
+      100.0 * param_or("optimization/audit_envelope_violation_max", 0.25);
   const bool no_cruise = dyn != nullptr && tot.env_n == 0;
   const bool clean =
-      tot.n_below_ground == 0 && !no_cruise && viol_pct < 25.0;
+      tot.n_below_ground == 0 && !no_cruise && viol_pct < viol_max_pct;
   if (clean) {
     log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
                 "%.1f%% (peak %.1f%% %s), risk exposure %.1f s",
@@ -905,7 +914,7 @@ void SegmentChainPlanner::logFinalEvaluation(
                 "hazards no per-solve audit saw",
                 tot.n_below_ground ? "TERRAIN OVERLAP " : "",
                 no_cruise ? "NEVER REACHES CRUISE " : "",
-                !no_cruise && viol_pct >= 25.0 ? "ENVELOPE " : "",
+                !no_cruise && viol_pct >= viol_max_pct ? "ENVELOPE " : "",
                 tot.min_agl, tot.min_agl_t, viol_pct);
   }
 }
@@ -971,11 +980,20 @@ void SegmentChainPlanner::appendTerminalPhase(
               prm.radius, prm.turns, prm.right ? "right" : "left",
               term.getPieceNum(), term.getTotalDuration(), dP, dV, dA,
               exit_p.z() - g, min_agl);
+  if (min_agl < 0.0) {
+    // The prescribed phase bypasses [REJECT]/[CONV-REJECT] entirely — this
+    // is its collision gate, same criterion as the MINCO audit's
+    // below-surface check. Degrade loudly: the chain flies without the
+    // helix rather than publishing a trajectory through terrain.
+    log_->warnf("[REJECT] PRESCRIBED terminal geometry goes %.3f u BELOW "
+                "terrain — helix DISCARDED, the chain flies without it",
+                min_agl);
+    return;
+  }
   if (min_agl < 0.5 * prm.final_agl) {
     log_->warnf("[CHAIN] PRESCRIBED terminal geometry descends to %.3f u "
-                "AGL — no optimizer and no collision audit protects this "
-                "phase yet (stage 4); move the helix or shrink the turns",
-                min_agl);
+                "AGL — no optimizer audit protects this phase; move the "
+                "helix or shrink the turns", min_agl);
   }
   chained->append(term);
 }

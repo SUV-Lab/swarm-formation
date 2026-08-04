@@ -39,8 +39,11 @@ public:
   // span. A sub-mission's own eikonal can pick a different route homotopy
   // than the baseline took there (observed on r3: west over 1,080 m terrain
   // instead of the baseline's eastern saddle — line-search death + terrain
-  // overlap). Off = re-litigate the front end per span (the stage-2 mode,
-  // where per-span FM conditions are the point).
+  // overlap). Off = re-litigate the front end per span, which introduces a
+  // variable other than the split itself. Orthogonal to the [STAGE-2]
+  // per-segment overrides: those apply with inherit_route either way, and
+  // they cannot vary FM conditions (only optimization/* re-reads per
+  // segment).
   SegmentChainPlanner(rclcpp::Node::SharedPtr node,
                       std::shared_ptr<PathManager> path_manager,
                       swarm_formation::LogManager *log_manager,
