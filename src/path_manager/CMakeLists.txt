@@ -121,6 +121,15 @@ target_link_libraries(terrain_risk_mask_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(terrain_risk_mask_test
   ${PATH_MANAGER_DEPENDENCIES})
 
+# [CHAIN] Stage-1 experiment: baseline vs chained plan on a synthetic DEM,
+# auditing every junction of the stitched trajectory for P/V/A continuity.
+# Manual harness (like risk_scenarios_test), NOT registered with ctest: it
+# runs segments+1 full L-BFGS solves with the production parameter set.
+add_executable(chain_experiment_test test/chain_experiment_test.cpp)
+target_link_libraries(chain_experiment_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(chain_experiment_test
+  ${PATH_MANAGER_DEPENDENCIES})
+
 
 # Register the self-contained tests with ctest. They existed for months as
 # plain executables that `colcon test` never ran — a regression net that
@@ -164,6 +173,10 @@ install(TARGETS risk_scenarios_test
 )
 
 install(TARGETS terrain_risk_mask_test
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS chain_experiment_test
   DESTINATION lib/${PROJECT_NAME}
 )
 
