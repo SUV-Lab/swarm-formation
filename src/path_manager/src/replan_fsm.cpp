@@ -121,6 +121,19 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     RCLCPP_INFO(node_->get_logger(), "PathManager initialized, waiting for trajectory command");
     log_manager_->infof("PathManager initialized, waiting for trajectory command");
 
+    // [CHAIN] Stage-1 segment-chained planning experiment (default off).
+    node_->declare_parameter("chain/enable", false);
+    node_->get_parameter("chain/enable", chain_enable_);
+    int chain_segments = 3;
+    node_->declare_parameter("chain/segments", 3);
+    node_->get_parameter("chain/segments", chain_segments);
+    chain_planner_ = std::make_unique<SegmentChainPlanner>(
+        node_, path_manager_, log_manager_.get(), chain_segments);
+    if (chain_enable_) {
+        FSM_LOG_WARN("[CHAIN] segment-chained planning ENABLED "
+                     "(%d segments per mission)", chain_planner_->segments());
+    }
+
     rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
     auto sensor_qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
 
@@ -738,10 +751,18 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
 
     auto global_traj_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TIMING] Starting global trajectory planning");
-    path_manager_->setStartVelSynthesized(start_vel_synthesized_);
-    bool success = path_manager_->planGlobalTraj(
-        start_pt_, start_vel_, start_acc_,
-        waypoints, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    bool success;
+    if (chain_enable_ && chain_planner_) {
+        // [CHAIN] baseline + N chained segment runs; the planner forwards
+        // the synthesized flag itself (per-run semantics differ).
+        success = chain_planner_->plan(start_pt_, start_vel_, start_acc_,
+                                       waypoints, start_vel_synthesized_);
+    } else {
+        path_manager_->setStartVelSynthesized(start_vel_synthesized_);
+        success = path_manager_->planGlobalTraj(
+            start_pt_, start_vel_, start_acc_,
+            waypoints, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    }
 
     auto global_traj_end = std::chrono::high_resolution_clock::now();
     auto global_traj_duration = std::chrono::duration_cast<std::chrono::milliseconds>(global_traj_end - global_traj_start).count();

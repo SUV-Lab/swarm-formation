@@ -16,6 +16,7 @@
 #include "mmp_mission_msgs/msg/risk_zone_array.hpp"
 #include "mmp_mission_msgs/msg/risk_zone_spec.hpp"
 #include "path_manager/path_manager.h"
+#include "path_manager/segment_chain_planner.h"
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
 
@@ -100,6 +101,14 @@ private:
                           const std::vector<Eigen::Vector3d>& waypoints);
 
     std::shared_ptr<PathManager> path_manager_;
+
+    // [CHAIN] Stage-1 segment-chained planning (chain/enable, default off).
+    // Lives beside the state machine, not inside it: the FSM decides WHEN to
+    // plan, the chain planner knows how to turn one mission into N chained
+    // pipeline runs. When disabled, triggerGlobalPlan takes the single-shot
+    // path exactly as before.
+    std::unique_ptr<SegmentChainPlanner> chain_planner_;
+    bool chain_enable_{false};
 
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr optimized_path_pub_;
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr global_path_pub_;

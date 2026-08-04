@@ -42,6 +42,7 @@ find_package(ament_index_cpp REQUIRED)
 add_library(${PROJECT_NAME}_lib
   src/path_manager.cpp
   src/replan_fsm.cpp
+  src/segment_chain_planner.cpp
   ../common/log_manager.cpp
 )
 

@@ -1496,6 +1496,21 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         return true;
 }
 
+// [CHAIN] Republish the along-trajectory channels for an externally
+// assembled trajectory. Same channels, colors and namespaces as the per-plan
+// publish in optimizeStage — the chained trajectory replaces the last span's
+// partial view, and the reference (baseline) rides the global-tube channel.
+void PathManager::publishTrajectoryViz(const poly_traj::Trajectory &opt,
+                                       const poly_traj::Trajectory &reference)
+{
+    publishTrajRisk(opt);
+    publishRiskProfile(opt);
+    publishTrajTube(opt, opt_traj_tube_pub_, "opt_path_drone_",
+                    0.55f, 0.72f, 1.0f, 0.22f);
+    publishTrajTube(reference, global_traj_tube_pub_, "global_path_drone_",
+                    0.59f, 0.71f, 1.0f, 0.85f);
+}
+
 void PathManager::setFormationInfo(int drone_id, const std::string& formation_type,
                                    const std::vector<Eigen::Vector3d>& formation_pattern) {
     current_formation_type_ = formation_type;

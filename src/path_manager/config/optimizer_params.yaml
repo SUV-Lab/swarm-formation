@@ -2,6 +2,14 @@
   ros__parameters:
     # ================= Pipeline: FM2 -> shortcut -> MINCO -> L-BFGS =================
 
+    # ---- [CHAIN] 단계별 궤적 분할 실험 (stage 1) ----
+    # 미션 1회를 baseline으로 계획한 뒤, 그 궤적에서 등시간 분할점의 PVA를
+    # 접합 계약으로 뽑아 동일 파이프라인을 N회 체이닝. run N의 tail BC와
+    # run N+1의 head BC가 같은 계약값(하드 등식)이라 이음매는 C2가 구조적으로
+    # 보장된다. off면 기존 단일 계획 그대로.
+    chain/enable: false
+    chain/segments: 3
+
     # ---- Front-end (FM2 / A*) ----
     manager/front_end: fm2              # fm2 | astar(ablation baseline)
     manager/fm2_coarse_k: 3             # eikonal grid downsample; lower = finer/slower

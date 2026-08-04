@@ -334,6 +334,14 @@ namespace path_manager
     // callback group as trajectory commands (handled in ReplanFSM).
     void setRiskZonesRuntime(const std::vector<RiskZone>& zones);
     size_t numRiskZones() const { return risk_zones_.size(); }
+    // [CHAIN] hooks for the segment-chain planner: junction placement must
+    // stay clear of the zone moat + GNRON taper band, and the chained result
+    // needs the along-trajectory viz republished (the per-run publish only
+    // covered the final span).
+    const std::vector<RiskZone>& riskZones() const { return risk_zones_; }
+    double riskGoalTaperRadius() const { return risk_goal_taper_radius_; }
+    void publishTrajectoryViz(const poly_traj::Trajectory &opt,
+                              const poly_traj::Trajectory &reference);
     // Read-only inspection hooks for metrics/tests. These expose the same
     // precomputed field consumed by FM2/A* and MINCO; no second LOS model.
     double getRiskVisibility(size_t zone_index,
