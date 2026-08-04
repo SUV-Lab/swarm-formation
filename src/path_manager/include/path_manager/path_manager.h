@@ -374,6 +374,9 @@ namespace path_manager
     // initial direction (manager/align_start_vel_to_route). Explicitly
     // commanded / trajectory-derived velocities are never re-aimed.
     void setStartVelSynthesized(bool s) { start_vel_synthesized_ = s; }
+    // [VEL-ALIGN] the operator kill switch (manager/align_start_vel_to_route)
+    // — route mode replicates the re-aim itself and must honor it too.
+    bool alignStartVelToRoute() const { return align_start_vel_to_route_; }
 
     // Dynamic obstacle interface (RViz-driven). Patches are layered on top of
     // the static terrain ESDF; the next plan picks them up via min(static,dyn).

@@ -89,6 +89,21 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     const bool author = dp("chain/author_from_route", false);
     const bool par = dp("chain/parallel", false);
     if (author) {
+      // Route mode authors contracts and builds every worker's optimizer
+      // from the MISSION-WIDE parameter surface — chain/seg<i>/params has
+      // no per-segment application point here (and the four
+      // PathManager-consumed values could never differ per PARALLEL worker
+      // anyway: they live on the shared manager). A dropped requirement
+      // must never be silent.
+      const std::vector<SegmentOverrides> over = readSegmentOverrides();
+      for (int i = 0; i < segments_; ++i) {
+        if (!over[static_cast<size_t>(i)].label.empty()) {
+          log_->warnf("[CHAIN-PAR] seg%d overrides IGNORED in route mode "
+                      "(%s) — use the baseline flow when the segment "
+                      "requirement must hold",
+                      i + 1, over[static_cast<size_t>(i)].label.c_str());
+        }
+      }
       return planRouteParallel(start_pos, start_vel, start_acc, waypoints,
                                start_vel_synthesized, par);
     } else if (par) {
@@ -388,6 +403,31 @@ bool SegmentChainPlanner::authorContractsFromRoute(
   const double span = S / segments_;
   const double cruise = pm_->maxVel();
 
+  // Sustainable grade at cruise: the THRUST-LIMITED climb, not just the
+  // fpa cap. A junction is pinned at full cruise with a = 0, so the solver
+  // has no energy trade there — a uniformly steep leg has kappa == 0 and
+  // would otherwise score as the calmest possible candidate while pinning
+  // an unsustainable climb as a hard BC (review find).
+  double tan_grade_max = std::numeric_limits<double>::infinity();
+  if (const auto *dyn = pm_->dynamicsParams()) {
+    double um = 100.0;
+    if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+      um = node_->get_parameter("optimization/dynamics_unit_xy_m")
+               .as_double();
+    const double v = cruise * um;
+    const double q =
+        0.5 * mmp_vehicle_dynamics::airDensity(*dyn, 0.0) * v * v;
+    const double W = dyn->mass_kg * dyn->gravity_mps2;
+    const double CL = W / std::max(1e-9, q * dyn->wing_area_m2);
+    const double D = (dyn->zero_lift_drag_coefficient +
+                      dyn->induced_drag_factor * CL * CL) *
+                     q * dyn->wing_area_m2;
+    const double sg = std::max(
+        0.0, std::min(1.0, (dyn->thrust_max_n * (1.0 - dyn->constraint_margin) - D) / W));
+    tan_grade_max = std::min(std::tan(dyn->flight_path_angle_max_rad),
+                             std::tan(std::asin(sg)));
+  }
+
   // Discrete 3D curvature per interior vertex: turn angle over the mean
   // chord — the a-priori stand-in for the baseline's |a| (= v^2 * kappa).
   std::vector<double> kappa(static_cast<size_t>(M), 0.0);
@@ -415,26 +455,52 @@ bool SegmentChainPlanner::authorContractsFromRoute(
       // Calmness dominates, balance breaks ties: kappa is rad/u (a gentle
       // route sits at ~0.001-0.01, a hard corner at 0.05+), the balance
       // term at most 0.4 — the 100x scale makes a real bend outweigh any
-      // imbalance while flat stretches sort by balance.
+      // imbalance while flat stretches sort by balance. Grade beyond the
+      // sustainable cone is penalized on the same scale as a hard bend.
+      const double hxy_i = (route[i + 1] - route[i - 1]).head<2>().norm();
+      const double grade_i =
+          hxy_i > 1e-9
+              ? std::abs(route[i + 1].z() - route[i - 1].z()) / hxy_i
+              : 1e3;
       const double score =
           kappa[static_cast<size_t>(i)] * 100.0 +
-          std::abs(s[i] - target) / span;
+          std::abs(s[i] - target) / span +
+          std::max(0.0, grade_i - tan_grade_max) * 100.0;
       if (score < best_any_score) { best_any = i; best_any_score = score; }
       if (nearRiskZone(route[i])) continue;
       if (score < best_score) { best = i; best_score = score; }
     }
-    if (best < 0) {
+    if (best < 0 && best_any >= 0) {
       log_->warnf("[CHAIN-PAR] junction %d: window blanketed by zones — "
                   "calmest candidate regardless (risk comparison "
                   "contaminated there)", j);
       best = best_any;
     }
-    if (best < 0) return false;
+    if (best < 0) {
+      // No vertex fell inside the arc window at all (very sparse route) —
+      // a different failure than zone blanket; the caller falls back.
+      log_->warnf("[CHAIN-PAR] junction %d: no route vertex in the arc "
+                  "window — route too sparse for %d segments",
+                  j, segments_);
+      return false;
+    }
     Contract c;
     c.t = s[best] / std::max(1e-9, cruise);
     c.pos = route[best];
     Eigen::Vector3d dir = route[best + 1] - route[best - 1];
     if (dir.norm() < 1e-9) dir = Eigen::Vector3d::UnitX();
+    const double hxy = dir.head<2>().norm();
+    if (hxy > 1e-9 && std::abs(dir.z()) > tan_grade_max * hxy) {
+      log_->warnf("[CHAIN-PAR] contract %d grade %.3f > sustainable %.3f — "
+                  "tangent sheared onto the climb cone (a hard BC at "
+                  "cruise with a=0 has no energy trade)",
+                  j, std::abs(dir.z()) / hxy, tan_grade_max);
+      dir.z() = std::copysign(tan_grade_max * hxy, dir.z());
+    } else if (hxy <= 1e-9) {
+      // Near-vertical chord: enter level — the same intent as the arrival
+      // contract's degenerate walk-back.
+      dir = Eigen::Vector3d::UnitX();
+    }
     c.vel = dir.normalized() * cruise;
     c.acc = Eigen::Vector3d::Zero();
     log_->infof("[CHAIN-PAR] contract %d @s=%.1f u (target %.1f): "
@@ -498,7 +564,8 @@ bool SegmentChainPlanner::planRouteParallel(
   // route is known here) and the [STALL-FLOOR] the bypassed planGlobalTraj
   // path would have applied.
   Eigen::Vector3d v0 = start_vel;
-  if (start_vel_synthesized && route.size() >= 2) {
+  if (pm_->alignStartVelToRoute() && start_vel_synthesized &&
+      route.size() >= 2) {
     Eigen::Vector3d dir = route[1] - route[0];
     dir.z() = 0.0;
     if (dir.head<2>().norm() > 1e-9)
@@ -527,8 +594,8 @@ bool SegmentChainPlanner::planRouteParallel(
   const double author_ms = ms_since(t_wall) - fe_ms;
 
   // === 3. per-worker optimizer instances (serial: setParam snapshots
-  // node params, and inner OpenMP is pinned to 1 thread while N worker
-  // threads exist) ===
+  // node params; inner OpenMP is SHARED as cores/segments per worker —
+  // see the note at the pin below) ===
   rclcpp::Parameter saved_rpt;
   bool had_rpt = node_->has_parameter("optimization/risk_parallel_threads");
   if (had_rpt)
