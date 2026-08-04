@@ -96,9 +96,12 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
 
   // === Junction contracts sampled from the baseline ===
   std::vector<Contract> contracts;
+  const double span = T / segments_;
+  double t_prev = 0.0;
   for (int i = 1; i < segments_; ++i) {
     Contract c;
-    c.t = clearJunctionTime(T * i / segments_, baseline);
+    c.t = clearJunctionTime(span * i, t_prev, span, baseline);
+    t_prev = c.t;
     c.pos = baseline.getPos(c.t);
     c.vel = baseline.getVel(c.t);
     c.acc = baseline.getAcc(c.t);
@@ -137,10 +140,13 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                 i + 1, segments_, head_pos.x(), head_pos.y(), head_pos.z(),
                 head_vel.norm(), last ? "goal" : "junction",
                 goal.back().x(), goal.back().y(), goal.back().z());
-    // Contract heads are trajectory-derived states — never re-aim them.
+    // Contract heads are trajectory-derived states — never re-aim
+    // ([VEL-ALIGN]) and never floor ([STALL-FLOOR]) them: the neighbour's
+    // tail pins the same state verbatim.
     pm_->setStartVelSynthesized(i == 0 ? start_vel_synthesized : false);
     if (!pm_->planGlobalTraj(head_pos, head_vel, head_acc, goal,
-                             end_vel, end_acc, /*junction_goal=*/!last)) {
+                             end_vel, end_acc, /*junction_goal=*/!last,
+                             /*junction_head=*/i != 0)) {
       // Degrade loudly to the baseline: the mission still flies, and the
       // failed experiment is visible in the log, not in the sky.
       log_->warnf("[CHAIN] segment %d/%d FAILED — restoring and flying the "
@@ -178,22 +184,31 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
 }
 
 double SegmentChainPlanner::clearJunctionTime(
-    double t, const poly_traj::Trajectory &traj) const
+    double t_nominal, double t_prev, double span,
+    const poly_traj::Trajectory &traj) const
 {
-  if (!nearRiskZone(traj.getPos(t))) return t;
-  const double T = traj.getTotalDuration();
-  for (double step = 0.02; step <= 0.10 + 1e-9; step += 0.02) {
+  // Monotonicity by construction: cand >= t_prev + 0.2*span, and since the
+  // previous junction accepted at most its nominal + 0.4*span, the next
+  // window [nominal + 0.6*span - 0.4*span, ...] is never empty. Junction
+  // times can therefore neither coincide nor invert, at ANY segment count —
+  // a total-duration window here let ±10% nudges cross once segments > 4.
+  const double lo = t_prev + 0.2 * span;
+  const auto ok = [&](double cand) {
+    return cand >= lo && !nearRiskZone(traj.getPos(cand));
+  };
+  if (ok(t_nominal)) return t_nominal;
+  for (double step = 0.08; step <= 0.40 + 1e-9; step += 0.08) {
     for (const double sgn : {+1.0, -1.0}) {
-      const double cand = t + sgn * step * T;
-      if (cand <= 0.05 * T || cand >= 0.95 * T) continue;
-      if (!nearRiskZone(traj.getPos(cand))) {
-        log_->infof("[CHAIN] junction @%.1f s nudged to %.1f s (clear of "
-                    "zone moat+taper)", t, cand);
-        return cand;
-      }
+      const double cand = t_nominal + sgn * step * span;
+      if (!ok(cand)) continue;
+      log_->infof("[CHAIN] junction @%.1f s nudged to %.1f s (clear of "
+                  "zone moat+taper)", t_nominal, cand);
+      return cand;
     }
   }
-  return t;  // the caller logs the contamination warning
+  // Nothing in the window clears; keep the nominal time (the caller logs
+  // the contamination warning) but never violate monotonicity.
+  return std::max(t_nominal, lo);
 }
 
 bool SegmentChainPlanner::nearRiskZone(const Eigen::Vector3d &p) const

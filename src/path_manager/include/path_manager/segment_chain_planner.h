@@ -67,10 +67,14 @@ private:
   // Junction time whose sampled position stays clear of every risk zone's
   // moat + GNRON taper reach. A junction inside that band would earn
   // barrier/taper exemptions the baseline never had — the split would CHANGE
-  // the risk field, not just the trajectory. Nudged in ±2% steps up to ±10%
-  // of total duration; when nothing clears, the original time is kept and a
-  // warning tells the operator the comparison is contaminated.
-  double clearJunctionTime(double t, const poly_traj::Trajectory &traj) const;
+  // the risk field, not just the trajectory. Candidates stay within ±40% of
+  // the nominal SPAN (T/segments, not total duration — a total-duration
+  // window let adjacent junctions cross once segments > 4) and above
+  // t_prev + 20% span, so accepted junction times are monotone with a
+  // guaranteed gap by construction. When nothing in the window clears, the
+  // nominal time is kept and the caller logs the contamination warning.
+  double clearJunctionTime(double t_nominal, double t_prev, double span,
+                           const poly_traj::Trajectory &traj) const;
   bool nearRiskZone(const Eigen::Vector3d &p) const;
 
   // Stage-1 seam verification + baseline comparison ([CHAIN-REPORT]).

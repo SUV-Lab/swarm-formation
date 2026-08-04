@@ -543,7 +543,7 @@ namespace path_manager
     bool PathManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                                      const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
                                      const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
-                                     bool junction_goal)
+                                     bool junction_goal, bool junction_head)
     {
         log_manager_->infof("Planning global trajectory with %zu waypoints", waypoints.size());
         auto t_total_start = std::chrono::steady_clock::now();
@@ -812,7 +812,20 @@ namespace path_manager
         // one exists, else along the route's initial direction (level).
         const double v_floor = poly_traj_opt_
             ? poly_traj_opt_->dynamicsMinSpeedFloorUnits() : 0.0;
-        if (v_floor > 0.0 && start_vel_eff.norm() < v_floor) {
+        // [CHAIN] A contract head is a state the baseline ALREADY FLEW —
+        // the floor is margin-backed (~8% above hard stall), so a converged
+        // baseline legitimately dips below it. Flooring one side of the seam
+        // while the neighbour's tail pins the contract verbatim would put a
+        // velocity step in the published trajectory; leave the state alone
+        // and let the min-speed hinge price it like the baseline did.
+        if (junction_head && v_floor > 0.0 && start_vel_eff.norm() < v_floor) {
+            log_manager_->infof(
+                "[CHAIN] contract head speed %.3f u/s is below the stall "
+                "floor %.3f u/s — kept verbatim (baseline flew it; the seam "
+                "must pin the same state on both sides)",
+                start_vel_eff.norm(), v_floor);
+        }
+        if (!junction_head && v_floor > 0.0 && start_vel_eff.norm() < v_floor) {
             Eigen::Vector3d dir = start_vel_eff;
             if (dir.norm() < 1.0e-9 && clean_path.size() >= 2) {
                 dir = clean_path[1] - clean_path[0];

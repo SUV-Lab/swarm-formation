@@ -258,10 +258,19 @@ namespace path_manager
     // final waypoint as a mid-route junction between chained segment plans:
     // its z is ABSOLUTE (sampled from a trajectory that already flies there),
     // so the [GOAL AGL] reinterpretation must not re-add the terrain under it.
+    // junction_head marks the START state as a prescribed contract — a state
+    // the baseline trajectory actually flew — so [STALL-FLOOR] must not
+    // rewrite it: the neighbouring segment's tail pins the SAME state
+    // verbatim, and flooring only this side would put a velocity step at the
+    // seam ([VEL-ALIGN] is already routed off for contract heads via
+    // setStartVelSynthesized). The dynamics floor is margin-backed (~8%
+    // above hard stall), so a converged baseline legitimately cruises below
+    // it and above stall — exactly where junctions land on zone/terrain
+    // missions.
     bool planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
                         const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
-                        bool junction_goal = false);
+                        bool junction_goal = false, bool junction_head = false);
 
     void deliverTrajToOptimizer(void) {
         if (isOptimizerInitialized()) {
