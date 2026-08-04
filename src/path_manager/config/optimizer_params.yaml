@@ -23,6 +23,14 @@
     # 끝나면(실패·폴백 포함) 전역값이 자동 복원된다. 예:
     #   chain/seg1/params: ["optimization/weight_time=1000.0"]
     #   chain/seg3/params: ["optimization/max_vel=1.8"]
+    # [STAGE-3] 처방형 터미널 단계(기본 off): 체인의 핸드오프 상태(도착 계약:
+    # 수평·순항·a=0)에서 곡률 램프로 진입하는 등속 하강 헬릭스를 해석 기하로
+    # 생성해 C²로 이어붙인다. 최적화·충돌감사 없음(4단계에서 전체 평가).
+    #   chain/terminal/enable: false
+    #   chain/terminal/radius: 58.0    # u; 순항 200 m/s에서 뱅크 ~35도
+    #   chain/terminal/turns: 1.0
+    #   chain/terminal/final_agl: 0.15 # u; 출구 지점의 지형 상공 고도
+    #   chain/terminal/right: true
 
     # ---- Front-end (FM2 / A*) ----
     manager/front_end: fm2              # fm2 | astar(ablation baseline)

@@ -98,6 +98,14 @@ private:
   };
   std::vector<SegmentOverrides> readSegmentOverrides() const;
 
+  // [STAGE-3] Optional PRESCRIBED terminal phase (chain/terminal/enable):
+  // a helix descent of genuinely different character — analytic geometry,
+  // no optimizer — appended after the chain from its handoff state (level,
+  // cruise, a = 0 by the arrival contract, which is exactly the state a
+  // curvature-ramp helix entry continues from with zero seam error). Logs
+  // its own [CHAIN-REPORT] block; nothing audits this phase yet (stage 4).
+  void appendTerminalPhase(poly_traj::Trajectory *chained) const;
+
   // Stage-1 seam verification + baseline comparison ([CHAIN-REPORT]).
   void logChainReport(const poly_traj::Trajectory &baseline,
                       const std::vector<poly_traj::Trajectory> &runs,

@@ -96,11 +96,15 @@ int main(int argc, char **argv)
   const int segments = argc > 2 ? std::atoi(argv[2]) : 3;
 
   bool with_zone = false, with_segdiff = false, with_twice = false,
-       with_failrestore = false, with_altcap = false;
+       with_failrestore = false, with_altcap = false, with_terminal = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
     if (v == "segdiff") with_segdiff = true;
+    // terminal: appends the stage-3 prescribed helix descent after the
+    // chain. The whole-trajectory junction audit then covers its internal
+    // Hermite joints AND the handoff seam under the same 1e-6 threshold.
+    if (v == "terminal") with_terminal = true;
     // twice: plan the SAME mission twice in one process. If the scope-guard
     // restore leaks a segment override, the second BASELINE (always planned
     // with mission-wide params) solves a different problem and its duration
@@ -140,6 +144,10 @@ int main(int argc, char **argv)
         "chain/seg2/params",
         std::vector<std::string>{"optimization/alt_cap_headroom=1.2"});
     std::cout << "altcap: seg2 alt_cap_headroom=1.2 (default 0.4)\n";
+  }
+
+  if (with_terminal) {
+    node->declare_parameter("chain/terminal/enable", true);
   }
 
   auto pm = std::make_shared<path_manager::PathManager>(node);
@@ -210,21 +218,50 @@ int main(int argc, char **argv)
   expect(max_da < 1e-6,
          "acceleration continuous at every junction (< 1e-6 u/s^2)");
 
-  // Sanity: the split must not change the flight materially.
+  // Sanity: the split must not change the flight materially. (A terminal
+  // helix deliberately extends the flight past the goal — gate those.)
   const double bt = baseline.getTotalDuration();
   const double ct = chained.getTotalDuration();
   std::cout << "baseline: " << baseline.getPieceNum() << " pieces, " << bt
             << " s | chained: " << chained.getPieceNum() << " pieces, " << ct
             << " s (" << 100.0 * (ct / bt - 1.0) << "% time)\n";
-  expect(std::abs(ct / bt - 1.0) < 0.15,
-         "chained flight time within 15% of the baseline");
-
-  // Endpoint fidelity: same start, same goal neighbourhood.
   expect((chained.getJuncPos(0) - start_pos).norm() < 1e-9,
          "chained trajectory starts at the mission start");
-  expect((chained.getJuncPos(chained.getPieceNum()) -
-          baseline.getJuncPos(baseline.getPieceNum())).norm() < 1e-6,
-         "chained and baseline end at the same resolved goal");
+  if (!with_terminal) {
+    expect(std::abs(ct / bt - 1.0) < 0.15,
+           "chained flight time within 15% of the baseline");
+    expect((chained.getJuncPos(chained.getPieceNum()) -
+            baseline.getJuncPos(baseline.getPieceNum())).norm() < 1e-6,
+           "chained and baseline end at the same resolved goal");
+  } else {
+    // The prescribed helix must exit level, unaccelerated, at the
+    // configured AGL over the terrain under its exit point.
+    const int M = chained.getPieceNum();
+    const Eigen::Vector3d exit_p = chained.getJuncPos(M);
+    const Eigen::Vector3d exit_v = chained.getJuncVel(M);
+    const Eigen::Vector3d exit_a = chained.getJuncAcc(M);
+    double ground = 0.0;
+    pm->terrainElevation(exit_p.x(), exit_p.y(), &ground);
+    expect(std::abs(exit_p.z() - ground - 0.15) < 0.02,
+           "terminal helix exits at the configured AGL");
+    expect(std::abs(exit_v.z()) < 1e-9 && exit_a.norm() < 1e-9,
+           "terminal helix exits level and unaccelerated");
+    expect(ct > bt + 30.0,
+           "terminal helix genuinely extends the flight");
+    // Constant-speed regression net: piece durations mismatched to their
+    // sampled arcs once put a ±1.6% speed ripple (and a spurious tangential
+    // acceleration) into the "constant-speed" helix. Sample deep inside it.
+    double v_min = std::numeric_limits<double>::infinity(), v_max = 0.0;
+    for (double tt = ct - 150.0; tt < ct - 5.0; tt += 0.1) {
+      const double s = chained.getVel(tt).head<2>().norm();
+      v_min = std::min(v_min, s);
+      v_max = std::max(v_max, s);
+    }
+    std::cout << "helix horizontal speed in [" << v_min << ", " << v_max
+              << "] u/s\n";
+    expect((v_max - v_min) / std::max(1e-9, v_min) < 0.005,
+           "helix speed ripple below 0.5% (constant-speed phase)");
+  }
 
   if (with_failrestore) {
     // The sub-stall segment must have failed and the chain degraded to the

@@ -43,6 +43,7 @@ add_library(${PROJECT_NAME}_lib
   src/path_manager.cpp
   src/replan_fsm.cpp
   src/segment_chain_planner.cpp
+  src/terminal_phase.cpp
   ../common/log_manager.cpp
 )
 

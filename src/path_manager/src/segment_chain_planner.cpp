@@ -5,6 +5,8 @@
 #include <limits>
 #include <map>
 
+#include "path_manager/terminal_phase.h"
+
 namespace path_manager {
 
 namespace {
@@ -299,6 +301,11 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   poly_traj::Trajectory chained = runs.front();
   for (size_t i = 1; i < runs.size(); ++i) chained.append(runs[i]);
 
+  // Report on the CHAIN portion (baseline deviation stays apples-to-apples),
+  // then append the optional prescribed terminal phase before storage.
+  logChainReport(baseline, runs, contracts, chained, seg_over);
+  appendTerminalPhase(&chained);
+
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
   // GLOBAL slot = the baseline OPTIMIZED trajectory (comparison reference,
   // see the class comment). Must precede setLocalTraj: setGlobalTraj resets
@@ -307,8 +314,6 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
   pm_->publishTrajectoryViz(chained, baseline);
 
-  logChainReport(baseline, runs, contracts, chained, seg_over);
-
   const double wall_ms = std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - t_wall).count();
   log_->infof("[CHAIN] chained %d segments: %d pieces, %.1f s flight "
@@ -316,6 +321,76 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
               segments_, chained.getPieceNum(), chained.getTotalDuration(), T,
               wall_ms);
   return true;
+}
+
+void SegmentChainPlanner::appendTerminalPhase(
+    poly_traj::Trajectory *chained) const
+{
+  const auto dp = [&](const char *n, auto def) {
+    if (!node_->has_parameter(n)) node_->declare_parameter(n, def);
+  };
+  dp("chain/terminal/enable", false);
+  bool enable = false;
+  node_->get_parameter("chain/terminal/enable", enable);
+  if (!enable) return;
+
+  TerminalHelixParams prm;
+  dp("chain/terminal/radius", prm.radius);
+  dp("chain/terminal/turns", prm.turns);
+  dp("chain/terminal/final_agl", prm.final_agl);
+  dp("chain/terminal/right", prm.right);
+  node_->get_parameter("chain/terminal/radius", prm.radius);
+  node_->get_parameter("chain/terminal/turns", prm.turns);
+  node_->get_parameter("chain/terminal/final_agl", prm.final_agl);
+  node_->get_parameter("chain/terminal/right", prm.right);
+
+  const int N = chained->getPieceNum();
+  const Eigen::Vector3d hp = chained->getJuncPos(N);
+  const Eigen::Vector3d hv = chained->getJuncVel(N);
+  const Eigen::Vector3d ha = chained->getJuncAcc(N);
+  if (ha.norm() > 1e-6) {
+    // The helix entry is built for the arrival contract's a = 0; a nonzero
+    // handoff acceleration becomes the seam's |dA| verbatim.
+    log_->warnf("[CHAIN] terminal handoff acceleration %.4f u/s^2 != 0 — "
+                "the helix entry assumes the arrival contract; the seam "
+                "will carry exactly this discontinuity", ha.norm());
+  }
+
+  double min_agl = 0.0;
+  const poly_traj::Trajectory term = TerminalPhase::helixDescent(
+      hp, hv, prm,
+      [this](double x, double y, double *e) {
+        if (pm_->terrainElevation(x, y, e)) return true;
+        *e = 0.0;  // water / off-DEM: sea level
+        return false;
+      },
+      &min_agl);
+  if (term.getPieceNum() == 0) {
+    log_->warnf("[CHAIN] terminal helix degenerate (|v|=%.3f, R=%.1f, "
+                "turns=%.2f) — not appended", hv.norm(), prm.radius,
+                prm.turns);
+    return;
+  }
+
+  const double dP = (term.getJuncPos(0) - hp).norm();
+  const double dV = (term.getJuncVel(0) - hv).norm();
+  const double dA = (term.getJuncAcc(0) - ha).norm();
+  const Eigen::Vector3d exit_p = term.getJuncPos(term.getPieceNum());
+  double g = 0.0;
+  pm_->terrainElevation(exit_p.x(), exit_p.y(), &g);
+  log_->infof("[CHAIN-REPORT] terminal: helix R=%.1f u, %.2f turns %s, "
+              "%d pieces, %.1f s | handoff seam |dP|=%.3e |dV|=%.3e "
+              "|dA|=%.3e | exit AGL %.3f u, min AGL %.3f u",
+              prm.radius, prm.turns, prm.right ? "right" : "left",
+              term.getPieceNum(), term.getTotalDuration(), dP, dV, dA,
+              exit_p.z() - g, min_agl);
+  if (min_agl < 0.5 * prm.final_agl) {
+    log_->warnf("[CHAIN] PRESCRIBED terminal geometry descends to %.3f u "
+                "AGL — no optimizer and no collision audit protects this "
+                "phase yet (stage 4); move the helix or shrink the turns",
+                min_agl);
+  }
+  chained->append(term);
 }
 
 std::vector<SegmentChainPlanner::SegmentOverrides>
