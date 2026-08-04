@@ -28,8 +28,6 @@ find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(swarm_graph REQUIRED)
 find_package(path_planner REQUIRED)
-find_package(nav_msgs REQUIRED)
-find_package(visualization_msgs REQUIRED)
 find_package(mmp_vehicle_dynamics REQUIRED)
 # [RISK-PAR] OpenMP for the per-piece risk-term precompute in
 # addPVAGradCost2CT. Raw flags (not OpenMP::OpenMP_CXX) for the same
@@ -55,8 +53,6 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   Eigen3
   swarm_graph
   path_planner
-  nav_msgs
-  visualization_msgs
   mmp_vehicle_dynamics
 )
 
@@ -72,6 +68,6 @@ install(DIRECTORY include/
 )
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(rclcpp Eigen3 swarm_graph path_planner nav_msgs visualization_msgs mmp_vehicle_dynamics)
+ament_export_dependencies(rclcpp Eigen3 swarm_graph path_planner mmp_vehicle_dynamics)
 
 ament_package()

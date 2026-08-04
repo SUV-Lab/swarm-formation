@@ -10,7 +10,9 @@
 
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
-  <depend>Eigen3</depend>
+  <depend>nav_msgs</depend>
+  <depend>eigen3_cmake_module</depend>
+  <depend>eigen</depend>
   <depend>path_optimizer</depend>
   <depend>path_planner</depend>
   <depend>geometry_msgs</depend>
@@ -22,9 +24,12 @@
   <depend>yaml-cpp</depend>
   <depend>ament_index_cpp</depend>
 
-  <exec_depend>nav_msgs</exec_depend>
   <!-- package://mmp_viz_assets/meshes/* (dynamic-obstacle mesh catalog) -->
   <exec_depend>mmp_viz_assets</exec_depend>
+  <!-- rviz_path_manager.launch.py 의 기본 follower (shared_3dof) -->
+  <exec_depend>mmp_vehicle_dynamics</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
