@@ -404,6 +404,18 @@ namespace path_manager
     double riskGoalTaperRadius() const { return risk_goal_taper_radius_; }
     void publishTrajectoryViz(const poly_traj::Trajectory &opt,
                               const poly_traj::Trajectory &reference);
+    // [CHAIN-VIZ] Per-segment view of a chained flight: every run in its
+    // own palette color, the optional terminal phase in white, and labelled
+    // junction spheres at the seams — ONE latched MarkerArray (DELETEALL +
+    // everything) on /viz/chain_segments, so a late-joining RViz gets the
+    // whole picture or none of it. Empty runs = clear-only (optimizeStage
+    // publishes that on every ordinary solve, so a single-shot mission can
+    // never show a stale chain).
+    void publishChainSegmentsViz(
+        const std::vector<poly_traj::Trajectory> &runs,
+        const std::vector<Eigen::Vector3d> &junctions,
+        const poly_traj::Trajectory *terminal = nullptr);
+
     // [FINAL-EVAL] shared flight-dynamics model pass-through (null when the
     // optimizer is uninitialized or the dynamics model is off).
     const mmp_vehicle_dynamics::Parameters* dynamicsParams() const {
@@ -685,6 +697,8 @@ namespace path_manager
     // whole picture (DELETEALL + every zone's markers), so a late joiner gets
     // all of it or none of it. See publishEffectiveRiskField.
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr risk_field_pub_;
+    // [CHAIN-VIZ] see publishChainSegmentsViz().
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr chain_segments_pub_;
     // [DEBUG-PIPELINE] Stage-by-stage geometry for "which stage broke it"
     // debugging: the front-end/initial/final trajectories already have their
     // own channels, but the two intermediates between them did not — the

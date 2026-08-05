@@ -367,7 +367,7 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     phase_names.push_back("seg" + std::to_string(i + 1));
   }
   const double t_pre_terminal = chained.getTotalDuration();
-  appendTerminalPhase(&chained);
+  const poly_traj::Trajectory term = appendTerminalPhase(&chained);
   if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
     phase_ends.push_back(chained.getTotalDuration());
     phase_names.push_back("terminal");
@@ -380,6 +380,15 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   pm_->traj_.setGlobalTraj(baseline, now_s);
   pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
   pm_->publishTrajectoryViz(chained, baseline);
+  {
+    // [CHAIN-VIZ] per-segment colors + labelled seams (+ the terminal
+    // handoff as the last junction when a helix was appended).
+    std::vector<Eigen::Vector3d> junc;
+    for (const auto &c : contracts) junc.push_back(c.pos);
+    if (term.getPieceNum() > 0) junc.push_back(term.getJuncPos(0));
+    pm_->publishChainSegmentsViz(runs, junc,
+                                 term.getPieceNum() > 0 ? &term : nullptr);
+  }
 
   logFinalEvaluation(chained, phase_ends, phase_names);
 
@@ -732,7 +741,7 @@ bool SegmentChainPlanner::planRouteParallel(
     phase_names.push_back("seg" + std::to_string(i + 1));
   }
   const double t_pre_terminal = chained.getTotalDuration();
-  appendTerminalPhase(&chained);
+  const poly_traj::Trajectory term = appendTerminalPhase(&chained);
   if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
     phase_ends.push_back(chained.getTotalDuration());
     phase_names.push_back("terminal");
@@ -744,6 +753,13 @@ bool SegmentChainPlanner::planRouteParallel(
   pm_->traj_.setGlobalTraj(chained, now_s);
   pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
   pm_->publishTrajectoryViz(chained, chained);
+  {
+    std::vector<Eigen::Vector3d> junc;
+    for (const auto &c : contracts) junc.push_back(c.pos);
+    if (term.getPieceNum() > 0) junc.push_back(term.getJuncPos(0));
+    pm_->publishChainSegmentsViz(runs, junc,
+                                 term.getPieceNum() > 0 ? &term : nullptr);
+  }
   logFinalEvaluation(chained, phase_ends, phase_names);
 
   std::string per;
@@ -919,7 +935,7 @@ void SegmentChainPlanner::logFinalEvaluation(
   }
 }
 
-void SegmentChainPlanner::appendTerminalPhase(
+poly_traj::Trajectory SegmentChainPlanner::appendTerminalPhase(
     poly_traj::Trajectory *chained) const
 {
   const auto dp = [&](const char *n, auto def) {
@@ -928,7 +944,7 @@ void SegmentChainPlanner::appendTerminalPhase(
   dp("chain/terminal/enable", false);
   bool enable = false;
   node_->get_parameter("chain/terminal/enable", enable);
-  if (!enable) return;
+  if (!enable) return {};
 
   TerminalHelixParams prm;
   dp("chain/terminal/radius", prm.radius);
@@ -965,7 +981,7 @@ void SegmentChainPlanner::appendTerminalPhase(
     log_->warnf("[CHAIN] terminal helix degenerate (|v|=%.3f, R=%.1f, "
                 "turns=%.2f) — not appended", hv.norm(), prm.radius,
                 prm.turns);
-    return;
+    return {};
   }
 
   const double dP = (term.getJuncPos(0) - hp).norm();
@@ -988,7 +1004,7 @@ void SegmentChainPlanner::appendTerminalPhase(
     log_->warnf("[REJECT] PRESCRIBED terminal geometry goes %.3f u BELOW "
                 "terrain — helix DISCARDED, the chain flies without it",
                 min_agl);
-    return;
+    return {};
   }
   if (min_agl < 0.5 * prm.final_agl) {
     log_->warnf("[CHAIN] PRESCRIBED terminal geometry descends to %.3f u "
@@ -996,6 +1012,7 @@ void SegmentChainPlanner::appendTerminalPhase(
                 "helix or shrink the turns", min_agl);
   }
   chained->append(term);
+  return term;
 }
 
 std::vector<SegmentChainPlanner::SegmentOverrides>

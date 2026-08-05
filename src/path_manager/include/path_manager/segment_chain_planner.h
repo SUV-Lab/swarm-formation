@@ -133,8 +133,10 @@ private:
   // no optimizer — appended after the chain from its handoff state (level,
   // cruise, a = 0 by the arrival contract, which is exactly the state a
   // curvature-ramp helix entry continues from with zero seam error). Logs
-  // its own [CHAIN-REPORT] block; nothing audits this phase yet (stage 4).
-  void appendTerminalPhase(poly_traj::Trajectory *chained) const;
+  // its own [CHAIN-REPORT] block. Returns the appended terminal trajectory
+  // (empty when disabled/degenerate/discarded) so the caller can paint it
+  // in the per-segment viz.
+  poly_traj::Trajectory appendTerminalPhase(poly_traj::Trajectory *chained) const;
 
   // Stage-1 seam verification + baseline comparison ([CHAIN-REPORT]).
   void logChainReport(const poly_traj::Trajectory &baseline,

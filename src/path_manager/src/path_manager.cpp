@@ -328,6 +328,10 @@ namespace path_manager
         // ~18 zones, leaving late joiners with a half-drawn field.
         risk_field_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/viz/risk_field", rclcpp::QoS(1).reliable().transient_local());
+        // [CHAIN-VIZ] per-segment chain view — same one-latched-array
+        // contract as the risk field.
+        chain_segments_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/viz/chain_segments", rclcpp::QoS(1).reliable().transient_local());
         // [DEBUG-PIPELINE] debug-mode only (see the member comment). Off by
         // default: the esdf overlay taught us that always-on debug output
         // with no watcher is pure cost — here the publisher itself is only
@@ -1560,6 +1564,9 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                         0.55f, 0.72f, 1.0f, 0.22f);
         publishTrajTube(global_traj, global_traj_tube_pub_, "global_path_drone_",
                         0.59f, 0.71f, 1.0f, 0.85f);
+        // [CHAIN-VIZ] every ordinary solve clears the per-segment channel;
+        // a chained plan repaints it AFTER its last segment solve.
+        publishChainSegmentsViz({}, {});
 
         auto t_opt_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] trajectory optimization: %.1f ms, duration=%.3f max_vel=%.3f",
@@ -1610,6 +1617,102 @@ bool PathManager::solveSlice(ego_planner::PolyTrajOptimizer &opt,
     return opt.optimizeFromPath(slice, head_pos, head_vel, head_acc,
                                 goal_wps, max_vel_, out_global, *out, cap,
                                 end_vel, end_acc);
+}
+
+// [CHAIN-VIZ] see the header comment. Tube sampling matches
+// publishTrajTube (0.1 s + exact endpoint); junction spheres are 3x the
+// tube girth with a floating J<n> label so the seams read at map scale.
+void PathManager::publishChainSegmentsViz(
+    const std::vector<poly_traj::Trajectory> &runs,
+    const std::vector<Eigen::Vector3d> &junctions,
+    const poly_traj::Trajectory *terminal)
+{
+    if (!chain_segments_pub_) return;
+    visualization_msgs::msg::MarkerArray arr;
+    {
+        visualization_msgs::msg::Marker del;
+        del.header.frame_id = "map";
+        del.header.stamp = node_->now();
+        del.action = visualization_msgs::msg::Marker::DELETEALL;
+        arr.markers.push_back(del);
+    }
+    if (runs.empty()) {  // clear-only
+        chain_segments_pub_->publish(arr);
+        return;
+    }
+    // High-contrast palette, cycled; the terminal phase is always WHITE so
+    // the prescribed geometry is unmistakable next to the optimized runs.
+    static const float kPal[][3] = {
+        {0.12f, 0.65f, 1.00f}, {1.00f, 0.55f, 0.10f}, {0.20f, 0.90f, 0.35f},
+        {0.95f, 0.30f, 0.85f}, {1.00f, 0.90f, 0.15f}, {0.35f, 0.35f, 1.00f},
+        {0.10f, 0.90f, 0.90f}, {1.00f, 0.35f, 0.30f}, {0.60f, 0.95f, 0.20f},
+        {0.80f, 0.55f, 1.00f},
+    };
+    constexpr size_t kPalN = sizeof(kPal) / sizeof(kPal[0]);
+    int id = 0;
+    const auto tube = [&](const poly_traj::Trajectory &traj, const float *c,
+                          const char *ns) {
+        const double T = traj.getTotalDuration();
+        if (T <= 1e-6) return;
+        visualization_msgs::msg::Marker m;
+        m.header.frame_id = "map";
+        m.header.stamp = node_->now();
+        m.ns = ns;
+        m.id = id++;
+        m.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+        m.action = visualization_msgs::msg::Marker::ADD;
+        m.pose.orientation.w = 1.0;
+        m.scale.x = m.scale.y = m.scale.z = path_scale_;
+        m.color.r = c[0]; m.color.g = c[1]; m.color.b = c[2];
+        m.color.a = 0.9f;
+        m.lifetime = rclcpp::Duration(0, 0);
+        for (double t = 0.0; t < T; t += 0.1) {
+            const Eigen::Vector3d p = traj.getPos(t);
+            geometry_msgs::msg::Point q;
+            q.x = p.x(); q.y = p.y(); q.z = p.z();
+            m.points.push_back(q);
+        }
+        const Eigen::Vector3d pe = traj.getPos(T - 1e-9);
+        geometry_msgs::msg::Point qe;
+        qe.x = pe.x(); qe.y = pe.y(); qe.z = pe.z();
+        m.points.push_back(qe);
+        arr.markers.push_back(m);
+    };
+    for (size_t i = 0; i < runs.size(); ++i)
+        tube(runs[i], kPal[i % kPalN], "chain_seg");
+    if (terminal) {
+        static const float kWhite[3] = {1.0f, 1.0f, 1.0f};
+        tube(*terminal, kWhite, "chain_terminal");
+    }
+    for (size_t j = 0; j < junctions.size(); ++j) {
+        visualization_msgs::msg::Marker s;
+        s.header.frame_id = "map";
+        s.header.stamp = node_->now();
+        s.ns = "chain_junction";
+        s.id = id++;
+        s.type = visualization_msgs::msg::Marker::SPHERE;
+        s.action = visualization_msgs::msg::Marker::ADD;
+        s.pose.position.x = junctions[j].x();
+        s.pose.position.y = junctions[j].y();
+        s.pose.position.z = junctions[j].z();
+        s.pose.orientation.w = 1.0;
+        s.scale.x = s.scale.y = s.scale.z = 3.0 * path_scale_;
+        s.color.r = s.color.g = s.color.b = 1.0f;
+        s.color.a = 0.95f;
+        s.lifetime = rclcpp::Duration(0, 0);
+        arr.markers.push_back(s);
+
+        visualization_msgs::msg::Marker t = s;
+        t.ns = "chain_junction_label";
+        t.id = id++;
+        t.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+        t.pose.position.z += 4.0 * path_scale_;
+        t.scale.x = t.scale.y = 0.0;
+        t.scale.z = 4.0 * path_scale_;
+        t.text = "J" + std::to_string(j + 1);
+        arr.markers.push_back(t);
+    }
+    chain_segments_pub_->publish(arr);
 }
 
 // [CHAIN] Republish the along-trajectory channels for an externally
