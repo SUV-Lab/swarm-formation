@@ -81,8 +81,9 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   // [AUTO-N] chain/segments == 0 sizes the split from the mission itself
   // once its piece count is known (route mode: after the front-end;
   // baseline mode: after the baseline solve): N = round(pieces / target),
-  // target = chain/auto_pieces_per_segment (default 55 — the measured
-  // sweet spot: quality-lossless and inside the solver's fast regime).
+  // target = chain/auto_pieces_per_segment (default 70 — the 105-run
+  // 6-point sweep's operating point: same mean quality as 55 with the
+  // worst case at +1.8% instead of +2.5%, one reject instead of several).
   // Missions under ~1.5 targets do not split at all. A positive
   // chain/segments keeps today's fixed-N behavior; the parameter is read
   // per plan, so it is live-tunable between missions.
@@ -434,9 +435,9 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
 bool SegmentChainPlanner::resolveAutoSegments(int pieces, const char *source)
 {
   if (!auto_segments_) return true;
-  int target = 55;
+  int target = 70;
   if (!node_->has_parameter("chain/auto_pieces_per_segment"))
-    node_->declare_parameter("chain/auto_pieces_per_segment", 55);
+    node_->declare_parameter("chain/auto_pieces_per_segment", 70);
   node_->get_parameter("chain/auto_pieces_per_segment", target);
   target = std::max(5, target);  // floor guards absurd targets (N = pieces)
   const int n = (pieces + target / 2) / target;  // round to nearest

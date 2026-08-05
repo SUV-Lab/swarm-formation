@@ -23,7 +23,7 @@
 //   auto     — [AUTO-N] chain/segments=0: N sized from the mission's piece
 //              count (target forced to 6 pieces/segment so the 13-piece
 //              fixture resolves to N=2, distinct from the argv default 3).
-//   autosmall— chain/segments=0 with the production target (55): the fixture
+//   autosmall— chain/segments=0 with the production target (70): the fixture
 //              sits below ~1.5 targets, so the mission must NOT split and
 //              the single-shot plan flies (both slots identical).
 // The [CHAIN]/[CHAIN-REPORT] narrative lands in ./logs/runtime/ (LogManager
@@ -368,7 +368,7 @@ int main(int argc, char **argv)
            "auto-N resolved 2 segments (13 pieces / target 6)");
   }
   if (with_autosmall) {
-    // [AUTO-N] production target 55: the fixture is far below ~1.5 targets,
+    // [AUTO-N] production target 70: the fixture is far below ~1.5 targets,
     // so the mission must not split — the single-shot plan fills both slots.
     expect(std::abs(bt - ct) < 1e-9 &&
                baseline.getPieceNum() == chained.getPieceNum(),
