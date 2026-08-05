@@ -134,12 +134,15 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
         node_, path_manager_, log_manager_.get(), chain_segments,
         chain_inherit_route);
     if (chain_enable_) {
+        const std::string seg_desc = chain_segments > 0
+            ? std::to_string(chain_segments) + " segments per mission"
+            : "auto-sized segments";
         FSM_LOG_WARN("[CHAIN] segment-chained planning ENABLED "
-                     "(%d segments per mission) — /planning/"
+                     "(%s) — /planning/"
                      "initial_trajectory carries the baseline OPTIMIZED "
                      "trajectory in this mode (the chained flight itself "
                      "under chain/author_from_route), not the MINCO seed",
-                     chain_planner_->segments());
+                     seg_desc.c_str());
     }
 
     rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;

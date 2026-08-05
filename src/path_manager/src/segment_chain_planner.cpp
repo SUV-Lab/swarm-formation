@@ -78,6 +78,23 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                                Eigen::Vector3d::Zero());
   }
 
+  // [AUTO-N] chain/segments == 0 sizes the split from the mission itself
+  // once its piece count is known (route mode: after the front-end;
+  // baseline mode: after the baseline solve): N = round(pieces / target),
+  // target = chain/auto_pieces_per_segment (default 55 — the measured
+  // sweet spot: quality-lossless and inside the solver's fast regime).
+  // Missions under ~1.5 targets do not split at all. A positive
+  // chain/segments keeps today's fixed-N behavior; the parameter is read
+  // per plan, so it is live-tunable between missions.
+  {
+    if (!node_->has_parameter("chain/segments"))
+      node_->declare_parameter("chain/segments", segments_);
+    int req = segments_;
+    node_->get_parameter("chain/segments", req);
+    auto_segments_ = (req <= 0);
+    if (!auto_segments_) segments_ = std::min(16, std::max(2, req));
+  }
+
   // [CHAIN-PAR] route-parallel mode replaces the whole baseline flow.
   {
     const auto dp = [&](const char *n, bool def) {
@@ -127,11 +144,24 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   }
   const poly_traj::Trajectory baseline = pm_->traj_.local_traj.traj;
   const double T = baseline.getTotalDuration();
+  // Both bail-outs below fly the baseline, and must leave the SAME storage
+  // the degrade path leaves: baseline in BOTH slots (at this point the
+  // global slot still holds the MINCO seed — the baseline copy normally
+  // happens after the segments run) plus viz and the final evaluation.
+  const auto fly_baseline = [&]() {
+    const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+    pm_->traj_.setGlobalTraj(baseline, now_s);
+    pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
+    pm_->publishTrajectoryViz(baseline, baseline);
+    logFinalEvaluation(baseline, {T}, {"baseline"});
+    return true;
+  };
+  if (!resolveAutoSegments(baseline.getPieceNum(), "baseline"))
+    return fly_baseline();  // [AUTO-N] mission below the split threshold
   if (T <= 1e-6 || baseline.getPieceNum() < segments_) {
-    // Too short to carve N spans out of. traj_ already holds the baseline.
     log_->warnf("[CHAIN] baseline too small to split (%.3f s, %d pieces) — "
                 "flying the baseline", T, baseline.getPieceNum());
-    return true;
+    return fly_baseline();
   }
 
   // === [STAGE-2] per-segment requirement overrides (read before the
@@ -401,6 +431,27 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   return true;
 }
 
+bool SegmentChainPlanner::resolveAutoSegments(int pieces, const char *source)
+{
+  if (!auto_segments_) return true;
+  int target = 55;
+  if (!node_->has_parameter("chain/auto_pieces_per_segment"))
+    node_->declare_parameter("chain/auto_pieces_per_segment", 55);
+  node_->get_parameter("chain/auto_pieces_per_segment", target);
+  target = std::max(5, target);  // floor guards absurd targets (N = pieces)
+  const int n = (pieces + target / 2) / target;  // round to nearest
+  if (n < 2) {
+    log_->infof("[CHAIN] auto segments: %d pieces (%s) < ~1.5x target %d — "
+                "mission too small to split, flying the single-shot plan",
+                pieces, source, target);
+    return false;
+  }
+  segments_ = std::min(16, n);
+  log_->infof("[CHAIN] auto segments: %d pieces (%s) / target %d -> N=%d",
+              pieces, source, target, segments_);
+  return true;
+}
+
 bool SegmentChainPlanner::authorContractsFromRoute(
     const std::vector<Eigen::Vector3d> &route,
     std::vector<Contract> *contracts) const
@@ -588,8 +639,12 @@ bool SegmentChainPlanner::planRouteParallel(
 
   // === 1. front-end only: commit the route (AGL/bbox/SDF/zone binding
   // happen here exactly once) ===
-  log_->infof("[CHAIN-PAR] route-%s plan, %d segments (no baseline)",
-              run_parallel ? "parallel" : "sequential", segments_);
+  if (auto_segments_)
+    log_->infof("[CHAIN-PAR] route-%s plan, auto-sized segments "
+                "(no baseline)", run_parallel ? "parallel" : "sequential");
+  else
+    log_->infof("[CHAIN-PAR] route-%s plan, %d segments (no baseline)",
+                run_parallel ? "parallel" : "sequential", segments_);
   pm_->setStartVelSynthesized(false);
   if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
                            Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
@@ -601,6 +656,8 @@ bool SegmentChainPlanner::planRouteParallel(
   const std::vector<Eigen::Vector3d> route = pm_->lastCommittedRoute();
   const std::vector<double> cap = pm_->lastCommittedCapRef();
   const double fe_ms = ms_since(t_wall);
+  if (!resolveAutoSegments(static_cast<int>(route.size()) - 1, "route"))
+    return fallback("auto-N: mission below the split threshold");
 
   // === 2. author contracts + slices on the route ===
   std::vector<Contract> contracts;

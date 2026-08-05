@@ -20,6 +20,12 @@
 //              lowers its speed ceiling (optimization/max_vel=1.8). The
 //              [CHAIN-REPORT] mean-speed column shows the differentiation;
 //              the seam audit must stay at solver noise regardless.
+//   auto     — [AUTO-N] chain/segments=0: N sized from the mission's piece
+//              count (target forced to 6 pieces/segment so the 13-piece
+//              fixture resolves to N=2, distinct from the argv default 3).
+//   autosmall— chain/segments=0 with the production target (55): the fixture
+//              sits below ~1.5 targets, so the mission must NOT split and
+//              the single-shot plan flies (both slots identical).
 // The [CHAIN]/[CHAIN-REPORT] narrative lands in ./logs/runtime/ (LogManager
 // is file-only); this binary prints the machine-checkable verdicts to stdout.
 #include <algorithm>
@@ -97,7 +103,8 @@ int main(int argc, char **argv)
 
   bool with_zone = false, with_segdiff = false, with_twice = false,
        with_failrestore = false, with_altcap = false, with_terminal = false,
-       with_tinyturn = false, with_route = false, with_par = false;
+       with_tinyturn = false, with_route = false, with_par = false,
+       with_auto = false, with_autosmall = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -133,52 +140,68 @@ int main(int argc, char **argv)
     // values (alt_cap_headroom) on seg2 — end-to-end proof of the re-read
     // fix: the [ALT] z-band log line for seg2's solve shifts by +0.8 u.
     if (v == "altcap") with_altcap = true;
+    // auto / autosmall: [AUTO-N] mission-sized segment count — see the
+    // usage block above for what each one pins.
+    if (v == "auto") with_auto = true;
+    if (v == "autosmall") with_autosmall = true;
   }
+  if (with_tinyturn) with_terminal = true;
 
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", params});
   auto node = std::make_shared<rclcpp::Node>("chain_experiment", options);
   node->declare_parameter("drone_id", 0);
+
+  // The params file is the LIVE tuning yaml: whatever chain/* toggles the
+  // user is currently experimenting with arrive as parameter overrides and
+  // would silently reconfigure every variant (observed once: the yaml's
+  // author_from_route + segments=0 flipped baseline-mode variants into
+  // route/auto mode and 5 of 9 failed). The harness owns chain config —
+  // argv picks the variant — so every toggle the planner reads is forced
+  // here: declare if needed, then set, which outranks any file override.
+  const auto force = [&node](const std::string &name, auto value) {
+    if (!node->has_parameter(name))
+      node->declare_parameter(name, rclcpp::ParameterValue(value));
+    node->set_parameter(rclcpp::Parameter(name, value));
+  };
+  force("chain/segments", (with_auto || with_autosmall) ? 0 : segments);
+  force("chain/author_from_route", with_route);
+  force("chain/parallel", with_par);
+  force("chain/terminal/enable", with_terminal);
+  force("chain/difficulty_balance", false);
+  for (int i = 1; i <= std::max(segments, 8); ++i)
+    force("chain/seg" + std::to_string(i) + "/params",
+          std::vector<std::string>{});
+  if (with_auto) force("chain/auto_pieces_per_segment", 6);
   if (with_segdiff) {
-    node->declare_parameter(
-        "chain/seg1/params",
-        std::vector<std::string>{"optimization/weight_time=1000.0"});
-    node->declare_parameter(
-        "chain/seg" + std::to_string(segments) + "/params",
-        std::vector<std::string>{"optimization/max_vel=1.8"});
+    force("chain/seg1/params",
+          std::vector<std::string>{"optimization/weight_time=1000.0"});
+    force("chain/seg" + std::to_string(segments) + "/params",
+          std::vector<std::string>{"optimization/max_vel=1.8"});
     std::cout << "segdiff: seg1 weight_time=1000, seg" << segments
               << " max_vel=1.8\n";
   } else if (with_failrestore) {
-    node->declare_parameter(
-        "chain/seg2/params",
-        std::vector<std::string>{"optimization/max_vel=0.5"});
+    force("chain/seg2/params",
+          std::vector<std::string>{"optimization/max_vel=0.5"});
     std::cout << "failrestore: seg2 max_vel=0.5 (sub-stall, must fail)\n";
   } else if (with_altcap) {
-    node->declare_parameter(
-        "chain/seg2/params",
-        std::vector<std::string>{"optimization/alt_cap_headroom=1.2"});
+    force("chain/seg2/params",
+          std::vector<std::string>{"optimization/alt_cap_headroom=1.2"});
     std::cout << "altcap: seg2 alt_cap_headroom=1.2 (default 0.4)\n";
   }
 
-  if (with_tinyturn) with_terminal = true;
   const double helix_turns = with_tinyturn ? 0.05 : 1.0;
-  if (with_terminal) {
-    node->declare_parameter("chain/terminal/enable", true);
-    if (with_tinyturn) {
-      node->declare_parameter("chain/terminal/turns", 0.05);
-      // The tiny arc cuts across hills the full turn avoids; a higher exit
-      // AGL keeps the whole descent above terrain — the underground gate
-      // (audit find) DISCARDS a cutting helix, and this fixture's heading
-      // assertions need the helix appended.
-      node->declare_parameter("chain/terminal/final_agl", 1.2);
-    }
+  if (with_tinyturn) {
+    force("chain/terminal/turns", 0.05);
+    // The tiny arc cuts across hills the full turn avoids; a higher exit
+    // AGL keeps the whole descent above terrain — the underground gate
+    // (audit find) DISCARDS a cutting helix, and this fixture's heading
+    // assertions need the helix appended.
+    force("chain/terminal/final_agl", 1.2);
   }
-  if (with_route) {
-    node->declare_parameter("chain/author_from_route", true);
-    if (with_par) node->declare_parameter("chain/parallel", true);
+  if (with_route)
     std::cout << (with_par ? "route-parallel" : "route-sequential")
               << " mode\n";
-  }
 
   auto pm = std::make_shared<path_manager::PathManager>(node);
   pm->initOptimizer();
@@ -336,6 +359,20 @@ int main(int argc, char **argv)
     expect(std::abs(bt - ct) < 1e-9 &&
                baseline.getPieceNum() == chained.getPieceNum(),
            "route mode stores the chained flight in both slots");
+  }
+  if (with_auto) {
+    // [AUTO-N] 13 baseline pieces / target 6 -> round to 2, which differs
+    // from the argv/ctor default 3 — segments() proves resolveAutoSegments
+    // actually sized the chain (a silent fall-through would leave 3).
+    expect(chain.segments() == 2,
+           "auto-N resolved 2 segments (13 pieces / target 6)");
+  }
+  if (with_autosmall) {
+    // [AUTO-N] production target 55: the fixture is far below ~1.5 targets,
+    // so the mission must not split — the single-shot plan fills both slots.
+    expect(std::abs(bt - ct) < 1e-9 &&
+               baseline.getPieceNum() == chained.getPieceNum(),
+           "auto-N below split threshold: single-shot plan flown");
   }
   if (with_failrestore) {
     // The sub-stall segment must have failed and the chain degraded to the

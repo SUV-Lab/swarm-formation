@@ -168,11 +168,17 @@ private:
   bool authorContractsFromRoute(const std::vector<Eigen::Vector3d> &route,
                                 std::vector<Contract> *contracts) const;
 
+  // [AUTO-N] resolves chain/segments==0 into a mission-sized N from the
+  // piece count; returns false when the mission is too small to split
+  // (the caller flies the single-shot result instead).
+  bool resolveAutoSegments(int pieces, const char *source);
+
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;
   swarm_formation::LogManager *log_;  // FSM-owned, outlives this component
   int segments_;
   bool inherit_route_;
+  bool auto_segments_{false};
 };
 
 }  // namespace path_manager
