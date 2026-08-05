@@ -444,11 +444,21 @@ void SegmentChainPlanner::applyContractJitter(
   // contract velocity in the horizontal plane; speed_frac scales its
   // magnitude. Loud WARN when active — this is measurement scaffolding,
   // never an operating mode.
+  // Robust to integer-typed CLI overrides ("-p ...:=-10" parses as int and
+  // makes a double declare throw): declare defensively, then accept either
+  // numeric type.
   const auto declare_once = [&](const char *name, double def) {
-    if (!node_->has_parameter(name)) node_->declare_parameter(name, def);
-    double v = def;
-    node_->get_parameter(name, v);
-    return v;
+    try {
+      if (!node_->has_parameter(name)) node_->declare_parameter(name, def);
+    } catch (const std::exception &) {}
+    try {
+      const rclcpp::Parameter p = node_->get_parameter(name);
+      if (p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE)
+        return p.as_double();
+      if (p.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER)
+        return static_cast<double>(p.as_int());
+    } catch (const std::exception &) {}
+    return def;
   };
   const double heading_deg = declare_once("chain/jitter/heading_deg", 0.0);
   const double speed_frac = declare_once("chain/jitter/speed_frac", 0.0);
