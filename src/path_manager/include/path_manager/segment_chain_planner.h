@@ -173,6 +173,11 @@ private:
   // (the caller flies the single-shot result instead).
   bool resolveAutoSegments(int pieces, const char *source);
 
+  // [JITTER] measurement-only contract perturbation (chain/jitter/*, all
+  // default 0 = off) for the junction sensitivity experiment.
+  void applyContractJitter(const std::vector<Eigen::Vector3d> &route,
+                           std::vector<Contract> *contracts);
+
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;
   swarm_formation::LogManager *log_;  // FSM-owned, outlives this component

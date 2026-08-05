@@ -432,6 +432,81 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   return true;
 }
 
+void SegmentChainPlanner::applyContractJitter(
+    const std::vector<Eigen::Vector3d> &route,
+    std::vector<Contract> *contracts)
+{
+  // [JITTER] Sensitivity-experiment hook (all default 0 = off): perturbs the
+  // AUTHORED contracts before slicing, to measure how much quality the
+  // prescription actually costs. arc_frac slides every junction along the
+  // committed route by that fraction of the mean span (position AND tangent
+  // re-derived, so the slice endpoints follow); heading_deg then rotates the
+  // contract velocity in the horizontal plane; speed_frac scales its
+  // magnitude. Loud WARN when active — this is measurement scaffolding,
+  // never an operating mode.
+  const auto declare_once = [&](const char *name, double def) {
+    if (!node_->has_parameter(name)) node_->declare_parameter(name, def);
+    double v = def;
+    node_->get_parameter(name, v);
+    return v;
+  };
+  const double heading_deg = declare_once("chain/jitter/heading_deg", 0.0);
+  const double speed_frac = declare_once("chain/jitter/speed_frac", 0.0);
+  const double arc_frac = declare_once("chain/jitter/arc_frac", 0.0);
+  if (heading_deg == 0.0 && speed_frac == 0.0 && arc_frac == 0.0) return;
+  if (contracts->empty() || route.size() < 2) return;
+
+  log_->warnf("[CHAIN-JITTER] EXPERIMENT: heading %+.1f deg, speed %+.1f%%, "
+              "arc %+.2f span — contracts perturbed",
+              heading_deg, speed_frac * 100.0, arc_frac);
+
+  // Cumulative arc table of the committed route.
+  std::vector<double> s(route.size(), 0.0);
+  for (size_t i = 1; i < route.size(); ++i)
+    s[i] = s[i - 1] + (route[i] - route[i - 1]).norm();
+  const double span = s.back() / static_cast<double>(contracts->size() + 1);
+  const auto pointAt = [&](double sq, Eigen::Vector3d *pos,
+                           Eigen::Vector3d *tan) {
+    sq = std::min(std::max(sq, 0.0), s.back());
+    size_t i = 1;
+    while (i + 1 < s.size() && s[i] < sq) ++i;
+    const double seg = std::max(1e-9, s[i] - s[i - 1]);
+    const double t = (sq - s[i - 1]) / seg;
+    *pos = route[i - 1] + t * (route[i] - route[i - 1]);
+    *tan = (route[i] - route[i - 1]) / seg;
+  };
+  const double cs = std::cos(heading_deg * M_PI / 180.0);
+  const double sn = std::sin(heading_deg * M_PI / 180.0);
+  double prev_s = 0.0;
+  for (auto &c : *contracts) {
+    Eigen::Vector3d pos = c.pos, tan = c.vel.normalized();
+    if (arc_frac != 0.0) {
+      // Locate the contract on the route (nearest-vertex arc), then slide.
+      size_t best = 0;
+      double bd = std::numeric_limits<double>::max();
+      for (size_t i = 0; i < route.size(); ++i) {
+        const double d = (route[i] - c.pos).squaredNorm();
+        if (d < bd) { bd = d; best = i; }
+      }
+      // Keep junction order with a guaranteed gap even at large shifts.
+      const double target =
+          std::max(s[best] + arc_frac * span, prev_s + 0.1 * span);
+      pointAt(target, &pos, &tan);
+      prev_s = target;
+    }
+    const double speed = c.vel.norm() * (1.0 + speed_frac);
+    Eigen::Vector3d v = tan;
+    if (heading_deg != 0.0) {
+      v = Eigen::Vector3d(cs * tan.x() - sn * tan.y(),
+                          sn * tan.x() + cs * tan.y(), tan.z());
+      v.normalize();
+    }
+    c.pos = pos;
+    c.vel = v * speed;
+    // c.acc stays as authored (a = 0).
+  }
+}
+
 bool SegmentChainPlanner::resolveAutoSegments(int pieces, const char *source)
 {
   if (!auto_segments_) return true;
@@ -664,6 +739,7 @@ bool SegmentChainPlanner::planRouteParallel(
   std::vector<Contract> contracts;
   if (!authorContractsFromRoute(route, &contracts))
     return fallback("route too small to author junctions on");
+  applyContractJitter(route, &contracts);
   std::vector<RouteSlice> slices =
       sliceCommittedRoute(route, cap, contracts);
   if (slices.size() != static_cast<size_t>(segments_))
