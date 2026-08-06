@@ -1020,16 +1020,23 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
         // [TERRAIN-READY] Ingestion receipt for command gating: the panel's
         // Run flow must not race a corridor the planner is still digesting
         // (LoadMap replying only proves the map was PUBLISHED). Latched
-        // [resolution_u, origin_x_u, origin_y_u] of what was actually
-        // ingested — the panel matches it against the LoadMap response
-        // before it releases the mission command.
-        if (terrain_ready_pub_) {
+        // [resolution_u, origin_x_u, origin_y_u, length_x_u, length_y_u] of
+        // what was actually ingested — the panel matches it against the
+        // LoadMap response before it releases the mission command. Guarded
+        // by the SAME validity test setTerrainData applies (it early-returns
+        // on malformed maps, keeping the old DEM — a receipt for a rejected
+        // map would certify terrain the planner never took; review find).
+        // Extent is included so two corridors sharing a corner cannot alias
+        // (review find).
+        if (terrain_ready_pub_ && msg->info.resolution > 0.0 &&
+            !msg->data.empty()) {
             std_msgs::msg::Float64MultiArray ready;
             ready.data = {msg->info.resolution,
                           msg->info.pose.position.x -
                               0.5 * msg->info.length_x,
                           msg->info.pose.position.y -
-                              0.5 * msg->info.length_y};
+                              0.5 * msg->info.length_y,
+                          msg->info.length_x, msg->info.length_y};
             terrain_ready_pub_->publish(ready);
         }
     }

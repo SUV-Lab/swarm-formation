@@ -11,6 +11,39 @@
 namespace path_manager {
 
 namespace {
+// Type-tolerant runtime parameter read. Statically-typed declares throw at
+// PLAN time when a CLI/YAML override carries the other numeric type
+// ("-p x:=-10" is an int, "x: 1" for a bool...) — and a try/catch around
+// the declare only converts the crash into silently DISCARDING the
+// override (the throw happens before registration; review find). Declaring
+// with dynamic_typing accepts any override type, and the switch coerces
+// bool/int/double, so operator-typed values can neither kill the node nor
+// vanish.
+double readNumParam(const rclcpp::Node::SharedPtr &node, const char *name,
+                    double def)
+{
+  try {
+    if (!node->has_parameter(name)) {
+      rcl_interfaces::msg::ParameterDescriptor d;
+      d.dynamic_typing = true;
+      node->declare_parameter(name, rclcpp::ParameterValue(def), d);
+    }
+    const rclcpp::Parameter p = node->get_parameter(name);
+    switch (p.get_type()) {
+      case rclcpp::ParameterType::PARAMETER_DOUBLE: return p.as_double();
+      case rclcpp::ParameterType::PARAMETER_INTEGER:
+        return static_cast<double>(p.as_int());
+      case rclcpp::ParameterType::PARAMETER_BOOL:
+        return p.as_bool() ? 1.0 : 0.0;
+      default: return def;
+    }
+  } catch (const std::exception &) {
+    return def;
+  }
+}
+}  // namespace
+
+namespace {
 
 // Dense (t, cumulative arc) table. Baseline and chain have different total
 // durations, so the deviation sweep compares them at matched ARC fractions —
@@ -444,25 +477,10 @@ void SegmentChainPlanner::applyContractJitter(
   // contract velocity in the horizontal plane; speed_frac scales its
   // magnitude. Loud WARN when active — this is measurement scaffolding,
   // never an operating mode.
-  // Robust to integer-typed CLI overrides ("-p ...:=-10" parses as int and
-  // makes a double declare throw): declare defensively, then accept either
-  // numeric type.
-  const auto declare_once = [&](const char *name, double def) {
-    try {
-      if (!node_->has_parameter(name)) node_->declare_parameter(name, def);
-    } catch (const std::exception &) {}
-    try {
-      const rclcpp::Parameter p = node_->get_parameter(name);
-      if (p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE)
-        return p.as_double();
-      if (p.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER)
-        return static_cast<double>(p.as_int());
-    } catch (const std::exception &) {}
-    return def;
-  };
-  const double heading_deg = declare_once("chain/jitter/heading_deg", 0.0);
-  const double speed_frac = declare_once("chain/jitter/speed_frac", 0.0);
-  const double arc_frac = declare_once("chain/jitter/arc_frac", 0.0);
+  const double heading_deg =
+      readNumParam(node_, "chain/jitter/heading_deg", 0.0);
+  const double speed_frac = readNumParam(node_, "chain/jitter/speed_frac", 0.0);
+  const double arc_frac = readNumParam(node_, "chain/jitter/arc_frac", 0.0);
   if (heading_deg == 0.0 && speed_frac == 0.0 && arc_frac == 0.0) return;
   if (contracts->empty() || route.size() < 2) return;
 
@@ -824,11 +842,8 @@ bool SegmentChainPlanner::planRouteParallel(
   std::vector<poly_traj::Trajectory> runs(static_cast<size_t>(segments_));
   std::vector<char> ok(static_cast<size_t>(segments_), 0);
   std::vector<double> solve_ms(static_cast<size_t>(segments_), 0.0);
-  {
-    if (!node_->has_parameter("chain/jitter/fail_segment"))
-      node_->declare_parameter("chain/jitter/fail_segment", 0);
-    node_->get_parameter("chain/jitter/fail_segment", jitter_fail_segment_);
-  }
+  jitter_fail_segment_ = static_cast<int>(
+      readNumParam(node_, "chain/jitter/fail_segment", 0.0));
   const auto worker = [&](int i) {
     const auto t0 = std::chrono::steady_clock::now();
     const bool last = (i + 1 == segments_);
@@ -871,6 +886,17 @@ bool SegmentChainPlanner::planRouteParallel(
   }
   const double solve_wall_ms = ms_since(t_solve);
 
+  // [JITTER] One-shot semantics for the failure injection: clear it the
+  // moment it fired so a value left behind on a running node (or a stale
+  // test yaml) cannot condemn every subsequent mission (review find). The
+  // WARN above marks the injected plan; this reset marks the recovery.
+  if (jitter_fail_segment_ > 0 && jitter_fail_segment_ <= segments_) {
+    node_->set_parameters(
+        {rclcpp::Parameter("chain/jitter/fail_segment", 0)});
+    log_->warnf("[CHAIN-JITTER] fail_segment fired — cleared to 0 "
+                "(one-shot)");
+  }
+
   // [CHAIN-RETRY] Merge ladder before the single-shot fallback. A lone
   // failed segment is usually a junction-placement casualty — the sweeps
   // showed missions that reject at fine splits succeed once the hard
@@ -886,10 +912,8 @@ bool SegmentChainPlanner::planRouteParallel(
     std::vector<int> failed;
     for (int i = 0; i < segments_; ++i)
       if (!ok[static_cast<size_t>(i)]) failed.push_back(i);
-    bool merge_on = true;
-    if (!node_->has_parameter("chain/merge_retry"))
-      node_->declare_parameter("chain/merge_retry", true);
-    node_->get_parameter("chain/merge_retry", merge_on);
+    const bool merge_on =
+        readNumParam(node_, "chain/merge_retry", 1.0) != 0.0;
     if (failed.size() == 1 && merge_on && segments_ >= 2) {
       const int f = failed.front();
       // Neighbor sides, smaller merged span first (keep the re-solve easy).
