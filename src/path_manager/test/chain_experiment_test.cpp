@@ -105,7 +105,7 @@ int main(int argc, char **argv)
        with_failrestore = false, with_altcap = false, with_terminal = false,
        with_tinyturn = false, with_route = false, with_par = false,
        with_auto = false, with_autosmall = false, with_tailfix = false,
-       with_tailzero = false, with_tailacc = false;
+       with_tailzero = false, with_tailacc = false, with_exclusive = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -151,6 +151,10 @@ int main(int argc, char **argv)
     // relaxation opt-in), tailacc (acceleration-only prescription rides the
     // level entry).
     if (v == "tailfix") with_tailfix = true;
+    // exclusive: terminal geometry toggled ON while the mission prescribes
+    // the final state — the guard must skip the helix, so the prescribed
+    // tail (tailfix checks) is still the trajectory's true end.
+    if (v == "exclusive") { with_tailfix = true; with_exclusive = true; }
     if (v == "tailzero") with_tailzero = true;
     if (v == "tailacc") with_tailacc = true;
   }
@@ -240,6 +244,10 @@ int main(int argc, char **argv)
   const Eigen::Vector3d start_acc(0.0, 0.0, 0.0);
   const std::vector<Eigen::Vector3d> goal = {{330.0, 150.0, 1.5}};
 
+  if (with_exclusive) {
+    force("chain/terminal/enable", true);
+    std::cout << "exclusive: terminal enabled + final state prescribed\n";
+  }
   ego_planner::TailBoundary mtail;
   if (with_tailfix) {
     mtail.prescribe_vel = true;

@@ -155,7 +155,11 @@ private:
   // its own [CHAIN-REPORT] block. Returns the appended terminal trajectory
   // (empty when disabled/degenerate/discarded) so the caller can paint it
   // in the per-segment viz.
-  poly_traj::Trajectory appendTerminalPhase(poly_traj::Trajectory *chained) const;
+  // final_state_prescribed: mission tail active -> terminal geometry is
+  // skipped with a WARN (v1 exclusivity; the mission input outranks the
+  // yaml toggle).
+  poly_traj::Trajectory appendTerminalPhase(poly_traj::Trajectory *chained,
+                                            bool final_state_prescribed) const;
 
   // Stage-1 seam verification + baseline comparison ([CHAIN-REPORT]).
   void logChainReport(const poly_traj::Trajectory &baseline,

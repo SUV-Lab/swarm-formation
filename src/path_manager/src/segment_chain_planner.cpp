@@ -495,7 +495,8 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     phase_names.push_back("seg" + std::to_string(i + 1));
   }
   const double t_pre_terminal = chained.getTotalDuration();
-  const poly_traj::Trajectory term = appendTerminalPhase(&chained);
+  const poly_traj::Trajectory term =
+      appendTerminalPhase(&chained, mission_tail.anyPrescribed());
   if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
     phase_ends.push_back(chained.getTotalDuration());
     phase_names.push_back("terminal");
@@ -1081,7 +1082,8 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     phase_names.push_back("seg" + std::to_string(i + 1));
   }
   const double t_pre_terminal = chained.getTotalDuration();
-  const poly_traj::Trajectory term = appendTerminalPhase(&chained);
+  const poly_traj::Trajectory term =
+      appendTerminalPhase(&chained, mission_tail.anyPrescribed());
   if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
     phase_ends.push_back(chained.getTotalDuration());
     phase_names.push_back("terminal");
@@ -1279,7 +1281,7 @@ void SegmentChainPlanner::logFinalEvaluation(
 }
 
 poly_traj::Trajectory SegmentChainPlanner::appendTerminalPhase(
-    poly_traj::Trajectory *chained) const
+    poly_traj::Trajectory *chained, bool final_state_prescribed) const
 {
   const auto dp = [&](const char *n, auto def) {
     if (!node_->has_parameter(n)) node_->declare_parameter(n, def);
@@ -1287,6 +1289,17 @@ poly_traj::Trajectory SegmentChainPlanner::appendTerminalPhase(
   dp("chain/terminal/enable", false);
   bool enable = false;
   node_->get_parameter("chain/terminal/enable", enable);
+  // [PHASE] v1 exclusivity (frozen design): a mission-prescribed final
+  // state and the prescribed terminal geometry both claim the trajectory's
+  // end — enabling both would make "final state" ambiguous (chain tail vs
+  // helix entry). The mission input outranks the yaml toggle; WARN, not
+  // ERROR: this is a defined priority, not a malfunction.
+  if (enable && final_state_prescribed) {
+    log_->warnf("[CHAIN] terminal geometry DISABLED: the mission prescribes "
+                "the final state (chain/terminal/enable ignored — the two "
+                "modes are exclusive in v1)");
+    return {};
+  }
   if (!enable) return {};
 
   TerminalHelixParams prm;
