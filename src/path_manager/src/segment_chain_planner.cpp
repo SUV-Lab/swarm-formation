@@ -161,7 +161,53 @@ SegmentChainPlanner::SegmentChainPlanner(rclcpp::Node::SharedPtr node,
                                          swarm_formation::LogManager *log_manager,
                                          int segments, bool inherit_route)
     : node_(node), pm_(path_manager), log_(log_manager),
-      segments_(std::max(2, segments)), inherit_route_(inherit_route) {}
+      segments_(std::max(2, segments)),
+      segments_requested_(std::max(2, segments)),
+      inherit_route_(inherit_route) {}
+
+void SegmentChainPlanner::resetPlanState()
+{
+  // [PLAN-STATE] Every member below is per-plan. The merge ladder decrements
+  // segments_ in flight and the phase blackboard is written only on the
+  // phase-enabled path, so without this a mission inherits the previous
+  // mission's N and its screened candidates (review find). Called once at
+  // the top of every plan, before anything reads them.
+  segments_ = segments_requested_;
+  auto_segments_ = false;
+  phase_applied_ = false;
+  phase_note_.clear();
+  dep_candidates_.clear();
+  arr_candidates_.clear();
+  phase_tan_grade_ = 1e9;
+  phase_turn_radius_u_ = 0.0;
+  jitter_fail_segment_ = 0;
+}
+
+std::vector<double> SegmentChainPlanner::capAlongRoute(
+    const std::vector<Eigen::Vector3d> &route,
+    const std::vector<double> &cap,
+    const std::vector<Eigen::Vector3d> &pts) const
+{
+  if (cap.size() != route.size() || route.size() < 2 || pts.empty()) return {};
+  std::vector<double> out;
+  out.reserve(pts.size());
+  for (const auto &p : pts) {
+    double best_d2 = std::numeric_limits<double>::max();
+    size_t best_seg = 0;
+    for (size_t i = 0; i + 1 < route.size(); ++i) {
+      const Eigen::Vector3d &a = route[i];
+      const Eigen::Vector3d ab = route[i + 1] - a;
+      const double len2 = ab.squaredNorm();
+      double u = (len2 > 1e-12) ? (p - a).dot(ab) / len2 : 0.0;
+      u = std::min(1.0, std::max(0.0, u));
+      const double d2 = (a + u * ab - p).squaredNorm();
+      if (d2 < best_d2) { best_d2 = d2; best_seg = i; }
+    }
+    // Same "never tighten the ceiling" rule the cut logic uses.
+    out.push_back(std::max(cap[best_seg], cap[best_seg + 1]));
+  }
+  return out;
+}
 
 PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                                      const Eigen::Vector3d &start_vel,
@@ -171,6 +217,10 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                                      const ego_planner::TailBoundary &mission_tail,
                                      bool start_vel_commanded)
 {
+  // [PLAN-STATE] First statement of the only public entry: no member may
+  // carry a previous mission's value into this one. The envelope rejection
+  // below returns early, so the reset has to precede it.
+  resetPlanState();
   // [ENVELOPE] Contract 1 (2026-08-08): an EXPLICITLY commanded initial
   // velocity outside the cruise model's validity region is rejected HERE,
   // before the front end or any optimizer runs. No clamp — rewriting an
@@ -322,7 +372,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     pm_->traj_.setGlobalTraj(baseline, now_s);
     pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
     pm_->publishTrajectoryViz(baseline, baseline);
-    logFinalEvaluation(baseline, {T}, {"baseline"});
+    evaluateFlight(baseline, {T}, {"baseline"});
     // A mission genuinely too small to split IS correctly served by the
     // baseline — SUCCESS, not a degradation (outcome matrix, frozen).
     return PlanResult::success();
@@ -541,7 +591,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
       // failed segment's overrides — same order as the success path.
       restore_guard.restore();
       pm_->publishTrajectoryViz(baseline, baseline);
-      logFinalEvaluation(baseline, {baseline.getTotalDuration()},
+      evaluateFlight(baseline, {baseline.getTotalDuration()},
                          {"baseline"});
       PlanResult r = PlanResult::success();
       r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
@@ -588,6 +638,13 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     phase_names.push_back("terminal");
   }
 
+  // [STITCH-GATE] Judged before storage — see the route-mode twin: a refused
+  // flight must not reach traj_ or RViz. The baseline slot is left alone too;
+  // in this mode it is the comparison channel for a product we are refusing.
+  const FlightVerdict fv = evaluateFlight(chained, phase_ends, phase_names);
+  if (fv.unflyable())
+    return stitchedVerdictResult(fv, PlanResult::success());
+
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
   // GLOBAL slot = the baseline OPTIMIZED trajectory (comparison reference,
   // see the class comment). Must precede setLocalTraj: setGlobalTraj resets
@@ -605,15 +662,13 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
                                  term.getPieceNum() > 0 ? &term : nullptr);
   }
 
-  logFinalEvaluation(chained, phase_ends, phase_names);
-
   const double wall_ms = std::chrono::duration<double, std::milli>(
       std::chrono::steady_clock::now() - t_wall).count();
   log_->infof("[CHAIN] chained %d segments: %d pieces, %.1f s flight "
               "(baseline %.1f s), planned in %.1f ms wall",
               segments_, chained.getPieceNum(), chained.getTotalDuration(), T,
               wall_ms);
-  return PlanResult::success();
+  return stitchedVerdictResult(fv, PlanResult::success());
 }
 
 void SegmentChainPlanner::applyContractJitter(
@@ -978,12 +1033,18 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     };
     dep_candidates_.clear();
     arr_candidates_.clear();
+    // Candidates are taken FIRST-FIT (nearest qualifying vertex), not
+    // scored — a ranking needs a reachability model that does not exist
+    // yet (contract 2 §12), so the only knob here is how many the retry
+    // ladder may try. Each extra candidate costs a full solve.
+    const size_t max_cand = static_cast<size_t>(std::max(
+        1.0, readNumParam(node_, "chain/phase/max_candidates", 3.0)));
     if (segments_ >= 3) {
-      for (int i = 1; i + 1 < M && dep_candidates_.size() < 3; ++i)
+      for (int i = 1; i + 1 < M && dep_candidates_.size() < max_cand; ++i)
         if (s[static_cast<size_t>(i)] >= depRequired(i) && sustained(i, +1))
           dep_candidates_.push_back(i);
       if (!dep_candidates_.empty()) dep_idx = dep_candidates_.front();
-      for (int i = M - 2; i >= 1 && arr_candidates_.size() < 3; --i)
+      for (int i = M - 2; i >= 1 && arr_candidates_.size() < max_cand; --i)
         if (s[static_cast<size_t>(i)] <= S - arr_min && sustained(i, -1))
           arr_candidates_.push_back(i);
       if (!arr_candidates_.empty()) arr_idx = arr_candidates_.front();
@@ -1202,7 +1263,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     // must never mean "no gate".
     if (readNumParam(node_, "chain/phase/enable", 0.0) != 0.0) {
       const poly_traj::Trajectory &fly = pm_->traj_.global_traj.traj;
-      const FlightVerdict fv = logFinalEvaluation(
+      const FlightVerdict fv = evaluateFlight(
           fly, {fly.getTotalDuration()}, {"direct"});
       // Fail-CLOSED (review find): a flight the evaluator could not judge
       // is as unflyable as one it condemned — "no verdict" must never read
@@ -1514,7 +1575,28 @@ PlanResult SegmentChainPlanner::planRouteParallel(
       // earlier among its screened candidates. Every retry solve passes the
       // peak-utilization acceptance gate. Exhausted -> DIRECT (single plan,
       // DEGRADED, no phase labels) — never a mislabeled merge.
+      //
+      // [PHASE-N2] Stated policy, not an accident of an empty list: at N=2
+      // ONE junction serves both handoffs, dual-screened in both directions.
+      // Moving it for the arrival would silently invalidate the departure
+      // screening that also accepted it, so the arrival edge has NO retry
+      // here — it goes direct with an honest note. (Before this was written
+      // down, arr_candidates_ was simply empty at N=2 and the ladder fell
+      // through reporting "no reachable arrival handoff", which reads as a
+      // screening failure rather than a policy.)
       bool edge_rescued = false;
+      if (phase_applied_ && segments_ == 2 && f == segments_ - 1) {
+        phase_applied_ = false;
+        log_->warnf("[PHASE-N2] arrival segment failed at N=2: the single "
+                    "shared handoff serves BOTH phases, so moving it is not "
+                    "available — direct plan, no phase labels");
+        PlanResult r = fallback("N=2 shared handoff admits no arrival retry");
+        if (r.hasTrajectory())
+          r.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK,
+                    "N=2 shared handoff admits no arrival retry — direct "
+                    "plan, no phase labels");
+        return r;
+      }
       if (phase_applied_ && (f == 0 || f == segments_ - 1)) {
         const bool edge_dep = (f == 0);
         bool rescued = false;
@@ -1564,6 +1646,11 @@ PlanResult SegmentChainPlanner::planRouteParallel(
                           "terrain/zone/grade validation — next", c);
               continue;
             }
+            // The connector is not a route slice, so it has no cap of its
+            // own — sample one off the route (review find: an empty cap
+            // silently demoted this solve to the scalar altitude band while
+            // every route-seeded solve used the arc-varying one).
+            edge_cap = capAlongRoute(route, cap, edge_path);
           } else {
             edge_path = ns.back().path;
             edge_cap = ns.back().cap;
@@ -1810,6 +1897,15 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     phase_names.push_back("terminal");
   }
 
+  // [STITCH-GATE] JUDGE BEFORE STORING. The verdict has to precede
+  // setLocalTraj and the viz publish: a refused flight left in traj_ is a
+  // trajectory the next state transition can pick up, and one already drawn
+  // in RViz tells the operator it was accepted. FAILED leaves both untouched.
+  const FlightVerdict stitched_fv =
+      evaluateFlight(chained, phase_ends, phase_names);
+  if (stitched_fv.unflyable())
+    return stitchedVerdictResult(stitched_fv, PlanResult::success());
+
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
   // No baseline: both slots carry the chained product (the comparison
   // channel simply mirrors the flight in this mode).
@@ -1823,7 +1919,6 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     pm_->publishChainSegmentsViz(runs, junc,
                                  term.getPieceNum() > 0 ? &term : nullptr);
   }
-  logFinalEvaluation(chained, phase_ends, phase_names);
 
   std::string per;
   for (size_t i = 0; i < solve_ms.size(); ++i) {
@@ -1848,10 +1943,52 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   if (!soft_drop_note.empty())
     result.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK,
                    "merge dropped soft overrides: " + soft_drop_note);
-  return result;
+  return stitchedVerdictResult(stitched_fv, result);
 }
 
-SegmentChainPlanner::FlightVerdict SegmentChainPlanner::logFinalEvaluation(
+PlanResult SegmentChainPlanner::stitchedVerdictResult(
+    const FlightVerdict &fv, PlanResult ok_result) const
+{
+  // [STITCH-GATE] Frozen policy for the whole-flight verdict on the product
+  // the caller is about to fly. Two tiers, because the two failure kinds are
+  // not the same kind of thing:
+  //   terrain overlap / never reaches cruise -> FAILED. There is no margin
+  //     to spend here; the trajectory passes through the ground or the
+  //     airframe cannot sustain the flight at all.
+  //   envelope over-utilization -> DEGRADED. A limit budget is something an
+  //     operator can knowingly exceed, and every span already passed its own
+  //     per-solve audit; the stitched reading is the honest whole-flight
+  //     number, reported loudly rather than silently discarded (which is
+  //     what happened before this gate existed).
+  // A degenerate product that could not be judged keeps its result: unlike
+  // the direct fallback (a repair, judged fail-closed), this trajectory
+  // already cleared the per-solve audits that produced it.
+  if (fv.unflyable()) {
+    char why[176];
+    snprintf(why, sizeof why,
+             "stitched flight is unflyable (%s%s) — whole-flight evaluation, "
+             "which no per-solve audit performs",
+             fv.underground ? "terrain overlap" : "",
+             fv.no_cruise ? (fv.underground ? ", never reaches cruise"
+                                            : "never reaches cruise")
+                          : "");
+    log_->errorf("[STITCH-GATE] %s", why);
+    return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
+  }
+  if (fv.evaluated && !fv.clean) {
+    char why[176];
+    snprintf(why, sizeof why,
+             "stitched flight exceeds the envelope budget (viol %.1f%%, peak "
+             "%.1f%%) — flyable, but the whole-flight reading is worse than "
+             "any per-solve audit saw",
+             fv.viol_pct, 100.0 * fv.util_peak);
+    log_->warnf("[STITCH-GATE] %s", why);
+    ok_result.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK, why);
+  }
+  return ok_result;
+}
+
+SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     const poly_traj::Trajectory &flight,
     const std::vector<double> &phase_ends,
     const std::vector<std::string> &phase_names) const

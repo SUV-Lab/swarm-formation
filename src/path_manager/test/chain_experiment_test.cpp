@@ -111,7 +111,7 @@ int main(int argc, char **argv)
        with_depedge = false, with_arredge = false, with_departop = false,
        with_initfail = false, with_initok = false, with_synthclamp = false,
        with_unsafedirect = false, with_initaccfail = false,
-       with_initnan = false;
+       with_initnan = false, with_arredge2 = false, with_twophase = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -157,6 +157,18 @@ int main(int argc, char **argv)
     // checks the head region (no worm: bounded total turn, no self-cross).
     if (v == "depedge") { with_route = true; with_phase = true; with_depedge = true; }
     if (v == "arredge") { with_route = true; with_phase = true; with_arredge = true; }
+    // [PHASE-N2] arredge2: the arrival segment fails at N=2, where ONE
+    // junction serves both handoffs. Stated policy is "no arrival retry" —
+    // the plan must go direct with that reason, never silently report a
+    // screening failure and never mislabel a merged span.
+    if (v == "arredge2") {
+      with_route = true; with_phase = true; with_phase2 = true;
+      with_arredge2 = true;
+    }
+    // twophase: two plans in ONE process with DIFFERENT segment counts, to
+    // prove no per-plan state (segments_, screened candidates) survives into
+    // the next mission — the merge ladder decrements segments_ in flight.
+    if (v == "twophase") { with_route = true; with_phase = true; with_twophase = true; }
     if (v == "departop") { with_route = true; with_phase = true; with_departop = true; }
     if (v == "par") { with_route = true; with_par = true; }
     // twice: plan the SAME mission twice in one process. If the scope-guard
@@ -254,6 +266,7 @@ int main(int argc, char **argv)
   if (with_initfail || with_initaccfail || with_initnan)
     force("chain/jitter/fail_segment", -1);
   if (with_mergetail) force("chain/jitter/fail_segment", 3);
+  if (with_arredge2) force("chain/jitter/fail_segment", 2);  // last of N=2
   if (with_failtail) force("chain/jitter/fail_segment", -1);
   if (with_phaseweight)
     force("chain/phase/arrival/params",
@@ -373,6 +386,31 @@ int main(int argc, char **argv)
            "reason is INITIAL_MODE_UNSUPPORTED");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
            "fault injection still armed — no front-end/optimizer work ran");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_twophase) {
+    // Plan 1 at N=3, plan 2 at N=5 in the same object. If segments_ or the
+    // screened candidate lists leaked, the second plan inherits the first
+    // one's N (possibly already decremented by a merge) and its handoffs.
+    const path_manager::PlanResult r1 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r1.hasTrajectory(), "first plan (N=3) produces a trajectory");
+    const int p1 = pm->traj_.local_traj.traj.getPieceNum();
+    force("chain/segments", 5);
+    const path_manager::PlanResult r2 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r2.hasTrajectory(), "second plan (N=5) produces a trajectory");
+    const int p2 = pm->traj_.local_traj.traj.getPieceNum();
+    std::cout << "twophase: N=3 -> " << p1 << " pieces, N=5 -> " << p2
+              << " pieces\n";
+    // Same mission, more segments: the piece count must actually change.
+    // Equality is the leak signature (the second plan re-used stale N).
+    expect(p1 != p2, "segment count change reaches the second plan (no "
+                     "per-plan state leak)");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -594,9 +632,10 @@ int main(int argc, char **argv)
     }
   }
 
-  if (with_route && !with_failtail) {
-    // (failtail EXPECTS the single-shot fallback, where the slots follow
-    // single-plan semantics — the slot assert applies to chain successes.)
+  if (with_route && !with_failtail && !with_arredge2) {
+    // (failtail and arredge2 EXPECT the single-shot fallback, where the
+    // slots follow single-plan semantics — this assert is for chain
+    // successes.)
     // Route mode has no baseline solve: both container slots must carry the
     // SAME chained flight (the comparison channel mirrors it), and the
     // whole-trajectory junction sweep above already covered its seams.
@@ -626,7 +665,8 @@ int main(int argc, char **argv)
     expect(v_end < 1.9, "arrival profile slows the tail region (< 1.9)");
     expect(v_mid > 1.95, "cruise region keeps mission speed (> 1.95)");
   }
-  if (with_phase && !with_phasefall && !with_departop && !with_initok) {
+  if (with_phase && !with_phasefall && !with_departop && !with_initok &&
+      !with_arredge2) {
     expect(pres.outcome == path_manager::PlanOutcome::SUCCESS,
            "phase handoffs pinned — SUCCESS, no degrade");
   }
@@ -705,6 +745,18 @@ int main(int argc, char **argv)
                pres.reason ==
                    path_manager::PlanReason::PHASE_BOUNDARY_FALLBACK,
            "impossible handoff arc -> DEGRADED(PHASE_BOUNDARY_FALLBACK)");
+  }
+  if (with_arredge2) {
+    // [PHASE-N2] The shared handoff admits no arrival retry: the plan goes
+    // DIRECT and says so. It must NOT come back SUCCESS (that would mean a
+    // merged span wearing phase labels). The single-shot fallback owns the
+    // stronger reason by the priority ladder — PHASE_BOUNDARY_FALLBACK
+    // rides along in `detail`, which is where the policy has to be legible.
+    expect(pres.outcome == path_manager::PlanOutcome::DEGRADED &&
+               pres.reason == path_manager::PlanReason::SINGLE_PLAN_FALLBACK,
+           "N=2 arrival failure -> DEGRADED(SINGLE_PLAN_FALLBACK), direct");
+    expect(pres.detail.find("N=2") != std::string::npos,
+           "reason names the N=2 shared-handoff policy, not a screening miss");
   }
   if (with_tailfix) {
     const Eigen::Vector3d tv = chained.getJuncVel(chained.getPieceNum());

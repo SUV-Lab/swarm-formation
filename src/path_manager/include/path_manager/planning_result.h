@@ -46,6 +46,11 @@ enum class PlanReason {
   // (the same evaluation the stitched chain gets). "No phase labels" must
   // never mean "no audit".
   DIRECT_FALLBACK_UNSAFE,
+  // The STITCHED chain flight is unflyable on the unambiguous counts —
+  // terrain overlap, or a flight that never reaches cruise. Per-solve
+  // audits cannot see these: they judge one span at a time and the
+  // prescribed terminal phase not at all.
+  STITCHED_FLIGHT_UNSAFE,
 };
 
 struct PlanResult {

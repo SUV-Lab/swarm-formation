@@ -147,15 +147,22 @@ private:
                       bool start_vel_synthesized,
                       const ego_planner::TailBoundary &mission_tail);
 
-  // [STAGE-4] Whole-flight evaluation of the FINAL stitched product — the
-  // one artifact no per-solve audit ever sees whole (and the terminal
-  // phase not at all): terrain clearance, flight-envelope utilization
-  // (shared mmp_vehicle_dynamics model) and OR-combined risk exposure,
-  // sampled at 10 Hz, per phase and total, ending in a CLEAN/CHECK
-  // verdict line. For the stitched chain it stays informational
-  // (publication already happened under the per-solve audits); the
-  // RETURNED verdict is the phase-mode direct-fallback acceptance gate
-  // (contract 1) — the one product that never met a whole-flight audit.
+  // [STAGE-4] Whole-flight JUDGMENT of the FINAL stitched product — the one
+  // artifact no per-solve audit ever sees whole (and the terminal phase not
+  // at all): terrain clearance, flight-envelope utilization (shared
+  // mmp_vehicle_dynamics model) and OR-combined risk exposure, sampled at
+  // 10 Hz, per phase and total.
+  //
+  // The RETURN VALUE is the authority; the per-phase log lines it emits are
+  // a readout of the same numbers, never a second opinion (review find: the
+  // stitched chain used to discard this verdict entirely while the direct
+  // fallback gated on it, so the identical evidence decided differently
+  // depending on which product produced it).
+  //
+  // Contract-2 note: every sample here is judged by the CRUISE model. A
+  // transition phase is by definition outside it, so per-phase model
+  // selection has to land here before any transition trajectory does —
+  // see docs/transition_phase_contract.md §4.
   struct FlightVerdict {
     bool evaluated{false};  // false: degenerate input, nothing was judged
     bool clean{true};
@@ -163,11 +170,20 @@ private:
     bool no_cruise{false};
     double viol_pct{0.0};
     double util_peak{0.0};
+    // The two counts above that no trajectory may ever fly with, whatever
+    // produced it. Envelope over-utilization is graded separately: it is a
+    // margin the caller may knowingly spend, terrain is not.
+    bool unflyable() const { return evaluated && (underground || no_cruise); }
   };
-  FlightVerdict logFinalEvaluation(
+  FlightVerdict evaluateFlight(
       const poly_traj::Trajectory &flight,
       const std::vector<double> &phase_ends,
       const std::vector<std::string> &phase_names) const;
+  // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
+  // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
+  // budget exceeded -> the given result degraded, otherwise unchanged.
+  PlanResult stitchedVerdictResult(const FlightVerdict &fv,
+                                   PlanResult ok_result) const;
 
   // [STAGE-3] Optional PRESCRIBED terminal phase (chain/terminal/enable):
   // a helix descent of genuinely different character — analytic geometry,
@@ -220,6 +236,20 @@ private:
   Contract contractFromVertex(const std::vector<Eigen::Vector3d> &route,
                               int i, double cruise,
                               double tan_grade_max) const;
+  // Per-vertex ceiling reference for a path that is NOT a route slice (the
+  // departure connector). Each point takes the cap of its nearest route
+  // segment, by the same max(cap[i], cap[i+1]) rule sliceCommittedRoute
+  // applies at a cut — an empty cap makes the solver fall back to the
+  // scalar altitude band, so a connector solve would be judged under a
+  // different altitude regime than every route-seeded solve (review find).
+  std::vector<double> capAlongRoute(
+      const std::vector<Eigen::Vector3d> &route,
+      const std::vector<double> &cap,
+      const std::vector<Eigen::Vector3d> &pts) const;
+  // Clears every per-plan member so nothing survives into the next mission
+  // (review find: segments_ is decremented mid-plan by the merge ladder and
+  // the phase blackboard is only reset on the phase-enabled path).
+  void resetPlanState();
   // Turn-out seed following the INITIAL velocity: arc (radius = margin x
   // R_min) chasing the handoff bearing, then a straight leg, z smoothstep.
   // The route slice must NOT seed the departure solve when the initial
@@ -247,7 +277,12 @@ private:
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;
   swarm_formation::LogManager *log_;  // FSM-owned, outlives this component
+  // Working segment count for the CURRENT plan: resolved per plan from
+  // segments_requested_ (or auto-sizing) and mutated in flight by the merge
+  // ladder. Never read across plans — resetPlanState restores it.
   int segments_;
+  // The construction-time request, the one value that outlives a plan.
+  const int segments_requested_;
   bool inherit_route_;
   bool auto_segments_{false};
   // [PHASE] set during route authoring (const method -> mutable): whether
