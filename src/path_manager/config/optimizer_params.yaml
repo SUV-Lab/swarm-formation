@@ -13,6 +13,21 @@
     # 아예 나누지 않고 단일 계획으로 돈다. 미션마다 손대지 않으려면 0 권장.
     chain/segments: 0
     # chain/auto_pieces_per_segment: 70   # 자동 모드의 토막당 목표 조각 수
+
+    # ---- [PHASE] 3단계(출발 전이-순항-도착 전이) 확장 ----
+    # chain/phase/enable: true            # 첫/끝 접합을 단계 핸드오프 규칙으로 선정
+    # chain/phase/depart_min_arc_u: 30.0  # 출발 핸드오프 최소 호장 (상승·가속 여유)
+    # chain/phase/arrive_min_arc_u: 30.0  # 도착 핸드오프가 목표 앞에 남길 호장
+    # chain/phase/min_cruise_arc_u: 60.0  # 순항 최소 길이 (미달 시 균형 접합+강등)
+    # chain/phase/calm_window_u: 40.0     # 안정 판정 호장 창 (곡률·경사·존 술어 유지)
+    # chain/phase/kappa_calm: 0.01        # 안정 곡률 임계 (rad/u; 순항 2u/s에서 |a|<=0.04)
+    # chain/phase/grade_frac: 0.5         # 등판 원뿔 대비 허용 경사 비율
+    # 단계별 가중 프로파일 (route 모드, 화이트리스트 키만; seg<i>가 우선):
+    # chain/phase/departure/params: ["optimization/weight_time=500.0"]
+    # chain/phase/cruise/params: []
+    # chain/phase/arrival/params: ["optimization/max_vel=1.8"]
+    # 미션 최종 상태(msg use_final_*)가 실속 이하 등 무효일 때 완화 허용(기본 거부):
+    # planning/allow_final_boundary_relaxation: false
     # (스윕 실측: 잘게(25~40)는 험지 기각·품질 최악 +2.8%, 70이 평균 +0.8%/
     #  최악 +1.8%로 최선 절충. 험지 회랑은 90~120이 더 안전.)
     # inherit_route (기본 on): 체인 run이 자기 구간의 FM2를 다시 돌리지 않고

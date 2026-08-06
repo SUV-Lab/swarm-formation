@@ -186,6 +186,8 @@ private:
     // [PLAN-OUTCOME] tri-state contract from the planner (planning_result.h):
     // last_plan_succeeded_ stays the retry/rollback gate; these carry the
     // "flyable but a requirement was relaxed" distinction a bool cannot.
+    // [PHASE] mission final boundary from the command (planner units).
+    ego_planner::TailBoundary mission_tail_;
     PlanOutcome last_plan_outcome_{PlanOutcome::FAILED};
     PlanReason last_plan_reason_{PlanReason::NONE};
     std::string current_mission_id_;    // Current mission being executed

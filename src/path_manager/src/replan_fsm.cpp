@@ -770,14 +770,57 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // [CHAIN] baseline + N chained segment runs; the planner forwards
         // the synthesized flag itself (per-run semantics differ).
         plan_res = chain_planner_->plan(start_pt_, start_vel_, start_acc_,
-                                        waypoints, start_vel_synthesized_);
+                                        waypoints, start_vel_synthesized_,
+                                        mission_tail_);
     } else {
-        path_manager_->setStartVelSynthesized(start_vel_synthesized_);
-        plan_res = path_manager_->planGlobalTraj(
-                       start_pt_, start_vel_, start_acc_, waypoints,
-                       ego_planner::TailBoundary{})
-                       ? PlanResult::success()
-                       : PlanResult::failed("single plan failed");
+        // [PHASE] The single path validates the final boundary HERE (the
+        // chain planner validates inside plan()) — same frozen policy:
+        // invalid without the opt-in fails, the opt-in relaxes + degrades.
+        ego_planner::TailBoundary eff_tail = mission_tail_;
+        bool tail_rejected = false, relaxed = false;
+        std::string relax_why;
+        if (mission_tail_.anyPrescribed()) {
+            std::string problem;
+            if (!mission_tail_.allFinite()) {
+                problem = "non-finite final boundary";
+            } else if (mission_tail_.prescribe_vel &&
+                       mission_tail_.vel.norm() <
+                           path_manager_->stallFloorUnits()) {
+                problem = "final speed below the stall floor";
+            }
+            if (!problem.empty()) {
+                bool allow = false;
+                if (!node_->has_parameter(
+                        "planning/allow_final_boundary_relaxation"))
+                    node_->declare_parameter(
+                        "planning/allow_final_boundary_relaxation", false);
+                node_->get_parameter(
+                    "planning/allow_final_boundary_relaxation", allow);
+                if (!allow) {
+                    FSM_LOG_ERROR("[PHASE] final boundary REJECTED: %s",
+                                  problem.c_str());
+                    tail_rejected = true;
+                    plan_res = PlanResult::failed(problem);
+                } else {
+                    FSM_LOG_WARN("[PHASE] final boundary relaxed (opt-in): "
+                                 "%s", problem.c_str());
+                    eff_tail = ego_planner::TailBoundary{};
+                    relaxed = true;
+                    relax_why = problem + " — final boundary relaxed (opt-in)";
+                }
+            }
+        }
+        if (!tail_rejected) {
+            path_manager_->setStartVelSynthesized(start_vel_synthesized_);
+            plan_res = path_manager_->planGlobalTraj(
+                           start_pt_, start_vel_, start_acc_, waypoints,
+                           eff_tail)
+                           ? PlanResult::success()
+                           : PlanResult::failed("single plan failed");
+            if (relaxed)
+                plan_res.degrade(PlanReason::FINAL_BOUNDARY_RELAXED,
+                                 relax_why);
+        }
     }
     // [PLAN-OUTCOME] the tri-state is the planner contract; the bool below
     // stays the execution gate (DEGRADED flies, loudly).
@@ -895,6 +938,33 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
     commanded_initial_acceleration_ = Eigen::Vector3d(
         msg->initial_acceleration.x, msg->initial_acceleration.y,
         msg->initial_acceleration.z) / initial_speed_unit_m_;
+    // [PHASE] mission FINAL boundary (SI -> planner units, same divisor as
+    // the initial vectors). Validated at the plan entry, not here.
+    mission_tail_ = ego_planner::TailBoundary{};
+    if (msg->use_final_velocity) {
+        mission_tail_.prescribe_vel = true;
+        mission_tail_.vel = Eigen::Vector3d(msg->final_velocity.x,
+                                            msg->final_velocity.y,
+                                            msg->final_velocity.z) /
+                            initial_speed_unit_m_;
+    }
+    if (msg->use_final_acceleration) {
+        mission_tail_.prescribe_acc = true;
+        mission_tail_.acc = Eigen::Vector3d(msg->final_acceleration.x,
+                                            msg->final_acceleration.y,
+                                            msg->final_acceleration.z) /
+                            initial_speed_unit_m_;
+    }
+    if (mission_tail_.anyPrescribed()) {
+        FSM_LOG_INFO("[PHASE] mission final boundary: vel %s (%.3f, %.3f, "
+                     "%.3f) u/s, acc %s (%.3f, %.3f, %.3f) u/s^2",
+                     mission_tail_.prescribe_vel ? "pinned" : "free",
+                     mission_tail_.vel.x(), mission_tail_.vel.y(),
+                     mission_tail_.vel.z(),
+                     mission_tail_.prescribe_acc ? "pinned" : "free",
+                     mission_tail_.acc.x(), mission_tail_.acc.y(),
+                     mission_tail_.acc.z());
+    }
     if (use_commanded_initial_velocity_ &&
         !commanded_initial_velocity_.allFinite()) {
         FSM_LOG_WARN("Ignoring non-finite commanded initial velocity");

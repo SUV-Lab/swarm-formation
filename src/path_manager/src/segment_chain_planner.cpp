@@ -1255,7 +1255,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     // test (chain/jitter/fail_segment, 1-based, default 0 = off): the
     // sweeps' organic rejects are session-dependent, so the rescue path
     // needs a fixture that fails on demand.
-    if (jitter_fail_segment_ == i + 1) {
+    if (jitter_fail_segment_ == i + 1 || jitter_fail_segment_ == -1) {
       log_->warnf("[CHAIN-JITTER] EXPERIMENT: segment %d/%d failure "
                   "INJECTED", i + 1, segments_);
       ok[ui] = 0;
@@ -1285,7 +1285,8 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   // moment it fired so a value left behind on a running node (or a stale
   // test yaml) cannot condemn every subsequent mission (review find). The
   // WARN above marks the injected plan; this reset marks the recovery.
-  if (jitter_fail_segment_ > 0 && jitter_fail_segment_ <= segments_) {
+  if (jitter_fail_segment_ == -1 ||
+      (jitter_fail_segment_ > 0 && jitter_fail_segment_ <= segments_)) {
     node_->set_parameters(
         {rclcpp::Parameter("chain/jitter/fail_segment", 0)});
     log_->warnf("[CHAIN-JITTER] fail_segment fired — cleared to 0 "
@@ -1444,7 +1445,14 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   for (size_t i = 0; i < runs.size(); ++i) {
     acc_t += runs[i].getTotalDuration();
     phase_ends.push_back(acc_t);
-    phase_names.push_back("seg" + std::to_string(i + 1));
+    if (phase_applied_) {
+      phase_names.push_back(i == 0 ? "departure"
+                            : i + 1 == runs.size()
+                                ? "arrival"
+                                : "cruise-" + std::to_string(i));
+    } else {
+      phase_names.push_back("seg" + std::to_string(i + 1));
+    }
   }
   const double t_pre_terminal = chained.getTotalDuration();
   const poly_traj::Trajectory term =

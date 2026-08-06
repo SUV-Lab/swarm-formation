@@ -107,7 +107,7 @@ int main(int argc, char **argv)
        with_auto = false, with_autosmall = false, with_tailfix = false,
        with_tailzero = false, with_tailacc = false, with_exclusive = false,
        with_phase = false, with_phasefall = false, with_phase2 = false,
-       with_phaseweight = false;
+       with_phaseweight = false, with_mergetail = false, with_failtail = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -139,6 +139,12 @@ int main(int argc, char **argv)
     // in ROUTE mode — the tail region must actually slow while the middle
     // cruises, proving per-worker configs reach the cost function.
     if (v == "phaseweight") { with_route = true; with_phase = true; with_phaseweight = true; }
+    // mergetail: last segment failure injected -> the MERGED span must
+    // still deliver the mission's prescribed final state.
+    // failtail: ALL workers fail (-1) -> the single-shot FALLBACK must
+    // still deliver it (and degrade, not silently succeed).
+    if (v == "mergetail") { with_route = true; with_tailfix = true; with_mergetail = true; }
+    if (v == "failtail") { with_route = true; with_tailfix = true; with_failtail = true; }
     if (v == "par") { with_route = true; with_par = true; }
     // twice: plan the SAME mission twice in one process. If the scope-guard
     // restore leaks a segment override, the second BASELINE (always planned
@@ -200,6 +206,8 @@ int main(int argc, char **argv)
           std::vector<std::string>{});
   if (with_auto) force("chain/auto_pieces_per_segment", 6);
   if (with_phase) force("chain/phase/enable", true);
+  if (with_mergetail) force("chain/jitter/fail_segment", 3);
+  if (with_failtail) force("chain/jitter/fail_segment", -1);
   if (with_phaseweight)
     force("chain/phase/arrival/params",
           std::vector<std::string>{"optimization/max_vel=1.8"});
@@ -426,13 +434,19 @@ int main(int argc, char **argv)
     }
   }
 
-  if (with_route) {
+  if (with_route && !with_failtail) {
+    // (failtail EXPECTS the single-shot fallback, where the slots follow
+    // single-plan semantics — the slot assert applies to chain successes.)
     // Route mode has no baseline solve: both container slots must carry the
     // SAME chained flight (the comparison channel mirrors it), and the
     // whole-trajectory junction sweep above already covered its seams.
     expect(std::abs(bt - ct) < 1e-9 &&
                baseline.getPieceNum() == chained.getPieceNum(),
            "route mode stores the chained flight in both slots");
+  }
+  if (with_failtail) {
+    expect(pres.outcome == path_manager::PlanOutcome::DEGRADED,
+           "all-fail fallback reports DEGRADED");
   }
   if (with_phaseweight) {
     const double T = chained.getTotalDuration();
