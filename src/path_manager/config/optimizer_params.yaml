@@ -15,7 +15,7 @@
     # chain/auto_pieces_per_segment: 70   # 자동 모드의 토막당 목표 조각 수
 
     # ---- [PHASE] 3단계(출발 전이-순항-도착 전이) 확장 ----
-    # chain/phase/enable: true            # 첫/끝 접합을 단계 핸드오프 규칙으로 선정
+    chain/phase/enable: true            # 첫/끝 접합을 단계 핸드오프 규칙으로 선정
     # chain/phase/depart_min_arc_u: 30.0  # 출발 핸드오프 최소 호장 (상승·가속 여유)
     # chain/phase/arrive_min_arc_u: 30.0  # 도착 핸드오프가 목표 앞에 남길 호장
     # chain/phase/min_cruise_arc_u: 60.0  # 순항 최소 길이 (미달 시 균형 접합+강등)

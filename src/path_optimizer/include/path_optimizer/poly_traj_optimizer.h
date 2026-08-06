@@ -138,6 +138,7 @@ namespace ego_planner
     // gate alone cannot see those. Acceptable rough solutions measure <=22%.
     double audit_env_viol_hard_max_{0.30};
     double last_env_viol_frac_{0.0};   // set by the envelope audit each plan
+    double last_env_peak_{0.0};        // [PHASE] peak envelope utilization
     // Sticky per-solve: true if ANY lbfgs pass exited -1004, even when a
     // restart later ends on a SUCCESS code (plateau test) — the gate must
     // still see the non-convergence.
@@ -568,6 +569,8 @@ namespace ego_planner
     // outside the solver (the stitched chain+terminal product includes a
     // prescribed phase no per-solve audit ever saw).
     bool dynamicsEnabled() const { return dynamics_enable_; }
+    // [PHASE] last solve's peak envelope utilization (1.0 = at limit).
+    double lastEnvPeak() const { return last_env_peak_; }
     const mmp_vehicle_dynamics::Parameters& dynamicsParams() const {
         return dynamics_params_;
     }

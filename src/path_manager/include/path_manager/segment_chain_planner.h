@@ -191,9 +191,27 @@ private:
       const std::vector<Contract> &contracts) const;
 
   // [CHAIN-PAR] see planRouteParallel. Contract.t carries pseudo-time
-  // (arc / cruise) for the logs.
+  // (arc / cruise) for the logs. v0 = the mission's effective start velocity
+  // — the departure handoff screening needs it ([PHASE-DEP] design v2).
   bool authorContractsFromRoute(const std::vector<Eigen::Vector3d> &route,
+                                const Eigen::Vector3d &v0,
                                 std::vector<Contract> *contracts) const;
+
+  // [PHASE-DEP] design v2 (departure worm fix): contract geometry at a
+  // route vertex (tangent sheared onto the climb cone, cruise speed, a=0).
+  Contract contractFromVertex(const std::vector<Eigen::Vector3d> &route,
+                              int i, double cruise,
+                              double tan_grade_max) const;
+  // Turn-out seed following the INITIAL velocity: arc (radius = margin x
+  // R_min) chasing the handoff bearing, then a straight leg, z smoothstep.
+  // The route slice must NOT seed the departure solve when the initial
+  // heading disagrees with the route — that is the worm generator.
+  std::vector<Eigen::Vector3d> buildDepartureConnector(
+      const Eigen::Vector3d &start, const Eigen::Vector3d &v0,
+      const Eigen::Vector3d &handoff, double turn_radius_u) const;
+  // Terrain-clearance / risk-zone / grade-cone sampling of a connector.
+  bool validateConnector(const std::vector<Eigen::Vector3d> &pts,
+                         double tan_grade_max) const;
 
   // [AUTO-N] resolves chain/segments==0 into a mission-sized N from the
   // piece count; returns false when the mission is too small to split
@@ -220,6 +238,11 @@ private:
   // attaches it to the PlanResult as PHASE_BOUNDARY_FALLBACK).
   mutable bool phase_applied_{false};
   mutable std::string phase_note_;
+  // [PHASE-DEP] screened handoff candidates (route vertex indices, first =
+  // the authored one) + the physics the edge-retry ladder reuses.
+  mutable std::vector<int> dep_candidates_, arr_candidates_;
+  mutable double phase_tan_grade_{1e9};
+  mutable double phase_turn_radius_u_{0.0};
 };
 
 }  // namespace path_manager

@@ -107,7 +107,8 @@ int main(int argc, char **argv)
        with_auto = false, with_autosmall = false, with_tailfix = false,
        with_tailzero = false, with_tailacc = false, with_exclusive = false,
        with_phase = false, with_phasefall = false, with_phase2 = false,
-       with_phaseweight = false, with_mergetail = false, with_failtail = false;
+       with_phaseweight = false, with_mergetail = false, with_failtail = false,
+       with_depedge = false, with_arredge = false, with_departop = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -145,6 +146,15 @@ int main(int argc, char **argv)
     // still deliver it (and degrade, not silently succeed).
     if (v == "mergetail") { with_route = true; with_tailfix = true; with_mergetail = true; }
     if (v == "failtail") { with_route = true; with_tailfix = true; with_failtail = true; }
+    // [PHASE-DEP] edge-boundary rescues: depedge injects a departure solve
+    // failure (one-shot) -> connector-seed retry at the SAME handoff must
+    // rescue with phase semantics intact; arredge injects the arrival solve
+    // failure -> the handoff moves EARLIER among screened candidates.
+    // departop plans with an initial velocity OPPOSITE the route and shape-
+    // checks the head region (no worm: bounded total turn, no self-cross).
+    if (v == "depedge") { with_route = true; with_phase = true; with_depedge = true; }
+    if (v == "arredge") { with_route = true; with_phase = true; with_arredge = true; }
+    if (v == "departop") { with_route = true; with_phase = true; with_departop = true; }
     if (v == "par") { with_route = true; with_par = true; }
     // twice: plan the SAME mission twice in one process. If the scope-guard
     // restore leaks a segment override, the second BASELINE (always planned
@@ -206,6 +216,8 @@ int main(int argc, char **argv)
           std::vector<std::string>{});
   if (with_auto) force("chain/auto_pieces_per_segment", 6);
   if (with_phase) force("chain/phase/enable", true);
+  if (with_depedge) force("chain/jitter/fail_segment", 1);
+  if (with_arredge) force("chain/jitter/fail_segment", 3);
   if (with_mergetail) force("chain/jitter/fail_segment", 3);
   if (with_failtail) force("chain/jitter/fail_segment", -1);
   if (with_phaseweight)
@@ -267,7 +279,7 @@ int main(int argc, char **argv)
   // 30 km eastbound mission over the hills: start at cruise, goal at 150 m
   // AGL. Start z is absolute (max terrain 1.8 u); goal z rides [GOAL AGL].
   const Eigen::Vector3d start_pos(30.0, 150.0, 3.0);
-  const Eigen::Vector3d start_vel(2.0, 0.0, 0.0);
+  Eigen::Vector3d start_vel(2.0, 0.0, 0.0);
   const Eigen::Vector3d start_acc(0.0, 0.0, 0.0);
   const std::vector<Eigen::Vector3d> goal = {{330.0, 150.0, 1.5}};
 
@@ -311,9 +323,10 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_departop) start_vel = Eigen::Vector3d(-1.55, 0.41, 0.0);
   const path_manager::PlanResult pres =
       chain.plan(start_pos, start_vel, start_acc, goal,
-                 /*start_vel_synthesized=*/true, mtail);
+                 /*start_vel_synthesized=*/!with_departop, mtail);
   const bool ok = pres.hasTrajectory();
   expect(ok, "chained plan returns success");
   if (!ok) {
@@ -466,9 +479,72 @@ int main(int argc, char **argv)
     expect(v_end < 1.9, "arrival profile slows the tail region (< 1.9)");
     expect(v_mid > 1.95, "cruise region keeps mission speed (> 1.95)");
   }
-  if (with_phase && !with_phasefall) {
+  if (with_phase && !with_phasefall && !with_departop) {
     expect(pres.outcome == path_manager::PlanOutcome::SUCCESS,
            "phase handoffs pinned — SUCCESS, no degrade");
+  }
+  if (with_departop) {
+    expect(pres.outcome != path_manager::PlanOutcome::FAILED,
+           "opposite initial velocity: plan exists (SUCCESS or explicit "
+           "DEGRADED direct)");
+    // Worm detector on the head region: bounded total turn, no xy self-
+    // intersection, bounded arc/chord (the 548 u worm fails all three).
+    const double t_end = std::min(60.0, chained.getTotalDuration());
+    std::vector<Eigen::Vector2d> xy;
+    double turn_sum = 0.0, arc = 0.0;
+    Eigen::Vector2d prev_dir(0, 0);
+    for (double tt = 0.0; tt <= t_end; tt += 0.5) {
+      const Eigen::Vector3d pp = chained.getPos(tt);
+      if (!xy.empty()) {
+        Eigen::Vector2d d = pp.head<2>() - Eigen::Vector2d(xy.back());
+        arc += d.norm();
+        if (d.norm() > 1e-6) {
+          d.normalize();
+          if (prev_dir.norm() > 0.5)
+            turn_sum += std::abs(std::atan2(
+                prev_dir.x() * d.y() - prev_dir.y() * d.x(),
+                prev_dir.dot(d)));
+          prev_dir = d;
+        }
+      }
+      xy.emplace_back(pp.x(), pp.y());
+    }
+    bool self_cross = false;
+    for (size_t i = 1; i + 2 < xy.size() && !self_cross; ++i)
+      for (size_t j = i + 2; j + 1 < xy.size(); ++j) {
+        const auto &a1 = xy[i - 1]; const auto &a2 = xy[i];
+        const auto &b1 = xy[j]; const auto &b2 = xy[j + 1];
+        const auto cross2 = [](const Eigen::Vector2d &u,
+                               const Eigen::Vector2d &v) {
+          return u.x() * v.y() - u.y() * v.x();
+        };
+        const double d1 = cross2(a2 - a1, b1 - a1);
+        const double d2 = cross2(a2 - a1, b2 - a1);
+        const double d3 = cross2(b2 - b1, a1 - b1);
+        const double d4 = cross2(b2 - b1, a2 - b1);
+        if (((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0))) {
+          self_cross = true;
+          break;
+        }
+      }
+    const double chord =
+        (xy.back() - xy.front()).norm() > 1e-6
+            ? (xy.back() - xy.front()).norm() : 1e-6;
+    std::cout << "departop head: turn " << turn_sum * 180.0 / M_PI
+              << " deg, arc/chord " << arc / chord
+              << (self_cross ? ", SELF-CROSS" : ", no cross") << "\n";
+    expect(turn_sum < 4.2, "head total turn bounded (< ~240 deg)");
+    expect(!self_cross, "head region has no self-intersection");
+    expect(arc / chord < 3.5, "head arc/chord bounded (no worm loop)");
+  }
+  if (with_depedge) {
+    expect(pres.outcome == path_manager::PlanOutcome::SUCCESS,
+           "departure solve failure rescued by connector at the SAME "
+           "handoff (phase intact)");
+  }
+  if (with_arredge) {
+    expect(pres.outcome == path_manager::PlanOutcome::SUCCESS,
+           "arrival solve failure rescued by moving the handoff earlier");
   }
   if (with_phasefall) {
     expect(pres.outcome == path_manager::PlanOutcome::DEGRADED &&

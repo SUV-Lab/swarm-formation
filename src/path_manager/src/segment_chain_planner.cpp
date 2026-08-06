@@ -686,8 +686,102 @@ bool SegmentChainPlanner::resolveAutoSegments(int pieces, const char *source)
   return true;
 }
 
+SegmentChainPlanner::Contract SegmentChainPlanner::contractFromVertex(
+    const std::vector<Eigen::Vector3d> &route, int i, double cruise,
+    double tan_grade_max) const
+{
+  Contract c;
+  const int M = static_cast<int>(route.size());
+  c.t = 0.0;
+  c.pos = route[i];
+  Eigen::Vector3d dir =
+      route[std::min(i + 1, M - 1)] - route[std::max(i - 1, 0)];
+  if (dir.norm() < 1e-9) dir = Eigen::Vector3d::UnitX();
+  const double hxy = dir.head<2>().norm();
+  if (hxy > 1e-9 && std::abs(dir.z()) > tan_grade_max * hxy)
+    dir.z() = std::copysign(tan_grade_max * hxy, dir.z());
+  else if (hxy <= 1e-9)
+    dir = Eigen::Vector3d::UnitX();
+  c.vel = dir.normalized() * cruise;
+  c.acc = Eigen::Vector3d::Zero();
+  return c;
+}
+
+std::vector<Eigen::Vector3d> SegmentChainPlanner::buildDepartureConnector(
+    const Eigen::Vector3d &start, const Eigen::Vector3d &v0,
+    const Eigen::Vector3d &handoff, double turn_radius_u) const
+{
+  std::vector<Eigen::Vector3d> pts{start};
+  Eigen::Vector2d p = start.head<2>();
+  const Eigen::Vector2d tgt = handoff.head<2>();
+  Eigen::Vector2d h = v0.head<2>();
+  const double step = 2.0;
+  if (h.norm() > 1e-6 && turn_radius_u > 1e-6) {
+    h.normalize();
+    // Turn toward the handoff bearing along a margin-backed circle, then
+    // run straight. Anti-parallel start (cross ~ 0) defaults to a left turn.
+    Eigen::Vector2d to_t = tgt - p;
+    double sgn =
+        (h.x() * to_t.y() - h.y() * to_t.x()) >= 0.0 ? 1.0 : -1.0;
+    double turned = 0.0;
+    while (turned < 2.0 * M_PI) {
+      to_t = tgt - p;
+      const double d = to_t.norm();
+      if (d < step) break;
+      to_t /= d;
+      const double mis =
+          std::atan2(h.x() * to_t.y() - h.y() * to_t.x(), h.dot(to_t));
+      if (std::abs(mis) < 0.08) break;
+      const double dth =
+          sgn * std::min(step / turn_radius_u, std::abs(mis));
+      const double cs = std::cos(dth), sn = std::sin(dth);
+      h = Eigen::Vector2d(cs * h.x() - sn * h.y(),
+                          sn * h.x() + cs * h.y());
+      p += h * step;
+      turned += std::abs(dth);
+      pts.emplace_back(p.x(), p.y(), 0.0);
+    }
+  }
+  while ((tgt - p).norm() > 5.0) {
+    p += (tgt - p).normalized() * 5.0;
+    pts.emplace_back(p.x(), p.y(), 0.0);
+  }
+  pts.push_back(handoff);
+  // z: smoothstep along cumulative arc (start/handoff exact).
+  std::vector<double> s(pts.size(), 0.0);
+  for (size_t i = 1; i < pts.size(); ++i)
+    s[i] = s[i - 1] + (pts[i].head<2>() - pts[i - 1].head<2>()).norm();
+  const double S = std::max(1e-9, s.back());
+  for (size_t i = 0; i < pts.size(); ++i) {
+    const double u = s[i] / S;
+    pts[i].z() = start.z() + (handoff.z() - start.z()) * (3.0 - 2.0 * u) * u * u;
+  }
+  pts.front() = start;
+  pts.back() = handoff;
+  return pts;
+}
+
+bool SegmentChainPlanner::validateConnector(
+    const std::vector<Eigen::Vector3d> &pts, double tan_grade_max) const
+{
+  if (pts.size() < 2) return false;
+  const double agl_min = 0.8 * pm_->minGoalAgl();
+  for (size_t i = 0; i < pts.size(); ++i) {
+    double g = 0.0;
+    pm_->terrainElevation(pts[i].x(), pts[i].y(), &g);
+    if (pts[i].z() < g + agl_min) return false;
+    if (nearRiskZone(pts[i])) return false;
+    if (i > 0) {
+      const double dxy = (pts[i].head<2>() - pts[i - 1].head<2>()).norm();
+      const double dz = std::abs(pts[i].z() - pts[i - 1].z());
+      if (dxy > 1e-9 && dz / dxy > tan_grade_max * 1.05) return false;
+    }
+  }
+  return true;
+}
+
 bool SegmentChainPlanner::authorContractsFromRoute(
-    const std::vector<Eigen::Vector3d> &route,
+    const std::vector<Eigen::Vector3d> &route, const Eigen::Vector3d &v0,
     std::vector<Contract> *contracts) const
 {
   const int M = static_cast<int>(route.size());
@@ -822,17 +916,56 @@ bool SegmentChainPlanner::authorContractsFromRoute(
       if (dir <= 0 && !leg(-1)) return false;
       return true;
     };
+    // [PHASE-DEP] reachability LOWER-BOUND screening (necessary, not
+    // sufficient — the connector solve is the sufficiency check): the
+    // handoff must sit beyond the arc a margin-backed minimum-radius turn
+    // from the INITIAL heading needs, plus the climb-cone arc for its
+    // altitude difference. Sufficiency (lateral room, terrain, vertical
+    // speed transition) is delegated to the connector validation + solve.
+    phase_tan_grade_ = tan_grade_max;
+    phase_turn_radius_u_ = 0.0;
+    if (const auto *dyn = pm_->dynamicsParams()) {
+      double um = 100.0;
+      if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+        um = node_->get_parameter("optimization/dynamics_unit_xy_m")
+                 .as_double();
+      const double vm = std::max(1e-3, v0.norm()) * um;
+      const double nmax = std::max(1.01, dyn->load_factor_max);
+      phase_turn_radius_u_ =
+          1.5 * vm * vm /
+          (dyn->gravity_mps2 * std::sqrt(nmax * nmax - 1.0)) / um;
+    }
+    const Eigen::Vector2d v0h = v0.head<2>();
+    const auto depRequired = [&](int i) {
+      double req = dep_min;
+      if (phase_turn_radius_u_ > 0.0 && v0h.norm() > 1e-6) {
+        Eigen::Vector2d tan_i =
+            (route[std::min(i + 1, M - 1)] - route[std::max(i - 1, 0)])
+                .head<2>();
+        if (tan_i.norm() > 1e-9) {
+          const double dpsi = std::abs(std::atan2(
+              v0h.normalized().x() * tan_i.normalized().y() -
+                  v0h.normalized().y() * tan_i.normalized().x(),
+              v0h.normalized().dot(tan_i.normalized())));
+          req = std::max(req, phase_turn_radius_u_ * dpsi);
+        }
+      }
+      if (tan_grade_max < 1e8)
+        req = std::max(req, std::abs(route[i].z() - route.front().z()) /
+                                std::max(1e-6, tan_grade_max));
+      return req;
+    };
+    dep_candidates_.clear();
+    arr_candidates_.clear();
     if (segments_ >= 3) {
-      for (int i = 1; i + 1 < M; ++i)
-        if (s[static_cast<size_t>(i)] >= dep_min && sustained(i, +1)) {
-          dep_idx = i;
-          break;
-        }
-      for (int i = M - 2; i >= 1; --i)
-        if (s[static_cast<size_t>(i)] <= S - arr_min && sustained(i, -1)) {
-          arr_idx = i;
-          break;
-        }
+      for (int i = 1; i + 1 < M && dep_candidates_.size() < 3; ++i)
+        if (s[static_cast<size_t>(i)] >= depRequired(i) && sustained(i, +1))
+          dep_candidates_.push_back(i);
+      if (!dep_candidates_.empty()) dep_idx = dep_candidates_.front();
+      for (int i = M - 2; i >= 1 && arr_candidates_.size() < 3; --i)
+        if (s[static_cast<size_t>(i)] <= S - arr_min && sustained(i, -1))
+          arr_candidates_.push_back(i);
+      if (!arr_candidates_.empty()) arr_idx = arr_candidates_.front();
       if (dep_idx < 0 || arr_idx < 0 || arr_idx <= dep_idx ||
           s[static_cast<size_t>(arr_idx)] - s[static_cast<size_t>(dep_idx)] <
               cruise_min) {
@@ -852,10 +985,10 @@ bool SegmentChainPlanner::authorContractsFromRoute(
                     s[static_cast<size_t>(arr_idx)] -
                         s[static_cast<size_t>(dep_idx)]);
       }
-    } else {  // N == 2: single shared handoff
+    } else {  // N == 2: single shared handoff, BOTH screenings at once
       double best_k = std::numeric_limits<double>::infinity();
       for (int i = 1; i + 1 < M; ++i) {
-        if (s[static_cast<size_t>(i)] < dep_min ||
+        if (s[static_cast<size_t>(i)] < depRequired(i) ||
             s[static_cast<size_t>(i)] > S - arr_min)
           continue;
         if (!sustained(i, 0)) continue;
@@ -866,6 +999,7 @@ bool SegmentChainPlanner::authorContractsFromRoute(
       }
       if (dep_idx >= 0) {
         phase_applied_ = true;
+        dep_candidates_.assign(1, dep_idx);  // N=2: no boundary-move retry
         log_->infof("[PHASE] N=2 shared handoff @s=%.1f u (kappa %.4f)",
                     s[static_cast<size_t>(dep_idx)], best_k);
       } else {
@@ -1075,9 +1209,20 @@ PlanResult SegmentChainPlanner::planRouteParallel(
                         : "auto-N: mission below the split threshold",
                     /*as_degraded=*/phase_requested);
 
+  // [VEL-ALIGN] resolved BEFORE authoring: the departure handoff screening
+  // measures the turn the EFFECTIVE start velocity needs.
+  Eigen::Vector3d v0 = start_vel;
+  if (pm_->alignStartVelToRoute() && start_vel_synthesized &&
+      route.size() >= 2) {
+    Eigen::Vector3d dir = route[1] - route[0];
+    dir.z() = 0.0;
+    if (dir.head<2>().norm() > 1e-9)
+      v0 = dir.normalized() * start_vel.norm();
+  }
+
   // === 2. author contracts + slices on the route ===
   std::vector<Contract> contracts;
-  if (!authorContractsFromRoute(route, &contracts))
+  if (!authorContractsFromRoute(route, v0, &contracts))
     return fallback("route too small to author junctions on");
   applyContractJitter(route, &contracts);
   std::vector<RouteSlice> slices =
@@ -1088,14 +1233,6 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   // Segment 1's head is the MISSION start: replicate [VEL-ALIGN] (the
   // route is known here) and the [STALL-FLOOR] the bypassed planGlobalTraj
   // path would have applied.
-  Eigen::Vector3d v0 = start_vel;
-  if (pm_->alignStartVelToRoute() && start_vel_synthesized &&
-      route.size() >= 2) {
-    Eigen::Vector3d dir = route[1] - route[0];
-    dir.z() = 0.0;
-    if (dir.head<2>().norm() > 1e-9)
-      v0 = dir.normalized() * start_vel.norm();
-  }
   if (const auto *dyn = pm_->dynamicsParams()) {
     double um = 100.0;
     if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
@@ -1312,10 +1449,165 @@ PlanResult SegmentChainPlanner::planRouteParallel(
         readNumParam(node_, "chain/merge_retry", 1.0) != 0.0;
     if (failed.size() == 1 && merge_on && segments_ >= 2) {
       const int f = failed.front();
+      const double peak_max =
+          readNumParam(node_, "optimization/audit_envelope_peak_max", 1.30);
+      // [PHASE-DEP] design v2: a failed EDGE segment must never dissolve
+      // its phase boundary into the cruise (the 548.7 u "departure" worm).
+      // Departure: retry with a turn-out CONNECTOR seed that follows the
+      // initial velocity — at the same handoff first (N=2: only this), then
+      // at farther screened candidates (N>=3). Arrival: move the handoff
+      // earlier among its screened candidates. Every retry solve passes the
+      // peak-utilization acceptance gate. Exhausted -> DIRECT (single plan,
+      // DEGRADED, no phase labels) — never a mislabeled merge.
+      bool edge_rescued = false;
+      if (phase_applied_ && (f == 0 || f == segments_ - 1)) {
+        const bool edge_dep = (f == 0);
+        bool rescued = false;
+        const auto solveGated =
+            [&](ego_planner::PolyTrajOptimizer &o,
+                const std::vector<Eigen::Vector3d> &path,
+                const std::vector<double> &cp, const Eigen::Vector3d &hp2,
+                const Eigen::Vector3d &hv2, const Eigen::Vector3d &ha2,
+                const ego_planner::TailBoundary &tb2,
+                poly_traj::Trajectory *out2) {
+              if (!pm_->solveSlice(o, path, cp, hp2, hv2, ha2, path.back(),
+                                   tb2, sup, out2))
+                return false;
+              if (o.lastEnvPeak() > peak_max) {
+                log_->warnf("[PHASE-DEP] retry solve peak %.1f%% > %.0f%% — "
+                            "rejected", 100.0 * o.lastEnvPeak(),
+                            100.0 * peak_max);
+                return false;
+              }
+              return true;
+            };
+        const std::vector<int> &cands =
+            edge_dep ? dep_candidates_ : arr_candidates_;
+        const size_t ci0 = (segments_ == 2 || !edge_dep) ? 1 : 1;
+        // Departure at N>=3 additionally retries the ORIGINAL handoff with
+        // a connector seed before moving it: the boundary may be fine and
+        // only the route-slice seed wrong.
+        std::vector<int> attempt;
+        if (edge_dep) attempt.push_back(cands.empty() ? -1 : cands[0]);
+        for (size_t ci = ci0; ci < cands.size(); ++ci)
+          attempt.push_back(cands[ci]);
+        for (int c : attempt) {
+          if (c < 0 || rescued) break;
+          Contract nc = contractFromVertex(route, c, pm_->maxVel(),
+                                           phase_tan_grade_);
+          std::vector<Contract> trial = contracts;
+          trial[edge_dep ? 0 : trial.size() - 1] = nc;
+          auto ns = sliceCommittedRoute(route, cap, trial);
+          if (ns.size() != static_cast<size_t>(segments_)) continue;
+          std::vector<Eigen::Vector3d> edge_path;
+          std::vector<double> edge_cap;
+          if (edge_dep) {
+            edge_path = buildDepartureConnector(start_pos, v0, nc.pos,
+                                                phase_turn_radius_u_);
+            if (!validateConnector(edge_path, phase_tan_grade_)) {
+              log_->warnf("[PHASE-DEP] connector to s-candidate %d failed "
+                          "terrain/zone/grade validation — next", c);
+              continue;
+            }
+          } else {
+            edge_path = ns.back().path;
+            edge_cap = ns.back().cap;
+          }
+          // Rebuild the two touched optimizers under their profiles.
+          ScopedMissionParams eguard(node_, log_);
+          eguard.applyEffective(
+              eff[static_cast<size_t>(edge_dep ? 0 : segments_ - 1)].params);
+          auto o_edge = pm_->makeConfiguredOptimizer();
+          eguard.applyEffective(
+              eff[static_cast<size_t>(edge_dep ? 1 : segments_ - 2)].params);
+          auto o_next = pm_->makeConfiguredOptimizer();
+          eguard.restoreNow();
+          poly_traj::Trajectory run_edge, run_next;
+          bool ok2 = false;
+          if (edge_dep) {
+            const bool nb_last = (1 == segments_ - 1);
+            ego_planner::TailBoundary tb_nb =
+                nb_last ? mission_tail
+                        : ego_planner::TailBoundary::pinned(trial[1].vel,
+                                                            trial[1].acc);
+            ok2 = solveGated(*o_edge, edge_path, edge_cap, start_pos, v0,
+                             start_acc,
+                             ego_planner::TailBoundary::pinned(nc.vel, nc.acc),
+                             &run_edge) &&
+                  solveGated(*o_next, ns[1].path, ns[1].cap, nc.pos, nc.vel,
+                             nc.acc, tb_nb, &run_next);
+            if (ok2) {
+              contracts = trial;
+              slices = ns;
+              runs[0] = run_edge;
+              runs[1] = run_next;
+              ok[0] = ok[1] = 1;
+            }
+          } else {
+            const int lastseg = segments_ - 1;
+            const Contract &head_prev =
+                contracts[static_cast<size_t>(lastseg - 2 >= 0 ? lastseg - 2
+                                                               : 0)];
+            ego_planner::TailBoundary tb_last = mission_tail;
+            ok2 = solveGated(*o_next, ns[static_cast<size_t>(lastseg - 1)].path,
+                             ns[static_cast<size_t>(lastseg - 1)].cap,
+                             lastseg - 1 == 0 ? start_pos : head_prev.pos,
+                             lastseg - 1 == 0 ? v0 : head_prev.vel,
+                             lastseg - 1 == 0 ? start_acc : head_prev.acc,
+                             ego_planner::TailBoundary::pinned(nc.vel, nc.acc),
+                             &run_next) &&
+                  solveGated(*o_edge, edge_path, edge_cap, nc.pos, nc.vel,
+                             nc.acc, tb_last, &run_edge);
+            if (ok2) {
+              contracts = trial;
+              slices = ns;
+              runs[static_cast<size_t>(lastseg)] = run_edge;
+              runs[static_cast<size_t>(lastseg - 1)] = run_next;
+              ok[static_cast<size_t>(lastseg)] = 1;
+              ok[static_cast<size_t>(lastseg - 1)] = 1;
+            }
+          }
+          if (ok2) {
+            rescued = true;
+            log_->warnf("[PHASE-DEP] %s boundary rescued at s-candidate %d "
+                        "(%s seed) — phase semantics preserved",
+                        edge_dep ? "departure" : "arrival", c,
+                        edge_dep ? "connector" : "route");
+          }
+        }
+        if (!rescued) {
+          phase_applied_ = false;
+          PlanResult r = fallback(edge_dep
+                                      ? "no reachable departure handoff"
+                                      : "no reachable arrival handoff");
+          if (r.hasTrajectory())
+            r.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK,
+                      edge_dep ? "departure boundary undeliverable — direct "
+                                 "plan, no phase labels"
+                               : "arrival boundary undeliverable — direct "
+                                 "plan, no phase labels");
+          return r;
+        }
+        edge_rescued = true;
+      }
+      if (!edge_rescued) {
       // Neighbor sides, smaller merged span first (keep the re-solve easy).
       std::vector<int> sides;  // neighbor index
       if (f > 0) sides.push_back(f - 1);
       if (f + 1 < segments_) sides.push_back(f + 1);
+      // [PHASE-DEP] protected boundaries: the generic merge may never drop
+      // the departure (contracts[0]) or arrival (contracts[last]) junction.
+      if (phase_applied_) {
+        sides.erase(std::remove_if(sides.begin(), sides.end(),
+                                   [&](int n) {
+                                     const int jd2 = std::min(f, n);
+                                     return jd2 == 0 ||
+                                            jd2 == static_cast<int>(
+                                                       contracts.size()) -
+                                                       1;
+                                   }),
+                    sides.end());
+      }
       std::sort(sides.begin(), sides.end(), [&](int a, int b) {
         return slices[static_cast<size_t>(a)].path.size() <
                slices[static_cast<size_t>(b)].path.size();
@@ -1423,6 +1715,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
                  segments_);
         return fallback(why);
       }
+      }  // !edge_rescued (generic merge)
     } else if (!failed.empty()) {
       char why[96];
       snprintf(why, sizeof why, "%zu segments failed", failed.size());
@@ -1640,8 +1933,14 @@ void SegmentChainPlanner::logFinalEvaluation(
   const double viol_max_pct =
       100.0 * param_or("optimization/audit_envelope_violation_max", 0.25);
   const bool no_cruise = dyn != nullptr && tot.env_n == 0;
-  const bool clean =
-      tot.n_below_ground == 0 && !no_cruise && viol_pct < viol_max_pct;
+  // [PHASE-DEP] peak joins the verdict: 0.7% violation TIME hid a 299%
+  // instantaneous thrust demand as CLEAN (review find). Same parameter the
+  // departure acceptance gate uses.
+  const double peak_chk =
+      param_or("optimization/audit_envelope_peak_max", 1.30);
+  const bool peak_bad = tot.util_peak > peak_chk;
+  const bool clean = tot.n_below_ground == 0 && !no_cruise &&
+                     viol_pct < viol_max_pct && !peak_bad;
   if (clean) {
     log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
                 "%.1f%% (peak %.1f%% %s), risk exposure %.1f s",

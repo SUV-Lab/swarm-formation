@@ -1873,6 +1873,7 @@ namespace ego_planner
     // [CONV-REJECT] a fresh audit must not inherit the previous plan's
     // envelope verdict (the gate reads this after we return).
     last_env_viol_frac_ = 0.0;
+    last_env_peak_ = 0.0;
     poly_traj::Trajectory traj = jerkOpt_.getTraj();
     // Sweep the FULL duration. The inherited ego-planner heuristic audited
     // only the first 2/3 (idx = k/3*2) — sensible for a rolling local replan
@@ -1980,6 +1981,7 @@ namespace ego_planner
         last_env_viol_frac_ = 1.0;
       }
       if (n_samp > 0) {
+        last_env_peak_ = util_peak;  // [PHASE] departure acceptance gate
         const size_t p95_index = (utilization_all.size() * 95) / 100;
         std::nth_element(utilization_all.begin(),
                          utilization_all.begin() + p95_index,
