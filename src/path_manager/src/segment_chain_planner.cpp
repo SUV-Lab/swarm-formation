@@ -41,6 +41,75 @@ double readNumParam(const rclcpp::Node::SharedPtr &node, const char *name,
     return def;
   }
 }
+
+// [PHASE] Optimizer-owned override whitelist (frozen v4), TAGGED: soft
+// weights may be dropped with a degrade note; hard-max entries are
+// REQUIREMENTS — merged conservatively (min) or preserved globally on
+// fallback, never silently lost. PathManager-shared keys (obstacle
+// clearance, altitude weight/headrooms) are deliberately absent: they
+// configure shared machinery and cannot differ per parallel worker.
+enum class OvrTag { kSoft, kHardMax };
+struct OvrKey { const char *name; OvrTag tag; };
+constexpr OvrKey kOverrideWhitelist[] = {
+    {"optimization/weight_time", OvrTag::kSoft},
+    {"optimization/weight_Risk", OvrTag::kSoft},
+    {"optimization/max_vel", OvrTag::kHardMax},
+};
+const OvrKey *whitelistFind(const std::string &n)
+{
+  for (const auto &k : kOverrideWhitelist)
+    if (n == k.name) return &k;
+  return nullptr;
+}
+
+// [PHASE] Mission-wide parameter guard for the WORKER CONSTRUCTION window
+// (frozen v4: two roles, split). applyEffective() = per-worker config:
+// reset to pristine, then set this worker's list — the freshly built
+// optimizer snapshots it. restoreNow()/dtor = the exception-safe guarantee
+// that mission-wide values are back before the threads fan out (and on any
+// throw in between). File-scope on purpose: plan()'s ParamRestore is a
+// function-local one-shot and cannot be reused here (review find).
+class ScopedMissionParams {
+ public:
+  ScopedMissionParams(const rclcpp::Node::SharedPtr &node,
+                      swarm_formation::LogManager *log)
+      : node_(node), log_(log) {}
+  void applyEffective(const std::vector<rclcpp::Parameter> &ps)
+  {
+    resetPristine();
+    for (const auto &p : ps)
+      if (!saved_.count(p.get_name()) && node_->has_parameter(p.get_name()))
+        saved_.emplace(p.get_name(), node_->get_parameter(p.get_name()));
+    if (!ps.empty()) node_->set_parameters(ps);
+  }
+  void resetPristine()
+  {
+    if (saved_.empty()) return;
+    std::vector<rclcpp::Parameter> back;
+    back.reserve(saved_.size());
+    for (const auto &kv : saved_) back.push_back(kv.second);
+    node_->set_parameters(back);
+  }
+  void restoreNow()
+  {
+    if (done_) return;
+    done_ = true;
+    try {
+      resetPristine();
+    } catch (const std::exception &e) {
+      if (log_)
+        log_->errorf("[PHASE] mission-wide parameter restore FAILED: %s",
+                     e.what());
+    }
+  }
+  ~ScopedMissionParams() { restoreNow(); }
+
+ private:
+  rclcpp::Node::SharedPtr node_;
+  swarm_formation::LogManager *log_;
+  std::map<std::string, rclcpp::Parameter> saved_;
+  bool done_{false};
+};
 }  // namespace
 
 namespace {
@@ -196,21 +265,10 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     const bool author = dp("chain/author_from_route", false);
     const bool par = dp("chain/parallel", false);
     if (author) {
-      // Route mode authors contracts and builds every worker's optimizer
-      // from the MISSION-WIDE parameter surface — chain/seg<i>/params has
-      // no per-segment application point here (and the four
-      // PathManager-consumed values could never differ per PARALLEL worker
-      // anyway: they live on the shared manager). A dropped requirement
-      // must never be silent.
-      const std::vector<SegmentOverrides> over = readSegmentOverrides();
-      for (int i = 0; i < segments_; ++i) {
-        if (!over[static_cast<size_t>(i)].label.empty()) {
-          log_->warnf("[CHAIN-PAR] seg%d overrides IGNORED in route mode "
-                      "(%s) — use the baseline flow when the segment "
-                      "requirement must hold",
-                      i + 1, over[static_cast<size_t>(i)].label.c_str());
-        }
-      }
+      // [PHASE] Route mode applies WHITELISTED optimizer-owned overrides
+      // per worker (phase profiles + seg<i>), in the serial construction
+      // window — see planRouteParallel. Non-whitelisted keys are dropped
+      // loudly there.
       return planRouteParallel(start_pos, start_vel, start_acc, waypoints,
                                start_vel_synthesized, par, mission_tail);
     } else if (par) {
@@ -922,17 +980,69 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   };
 
   // Single-shot fallback for anything the route mode cannot author.
+  // [PHASE] Effective per-worker override lists (mission-wide < phase
+  // profile by position < seg<i>; whitelisted keys only) — filled after N
+  // is known, read by the fallback for hard-limit preservation.
+  SegmentOverrides prof_dep, prof_cru, prof_arr;
+  std::vector<SegmentOverrides> eff;
+  std::string soft_drop_note;
+
   // as_degraded=false marks the one caller where single-shot IS the correct
   // plan (mission below the split threshold), not a repair.
   const auto fallback = [&](const char *why, bool as_degraded = true) {
     log_->warnf("[CHAIN-PAR] %s — falling back to the single-shot plan", why);
+    // [PHASE] Hard-tagged requirements survive the fallback CONSERVATIVELY
+    // (min across all segments applied mission-wide). Frozen doctrine:
+    // preserved -> DEGRADED, lost -> FAILED — a fallback that quietly
+    // dropped an explicit hard limit would lie exactly like the old tail
+    // sentinel did.
+    std::map<std::string, double> hardmin;
+    for (const auto &e : eff)
+      for (const auto &pp : e.params) {
+        const OvrKey *k = whitelistFind(pp.get_name());
+        if (!k || k->tag != OvrTag::kHardMax) continue;
+        const double v = pp.as_double();
+        auto it = hardmin.find(pp.get_name());
+        if (it == hardmin.end() || v < it->second)
+          hardmin[pp.get_name()] = v;
+      }
+    ScopedMissionParams fguard(node_, log_);
+    if (!hardmin.empty()) {
+      try {
+        std::vector<rclcpp::Parameter> hp2;
+        hp2.reserve(hardmin.size());
+        for (const auto &kv : hardmin) hp2.emplace_back(kv.first, kv.second);
+        fguard.applyEffective(hp2);
+        pm_->initOptimizer(/*force_reinit=*/true);
+        pm_->deliverTrajToOptimizer();
+        log_->warnf("[PHASE] fallback preserves %zu hard limit(s) "
+                    "conservatively (mission-wide min)", hardmin.size());
+      } catch (const std::exception &e) {
+        return PlanResult::failed(
+            std::string("hard-limit preservation failed: ") + e.what());
+      }
+    }
     pm_->setStartVelSynthesized(start_vel_synthesized);
-    if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                             mission_tail))
+    const bool fb_ok = pm_->planGlobalTraj(start_pos, start_vel, start_acc,
+                                           waypoints, mission_tail);
+    if (!hardmin.empty()) {
+      fguard.restoreNow();
+      try {
+        pm_->initOptimizer(/*force_reinit=*/true);
+        pm_->deliverTrajToOptimizer();
+      } catch (const std::exception &e) {
+        log_->errorf("[PHASE] optimizer restore after fallback failed: %s",
+                     e.what());
+      }
+    }
+    if (!fb_ok)
       return PlanResult::failed(std::string(why) +
                                 "; single-shot fallback failed too");
     PlanResult r = PlanResult::success();
     if (as_degraded) r.degrade(PlanReason::SINGLE_PLAN_FALLBACK, why);
+    if (!hardmin.empty())
+      r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
+                "hard limits preserved conservatively in the single plan");
     return r;
   };
 
@@ -1034,9 +1144,79 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     node_->set_parameters(
         {rclcpp::Parameter("optimization/risk_parallel_threads", per)});
   }
+  // [PHASE] Build the effective per-worker override lists: phase profile
+  // by POSITION (departure = first, arrival = last, cruise between; only
+  // when phase mode is on), then seg<i> on top (explicit index wins).
+  // Whitelisted optimizer-owned keys only — everything else is dropped
+  // loudly (PathManager-shared values cannot differ per parallel worker).
+  prof_dep = readOverrideList("chain/phase/departure/params",
+                              "phase-departure");
+  prof_cru = readOverrideList("chain/phase/cruise/params", "phase-cruise");
+  prof_arr = readOverrideList("chain/phase/arrival/params", "phase-arrival");
+  const std::vector<SegmentOverrides> seg_over = readSegmentOverrides();
+  eff.assign(static_cast<size_t>(segments_), SegmentOverrides{});
+  for (int i = 0; i < segments_; ++i) {
+    std::map<std::string, rclcpp::Parameter> m;
+    const auto take = [&](const SegmentOverrides &src, const char *origin) {
+      for (const auto &pp : src.params) {
+        if (!whitelistFind(pp.get_name())) {
+          log_->warnf("[PHASE] %s override '%s' is not route-mode "
+                      "whitelisted — dropped (baseline flow applies the "
+                      "full surface)", origin, pp.get_name().c_str());
+          continue;
+        }
+        m[pp.get_name()] = pp;
+      }
+    };
+    if (phase_requested)
+      take(i == 0 ? prof_dep : (i + 1 == segments_ ? prof_arr : prof_cru),
+           i == 0 ? "departure" : (i + 1 == segments_ ? "arrival" : "cruise"));
+    take(seg_over[static_cast<size_t>(i)], "seg");
+    auto &e = eff[static_cast<size_t>(i)];
+    for (const auto &kv : m) {
+      e.params.push_back(kv.second);
+      e.label += (e.label.empty() ? "" : ", ") + kv.first + "=" +
+                 kv.second.value_to_string();
+    }
+  }
+
+  // [PHASE] The baseline-mode ceiling rules, ported (found by the
+  // phaseweight harness variant): a profile/seg override that lowers a
+  // worker's max_vel below the authored contract speed hands it an
+  // unsatisfiable hard BC — the segment fails and the merge ladder drags
+  // the whole merged span down to the ceiling. (1) Junction speeds
+  // harmonize to min(neighbor ceilings) — shrink only; (2) an unprescribed
+  // LAST-segment tail gets a level entry at its own ceiling instead of the
+  // mission-wide cruise speed.
+  const auto effMaxVel = [&](int i) {
+    for (const auto &pp : eff[static_cast<size_t>(i)].params)
+      if (pp.get_name() == "optimization/max_vel") return pp.as_double();
+    return pm_->maxVel();
+  };
+  for (size_t c = 0; c < contracts.size(); ++c) {
+    const double cap = std::min(effMaxVel(static_cast<int>(c)),
+                                effMaxVel(static_cast<int>(c) + 1));
+    const double sp = contracts[c].vel.norm();
+    if (cap < pm_->maxVel() - 1e-12 && sp > cap + 1e-9) {
+      contracts[c].vel *= cap / sp;
+      log_->infof("[PHASE] contract %zu speed harmonized to the lowered "
+                  "ceiling: %.3f -> %.3f u/s", c + 1, sp, cap);
+    }
+  }
+
+  // Worker optimizers are built SERIALLY (setParam snapshots node params);
+  // the guard resets to pristine between workers and restores mission-wide
+  // values — exception-safe — before any thread starts.
+  ScopedMissionParams cfg_guard(node_, log_);
   std::vector<std::unique_ptr<ego_planner::PolyTrajOptimizer>> opts;
-  for (int i = 0; i < segments_; ++i)
+  for (int i = 0; i < segments_; ++i) {
+    cfg_guard.applyEffective(eff[static_cast<size_t>(i)].params);
+    if (!eff[static_cast<size_t>(i)].label.empty())
+      log_->infof("[PHASE] worker %d effective overrides: %s", i + 1,
+                  eff[static_cast<size_t>(i)].label.c_str());
     opts.push_back(pm_->makeConfiguredOptimizer());
+  }
+  cfg_guard.restoreNow();
   if (run_parallel && had_rpt) node_->set_parameters({saved_rpt});
   const bool sup = pm_->zoneAvoidPassNow() == 1;
 
@@ -1054,10 +1234,23 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     const Eigen::Vector3d hv = i ? contracts[ui - 1].vel : v0;
     const Eigen::Vector3d ha = i ? contracts[ui - 1].acc : start_acc;
     const Eigen::Vector3d gp = slices[ui].path.back();
-    const ego_planner::TailBoundary tb =
+    ego_planner::TailBoundary tb =
         last ? mission_tail
              : ego_planner::TailBoundary::pinned(contracts[ui].vel,
                                                  contracts[ui].acc);
+    if (last && !tb.prescribe_vel) {
+      const double ceil_v = effMaxVel(i);
+      if (ceil_v < pm_->maxVel() - 1e-12 && slices[ui].path.size() >= 2) {
+        Eigen::Vector3d ad = slices[ui].path.back() -
+                             slices[ui].path[slices[ui].path.size() - 2];
+        ad.z() = 0.0;
+        if (ad.norm() < 1e-6) ad = Eigen::Vector3d::UnitX();
+        tb = ego_planner::TailBoundary::pinned(ad.normalized() * ceil_v,
+                                               Eigen::Vector3d::Zero());
+        log_->infof("[PHASE] arrival tail at the segment ceiling: |v|=%.3f "
+                    "u/s level", ceil_v);
+      }
+    }
     // [JITTER] fault injection for the merge-retry ladder's deterministic
     // test (chain/jitter/fail_segment, 1-based, default 0 = off): the
     // sweeps' organic rejects are session-dependent, so the rescue path
@@ -1156,7 +1349,50 @@ PlanResult SegmentChainPlanner::planRouteParallel(
                     "segment %d (junction %d dropped), re-solving the span",
                     f + 1, segments_, n + 1, jd + 1);
         const auto t_retry = std::chrono::steady_clock::now();
+        // [PHASE] merged-span profile (frozen): arrival if it contains the
+        // last segment, departure if the first, cruise otherwise. seg<i>
+        // SOFT overrides are dropped (noted -> degrade); hard-max values
+        // merge conservatively (min of both sides).
+        SegmentOverrides mo;
+        {
+          std::map<std::string, rclcpp::Parameter> m;
+          if (phase_requested) {
+            const SegmentOverrides &prof =
+                (hi + 1 == segments_) ? prof_arr
+                                      : (lo == 0 ? prof_dep : prof_cru);
+            for (const auto &pp : prof.params)
+              if (whitelistFind(pp.get_name())) m[pp.get_name()] = pp;
+          }
+          for (int side : {lo, hi}) {
+            for (const auto &pp :
+                 eff[static_cast<size_t>(side)].params) {
+              const OvrKey *k = whitelistFind(pp.get_name());
+              if (!k) continue;
+              if (k->tag == OvrTag::kSoft) {
+                const auto it = m.find(pp.get_name());
+                if (it == m.end() ||
+                    it->second.as_double() != pp.as_double())
+                  soft_drop_note +=
+                      (soft_drop_note.empty() ? "" : ", ") + pp.get_name();
+                continue;
+              }
+              const double v = pp.as_double();
+              const auto it = m.find(pp.get_name());
+              if (it == m.end() || v < it->second.as_double())
+                m[pp.get_name()] = rclcpp::Parameter(pp.get_name(), v);
+            }
+          }
+          for (const auto &kv : m) {
+            mo.params.push_back(kv.second);
+            mo.label += (mo.label.empty() ? "" : ", ") + kv.first;
+          }
+        }
+        ScopedMissionParams mguard(node_, log_);
+        mguard.applyEffective(mo.params);
         auto ropt = pm_->makeConfiguredOptimizer();
+        mguard.restoreNow();
+        if (!mo.label.empty())
+          log_->infof("[PHASE] merged span profile: %s", mo.label.c_str());
         poly_traj::Trajectory mrun;
         if (pm_->solveSlice(*ropt, merged.path, merged.cap, hp, hv, ha, gp,
                             tb, sup, &mrun)) {
@@ -1253,6 +1489,9 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   PlanResult result = PlanResult::success();
   if (!phase_note_.empty())
     result.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK, phase_note_);
+  if (!soft_drop_note.empty())
+    result.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK,
+                   "merge dropped soft overrides: " + soft_drop_note);
   return result;
 }
 
@@ -1503,37 +1742,36 @@ poly_traj::Trajectory SegmentChainPlanner::appendTerminalPhase(
   return term;
 }
 
-std::vector<SegmentChainPlanner::SegmentOverrides>
-SegmentChainPlanner::readSegmentOverrides() const
+SegmentChainPlanner::SegmentOverrides
+SegmentChainPlanner::readOverrideList(const std::string &pname,
+                                      const std::string &who) const
 {
-  std::vector<SegmentOverrides> out(static_cast<size_t>(segments_));
-  for (int i = 0; i < segments_; ++i) {
-    const std::string pname = "chain/seg" + std::to_string(i + 1) + "/params";
-    if (!node_->has_parameter(pname))
-      node_->declare_parameter(pname, std::vector<std::string>{});
-    std::vector<std::string> specs;
-    node_->get_parameter(pname, specs);
-    auto &so = out[static_cast<size_t>(i)];
+  SegmentOverrides so;
+  if (!node_->has_parameter(pname))
+    node_->declare_parameter(pname, std::vector<std::string>{});
+  std::vector<std::string> specs;
+  node_->get_parameter(pname, specs);
+  {
     for (const std::string &spec : specs) {
       const size_t eq = spec.find('=');
       if (eq == std::string::npos || eq == 0 || eq + 1 >= spec.size()) {
-        log_->warnf("[CHAIN] seg%d override '%s' is not name=value — skipped",
-                    i + 1, spec.c_str());
+        log_->warnf("[CHAIN] %s override '%s' is not name=value — skipped",
+                    who.c_str(), spec.c_str());
         continue;
       }
       const std::string name = spec.substr(0, eq);
       const std::string val = spec.substr(eq + 1);
       if (!node_->has_parameter(name)) {
-        log_->warnf("[CHAIN] seg%d override '%s': no such parameter — "
+        log_->warnf("[CHAIN] %s override '%s': no such parameter — "
                     "skipped (typo, or its consumer never declared it)",
-                    i + 1, name.c_str());
+                    who.c_str(), name.c_str());
         continue;
       }
       if (name.rfind("optimization/", 0) != 0) {
-        log_->warnf("[CHAIN] seg%d override '%s': only optimization/* is "
+        log_->warnf("[CHAIN] %s override '%s': only optimization/* is "
                     "re-read per segment (manager/FSM parameters load at "
                     "startup) — the value will be set but its consumer "
-                    "will not see it this mission", i + 1, name.c_str());
+                    "will not see it this mission", who.c_str(), name.c_str());
       }
       try {
         switch (node_->get_parameter(name).get_type()) {
@@ -1571,18 +1809,29 @@ SegmentChainPlanner::readSegmentOverrides() const
             so.params.emplace_back(name, val);
             break;
           default:
-            log_->warnf("[CHAIN] seg%d override '%s': unsupported parameter "
-                        "type — skipped", i + 1, name.c_str());
+            log_->warnf("[CHAIN] %s override '%s': unsupported parameter "
+                        "type — skipped", who.c_str(), name.c_str());
             continue;
         }
       } catch (const std::exception &e) {
-        log_->warnf("[CHAIN] seg%d override '%s': value parse failed (%s) — "
-                    "skipped", i + 1, spec.c_str(), e.what());
+        log_->warnf("[CHAIN] %s override '%s': value parse failed (%s) — "
+                    "skipped", who.c_str(), spec.c_str(), e.what());
         continue;
       }
       so.label += (so.label.empty() ? "" : ", ") + spec;
     }
   }
+  return so;
+}
+
+std::vector<SegmentChainPlanner::SegmentOverrides>
+SegmentChainPlanner::readSegmentOverrides() const
+{
+  std::vector<SegmentOverrides> out(static_cast<size_t>(segments_));
+  for (int i = 0; i < segments_; ++i)
+    out[static_cast<size_t>(i)] = readOverrideList(
+        "chain/seg" + std::to_string(i + 1) + "/params",
+        "seg" + std::to_string(i + 1));
   return out;
 }
 

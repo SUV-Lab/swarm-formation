@@ -109,6 +109,10 @@ private:
     std::string label;  // "a=b, c=d" for the report; empty = none
   };
   std::vector<SegmentOverrides> readSegmentOverrides() const;
+  // One "name=value" string-array parameter parsed against declared types
+  // (the seg<i> parser, generalized for the phase profiles).
+  SegmentOverrides readOverrideList(const std::string &pname,
+                                    const std::string &who) const;
 
   // [CHAIN-PAR] Route-parallel mode (chain/author_from_route [+
   // chain/parallel]): NO baseline solve. One front-end-only pass commits

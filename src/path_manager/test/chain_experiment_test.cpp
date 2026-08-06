@@ -106,7 +106,8 @@ int main(int argc, char **argv)
        with_tinyturn = false, with_route = false, with_par = false,
        with_auto = false, with_autosmall = false, with_tailfix = false,
        with_tailzero = false, with_tailacc = false, with_exclusive = false,
-       with_phase = false, with_phasefall = false, with_phase2 = false;
+       with_phase = false, with_phasefall = false, with_phase2 = false,
+       with_phaseweight = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -134,6 +135,10 @@ int main(int argc, char **argv)
     if (v == "phase") { with_route = true; with_phase = true; }
     if (v == "phasefall") { with_route = true; with_phase = true; with_phasefall = true; }
     if (v == "phase2") { with_route = true; with_phase = true; with_phase2 = true; }
+    // phaseweight: arrival profile pins max_vel=1.8 (hard-max, whitelisted)
+    // in ROUTE mode — the tail region must actually slow while the middle
+    // cruises, proving per-worker configs reach the cost function.
+    if (v == "phaseweight") { with_route = true; with_phase = true; with_phaseweight = true; }
     if (v == "par") { with_route = true; with_par = true; }
     // twice: plan the SAME mission twice in one process. If the scope-guard
     // restore leaks a segment override, the second BASELINE (always planned
@@ -195,6 +200,9 @@ int main(int argc, char **argv)
           std::vector<std::string>{});
   if (with_auto) force("chain/auto_pieces_per_segment", 6);
   if (with_phase) force("chain/phase/enable", true);
+  if (with_phaseweight)
+    force("chain/phase/arrival/params",
+          std::vector<std::string>{"optimization/max_vel=1.8"});
   if (with_phasefall) force("chain/phase/depart_min_arc_u", 280.0);
   if (with_phase2) force("chain/segments", 2);
   if (with_segdiff) {
@@ -425,6 +433,24 @@ int main(int argc, char **argv)
     expect(std::abs(bt - ct) < 1e-9 &&
                baseline.getPieceNum() == chained.getPieceNum(),
            "route mode stores the chained flight in both slots");
+  }
+  if (with_phaseweight) {
+    const double T = chained.getTotalDuration();
+    double v_end = 0.0, n_end = 0.0, v_mid = 0.0, n_mid = 0.0;
+    for (double tt = std::max(0.0, T - 6.0); tt < T - 1.0; tt += 0.2) {
+      v_end += chained.getVel(tt).norm();
+      n_end += 1.0;
+    }
+    for (double tt = T * 0.4; tt < T * 0.6; tt += 0.2) {
+      v_mid += chained.getVel(tt).norm();
+      n_mid += 1.0;
+    }
+    v_end /= std::max(1.0, n_end);
+    v_mid /= std::max(1.0, n_mid);
+    std::cout << "phaseweight: mid mean " << v_mid << " u/s, tail mean "
+              << v_end << " u/s\n";
+    expect(v_end < 1.9, "arrival profile slows the tail region (< 1.9)");
+    expect(v_mid > 1.95, "cruise region keeps mission speed (> 1.95)");
   }
   if (with_phase && !with_phasefall) {
     expect(pres.outcome == path_manager::PlanOutcome::SUCCESS,
