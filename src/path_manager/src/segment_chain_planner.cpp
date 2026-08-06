@@ -94,7 +94,7 @@ SegmentChainPlanner::SegmentChainPlanner(rclcpp::Node::SharedPtr node,
     : node_(node), pm_(path_manager), log_(log_manager),
       segments_(std::max(2, segments)), inherit_route_(inherit_route) {}
 
-bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
+PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                                const Eigen::Vector3d &start_vel,
                                const Eigen::Vector3d &start_acc,
                                const std::vector<Eigen::Vector3d> &waypoints,
@@ -106,9 +106,14 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     log_->warnf("[CHAIN] %zu waypoints — stage 1 chains single-goal missions "
                 "only, falling back to the single-shot plan", waypoints.size());
     pm_->setStartVelSynthesized(start_vel_synthesized);
-    return pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                               Eigen::Vector3d::Zero(),
-                               Eigen::Vector3d::Zero());
+    if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
+                             Eigen::Vector3d::Zero(),
+                             Eigen::Vector3d::Zero()))
+      return PlanResult::failed("multi-waypoint single-shot plan failed");
+    PlanResult r = PlanResult::success();
+    r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
+              "multi-waypoint mission — chain not attempted");
+    return r;
   }
 
   // [AUTO-N] chain/segments == 0 sizes the split from the mission itself
@@ -174,7 +179,7 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                            Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero())) {
     log_->errorf("[CHAIN] baseline plan failed — nothing to chain, nothing "
                  "to fly");
-    return false;
+    return PlanResult::failed("baseline plan failed");
   }
   const poly_traj::Trajectory baseline = pm_->traj_.local_traj.traj;
   const double T = baseline.getTotalDuration();
@@ -188,7 +193,9 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
     pm_->publishTrajectoryViz(baseline, baseline);
     logFinalEvaluation(baseline, {T}, {"baseline"});
-    return true;
+    // A mission genuinely too small to split IS correctly served by the
+    // baseline — SUCCESS, not a degradation (outcome matrix, frozen).
+    return PlanResult::success();
   };
   if (!resolveAutoSegments(baseline.getPieceNum(), "baseline"))
     return fly_baseline();  // [AUTO-N] mission below the split threshold
@@ -405,7 +412,12 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
       pm_->publishTrajectoryViz(baseline, baseline);
       logFinalEvaluation(baseline, {baseline.getTotalDuration()},
                          {"baseline"});
-      return true;
+      PlanResult r = PlanResult::success();
+      r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
+                "segment " + std::to_string(i + 1) + "/" +
+                    std::to_string(segments_) +
+                    " failed — baseline restored");
+      return r;
     }
     runs.push_back(pm_->traj_.local_traj.traj);
   }
@@ -462,7 +474,7 @@ bool SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
               "(baseline %.1f s), planned in %.1f ms wall",
               segments_, chained.getPieceNum(), chained.getTotalDuration(), T,
               wall_ms);
-  return true;
+  return PlanResult::success();
 }
 
 void SegmentChainPlanner::applyContractJitter(
@@ -719,7 +731,7 @@ bool SegmentChainPlanner::authorContractsFromRoute(
   return true;
 }
 
-bool SegmentChainPlanner::planRouteParallel(
+PlanResult SegmentChainPlanner::planRouteParallel(
     const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
     const Eigen::Vector3d &start_acc,
     const std::vector<Eigen::Vector3d> &waypoints,
@@ -733,12 +745,19 @@ bool SegmentChainPlanner::planRouteParallel(
   };
 
   // Single-shot fallback for anything the route mode cannot author.
-  const auto fallback = [&](const char *why) {
+  // as_degraded=false marks the one caller where single-shot IS the correct
+  // plan (mission below the split threshold), not a repair.
+  const auto fallback = [&](const char *why, bool as_degraded = true) {
     log_->warnf("[CHAIN-PAR] %s — falling back to the single-shot plan", why);
     pm_->setStartVelSynthesized(start_vel_synthesized);
-    return pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                               Eigen::Vector3d::Zero(),
-                               Eigen::Vector3d::Zero());
+    if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
+                             Eigen::Vector3d::Zero(),
+                             Eigen::Vector3d::Zero()))
+      return PlanResult::failed(std::string(why) +
+                                "; single-shot fallback failed too");
+    PlanResult r = PlanResult::success();
+    if (as_degraded) r.degrade(PlanReason::SINGLE_PLAN_FALLBACK, why);
+    return r;
   };
 
   // === 1. front-end only: commit the route (AGL/bbox/SDF/zone binding
@@ -755,13 +774,14 @@ bool SegmentChainPlanner::planRouteParallel(
                            false, false, nullptr, nullptr,
                            /*front_end_only=*/true)) {
     log_->errorf("[CHAIN-PAR] front-end failed — nothing to author on");
-    return false;
+    return PlanResult::failed("front-end failed");
   }
   const std::vector<Eigen::Vector3d> route = pm_->lastCommittedRoute();
   const std::vector<double> cap = pm_->lastCommittedCapRef();
   const double fe_ms = ms_since(t_wall);
   if (!resolveAutoSegments(static_cast<int>(route.size()) - 1, "route"))
-    return fallback("auto-N: mission below the split threshold");
+    return fallback("auto-N: mission below the split threshold",
+                    /*as_degraded=*/false);
 
   // === 2. author contracts + slices on the route ===
   std::vector<Contract> contracts;
@@ -1043,7 +1063,10 @@ bool SegmentChainPlanner::planRouteParallel(
               *std::max_element(solve_ms.begin(), solve_ms.end()),
               ms_since(t_wall), chained.getPieceNum(),
               chained.getTotalDuration());
-  return true;
+  // A merge rescue that dropped no stated requirement stays SUCCESS
+  // (outcome matrix); profile-loss degrades attach at the merge site once
+  // phase profiles exist.
+  return PlanResult::success();
 }
 
 void SegmentChainPlanner::logFinalEvaluation(

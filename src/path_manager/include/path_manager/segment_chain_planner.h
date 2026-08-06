@@ -6,6 +6,7 @@
 #include <Eigen/Eigen>
 #include <rclcpp/rclcpp.hpp>
 #include "path_manager/path_manager.h"
+#include "path_manager/planning_result.h"
 
 namespace path_manager {
 
@@ -59,11 +60,14 @@ public:
   // start_vel_synthesized is forwarded to the baseline run and the first
   // segment ([VEL-ALIGN] applies to both the same way); later segments start
   // from a contract state, which is trajectory-derived and never re-aimed.
-  bool plan(const Eigen::Vector3d &start_pos,
-            const Eigen::Vector3d &start_vel,
-            const Eigen::Vector3d &start_acc,
-            const std::vector<Eigen::Vector3d> &waypoints,
-            bool start_vel_synthesized);
+  // Returns the planner<->FSM contract (planning_result.h): FAILED = do not
+  // fly, SUCCESS = all stated requirements met, DEGRADED = flyable under an
+  // approved relaxation (reason + detail say which).
+  PlanResult plan(const Eigen::Vector3d &start_pos,
+                  const Eigen::Vector3d &start_vel,
+                  const Eigen::Vector3d &start_acc,
+                  const std::vector<Eigen::Vector3d> &waypoints,
+                  bool start_vel_synthesized);
 
   int segments() const { return segments_; }
 
@@ -110,11 +114,11 @@ private:
   // (r4: |a| = 0.002). Segments then solve on per-worker optimizer
   // instances, concurrently when chain/parallel is set. No baseline means
   // no fallback: a failed segment fails the mission plan.
-  bool planRouteParallel(const Eigen::Vector3d &start_pos,
-                         const Eigen::Vector3d &start_vel,
-                         const Eigen::Vector3d &start_acc,
-                         const std::vector<Eigen::Vector3d> &waypoints,
-                         bool start_vel_synthesized, bool run_parallel);
+  PlanResult planRouteParallel(const Eigen::Vector3d &start_pos,
+                               const Eigen::Vector3d &start_vel,
+                               const Eigen::Vector3d &start_acc,
+                               const std::vector<Eigen::Vector3d> &waypoints,
+                               bool start_vel_synthesized, bool run_parallel);
 
   // [STAGE-4] Whole-flight evaluation of the FINAL stitched product — the
   // one artifact no per-solve audit ever sees whole (and the terminal

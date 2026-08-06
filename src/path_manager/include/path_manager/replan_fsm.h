@@ -17,6 +17,7 @@
 #include "mmp_mission_msgs/msg/risk_zone_array.hpp"
 #include "mmp_mission_msgs/msg/risk_zone_spec.hpp"
 #include "path_manager/path_manager.h"
+#include "path_manager/planning_result.h"
 #include "path_manager/segment_chain_planner.h"
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
@@ -182,6 +183,11 @@ private:
     // a failed/rejected plan made an identical retry a "duplicate", silently
     // stranding the mission with no reject signal.
     bool last_plan_succeeded_{false};
+    // [PLAN-OUTCOME] tri-state contract from the planner (planning_result.h):
+    // last_plan_succeeded_ stays the retry/rollback gate; these carry the
+    // "flyable but a requirement was relaxed" distinction a bool cannot.
+    PlanOutcome last_plan_outcome_{PlanOutcome::FAILED};
+    PlanReason last_plan_reason_{PlanReason::NONE};
     std::string current_mission_id_;    // Current mission being executed
     std::string next_mission_id_;       // Next mission to execute
     bool is_final_mission_;             // True if no more missions after current

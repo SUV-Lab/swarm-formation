@@ -765,18 +765,28 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
 
     auto global_traj_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TIMING] Starting global trajectory planning");
-    bool success;
+    PlanResult plan_res;
     if (chain_enable_ && chain_planner_) {
         // [CHAIN] baseline + N chained segment runs; the planner forwards
         // the synthesized flag itself (per-run semantics differ).
-        success = chain_planner_->plan(start_pt_, start_vel_, start_acc_,
-                                       waypoints, start_vel_synthesized_);
+        plan_res = chain_planner_->plan(start_pt_, start_vel_, start_acc_,
+                                        waypoints, start_vel_synthesized_);
     } else {
         path_manager_->setStartVelSynthesized(start_vel_synthesized_);
-        success = path_manager_->planGlobalTraj(
-            start_pt_, start_vel_, start_acc_,
-            waypoints, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+        plan_res = path_manager_->planGlobalTraj(
+                       start_pt_, start_vel_, start_acc_, waypoints,
+                       Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero())
+                       ? PlanResult::success()
+                       : PlanResult::failed("single plan failed");
     }
+    // [PLAN-OUTCOME] the tri-state is the planner contract; the bool below
+    // stays the execution gate (DEGRADED flies, loudly).
+    last_plan_outcome_ = plan_res.outcome;
+    last_plan_reason_ = plan_res.reason;
+    if (plan_res.outcome == PlanOutcome::DEGRADED) {
+        FSM_LOG_WARN("[PLAN] DEGRADED: %s", plan_res.detail.c_str());
+    }
+    const bool success = plan_res.hasTrajectory();
 
     auto global_traj_end = std::chrono::high_resolution_clock::now();
     auto global_traj_duration = std::chrono::duration_cast<std::chrono::milliseconds>(global_traj_end - global_traj_start).count();

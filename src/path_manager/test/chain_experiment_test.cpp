@@ -232,7 +232,8 @@ int main(int argc, char **argv)
   const std::vector<Eigen::Vector3d> goal = {{330.0, 150.0, 1.5}};
 
   const bool ok = chain.plan(start_pos, start_vel, start_acc, goal,
-                             /*start_vel_synthesized=*/true);
+                             /*start_vel_synthesized=*/true)
+                      .hasTrajectory();
   expect(ok, "chained plan returns success");
   if (!ok) {
     rclcpp::shutdown();
@@ -389,7 +390,8 @@ int main(int argc, char **argv)
     const double base1 = bt;
     const int base1_pieces = baseline.getPieceNum();
     const bool ok2 = chain.plan(start_pos, start_vel, start_acc, goal,
-                                /*start_vel_synthesized=*/true);
+                                /*start_vel_synthesized=*/true)
+                         .hasTrajectory();
     expect(ok2, "second plan in the same process succeeds");
     const poly_traj::Trajectory &base2 = pm->traj_.global_traj.traj;
     expect(std::abs(base2.getTotalDuration() - base1) < 1e-9 &&
