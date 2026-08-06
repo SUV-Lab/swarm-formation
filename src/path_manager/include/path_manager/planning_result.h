@@ -36,6 +36,11 @@ enum class PlanReason {
   NONE,
   PHASE_BOUNDARY_FALLBACK,
   SINGLE_PLAN_FALLBACK,
+  // The whole-flight evaluation of the STITCHED product reads worse than
+  // any per-solve audit did — a limit budget the caller is knowingly
+  // spending. Above the fallbacks: "the flight you are getting is hotter
+  // than requested" outranks "you are getting it a different way".
+  STITCHED_ENVELOPE_BUDGET,
   FINAL_BOUNDARY_RELAXED,
   // An EXPLICITLY commanded initial state outside the cruise model's
   // validity region (speed range / flight-path cone). The launch regime

@@ -186,15 +186,22 @@ void SegmentChainPlanner::resetPlanState()
 std::vector<double> SegmentChainPlanner::capAlongRoute(
     const std::vector<Eigen::Vector3d> &route,
     const std::vector<double> &cap,
-    const std::vector<Eigen::Vector3d> &pts) const
+    const std::vector<Eigen::Vector3d> &pts, int upto_vertex) const
 {
   if (cap.size() != route.size() || route.size() < 2 || pts.empty()) return {};
+  // The connector spans start -> handoff, so only the route PREFIX up to
+  // that vertex is a meaningful neighbourhood. Searching the whole route
+  // lets a corridor that doubles back hand a connector point the cap of a
+  // segment it never flies near (review find).
+  size_t last_seg = route.size() - 2;
+  if (upto_vertex > 0)
+    last_seg = std::min(last_seg, static_cast<size_t>(upto_vertex - 1));
   std::vector<double> out;
   out.reserve(pts.size());
   for (const auto &p : pts) {
     double best_d2 = std::numeric_limits<double>::max();
     size_t best_seg = 0;
-    for (size_t i = 0; i + 1 < route.size(); ++i) {
+    for (size_t i = 0; i <= last_seg; ++i) {
       const Eigen::Vector3d &a = route[i];
       const Eigen::Vector3d ab = route[i + 1] - a;
       const double len2 = ab.squaredNorm();
@@ -203,10 +210,27 @@ std::vector<double> SegmentChainPlanner::capAlongRoute(
       const double d2 = (a + u * ab - p).squaredNorm();
       if (d2 < best_d2) { best_d2 = d2; best_seg = i; }
     }
-    // Same "never tighten the ceiling" rule the cut logic uses.
-    out.push_back(std::max(cap[best_seg], cap[best_seg + 1]));
+    // Two rules, both inherited from how the route's own cap is built:
+    //  - never tighten the ceiling at a cut: max of the segment's ends
+    //  - the ceiling is never below the path's OWN altitude (planFrontEnd
+    //    seeds cap_ref from max(raw_z, route z), an invariant every
+    //    route-seeded solve holds). A connector climbs off the route, so
+    //    the sampled value alone can land BELOW the point it is capping —
+    //    which would price the seed's own altitude as a violation.
+    out.push_back(std::max(std::max(cap[best_seg], cap[best_seg + 1]), p.z()));
   }
   return out;
+}
+
+void SegmentChainPlanner::invalidateStoredTrajectory() const
+{
+  // A refused plan must not leave a flyable-looking trajectory behind:
+  // ReplanFSM::planFromGlobalTraj publishes and executes traj_.local_traj
+  // on (duration > 0 && start_time > 0) alone, so a FAILED outcome that
+  // stored one first would be picked up by the next state transition
+  // (review find). Zeroing the two fields it tests is the whole contract.
+  pm_->traj_.local_traj.duration = 0.0;
+  pm_->traj_.local_traj.start_time = 0.0;
 }
 
 PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
@@ -352,8 +376,16 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   const auto t_wall = std::chrono::steady_clock::now();
 
   // === Baseline: the unsplit mission, exactly today's behavior ===
-  log_->infof("[CHAIN] baseline plan (unsplit mission; %d chained segments "
-              "follow)", segments_);
+  // N is not known yet in auto mode — it is sized from THIS solve's piece
+  // count a few lines below. Printing segments_ here announced a number the
+  // plan never used (review find; it only looked right before resetPlanState
+  // because the member still carried the previous mission's resolved N).
+  if (auto_segments_)
+    log_->infof("[CHAIN] baseline plan (unsplit mission; segment count sized "
+                "from its piece count)");
+  else
+    log_->infof("[CHAIN] baseline plan (unsplit mission; %d chained segments "
+                "follow)", segments_);
   pm_->setStartVelSynthesized(start_vel_synthesized);
   if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
                            mission_tail)) {
@@ -639,11 +671,32 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   }
 
   // [STITCH-GATE] Judged before storage — see the route-mode twin: a refused
-  // flight must not reach traj_ or RViz. The baseline slot is left alone too;
-  // in this mode it is the comparison channel for a product we are refusing.
+  // flight must not reach traj_ or RViz.
+  //
+  // Baseline mode differs from route mode in what it can do about it: a
+  // fully solved, per-solve-audited baseline is sitting right here. Killing
+  // the mission while holding a flyable trajectory would contradict this
+  // mode's whole doctrine ("on any segment failure the baseline is restored
+  // and flown"), so an unflyable STITCH degrades onto the baseline instead
+  // of failing (review find). Route mode has no baseline, so there FAILED
+  // is the only honest answer.
   const FlightVerdict fv = evaluateFlight(chained, phase_ends, phase_names);
-  if (fv.unflyable())
-    return stitchedVerdictResult(fv, PlanResult::success());
+  if (fv.unflyable()) {
+    log_->errorf("[STITCH-GATE] stitched flight is unflyable (%s%s) — "
+                 "restoring the baseline",
+                 fv.underground ? "terrain overlap" : "",
+                 fv.no_cruise ? (fv.underground ? ", never reaches cruise"
+                                                : "never reaches cruise")
+                              : "");
+    PlanResult r = fly_baseline();
+    if (r.hasTrajectory())
+      r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
+                "stitched chain failed the whole-flight evaluation — "
+                "baseline flown instead");
+    else
+      invalidateStoredTrajectory();
+    return r;
+  }
 
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
   // GLOBAL slot = the baseline OPTIMIZED trajectory (comparison reference,
@@ -1037,8 +1090,13 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     // scored — a ranking needs a reachability model that does not exist
     // yet (contract 2 §12), so the only knob here is how many the retry
     // ladder may try. Each extra candidate costs a full solve.
-    const size_t max_cand = static_cast<size_t>(std::max(
-        1.0, readNumParam(node_, "chain/phase/max_candidates", 3.0)));
+    // Clamped on BOTH sides: an unclamped huge value (a stray 1e300, or
+    // YAML's .inf) casts to 0 and would silently switch handoff selection
+    // off entirely (review find). 1 means "authored handoff only, no retry"
+    // — the retry ladder starts at candidate index 1.
+    const size_t max_cand = static_cast<size_t>(std::min(
+        16.0, std::max(1.0,
+                       readNumParam(node_, "chain/phase/max_candidates", 3.0))));
     if (segments_ >= 3) {
       for (int i = 1; i + 1 < M && dep_candidates_.size() < max_cand; ++i)
         if (s[static_cast<size_t>(i)] >= depRequired(i) && sustained(i, +1))
@@ -1213,7 +1271,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     // dropped an explicit hard limit would lie exactly like the old tail
     // sentinel did.
     std::map<std::string, double> hardmin;
-    for (const auto &e : eff)
+    const auto collect = [&](const SegmentOverrides &e) {
       for (const auto &pp : e.params) {
         const OvrKey *k = whitelistFind(pp.get_name());
         if (!k || k->tag != OvrTag::kHardMax) continue;
@@ -1222,6 +1280,21 @@ PlanResult SegmentChainPlanner::planRouteParallel(
         if (it == hardmin.end() || v < it->second)
           hardmin[pp.get_name()] = v;
       }
+    };
+    if (!eff.empty()) {
+      for (const auto &e : eff) collect(e);
+    } else {
+      // [PHASE] The EARLY fallbacks (front-end failure, auto-N below the
+      // split threshold) run before eff is built, so scanning eff alone
+      // preserved nothing and the direct plan quietly flew past an operator's
+      // hard limit — the exact lie this preservation exists to prevent
+      // (review find). Read the declared profiles directly instead.
+      collect(readOverrideList("chain/phase/departure/params",
+                               "phase-departure"));
+      collect(readOverrideList("chain/phase/cruise/params", "phase-cruise"));
+      collect(readOverrideList("chain/phase/arrival/params", "phase-arrival"));
+      for (const auto &so : readSegmentOverrides()) collect(so);
+    }
     ScopedMissionParams fguard(node_, log_);
     if (!hardmin.empty()) {
       try {
@@ -1262,7 +1335,11 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     // before, fail -> FAILED(DIRECT_FALLBACK_UNSAFE). "No phase labels"
     // must never mean "no gate".
     if (readNumParam(node_, "chain/phase/enable", 0.0) != 0.0) {
-      const poly_traj::Trajectory &fly = pm_->traj_.global_traj.traj;
+      // The LOCAL slot carries the optimized trajectory that is actually
+      // flown; the global slot is the pre-L-BFGS seed (path_manager.cpp
+      // stores out_global there as the comparison channel). Judging the
+      // seed would gate on a trajectory nobody flies — review find.
+      const poly_traj::Trajectory &fly = pm_->traj_.local_traj.traj;
       const FlightVerdict fv = evaluateFlight(
           fly, {fly.getTotalDuration()}, {"direct"});
       // Fail-CLOSED (review find): a flight the evaluator could not judge
@@ -1283,6 +1360,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
                    fv.viol_pct, 100.0 * fv.util_peak);
         }
         log_->errorf("[ENVELOPE] %s — FAILED (DIRECT_FALLBACK_UNSAFE)", why2);
+        invalidateStoredTrajectory();
         return PlanResult::failedBecause(
             PlanReason::DIRECT_FALLBACK_UNSAFE,
             std::string(why) + "; " + why2);
@@ -1650,7 +1728,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
             // own — sample one off the route (review find: an empty cap
             // silently demoted this solve to the scalar altitude band while
             // every route-seeded solve used the arc-varying one).
-            edge_cap = capAlongRoute(route, cap, edge_path);
+            edge_cap = capAlongRoute(route, cap, edge_path, c);
           } else {
             edge_path = ns.back().path;
             edge_cap = ns.back().cap;
@@ -1973,6 +2051,10 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
                                             : "never reaches cruise")
                           : "");
     log_->errorf("[STITCH-GATE] %s", why);
+    // Nothing stored on this path today, but the guarantee has to hold for
+    // every caller — an earlier stage (baseline solve, direct fallback) may
+    // already have left a trajectory in traj_.
+    invalidateStoredTrajectory();
     return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
   }
   if (fv.evaluated && !fv.clean) {
@@ -1983,7 +2065,7 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
              "any per-solve audit saw",
              fv.viol_pct, 100.0 * fv.util_peak);
     log_->warnf("[STITCH-GATE] %s", why);
-    ok_result.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK, why);
+    ok_result.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET, why);
   }
   return ok_result;
 }

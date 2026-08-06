@@ -242,10 +242,17 @@ private:
   // applies at a cut — an empty cap makes the solver fall back to the
   // scalar altitude band, so a connector solve would be judged under a
   // different altitude regime than every route-seeded solve (review find).
+  // upto_vertex > 0 limits the search to the route prefix ending at that
+  // vertex (the connector's handoff) — a corridor that doubles back would
+  // otherwise donate a far segment's ceiling to a nearby connector point.
   std::vector<double> capAlongRoute(
       const std::vector<Eigen::Vector3d> &route,
       const std::vector<double> &cap,
-      const std::vector<Eigen::Vector3d> &pts) const;
+      const std::vector<Eigen::Vector3d> &pts,
+      int upto_vertex = -1) const;
+  // Zeroes the fields ReplanFSM tests before executing a stored trajectory.
+  // Called on every FAILED exit that ran after the product was stored.
+  void invalidateStoredTrajectory() const;
   // Clears every per-plan member so nothing survives into the next mission
   // (review find: segments_ is decremented mid-plan by the merge ladder and
   // the phase blackboard is only reset on the phase-enabled path).
