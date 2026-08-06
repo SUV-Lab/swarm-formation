@@ -64,15 +64,23 @@ public:
   // fly, SUCCESS = all stated requirements met, DEGRADED = flyable under an
   // approved relaxation (reason + detail say which).
   // mission_tail: the mission's FINAL boundary ([PHASE]). Validated once
-  // at this entry (stall floor, finiteness); invalid without the
-  // planning/allow_final_boundary_relaxation opt-in fails the plan.
+  // at this entry (shared envelope validator, finiteness); invalid without
+  // the planning/allow_final_boundary_relaxation opt-in fails the plan.
+  // start_vel_commanded ([ENVELOPE], contract 1): the start velocity is an
+  // EXPLICIT operator input (use_initial_velocity / test injection), not a
+  // synthesized or trajectory-derived state. Commanded inputs are validated
+  // against the cruise envelope at this entry — outside it the plan FAILS
+  // (INITIAL_MODE_UNSUPPORTED) before the front end or any optimizer runs;
+  // they are never clamped. Non-commanded starts keep the [STALL-FLOOR]
+  // clamp doctrine (our own proxy states may be repaired, inputs may not).
   PlanResult plan(const Eigen::Vector3d &start_pos,
                   const Eigen::Vector3d &start_vel,
                   const Eigen::Vector3d &start_acc,
                   const std::vector<Eigen::Vector3d> &waypoints,
                   bool start_vel_synthesized,
                   const ego_planner::TailBoundary &mission_tail =
-                      ego_planner::TailBoundary{});
+                      ego_planner::TailBoundary{},
+                  bool start_vel_commanded = false);
 
   int segments() const { return segments_; }
 
@@ -144,12 +152,22 @@ private:
   // phase not at all): terrain clearance, flight-envelope utilization
   // (shared mmp_vehicle_dynamics model) and OR-combined risk exposure,
   // sampled at 10 Hz, per phase and total, ending in a CLEAN/CHECK
-  // verdict line. Informational, never a gate: publication already
-  // happened under the per-solve audits; this block is where the stitched
-  // flight's remaining blind spots become visible.
-  void logFinalEvaluation(const poly_traj::Trajectory &flight,
-                          const std::vector<double> &phase_ends,
-                          const std::vector<std::string> &phase_names) const;
+  // verdict line. For the stitched chain it stays informational
+  // (publication already happened under the per-solve audits); the
+  // RETURNED verdict is the phase-mode direct-fallback acceptance gate
+  // (contract 1) — the one product that never met a whole-flight audit.
+  struct FlightVerdict {
+    bool evaluated{false};  // false: degenerate input, nothing was judged
+    bool clean{true};
+    bool underground{false};
+    bool no_cruise{false};
+    double viol_pct{0.0};
+    double util_peak{0.0};
+  };
+  FlightVerdict logFinalEvaluation(
+      const poly_traj::Trajectory &flight,
+      const std::vector<double> &phase_ends,
+      const std::vector<std::string> &phase_names) const;
 
   // [STAGE-3] Optional PRESCRIBED terminal phase (chain/terminal/enable):
   // a helix descent of genuinely different character — analytic geometry,

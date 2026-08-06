@@ -168,14 +168,37 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                                      const Eigen::Vector3d &start_acc,
                                      const std::vector<Eigen::Vector3d> &waypoints,
                                      bool start_vel_synthesized,
-                                     const ego_planner::TailBoundary &mission_tail)
+                                     const ego_planner::TailBoundary &mission_tail,
+                                     bool start_vel_commanded)
 {
+  // [ENVELOPE] Contract 1 (2026-08-08): an EXPLICITLY commanded initial
+  // velocity outside the cruise model's validity region is rejected HERE,
+  // before the front end or any optimizer runs. No clamp — rewriting an
+  // operator's stated launch state into a different flyable one is how a
+  // 549 u worm once flew as "SUCCESS". The launch/transition regime is
+  // contract 2 (a transition planner with its own limit set), not a special
+  // case of this one. Synthesized/trajectory-derived starts are our own
+  // states and keep the [STALL-FLOOR] clamp doctrine.
+  if (start_vel_commanded) {
+    const std::string prob = pm_->stateEnvelopeProblem(start_vel);
+    if (!prob.empty()) {
+      log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s — the "
+                   "launch/transition regime is outside this planner's "
+                   "envelope (INITIAL_MODE_UNSUPPORTED)", prob.c_str());
+      return PlanResult::failedBecause(
+          PlanReason::INITIAL_MODE_UNSUPPORTED,
+          "initial state unsupported: " + prob);
+    }
+  }
   // [PHASE] Final-boundary validation happens ONCE, here — every exit of
   // planImpl (workers, merge retry, fallbacks, baseline restore) receives
   // the validated tail, so an unmet stated requirement can never leave as
   // a plain success. Frozen policy: invalid + no opt-in -> FAILED; invalid
   // + planning/allow_final_boundary_relaxation -> plan without the tail and
-  // return DEGRADED(FINAL_BOUNDARY_RELAXED).
+  // return DEGRADED(FINAL_BOUNDARY_RELAXED). Same envelope validator as the
+  // initial state: a terminal state the model cannot fly (sub-stall, above
+  // max speed, outside the flight-path cone) is prescribed like the launch
+  // phase — outside the region, not plannable.
   ego_planner::TailBoundary eff = mission_tail;
   bool relaxed = false;
   std::string relax_why;
@@ -184,12 +207,9 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     if (!mission_tail.allFinite()) {
       problem = "non-finite final boundary";
     } else if (mission_tail.prescribe_vel) {
-      const double floor_u = pm_->stallFloorUnits();
-      if (mission_tail.vel.norm() < floor_u)
-        problem = "final speed " + std::to_string(mission_tail.vel.norm()) +
-                  " u/s below the stall floor " + std::to_string(floor_u) +
-                  " u/s (a fixed-wing terminal state below stall is outside "
-                  "the model, like the launch phase)";
+      const std::string ep = pm_->stateEnvelopeProblem(mission_tail.vel);
+      if (!ep.empty())
+        problem = "final velocity outside the cruise validity region: " + ep;
     }
     if (!problem.empty()) {
       const bool allow =
@@ -1172,6 +1192,31 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     if (!fb_ok)
       return PlanResult::failed(std::string(why) +
                                 "; single-shot fallback failed too");
+    // [ENVELOPE] Contract 1 (2026-08-08): a phase-mode direct fallback is
+    // the one product that never meets a whole-flight audit (the stitched
+    // chain gets [FINAL-EVAL]; this path returns before it). Within-envelope
+    // inputs can still produce an unflyable direct solve — the worm's honest
+    // sibling — so the SAME fitness evaluation gates it: pass -> DEGRADED as
+    // before, fail -> FAILED(DIRECT_FALLBACK_UNSAFE). "No phase labels"
+    // must never mean "no gate".
+    if (readNumParam(node_, "chain/phase/enable", 0.0) != 0.0) {
+      const poly_traj::Trajectory &fly = pm_->traj_.global_traj.traj;
+      const FlightVerdict fv = logFinalEvaluation(
+          fly, {fly.getTotalDuration()}, {"direct"});
+      if (fv.evaluated && !fv.clean) {
+        char why2[192];
+        snprintf(why2, sizeof why2,
+                 "direct fallback failed the flight fitness gate (%s%senv "
+                 "viol %.1f%%, peak %.1f%%)",
+                 fv.underground ? "terrain overlap, " : "",
+                 fv.no_cruise ? "never reaches cruise, " : "",
+                 fv.viol_pct, 100.0 * fv.util_peak);
+        log_->errorf("[ENVELOPE] %s — FAILED (DIRECT_FALLBACK_UNSAFE)", why2);
+        return PlanResult::failedBecause(
+            PlanReason::DIRECT_FALLBACK_UNSAFE,
+            std::string(why) + "; " + why2);
+      }
+    }
     PlanResult r = PlanResult::success();
     if (as_degraded) r.degrade(PlanReason::SINGLE_PLAN_FALLBACK, why);
     if (!hardmin.empty())
@@ -1796,7 +1841,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   return result;
 }
 
-void SegmentChainPlanner::logFinalEvaluation(
+SegmentChainPlanner::FlightVerdict SegmentChainPlanner::logFinalEvaluation(
     const poly_traj::Trajectory &flight,
     const std::vector<double> &phase_ends,
     const std::vector<std::string> &phase_names) const
@@ -1804,7 +1849,7 @@ void SegmentChainPlanner::logFinalEvaluation(
   const double T = flight.getTotalDuration();
   if (T <= 1e-9 || phase_ends.empty() ||
       phase_ends.size() != phase_names.size())
-    return;
+    return {};
 
   const mmp_vehicle_dynamics::Parameters *dyn = pm_->dynamicsParams();
   const auto param_or = [&](const char *n, double def) {
@@ -1956,6 +2001,14 @@ void SegmentChainPlanner::logFinalEvaluation(
                 !no_cruise && viol_pct >= viol_max_pct ? "ENVELOPE " : "",
                 tot.min_agl, tot.min_agl_t, viol_pct);
   }
+  FlightVerdict v;
+  v.evaluated = true;
+  v.clean = clean;
+  v.underground = tot.n_below_ground != 0;
+  v.no_cruise = no_cruise;
+  v.viol_pct = viol_pct;
+  v.util_peak = tot.util_peak;
+  return v;
 }
 
 poly_traj::Trajectory SegmentChainPlanner::appendTerminalPhase(

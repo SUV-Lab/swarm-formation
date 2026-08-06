@@ -154,6 +154,13 @@ private:
     // synthesized velocity onto the route's actual initial direction
     // ([VEL-ALIGN]); explicit vectors are never touched.
     bool start_vel_synthesized_{false};
+    // [ENVELOPE] True when start_vel_ is an EXPLICIT operator input
+    // (use_initial_velocity vector or test injection). Commanded starts are
+    // envelope-validated at plan entry (contract 1: outside the cruise
+    // validity region -> FAILED(INITIAL_MODE_UNSUPPORTED), never clamped);
+    // synthesized and trajectory-derived starts are not inputs and keep the
+    // [STALL-FLOOR] clamp doctrine.
+    bool start_vel_commanded_{false};
     Eigen::Vector3d commanded_initial_velocity_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d commanded_initial_acceleration_{Eigen::Vector3d::Zero()};
 

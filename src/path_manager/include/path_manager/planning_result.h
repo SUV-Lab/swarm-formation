@@ -28,11 +28,24 @@ enum class PlanOutcome { FAILED, SUCCESS, DEGRADED };
 // Single reason, priority-ordered (higher wins when several apply):
 //   FINAL_BOUNDARY_RELAXED > SINGLE_PLAN_FALLBACK > PHASE_BOUNDARY_FALLBACK
 // `detail` carries the full story when reasons stack.
+//
+// The last two are FAILED-only (contract 1, 2026-08-08): they name WHY no
+// trajectory exists, not what was traded for one. They never enter the
+// degrade ladder — degrade() cannot run on a FAILED result.
 enum class PlanReason {
   NONE,
   PHASE_BOUNDARY_FALLBACK,
   SINGLE_PLAN_FALLBACK,
   FINAL_BOUNDARY_RELAXED,
+  // An EXPLICITLY commanded initial state outside the cruise model's
+  // validity region (speed range / flight-path cone). The launch regime
+  // needs a transition planner (contract 2), not a clamp: rewriting the
+  // operator's stated start into a different flyable one is a lie.
+  INITIAL_MODE_UNSUPPORTED,
+  // A phase-mode direct fallback that failed the whole-flight fitness gate
+  // (the same evaluation the stitched chain gets). "No phase labels" must
+  // never mean "no audit".
+  DIRECT_FALLBACK_UNSAFE,
 };
 
 struct PlanResult {
@@ -46,6 +59,11 @@ struct PlanResult {
   static PlanResult failed(std::string why)
   {
     return {PlanOutcome::FAILED, PlanReason::NONE, std::move(why)};
+  }
+  // FAILED with a machine-readable cause (the FAILED-only reasons above).
+  static PlanResult failedBecause(PlanReason r, std::string why)
+  {
+    return {PlanOutcome::FAILED, r, std::move(why)};
   }
   // Priority-respecting degrade accumulator: outcome drops to DEGRADED,
   // the strongest reason wins, details concatenate.

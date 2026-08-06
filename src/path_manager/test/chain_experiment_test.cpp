@@ -108,7 +108,9 @@ int main(int argc, char **argv)
        with_tailzero = false, with_tailacc = false, with_exclusive = false,
        with_phase = false, with_phasefall = false, with_phase2 = false,
        with_phaseweight = false, with_mergetail = false, with_failtail = false,
-       with_depedge = false, with_arredge = false, with_departop = false;
+       with_depedge = false, with_arredge = false, with_departop = false,
+       with_initfail = false, with_initok = false, with_synthclamp = false,
+       with_unsafedirect = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -186,6 +188,20 @@ int main(int argc, char **argv)
     if (v == "exclusive") { with_tailfix = true; with_exclusive = true; }
     if (v == "tailzero") with_tailzero = true;
     if (v == "tailacc") with_tailacc = true;
+    // [ENVELOPE] contract-1 entry-validation variants. initfail: commanded
+    // initial velocity OUTSIDE the validity cone (γ = 32° > 30°) — must
+    // FAIL(INITIAL_MODE_UNSUPPORTED) at plan entry with NO front-end or
+    // optimizer work (proven by the armed fault injection staying armed).
+    // initok: same shape at γ = 7° — proceeds normally through the phase
+    // machinery. synthclamp: SYNTHESIZED sub-floor start keeps the
+    // [STALL-FLOOR] clamp (no envelope reject — the floor repairs OUR proxy
+    // states, never operator inputs). unsafedirect: the phase-mode direct
+    // fallback vs the flight fitness gate — passes under the default budget
+    // (DEGRADED), FAILS(DIRECT_FALLBACK_UNSAFE) under an impossible one.
+    if (v == "initfail") { with_route = true; with_phase = true; with_initfail = true; }
+    if (v == "initok") { with_route = true; with_phase = true; with_initok = true; }
+    if (v == "synthclamp") { with_route = true; with_autosmall = true; with_synthclamp = true; }
+    if (v == "unsafedirect") { with_route = true; with_autosmall = true; with_phase = true; with_unsafedirect = true; }
   }
   if (with_tinyturn) with_terminal = true;
 
@@ -215,9 +231,17 @@ int main(int argc, char **argv)
     force("chain/seg" + std::to_string(i) + "/params",
           std::vector<std::string>{});
   if (with_auto) force("chain/auto_pieces_per_segment", 6);
-  if (with_phase) force("chain/phase/enable", true);
+  // Forced BOTH ways: the live yaml ships chain/phase/enable true, and a
+  // non-phase variant picking it up would route its direct fallback through
+  // the phase-mode fitness gate (observed: synthclamp's clamped-floor flight
+  // gated FAILED at 765% thrust peak instead of pinning the clamp doctrine).
+  force("chain/phase/enable", with_phase);
   if (with_depedge) force("chain/jitter/fail_segment", 1);
   if (with_arredge) force("chain/jitter/fail_segment", 3);
+  // initfail arms all-worker failure injection as a tripwire: entry
+  // validation must exit BEFORE the worker stage that consumes (and resets)
+  // it, so the parameter still reads -1 after the plan.
+  if (with_initfail) force("chain/jitter/fail_segment", -1);
   if (with_mergetail) force("chain/jitter/fail_segment", 3);
   if (with_failtail) force("chain/jitter/fail_segment", -1);
   if (with_phaseweight)
@@ -323,10 +347,85 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_initfail) {
+    // [0, -160, 100] m/s in units: speed 188.7 m/s IN range, γ = 32° OUT of
+    // the ±30° cone — the r5 defect input. Must fail at plan entry: reason
+    // set, no trajectory, and the armed fault injection untouched (nothing
+    // downstream of validation ever ran).
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, Eigen::Vector3d(0.0, -1.6, 1.0), start_acc,
+                   goal, /*start_vel_synthesized=*/false, {},
+                   /*start_vel_commanded=*/true);
+    expect(!r.hasTrajectory(),
+           "out-of-cone commanded initial state FAILED (no trajectory)");
+    expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "reason is INITIAL_MODE_UNSUPPORTED");
+    expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
+           "fault injection still armed — no front-end/optimizer work ran");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_synthclamp) {
+    // Synthesized 50 m/s start (floor ≈ 130 m/s): the [STALL-FLOOR] clamp
+    // repairs it and the too-small mission flies single-shot as SUCCESS —
+    // proving the envelope gate never fires on non-commanded starts.
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc,
+                   goal, /*start_vel_synthesized=*/true, {});
+    expect(r.hasTrajectory(),
+           "synthesized sub-floor start still plans (clamped, not rejected)");
+    expect(r.outcome == path_manager::PlanOutcome::SUCCESS,
+           "single-shot on a below-threshold mission stays SUCCESS");
+    expect(r.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "no INITIAL_MODE_UNSUPPORTED misclassification");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_unsafedirect) {
+    // Phase requested on a below-threshold mission -> direct fallback. Under
+    // the default budget the SAME flight passes the fitness gate and reports
+    // DEGRADED; under an impossible peak budget (1%) it must be REFUSED —
+    // FAILED(DIRECT_FALLBACK_UNSAFE), never handed to the FSM.
+    const path_manager::PlanResult r1 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r1.hasTrajectory(),
+           "phase-mode direct fallback flies under the default gate");
+    expect(r1.outcome == path_manager::PlanOutcome::DEGRADED,
+           "direct fallback reports DEGRADED");
+    force("optimization/audit_envelope_peak_max", 0.01);
+    const path_manager::PlanResult r2 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(!r2.hasTrajectory(), "unsafe direct fallback FAILED, not flown");
+    expect(r2.reason == path_manager::PlanReason::DIRECT_FALLBACK_UNSAFE,
+           "reason is DIRECT_FALLBACK_UNSAFE");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_departop) start_vel = Eigen::Vector3d(-1.55, 0.41, 0.0);
+  // initok: the r5 defect DIRECTION at a lawful γ = 7° (speed 161 m/s) —
+  // commanded, so it passes the SAME gate that kills initfail, then the
+  // standard flow (junction audit included) must hold. departop doubles as
+  // the reverse-horizontal case: 160 m/s level opposite the route is IN the
+  // envelope and must never be misclassified as INITIAL_MODE_UNSUPPORTED.
+  if (with_initok) start_vel = Eigen::Vector3d(0.0, -1.6, 0.2);
+  const bool vel_commanded = with_departop || with_initok;
   const path_manager::PlanResult pres =
       chain.plan(start_pos, start_vel, start_acc, goal,
-                 /*start_vel_synthesized=*/!with_departop, mtail);
+                 /*start_vel_synthesized=*/!vel_commanded, mtail,
+                 vel_commanded);
+  if (vel_commanded)
+    expect(pres.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "within-envelope commanded start not misclassified as "
+           "INITIAL_MODE_UNSUPPORTED");
   const bool ok = pres.hasTrajectory();
   expect(ok, "chained plan returns success");
   if (!ok) {
@@ -479,9 +578,16 @@ int main(int argc, char **argv)
     expect(v_end < 1.9, "arrival profile slows the tail region (< 1.9)");
     expect(v_mid > 1.95, "cruise region keeps mission speed (> 1.95)");
   }
-  if (with_phase && !with_phasefall && !with_departop) {
+  if (with_phase && !with_phasefall && !with_departop && !with_initok) {
     expect(pres.outcome == path_manager::PlanOutcome::SUCCESS,
            "phase handoffs pinned — SUCCESS, no degrade");
+  }
+  if (with_initok) {
+    // The commanded start disagrees with the route heading, so the plan may
+    // legitimately land on the connector rescue or the (gated) direct
+    // fallback — the regression pins "proceeds", not the exact outcome.
+    expect(pres.outcome != path_manager::PlanOutcome::FAILED,
+           "lawful commanded start (γ = 7°): plan exists");
   }
   if (with_departop) {
     expect(pres.outcome != path_manager::PlanOutcome::FAILED,

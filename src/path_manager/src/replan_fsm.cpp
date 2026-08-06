@@ -568,6 +568,7 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_vel_ = theoretical_vel;
         start_acc_ = theoretical_acc;
         start_vel_synthesized_ = false;  // trajectory-derived: real motion state
+        start_vel_commanded_ = false;    // not an operator input
 
         double pos_error = (current_pos_ - theoretical_pos).norm();
         log_manager_->infof("Formation change - using TRAJECTORY position/vel/acc (error from actual: %.2fm)",
@@ -579,11 +580,13 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_pt_ = current_pos_;
         start_vel_.setZero();
         start_vel_synthesized_ = false;
+        start_vel_commanded_ = false;
         // Provenance tag for the log below: the derived first-leg velocity
         // was repeatedly misread as an applied use_initial_velocity vector.
         const char *vel_src = "rest (zero)";
         if (use_commanded_initial_velocity_) {
             start_vel_ = commanded_initial_velocity_;
+            start_vel_commanded_ = true;
             vel_src = "commanded vector (use_initial_velocity)";
         } else if (commanded_initial_speed_ > 0.0) {
             // Aim the initial velocity along the FIRST ROUTE LEG, not the
@@ -641,6 +644,7 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_vel_ = inject_init_vel_;
         start_acc_ = inject_init_acc_;
         start_vel_synthesized_ = false;  // injected = explicit, never re-aim
+        start_vel_commanded_ = true;     // explicit input: envelope-validated
         log_manager_->infof("[TEST] Injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
                    start_vel_(0), start_vel_(1), start_vel_(2),
                    start_acc_(0), start_acc_(1), start_acc_(2));
@@ -768,25 +772,43 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     PlanResult plan_res;
     if (chain_enable_ && chain_planner_) {
         // [CHAIN] baseline + N chained segment runs; the planner forwards
-        // the synthesized flag itself (per-run semantics differ).
+        // the synthesized flag itself (per-run semantics differ) and
+        // envelope-validates a commanded start at its entry ([ENVELOPE]).
         plan_res = chain_planner_->plan(start_pt_, start_vel_, start_acc_,
                                         waypoints, start_vel_synthesized_,
-                                        mission_tail_);
+                                        mission_tail_, start_vel_commanded_);
     } else {
-        // [PHASE] The single path validates the final boundary HERE (the
-        // chain planner validates inside plan()) — same frozen policy:
-        // invalid without the opt-in fails, the opt-in relaxes + degrades.
+        // [PHASE] The single path validates the boundaries HERE (the chain
+        // planner validates inside plan()) — same frozen policy: a
+        // commanded initial state outside the envelope fails before any
+        // planning (contract 1, never clamped); an invalid final boundary
+        // without the opt-in fails, the opt-in relaxes + degrades.
         ego_planner::TailBoundary eff_tail = mission_tail_;
+        bool head_rejected = false;
         bool tail_rejected = false, relaxed = false;
         std::string relax_why;
-        if (mission_tail_.anyPrescribed()) {
+        if (start_vel_commanded_) {
+            const std::string prob =
+                path_manager_->stateEnvelopeProblem(start_vel_);
+            if (!prob.empty()) {
+                FSM_LOG_ERROR("[ENVELOPE] commanded initial state REJECTED: "
+                              "%s (INITIAL_MODE_UNSUPPORTED)", prob.c_str());
+                head_rejected = true;
+                plan_res = PlanResult::failedBecause(
+                    PlanReason::INITIAL_MODE_UNSUPPORTED,
+                    "initial state unsupported: " + prob);
+            }
+        }
+        if (!head_rejected && mission_tail_.anyPrescribed()) {
             std::string problem;
             if (!mission_tail_.allFinite()) {
                 problem = "non-finite final boundary";
-            } else if (mission_tail_.prescribe_vel &&
-                       mission_tail_.vel.norm() <
-                           path_manager_->stallFloorUnits()) {
-                problem = "final speed below the stall floor";
+            } else if (mission_tail_.prescribe_vel) {
+                const std::string ep =
+                    path_manager_->stateEnvelopeProblem(mission_tail_.vel);
+                if (!ep.empty())
+                    problem = "final velocity outside the cruise validity "
+                              "region: " + ep;
             }
             if (!problem.empty()) {
                 bool allow = false;
@@ -810,7 +832,7 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
                 }
             }
         }
-        if (!tail_rejected) {
+        if (!head_rejected && !tail_rejected) {
             path_manager_->setStartVelSynthesized(start_vel_synthesized_);
             plan_res = path_manager_->planGlobalTraj(
                            start_pt_, start_vel_, start_acc_, waypoints,
@@ -828,6 +850,9 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     last_plan_reason_ = plan_res.reason;
     if (plan_res.outcome == PlanOutcome::DEGRADED) {
         FSM_LOG_WARN("[PLAN] DEGRADED: %s", plan_res.detail.c_str());
+    } else if (plan_res.outcome == PlanOutcome::FAILED &&
+               !plan_res.detail.empty()) {
+        FSM_LOG_ERROR("[PLAN] FAILED: %s", plan_res.detail.c_str());
     }
     const bool success = plan_res.hasTrajectory();
 

@@ -320,6 +320,15 @@ namespace path_manager
         return poly_traj_opt_ ? poly_traj_opt_->dynamicsMinSpeedFloorUnits()
                               : 0.0;
     }
+    // [ENVELOPE] Contract 1 (2026-08-08): is this VELOCITY (planner units)
+    // inside the cruise model's validity region? Empty string = yes;
+    // otherwise a human-readable problem in m/s / degrees. ONE region
+    // definition — speed within [stall floor, model max], flight-path angle
+    // within the model's cone — shared by the explicit-initial-state gate
+    // and the final-boundary validation, so "outside the envelope" cannot
+    // mean two different things at the two ends of the mission. Dynamics
+    // model off = no region to violate = always empty.
+    std::string stateEnvelopeProblem(const Eigen::Vector3d &vel_units) const;
     int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
 
     // [CHAIN] committed front-end products of the most recent plan, retained

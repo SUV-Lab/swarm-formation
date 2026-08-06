@@ -573,6 +573,49 @@ namespace path_manager
         }
     }
 
+    std::string PathManager::stateEnvelopeProblem(
+        const Eigen::Vector3d &vel_units) const
+    {
+        if (!poly_traj_opt_ || !poly_traj_opt_->dynamicsEnabled()) return {};
+        if (!vel_units.allFinite()) return "non-finite velocity";
+        const auto unit = [&](const char *n, double def) {
+            return node_->has_parameter(n) ? node_->get_parameter(n).as_double()
+                                           : def;
+        };
+        const double um_xy = unit("optimization/dynamics_unit_xy_m", 100.0);
+        const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
+        const double vh = std::hypot(vel_units.x() * um_xy,
+                                     vel_units.y() * um_xy);
+        const double vz = vel_units.z() * um_z;
+        const double vm = std::hypot(vh, vz);
+        const auto &dyn = poly_traj_opt_->dynamicsParams();
+        const double floor_mps =
+            poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy;
+        char buf[160];
+        if (vm < floor_mps) {
+            snprintf(buf, sizeof buf,
+                     "speed %.1f m/s below the stall floor %.1f m/s", vm,
+                     floor_mps);
+            return buf;
+        }
+        if (vm > dyn.speed_max_mps) {
+            snprintf(buf, sizeof buf,
+                     "speed %.1f m/s above the model maximum %.1f m/s", vm,
+                     dyn.speed_max_mps);
+            return buf;
+        }
+        const double gamma = std::atan2(std::abs(vz), vh);
+        if (gamma > dyn.flight_path_angle_max_rad) {
+            snprintf(buf, sizeof buf,
+                     "flight path angle %.1f deg outside the +/-%.1f deg "
+                     "validity cone",
+                     gamma * 180.0 / M_PI,
+                     dyn.flight_path_angle_max_rad * 180.0 / M_PI);
+            return buf;
+        }
+        return {};
+    }
+
     bool PathManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                                      const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
                                      const ego_planner::TailBoundary &tail,
