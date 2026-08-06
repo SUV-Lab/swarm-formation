@@ -492,7 +492,14 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   for (size_t i = 0; i < runs.size(); ++i) {
     acc_t += runs[i].getTotalDuration();
     phase_ends.push_back(acc_t);
-    phase_names.push_back("seg" + std::to_string(i + 1));
+    if (phase_applied_) {
+      phase_names.push_back(i == 0 ? "departure"
+                            : i + 1 == runs.size()
+                                ? "arrival"
+                                : "cruise-" + std::to_string(i));
+    } else {
+      phase_names.push_back("seg" + std::to_string(i + 1));
+    }
   }
   const double t_pre_terminal = chained.getTotalDuration();
   const poly_traj::Trajectory term =
@@ -710,16 +717,132 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     kappa[static_cast<size_t>(i)] = std::acos(c) / (0.5 * (la + lb));
   }
 
+  // [PHASE] Departure/arrival handoff selection (frozen v4 rules). All
+  // thresholds are ARC-based — vertex counts depend on sampling density.
+  // N>=3: pin junction 1 (first sustained-calm vertex past the departure
+  // arc) and junction N-1 (last sustained-calm vertex before the arrival
+  // arc); middles balance between them. N==2: ONE junction serves both
+  // handoffs — the calmest vertex whose calm window holds in BOTH
+  // directions. Candidates missing => keep today's balanced junctions and
+  // report a phase-semantic degrade (never re-split: N stays).
+  phase_note_.clear();
+  phase_applied_ = false;
+  int dep_idx = -1, arr_idx = -1;
+  const bool phase_on =
+      readNumParam(node_, "chain/phase/enable", 0.0) != 0.0;
+  if (phase_on) {
+    const double dep_min =
+        readNumParam(node_, "chain/phase/depart_min_arc_u", 30.0);
+    const double arr_min =
+        readNumParam(node_, "chain/phase/arrive_min_arc_u", 30.0);
+    const double cruise_min =
+        readNumParam(node_, "chain/phase/min_cruise_arc_u", 60.0);
+    const double win = readNumParam(node_, "chain/phase/calm_window_u", 40.0);
+    const double kcalm = readNumParam(node_, "chain/phase/kappa_calm", 0.01);
+    const double gmax =
+        readNumParam(node_, "chain/phase/grade_frac", 0.5) * tan_grade_max;
+    const auto vertexCalm = [&](int k) {
+      if (kappa[static_cast<size_t>(k)] > kcalm) return false;
+      const int km = std::max(0, k - 1), kp = std::min(M - 1, k + 1);
+      const double hxy = (route[kp] - route[km]).head<2>().norm();
+      const double gr =
+          hxy > 1e-9 ? std::abs(route[kp].z() - route[km].z()) / hxy : 1e3;
+      if (gr > gmax) return false;
+      return !nearRiskZone(route[k]);
+    };
+    const auto sustained = [&](int i, int dir) {  // +1 fwd, -1 back, 0 both
+      const auto leg = [&](int step) {
+        double acc = 0.0;
+        for (int k = i; k >= 1 && k + 1 < M; k += step) {
+          if (!vertexCalm(k)) return false;
+          acc += (route[k + 1] - route[k]).norm();
+          if (acc >= win) return true;
+        }
+        return true;  // window truncated by the route end — accept
+      };
+      if (dir >= 0 && !leg(+1)) return false;
+      if (dir <= 0 && !leg(-1)) return false;
+      return true;
+    };
+    if (segments_ >= 3) {
+      for (int i = 1; i + 1 < M; ++i)
+        if (s[static_cast<size_t>(i)] >= dep_min && sustained(i, +1)) {
+          dep_idx = i;
+          break;
+        }
+      for (int i = M - 2; i >= 1; --i)
+        if (s[static_cast<size_t>(i)] <= S - arr_min && sustained(i, -1)) {
+          arr_idx = i;
+          break;
+        }
+      if (dep_idx < 0 || arr_idx < 0 || arr_idx <= dep_idx ||
+          s[static_cast<size_t>(arr_idx)] - s[static_cast<size_t>(dep_idx)] <
+              cruise_min) {
+        phase_note_ =
+            "phase handoffs not found (departure idx " +
+            std::to_string(dep_idx) + ", arrival idx " +
+            std::to_string(arr_idx) +
+            ") — N kept, balanced junctions, phase semantics degraded";
+        log_->warnf("[PHASE] %s", phase_note_.c_str());
+        dep_idx = arr_idx = -1;
+      } else {
+        phase_applied_ = true;
+        log_->infof("[PHASE] handoffs: departure @s=%.1f u, arrival @s=%.1f "
+                    "u (cruise span %.1f u)",
+                    s[static_cast<size_t>(dep_idx)],
+                    s[static_cast<size_t>(arr_idx)],
+                    s[static_cast<size_t>(arr_idx)] -
+                        s[static_cast<size_t>(dep_idx)]);
+      }
+    } else {  // N == 2: single shared handoff
+      double best_k = std::numeric_limits<double>::infinity();
+      for (int i = 1; i + 1 < M; ++i) {
+        if (s[static_cast<size_t>(i)] < dep_min ||
+            s[static_cast<size_t>(i)] > S - arr_min)
+          continue;
+        if (!sustained(i, 0)) continue;
+        if (kappa[static_cast<size_t>(i)] < best_k) {
+          best_k = kappa[static_cast<size_t>(i)];
+          dep_idx = i;
+        }
+      }
+      if (dep_idx >= 0) {
+        phase_applied_ = true;
+        log_->infof("[PHASE] N=2 shared handoff @s=%.1f u (kappa %.4f)",
+                    s[static_cast<size_t>(dep_idx)], best_k);
+      } else {
+        phase_note_ = "no shared departure/arrival handoff (N=2) — balanced "
+                      "junction kept, phase semantics degraded";
+        log_->warnf("[PHASE] %s", phase_note_.c_str());
+      }
+    }
+  }
+
   contracts->clear();
   double w_prev = 0.0;
   for (int j = 1; j < segments_; ++j) {
-    const double target = j * span_w;
-    const double lo = w_prev + 0.2 * span_w;
-    const double hi = target + 0.4 * span_w;
-    int best = -1, best_any = -1;
+    int forced = -1;
+    if (phase_applied_) {
+      if (j == 1 && dep_idx >= 0) forced = dep_idx;
+      if (j == segments_ - 1 && arr_idx >= 0) forced = arr_idx;
+    }
+    double target = j * span_w;
+    double lo = w_prev + 0.2 * span_w;
+    double hi = target + 0.4 * span_w;
+    double span_bal = span_w;
+    if (phase_applied_ && segments_ >= 3 && forced < 0) {
+      // Middle junctions balance INSIDE the cruise span.
+      const double w0 = w[static_cast<size_t>(dep_idx)];
+      const double w1 = w[static_cast<size_t>(arr_idx)];
+      span_bal = (w1 - w0) / static_cast<double>(segments_ - 2);
+      target = w0 + (j - 1) * span_bal;
+      lo = std::max(w_prev + 0.2 * span_bal, w0 + 1e-9);
+      hi = std::min(target + 0.4 * span_bal, w1 - 1e-9);
+    }
+    int best = forced, best_any = -1;
     double best_score = std::numeric_limits<double>::infinity();
     double best_any_score = best_score;
-    for (int i = 1; i + 1 < M; ++i) {
+    for (int i = 1; best < 0 && i + 1 < M; ++i) {
       if (w[static_cast<size_t>(i)] < lo || w[static_cast<size_t>(i)] > hi)
         continue;
       // Calmness dominates, balance breaks ties: kappa is rad/u (a gentle
@@ -734,7 +857,7 @@ bool SegmentChainPlanner::authorContractsFromRoute(
               : 1e3;
       const double score =
           kappa[static_cast<size_t>(i)] * 100.0 +
-          std::abs(w[static_cast<size_t>(i)] - target) / span_w +
+          std::abs(w[static_cast<size_t>(i)] - target) / span_bal +
           std::max(0.0, grade_i - tan_grade_max) * 100.0;
       if (score < best_any_score) { best_any = i; best_any_score = score; }
       if (nearRiskZone(route[i])) continue;
@@ -832,9 +955,15 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   const std::vector<Eigen::Vector3d> route = pm_->lastCommittedRoute();
   const std::vector<double> cap = pm_->lastCommittedCapRef();
   const double fe_ms = ms_since(t_wall);
+  const bool phase_requested =
+      readNumParam(node_, "chain/phase/enable", 0.0) != 0.0;
   if (!resolveAutoSegments(static_cast<int>(route.size()) - 1, "route"))
-    return fallback("auto-N: mission below the split threshold",
-                    /*as_degraded=*/false);
+    // Direct plan on a too-small mission is the CORRECT answer — except
+    // when phase semantics were requested and cannot be delivered.
+    return fallback(phase_requested
+                        ? "auto-N below threshold (phase mode: direct)"
+                        : "auto-N: mission below the split threshold",
+                    /*as_degraded=*/phase_requested);
 
   // === 2. author contracts + slices on the route ===
   std::vector<Contract> contracts;
@@ -1121,7 +1250,10 @@ PlanResult SegmentChainPlanner::planRouteParallel(
   // A merge rescue that dropped no stated requirement stays SUCCESS
   // (outcome matrix); profile-loss degrades attach at the merge site once
   // phase profiles exist.
-  return PlanResult::success();
+  PlanResult result = PlanResult::success();
+  if (!phase_note_.empty())
+    result.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK, phase_note_);
+  return result;
 }
 
 void SegmentChainPlanner::logFinalEvaluation(

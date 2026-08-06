@@ -210,6 +210,12 @@ private:
   int segments_;
   bool inherit_route_;
   bool auto_segments_{false};
+  // [PHASE] set during route authoring (const method -> mutable): whether
+  // the departure/arrival handoff rules actually pinned junctions, and the
+  // human-readable fallback note when they could not (planRouteParallel
+  // attaches it to the PlanResult as PHASE_BOUNDARY_FALLBACK).
+  mutable bool phase_applied_{false};
+  mutable std::string phase_note_;
 };
 
 }  // namespace path_manager

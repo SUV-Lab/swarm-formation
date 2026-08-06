@@ -105,7 +105,8 @@ int main(int argc, char **argv)
        with_failrestore = false, with_altcap = false, with_terminal = false,
        with_tinyturn = false, with_route = false, with_par = false,
        with_auto = false, with_autosmall = false, with_tailfix = false,
-       with_tailzero = false, with_tailacc = false, with_exclusive = false;
+       with_tailzero = false, with_tailacc = false, with_exclusive = false,
+       with_phase = false, with_phasefall = false, with_phase2 = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -126,6 +127,13 @@ int main(int argc, char **argv)
     // route-specific storage semantics (both slots carry the chained
     // flight).
     if (v == "route") with_route = true;
+    // [PHASE] junction-rule variants (route mode implied): phase = handoffs
+    // pinned on the smooth fixture (SUCCESS, no degrade); phasefall =
+    // impossible departure arc -> balanced junctions + DEGRADED(
+    // PHASE_BOUNDARY_FALLBACK); phase2 = N=2 single shared handoff.
+    if (v == "phase") { with_route = true; with_phase = true; }
+    if (v == "phasefall") { with_route = true; with_phase = true; with_phasefall = true; }
+    if (v == "phase2") { with_route = true; with_phase = true; with_phase2 = true; }
     if (v == "par") { with_route = true; with_par = true; }
     // twice: plan the SAME mission twice in one process. If the scope-guard
     // restore leaks a segment override, the second BASELINE (always planned
@@ -186,6 +194,9 @@ int main(int argc, char **argv)
     force("chain/seg" + std::to_string(i) + "/params",
           std::vector<std::string>{});
   if (with_auto) force("chain/auto_pieces_per_segment", 6);
+  if (with_phase) force("chain/phase/enable", true);
+  if (with_phasefall) force("chain/phase/depart_min_arc_u", 280.0);
+  if (with_phase2) force("chain/segments", 2);
   if (with_segdiff) {
     force("chain/seg1/params",
           std::vector<std::string>{"optimization/weight_time=1000.0"});
@@ -284,9 +295,10 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  const bool ok = chain.plan(start_pos, start_vel, start_acc, goal,
-                             /*start_vel_synthesized=*/true, mtail)
-                      .hasTrajectory();
+  const path_manager::PlanResult pres =
+      chain.plan(start_pos, start_vel, start_acc, goal,
+                 /*start_vel_synthesized=*/true, mtail);
+  const bool ok = pres.hasTrajectory();
   expect(ok, "chained plan returns success");
   if (!ok) {
     rclcpp::shutdown();
@@ -413,6 +425,16 @@ int main(int argc, char **argv)
     expect(std::abs(bt - ct) < 1e-9 &&
                baseline.getPieceNum() == chained.getPieceNum(),
            "route mode stores the chained flight in both slots");
+  }
+  if (with_phase && !with_phasefall) {
+    expect(pres.outcome == path_manager::PlanOutcome::SUCCESS,
+           "phase handoffs pinned — SUCCESS, no degrade");
+  }
+  if (with_phasefall) {
+    expect(pres.outcome == path_manager::PlanOutcome::DEGRADED &&
+               pres.reason ==
+                   path_manager::PlanReason::PHASE_BOUNDARY_FALLBACK,
+           "impossible handoff arc -> DEGRADED(PHASE_BOUNDARY_FALLBACK)");
   }
   if (with_tailfix) {
     const Eigen::Vector3d tv = chained.getJuncVel(chained.getPieceNum());
