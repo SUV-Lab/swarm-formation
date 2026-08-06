@@ -329,6 +329,17 @@ namespace path_manager
     // mean two different things at the two ends of the mission. Dynamics
     // model off = no region to violate = always empty.
     std::string stateEnvelopeProblem(const Eigen::Vector3d &vel_units) const;
+    // [ENVELOPE] Full-PVA judgment for a COMMANDED initial state (review
+    // find: the velocity check alone certified states whose commanded
+    // acceleration no thrust/load budget can deliver). Velocity region
+    // first (above), then inverse dynamics on the complete state — the
+    // load/thrust/bank the model needs to FLY this exact PVA must sit
+    // inside the same envelope the per-solve audits enforce. An
+    // inverse-dynamics-undefined state is rejected too (fail-closed: an
+    // explicit input we cannot certify does not plan).
+    std::string pvaEnvelopeProblem(const Eigen::Vector3d &pos_units,
+                                   const Eigen::Vector3d &vel_units,
+                                   const Eigen::Vector3d &acc_units) const;
     int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
 
     // [CHAIN] committed front-end products of the most recent plan, retained

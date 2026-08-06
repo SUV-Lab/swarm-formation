@@ -616,6 +616,43 @@ namespace path_manager
         return {};
     }
 
+    std::string PathManager::pvaEnvelopeProblem(
+        const Eigen::Vector3d &pos_units, const Eigen::Vector3d &vel_units,
+        const Eigen::Vector3d &acc_units) const
+    {
+        const std::string vel_problem = stateEnvelopeProblem(vel_units);
+        if (!vel_problem.empty()) return vel_problem;
+        if (!poly_traj_opt_ || !poly_traj_opt_->dynamicsEnabled()) return {};
+        if (!pos_units.allFinite()) return "non-finite position";
+        if (!acc_units.allFinite()) return "non-finite acceleration";
+        const auto unit = [&](const char *n, double def) {
+            return node_->has_parameter(n) ? node_->get_parameter(n).as_double()
+                                           : def;
+        };
+        const double um_xy = unit("optimization/dynamics_unit_xy_m", 100.0);
+        const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
+        const Eigen::Vector3d S(um_xy, um_xy, um_z);
+        const auto &dyn = poly_traj_opt_->dynamicsParams();
+        const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
+            dyn, S.cwiseProduct(pos_units), S.cwiseProduct(vel_units),
+            S.cwiseProduct(acc_units));
+        char buf[160];
+        if (!ev.valid) {
+            return "inverse dynamics undefined for this state — cannot be "
+                   "certified";
+        }
+        if (!mmp_vehicle_dynamics::isWithinEnvelope(dyn, ev)) {
+            mmp_vehicle_dynamics::EnvelopeLimit lim;
+            const double u =
+                mmp_vehicle_dynamics::envelopeUtilization(dyn, ev, &lim);
+            snprintf(buf, sizeof buf,
+                     "flying this exact state demands %.0f%% of the %s limit",
+                     100.0 * u, mmp_vehicle_dynamics::envelopeLimitName(lim));
+            return buf;
+        }
+        return {};
+    }
+
     bool PathManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                                      const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
                                      const ego_planner::TailBoundary &tail,

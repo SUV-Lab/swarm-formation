@@ -110,7 +110,7 @@ int main(int argc, char **argv)
        with_phaseweight = false, with_mergetail = false, with_failtail = false,
        with_depedge = false, with_arredge = false, with_departop = false,
        with_initfail = false, with_initok = false, with_synthclamp = false,
-       with_unsafedirect = false;
+       with_unsafedirect = false, with_initaccfail = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -199,6 +199,11 @@ int main(int argc, char **argv)
     // fallback vs the flight fitness gate — passes under the default budget
     // (DEGRADED), FAILS(DIRECT_FALLBACK_UNSAFE) under an impossible one.
     if (v == "initfail") { with_route = true; with_phase = true; with_initfail = true; }
+    // initaccfail: lawful velocity (180 m/s level) but a commanded
+    // acceleration only ~51 g of lateral load could deliver — the full-PVA
+    // judgment (inverse dynamics) must reject what the velocity screen
+    // alone would certify.
+    if (v == "initaccfail") { with_route = true; with_phase = true; with_initaccfail = true; }
     if (v == "initok") { with_route = true; with_phase = true; with_initok = true; }
     if (v == "synthclamp") { with_route = true; with_autosmall = true; with_synthclamp = true; }
     if (v == "unsafedirect") { with_route = true; with_autosmall = true; with_phase = true; with_unsafedirect = true; }
@@ -241,7 +246,8 @@ int main(int argc, char **argv)
   // initfail arms all-worker failure injection as a tripwire: entry
   // validation must exit BEFORE the worker stage that consumes (and resets)
   // it, so the parameter still reads -1 after the plan.
-  if (with_initfail) force("chain/jitter/fail_segment", -1);
+  if (with_initfail || with_initaccfail)
+    force("chain/jitter/fail_segment", -1);
   if (with_mergetail) force("chain/jitter/fail_segment", 3);
   if (with_failtail) force("chain/jitter/fail_segment", -1);
   if (with_phaseweight)
@@ -358,6 +364,27 @@ int main(int argc, char **argv)
                    /*start_vel_commanded=*/true);
     expect(!r.hasTrajectory(),
            "out-of-cone commanded initial state FAILED (no trajectory)");
+    expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "reason is INITIAL_MODE_UNSUPPORTED");
+    expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
+           "fault injection still armed — no front-end/optimizer work ran");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_initaccfail) {
+    // Velocity alone is lawful — 180 m/s level. The commanded acceleration
+    // (0, 5, 0) u/s² = 500 m/s² lateral (~51 g) is not: the inverse-dynamics
+    // stage of the PVA judgment must reject it before any planning.
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, Eigen::Vector3d(1.8, 0.0, 0.0),
+                   Eigen::Vector3d(0.0, 5.0, 0.0), goal,
+                   /*start_vel_synthesized=*/false, {},
+                   /*start_vel_commanded=*/true);
+    expect(!r.hasTrajectory(),
+           "undeliverable commanded acceleration FAILED (no trajectory)");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "reason is INITIAL_MODE_UNSUPPORTED");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,

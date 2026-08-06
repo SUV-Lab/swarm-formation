@@ -180,7 +180,8 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   // case of this one. Synthesized/trajectory-derived starts are our own
   // states and keep the [STALL-FLOOR] clamp doctrine.
   if (start_vel_commanded) {
-    const std::string prob = pm_->stateEnvelopeProblem(start_vel);
+    const std::string prob =
+        pm_->pvaEnvelopeProblem(start_pos, start_vel, start_acc);
     if (!prob.empty()) {
       log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s — the "
                    "launch/transition regime is outside this planner's "
@@ -1203,14 +1204,23 @@ PlanResult SegmentChainPlanner::planRouteParallel(
       const poly_traj::Trajectory &fly = pm_->traj_.global_traj.traj;
       const FlightVerdict fv = logFinalEvaluation(
           fly, {fly.getTotalDuration()}, {"direct"});
-      if (fv.evaluated && !fv.clean) {
+      // Fail-CLOSED (review find): a flight the evaluator could not judge
+      // is as unflyable as one it condemned — "no verdict" must never read
+      // as "clean" for a product that skipped every whole-flight audit.
+      if (!fv.evaluated || !fv.clean) {
         char why2[192];
-        snprintf(why2, sizeof why2,
-                 "direct fallback failed the flight fitness gate (%s%senv "
-                 "viol %.1f%%, peak %.1f%%)",
-                 fv.underground ? "terrain overlap, " : "",
-                 fv.no_cruise ? "never reaches cruise, " : "",
-                 fv.viol_pct, 100.0 * fv.util_peak);
+        if (!fv.evaluated) {
+          snprintf(why2, sizeof why2,
+                   "direct fallback could not be evaluated by the flight "
+                   "fitness gate (degenerate product)");
+        } else {
+          snprintf(why2, sizeof why2,
+                   "direct fallback failed the flight fitness gate (%s%senv "
+                   "viol %.1f%%, peak %.1f%%)",
+                   fv.underground ? "terrain overlap, " : "",
+                   fv.no_cruise ? "never reaches cruise, " : "",
+                   fv.viol_pct, 100.0 * fv.util_peak);
+        }
         log_->errorf("[ENVELOPE] %s — FAILED (DIRECT_FALLBACK_UNSAFE)", why2);
         return PlanResult::failedBecause(
             PlanReason::DIRECT_FALLBACK_UNSAFE,

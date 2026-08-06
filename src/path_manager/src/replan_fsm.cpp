@@ -788,8 +788,8 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         bool tail_rejected = false, relaxed = false;
         std::string relax_why;
         if (start_vel_commanded_) {
-            const std::string prob =
-                path_manager_->stateEnvelopeProblem(start_vel_);
+            const std::string prob = path_manager_->pvaEnvelopeProblem(
+                start_pt_, start_vel_, start_acc_);
             if (!prob.empty()) {
                 FSM_LOG_ERROR("[ENVELOPE] commanded initial state REJECTED: "
                               "%s (INITIAL_MODE_UNSUPPORTED)", prob.c_str());
