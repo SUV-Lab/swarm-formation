@@ -177,6 +177,9 @@ private:
   // default 0 = off) for the junction sensitivity experiment.
   void applyContractJitter(const std::vector<Eigen::Vector3d> &route,
                            std::vector<Contract> *contracts);
+  // [JITTER] deterministic worker-failure injection (1-based; 0 = off) for
+  // testing the merge-retry ladder.
+  int jitter_fail_segment_{0};
 
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;

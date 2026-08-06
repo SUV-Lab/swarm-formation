@@ -824,6 +824,11 @@ bool SegmentChainPlanner::planRouteParallel(
   std::vector<poly_traj::Trajectory> runs(static_cast<size_t>(segments_));
   std::vector<char> ok(static_cast<size_t>(segments_), 0);
   std::vector<double> solve_ms(static_cast<size_t>(segments_), 0.0);
+  {
+    if (!node_->has_parameter("chain/jitter/fail_segment"))
+      node_->declare_parameter("chain/jitter/fail_segment", 0);
+    node_->get_parameter("chain/jitter/fail_segment", jitter_fail_segment_);
+  }
   const auto worker = [&](int i) {
     const auto t0 = std::chrono::steady_clock::now();
     const bool last = (i + 1 == segments_);
@@ -836,6 +841,17 @@ bool SegmentChainPlanner::planRouteParallel(
         last ? Eigen::Vector3d::Zero() : contracts[ui].vel;
     const Eigen::Vector3d ea =
         last ? Eigen::Vector3d::Zero() : contracts[ui].acc;
+    // [JITTER] fault injection for the merge-retry ladder's deterministic
+    // test (chain/jitter/fail_segment, 1-based, default 0 = off): the
+    // sweeps' organic rejects are session-dependent, so the rescue path
+    // needs a fixture that fails on demand.
+    if (jitter_fail_segment_ == i + 1) {
+      log_->warnf("[CHAIN-JITTER] EXPERIMENT: segment %d/%d failure "
+                  "INJECTED", i + 1, segments_);
+      ok[ui] = 0;
+      solve_ms[ui] = 0.0;
+      return;
+    }
     ok[ui] = pm_->solveSlice(*opts[ui], slices[ui].path, slices[ui].cap,
                              hp, hv, ha, gp, ev, ea, sup, &runs[ui])
                  ? 1
@@ -855,14 +871,97 @@ bool SegmentChainPlanner::planRouteParallel(
   }
   const double solve_wall_ms = ms_since(t_solve);
 
-  for (int i = 0; i < segments_; ++i) {
-    if (!ok[static_cast<size_t>(i)]) {
-      // No baseline exists in this mode — degrade to the single-shot plan
-      // instead of rejecting the mission: a marginal per-segment gate trip
-      // (measured: 28.7% vs the 25% envelope gate) must cost speed, not
-      // the flight.
+  // [CHAIN-RETRY] Merge ladder before the single-shot fallback. A lone
+  // failed segment is usually a junction-placement casualty — the sweeps
+  // showed missions that reject at fine splits succeed once the hard
+  // stretch is cut less (and the sensitivity experiment showed junction
+  // STATE barely matters, so the lever is the junction's existence, not
+  // its value). Drop one junction bounding the failed segment and re-solve
+  // the merged span once per side; only if both merges fail does the plan
+  // degrade to single-shot. Bounded on purpose: exactly one failed
+  // segment, at most two extra solves — multi-failure means the corridor
+  // is hostile to this split wholesale, and single-shot is the honest
+  // answer there.
+  {
+    std::vector<int> failed;
+    for (int i = 0; i < segments_; ++i)
+      if (!ok[static_cast<size_t>(i)]) failed.push_back(i);
+    bool merge_on = true;
+    if (!node_->has_parameter("chain/merge_retry"))
+      node_->declare_parameter("chain/merge_retry", true);
+    node_->get_parameter("chain/merge_retry", merge_on);
+    if (failed.size() == 1 && merge_on && segments_ >= 2) {
+      const int f = failed.front();
+      // Neighbor sides, smaller merged span first (keep the re-solve easy).
+      std::vector<int> sides;  // neighbor index
+      if (f > 0) sides.push_back(f - 1);
+      if (f + 1 < segments_) sides.push_back(f + 1);
+      std::sort(sides.begin(), sides.end(), [&](int a, int b) {
+        return slices[static_cast<size_t>(a)].path.size() <
+               slices[static_cast<size_t>(b)].path.size();
+      });
+      bool rescued = false;
+      for (int n : sides) {
+        const int lo = std::min(f, n), hi = std::max(f, n);
+        const size_t ulo = static_cast<size_t>(lo), uhi = static_cast<size_t>(hi);
+        const int jd = lo;  // contract index dropped (junction between lo|hi)
+        RouteSlice merged;
+        merged.path = slices[ulo].path;
+        merged.cap = slices[ulo].cap;
+        // Slices share the junction vertex — skip the duplicate.
+        merged.path.insert(merged.path.end(),
+                           slices[uhi].path.begin() + 1, slices[uhi].path.end());
+        merged.cap.insert(merged.cap.end(),
+                          slices[uhi].cap.begin() + 1, slices[uhi].cap.end());
+        const bool m_last = (hi + 1 == segments_);
+        const Eigen::Vector3d hp =
+            lo ? contracts[static_cast<size_t>(lo - 1)].pos : start_pos;
+        const Eigen::Vector3d hv =
+            lo ? contracts[static_cast<size_t>(lo - 1)].vel : v0;
+        const Eigen::Vector3d ha =
+            lo ? contracts[static_cast<size_t>(lo - 1)].acc : start_acc;
+        const Eigen::Vector3d gp = merged.path.back();
+        const Eigen::Vector3d ev =
+            m_last ? Eigen::Vector3d::Zero() : contracts[static_cast<size_t>(hi)].vel;
+        const Eigen::Vector3d ea =
+            m_last ? Eigen::Vector3d::Zero() : contracts[static_cast<size_t>(hi)].acc;
+        log_->warnf("[CHAIN-RETRY] segment %d/%d failed — merging with "
+                    "segment %d (junction %d dropped), re-solving the span",
+                    f + 1, segments_, n + 1, jd + 1);
+        const auto t_retry = std::chrono::steady_clock::now();
+        auto ropt = pm_->makeConfiguredOptimizer();
+        poly_traj::Trajectory mrun;
+        if (pm_->solveSlice(*ropt, merged.path, merged.cap, hp, hv, ha, gp,
+                            ev, ea, sup, &mrun)) {
+          const double retry_ms = ms_since(t_retry);
+          runs[ulo] = mrun;
+          runs.erase(runs.begin() + static_cast<long>(uhi));
+          ok[ulo] = 1;
+          ok.erase(ok.begin() + static_cast<long>(uhi));
+          solve_ms[ulo] += solve_ms[uhi] + retry_ms;
+          solve_ms.erase(solve_ms.begin() + static_cast<long>(uhi));
+          slices[ulo] = std::move(merged);
+          slices.erase(slices.begin() + static_cast<long>(uhi));
+          contracts.erase(contracts.begin() + jd);
+          segments_ -= 1;
+          log_->warnf("[CHAIN-RETRY] merge rescued the chain: %d segments "
+                      "remain (merged solve %.0f ms)", segments_, retry_ms);
+          rescued = true;
+          break;
+        }
+        log_->warnf("[CHAIN-RETRY] merged span with segment %d failed too",
+                    n + 1);
+      }
+      if (!rescued) {
+        char why[96];
+        snprintf(why, sizeof why,
+                 "segment %d/%d failed (merge retries exhausted)", f + 1,
+                 segments_);
+        return fallback(why);
+      }
+    } else if (!failed.empty()) {
       char why[96];
-      snprintf(why, sizeof why, "segment %d/%d failed", i + 1, segments_);
+      snprintf(why, sizeof why, "%zu segments failed", failed.size());
       return fallback(why);
     }
   }
