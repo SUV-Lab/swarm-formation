@@ -576,8 +576,11 @@ namespace path_manager
     std::string PathManager::stateEnvelopeProblem(
         const Eigen::Vector3d &vel_units) const
     {
-        if (!poly_traj_opt_ || !poly_traj_opt_->dynamicsEnabled()) return {};
+        // Finiteness is judged BEFORE the model-off early return (review
+        // find): a NaN state is unplannable whether or not the dynamics
+        // model is loaded, and "model off" must not certify it.
         if (!vel_units.allFinite()) return "non-finite velocity";
+        if (!poly_traj_opt_ || !poly_traj_opt_->dynamicsEnabled()) return {};
         const auto unit = [&](const char *n, double def) {
             return node_->has_parameter(n) ? node_->get_parameter(n).as_double()
                                            : def;
@@ -620,11 +623,14 @@ namespace path_manager
         const Eigen::Vector3d &pos_units, const Eigen::Vector3d &vel_units,
         const Eigen::Vector3d &acc_units) const
     {
+        // Same ordering doctrine as stateEnvelopeProblem: every component of
+        // the state is checked for finiteness FIRST, so a disabled dynamics
+        // model cannot certify a NaN input by short-circuiting.
+        if (!pos_units.allFinite()) return "non-finite position";
+        if (!acc_units.allFinite()) return "non-finite acceleration";
         const std::string vel_problem = stateEnvelopeProblem(vel_units);
         if (!vel_problem.empty()) return vel_problem;
         if (!poly_traj_opt_ || !poly_traj_opt_->dynamicsEnabled()) return {};
-        if (!pos_units.allFinite()) return "non-finite position";
-        if (!acc_units.allFinite()) return "non-finite acceleration";
         const auto unit = [&](const char *n, double def) {
             return node_->has_parameter(n) ? node_->get_parameter(n).as_double()
                                            : def;

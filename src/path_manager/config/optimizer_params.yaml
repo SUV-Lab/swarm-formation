@@ -397,7 +397,10 @@
                                 # a finite smooth penalty.
     manager/max_vel: 2.0
     manager/max_acc: 5.0
-    manager/initial_speed_unit_m: 0.0  # TrajectoryCommand m/s -> frame units/s
+    manager/initial_speed_unit_m: 100.0  # TrajectoryCommand m/s -> frame units/s
+                                # (1 u = 100 m). Zero is not "unset": it made
+                                # the FSM warn and fall back to this value on
+                                # every startup.
 
     # ---- Subsonic fixed-wing inverse dynamics ----
     # The MINCO position polynomial is converted to physical r/v/a and checked

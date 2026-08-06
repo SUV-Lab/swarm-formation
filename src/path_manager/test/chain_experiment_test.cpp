@@ -110,7 +110,8 @@ int main(int argc, char **argv)
        with_phaseweight = false, with_mergetail = false, with_failtail = false,
        with_depedge = false, with_arredge = false, with_departop = false,
        with_initfail = false, with_initok = false, with_synthclamp = false,
-       with_unsafedirect = false, with_initaccfail = false;
+       with_unsafedirect = false, with_initaccfail = false,
+       with_initnan = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -204,6 +205,10 @@ int main(int argc, char **argv)
     // judgment (inverse dynamics) must reject what the velocity screen
     // alone would certify.
     if (v == "initaccfail") { with_route = true; with_phase = true; with_initaccfail = true; }
+    // initnan: NaN in the commanded acceleration. Finiteness is judged
+    // BEFORE the dynamics-model-off early return, so a NaN state is
+    // rejected whether or not the model is loaded (fail-closed ordering).
+    if (v == "initnan") { with_route = true; with_phase = true; with_initnan = true; }
     if (v == "initok") { with_route = true; with_phase = true; with_initok = true; }
     if (v == "synthclamp") { with_route = true; with_autosmall = true; with_synthclamp = true; }
     if (v == "unsafedirect") { with_route = true; with_autosmall = true; with_phase = true; with_unsafedirect = true; }
@@ -246,7 +251,7 @@ int main(int argc, char **argv)
   // initfail arms all-worker failure injection as a tripwire: entry
   // validation must exit BEFORE the worker stage that consumes (and resets)
   // it, so the parameter still reads -1 after the plan.
-  if (with_initfail || with_initaccfail)
+  if (with_initfail || with_initaccfail || with_initnan)
     force("chain/jitter/fail_segment", -1);
   if (with_mergetail) force("chain/jitter/fail_segment", 3);
   if (with_failtail) force("chain/jitter/fail_segment", -1);
@@ -364,6 +369,22 @@ int main(int argc, char **argv)
                    /*start_vel_commanded=*/true);
     expect(!r.hasTrajectory(),
            "out-of-cone commanded initial state FAILED (no trajectory)");
+    expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "reason is INITIAL_MODE_UNSUPPORTED");
+    expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
+           "fault injection still armed — no front-end/optimizer work ran");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_initnan) {
+    const path_manager::PlanResult r = chain.plan(
+        start_pos, Eigen::Vector3d(1.8, 0.0, 0.0),
+        Eigen::Vector3d(0.0, std::nan(""), 0.0), goal,
+        /*start_vel_synthesized=*/false, {}, /*start_vel_commanded=*/true);
+    expect(!r.hasTrajectory(), "NaN commanded acceleration FAILED");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "reason is INITIAL_MODE_UNSUPPORTED");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
