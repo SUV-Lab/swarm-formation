@@ -5,6 +5,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <Eigen/Dense>
 #include <mutex>
 #include <map>
@@ -114,6 +115,10 @@ private:
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr global_path_pub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
     rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr terrain_sub_;
+    // [TERRAIN-READY] latched ingestion receipt: [resolution_u, origin_x_u,
+    // origin_y_u] of the terrain the planner actually consumed — the panel's
+    // Run flow gates the mission command on it (see terrainCallback).
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr terrain_ready_pub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::DynamicObstacleArray>::SharedPtr
         load_obstacles_sub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::RiskZoneArray>::SharedPtr

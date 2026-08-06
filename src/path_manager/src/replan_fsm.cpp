@@ -210,6 +210,9 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
         "/terrain/grid_map", terrain_qos,
         std::bind(&ReplanFSM::terrainCallback, this, std::placeholders::_1),
         state_mutator_options);
+    // [TERRAIN-READY] latched ingestion receipt (see terrainCallback).
+    terrain_ready_pub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+        "/planning/terrain_ready", rclcpp::QoS(1).reliable().transient_local());
 
     // No separate clear topic: an empty DynamicObstacleArray with replace=true
     // is the clear verb (the /dynamic_obstacles/clear Empty topic was retired).
@@ -1014,6 +1017,21 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
     if (path_manager_) {
         path_manager_->setTerrainData(msg);
         FSM_LOG_INFO("Terrain data received and forwarded to PathManager");
+        // [TERRAIN-READY] Ingestion receipt for command gating: the panel's
+        // Run flow must not race a corridor the planner is still digesting
+        // (LoadMap replying only proves the map was PUBLISHED). Latched
+        // [resolution_u, origin_x_u, origin_y_u] of what was actually
+        // ingested — the panel matches it against the LoadMap response
+        // before it releases the mission command.
+        if (terrain_ready_pub_) {
+            std_msgs::msg::Float64MultiArray ready;
+            ready.data = {msg->info.resolution,
+                          msg->info.pose.position.x -
+                              0.5 * msg->info.length_x,
+                          msg->info.pose.position.y -
+                              0.5 * msg->info.length_y};
+            terrain_ready_pub_->publish(ready);
+        }
     }
 }
 
