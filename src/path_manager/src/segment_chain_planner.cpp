@@ -95,10 +95,62 @@ SegmentChainPlanner::SegmentChainPlanner(rclcpp::Node::SharedPtr node,
       segments_(std::max(2, segments)), inherit_route_(inherit_route) {}
 
 PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
+                                     const Eigen::Vector3d &start_vel,
+                                     const Eigen::Vector3d &start_acc,
+                                     const std::vector<Eigen::Vector3d> &waypoints,
+                                     bool start_vel_synthesized,
+                                     const ego_planner::TailBoundary &mission_tail)
+{
+  // [PHASE] Final-boundary validation happens ONCE, here — every exit of
+  // planImpl (workers, merge retry, fallbacks, baseline restore) receives
+  // the validated tail, so an unmet stated requirement can never leave as
+  // a plain success. Frozen policy: invalid + no opt-in -> FAILED; invalid
+  // + planning/allow_final_boundary_relaxation -> plan without the tail and
+  // return DEGRADED(FINAL_BOUNDARY_RELAXED).
+  ego_planner::TailBoundary eff = mission_tail;
+  bool relaxed = false;
+  std::string relax_why;
+  if (mission_tail.anyPrescribed()) {
+    std::string problem;
+    if (!mission_tail.allFinite()) {
+      problem = "non-finite final boundary";
+    } else if (mission_tail.prescribe_vel) {
+      const double floor_u = pm_->stallFloorUnits();
+      if (mission_tail.vel.norm() < floor_u)
+        problem = "final speed " + std::to_string(mission_tail.vel.norm()) +
+                  " u/s below the stall floor " + std::to_string(floor_u) +
+                  " u/s (a fixed-wing terminal state below stall is outside "
+                  "the model, like the launch phase)";
+    }
+    if (!problem.empty()) {
+      const bool allow =
+          readNumParam(node_, "planning/allow_final_boundary_relaxation",
+                       0.0) != 0.0;
+      if (!allow) {
+        log_->errorf("[PHASE] final boundary REJECTED: %s — set "
+                     "planning/allow_final_boundary_relaxation to fly "
+                     "without it", problem.c_str());
+        return PlanResult::failed(problem);
+      }
+      log_->warnf("[PHASE] final boundary relaxed (opt-in): %s",
+                  problem.c_str());
+      eff = ego_planner::TailBoundary{};
+      relaxed = true;
+      relax_why = problem + " — final boundary relaxed (opt-in)";
+    }
+  }
+  PlanResult r = planImpl(start_pos, start_vel, start_acc, waypoints,
+                          start_vel_synthesized, eff);
+  if (relaxed) r.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
+  return r;
+}
+
+PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
                                const Eigen::Vector3d &start_vel,
                                const Eigen::Vector3d &start_acc,
                                const std::vector<Eigen::Vector3d> &waypoints,
-                               bool start_vel_synthesized)
+                               bool start_vel_synthesized,
+                               const ego_planner::TailBoundary &mission_tail)
 {
   // Stage-1 scope: one goal. Multi-waypoint missions need a waypoint-to-span
   // assignment that does not exist yet — fall back to the single-shot plan.
@@ -107,8 +159,7 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                 "only, falling back to the single-shot plan", waypoints.size());
     pm_->setStartVelSynthesized(start_vel_synthesized);
     if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                             Eigen::Vector3d::Zero(),
-                             Eigen::Vector3d::Zero()))
+                             mission_tail))
       return PlanResult::failed("multi-waypoint single-shot plan failed");
     PlanResult r = PlanResult::success();
     r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
@@ -161,7 +212,7 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
         }
       }
       return planRouteParallel(start_pos, start_vel, start_acc, waypoints,
-                               start_vel_synthesized, par);
+                               start_vel_synthesized, par, mission_tail);
     } else if (par) {
       log_->warnf("[CHAIN] chain/parallel needs chain/author_from_route "
                   "(the baseline is inherently sequential) — running the "
@@ -176,7 +227,7 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
               "follow)", segments_);
   pm_->setStartVelSynthesized(start_vel_synthesized);
   if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                           Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero())) {
+                           mission_tail)) {
     log_->errorf("[CHAIN] baseline plan failed — nothing to chain, nothing "
                  "to fly");
     return PlanResult::failed("baseline plan failed");
@@ -357,10 +408,10 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     // plan would end.
     const std::vector<Eigen::Vector3d> goal =
         last ? waypoints : std::vector<Eigen::Vector3d>{contracts[i].pos};
-    Eigen::Vector3d end_vel =
-        last ? Eigen::Vector3d::Zero() : contracts[i].vel;
-    Eigen::Vector3d end_acc =
-        last ? Eigen::Vector3d::Zero() : contracts[i].acc;
+    ego_planner::TailBoundary seg_tail =
+        last ? mission_tail
+             : ego_planner::TailBoundary::pinned(contracts[i].vel,
+                                                 contracts[i].acc);
     // A slow LAST segment cannot take the default arrival contract — that
     // would pin its tail at the mission-wide cruise speed, above its own
     // ceiling. Prescribe the same level entry (the baseline's own arrival
@@ -373,11 +424,12 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
         dir.z() = 0.0;  // level, like the arrival contract (no-op: the
                         // baseline tail is already level by that contract)
         if (dir.norm() > 1e-9) {
-          end_vel = dir.normalized() * seg_vmax[static_cast<size_t>(i)];
-          end_acc = Eigen::Vector3d::Zero();
+          seg_tail = ego_planner::TailBoundary::pinned(
+              dir.normalized() * seg_vmax[static_cast<size_t>(i)],
+              Eigen::Vector3d::Zero());
           log_->infof("[CHAIN] arrival contract at the segment ceiling: "
                       "|v|=%.3f u/s level along the baseline approach",
-                      end_vel.norm());
+                      seg_tail.vel.norm());
         }
       }
     }
@@ -394,7 +446,7 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     const RouteSlice *slice =
         (i < static_cast<int>(slices.size())) ? &slices[i] : nullptr;
     if (!pm_->planGlobalTraj(head_pos, head_vel, head_acc, goal,
-                             end_vel, end_acc, /*junction_goal=*/!last,
+                             seg_tail, /*junction_goal=*/!last,
                              /*junction_head=*/i != 0,
                              slice ? &slice->path : nullptr,
                              slice ? &slice->cap : nullptr)) {
@@ -735,7 +787,8 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
     const Eigen::Vector3d &start_acc,
     const std::vector<Eigen::Vector3d> &waypoints,
-    bool start_vel_synthesized, bool run_parallel)
+    bool start_vel_synthesized, bool run_parallel,
+    const ego_planner::TailBoundary &mission_tail)
 {
   const auto t_wall = std::chrono::steady_clock::now();
   const auto ms_since = [](const std::chrono::steady_clock::time_point &t0) {
@@ -751,8 +804,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     log_->warnf("[CHAIN-PAR] %s — falling back to the single-shot plan", why);
     pm_->setStartVelSynthesized(start_vel_synthesized);
     if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                             Eigen::Vector3d::Zero(),
-                             Eigen::Vector3d::Zero()))
+                             mission_tail))
       return PlanResult::failed(std::string(why) +
                                 "; single-shot fallback failed too");
     PlanResult r = PlanResult::success();
@@ -770,7 +822,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
                 run_parallel ? "parallel" : "sequential", segments_);
   pm_->setStartVelSynthesized(false);
   if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                           Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(),
+                           ego_planner::TailBoundary{},
                            false, false, nullptr, nullptr,
                            /*front_end_only=*/true)) {
     log_->errorf("[CHAIN-PAR] front-end failed — nothing to author on");
@@ -872,10 +924,10 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     const Eigen::Vector3d hv = i ? contracts[ui - 1].vel : v0;
     const Eigen::Vector3d ha = i ? contracts[ui - 1].acc : start_acc;
     const Eigen::Vector3d gp = slices[ui].path.back();
-    const Eigen::Vector3d ev =
-        last ? Eigen::Vector3d::Zero() : contracts[ui].vel;
-    const Eigen::Vector3d ea =
-        last ? Eigen::Vector3d::Zero() : contracts[ui].acc;
+    const ego_planner::TailBoundary tb =
+        last ? mission_tail
+             : ego_planner::TailBoundary::pinned(contracts[ui].vel,
+                                                 contracts[ui].acc);
     // [JITTER] fault injection for the merge-retry ladder's deterministic
     // test (chain/jitter/fail_segment, 1-based, default 0 = off): the
     // sweeps' organic rejects are session-dependent, so the rescue path
@@ -888,7 +940,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
       return;
     }
     ok[ui] = pm_->solveSlice(*opts[ui], slices[ui].path, slices[ui].cap,
-                             hp, hv, ha, gp, ev, ea, sup, &runs[ui])
+                             hp, hv, ha, gp, tb, sup, &runs[ui])
                  ? 1
                  : 0;
     solve_ms[ui] = std::chrono::duration<double, std::milli>(
@@ -965,10 +1017,11 @@ PlanResult SegmentChainPlanner::planRouteParallel(
         const Eigen::Vector3d ha =
             lo ? contracts[static_cast<size_t>(lo - 1)].acc : start_acc;
         const Eigen::Vector3d gp = merged.path.back();
-        const Eigen::Vector3d ev =
-            m_last ? Eigen::Vector3d::Zero() : contracts[static_cast<size_t>(hi)].vel;
-        const Eigen::Vector3d ea =
-            m_last ? Eigen::Vector3d::Zero() : contracts[static_cast<size_t>(hi)].acc;
+        const ego_planner::TailBoundary tb =
+            m_last ? mission_tail
+                   : ego_planner::TailBoundary::pinned(
+                         contracts[static_cast<size_t>(hi)].vel,
+                         contracts[static_cast<size_t>(hi)].acc);
         log_->warnf("[CHAIN-RETRY] segment %d/%d failed — merging with "
                     "segment %d (junction %d dropped), re-solving the span",
                     f + 1, segments_, n + 1, jd + 1);
@@ -976,7 +1029,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
         auto ropt = pm_->makeConfiguredOptimizer();
         poly_traj::Trajectory mrun;
         if (pm_->solveSlice(*ropt, merged.path, merged.cap, hp, hv, ha, gp,
-                            ev, ea, sup, &mrun)) {
+                            tb, sup, &mrun)) {
           const double retry_ms = ms_since(t_retry);
           runs[ulo] = mrun;
           runs.erase(runs.begin() + static_cast<long>(uhi));

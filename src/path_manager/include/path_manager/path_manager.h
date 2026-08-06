@@ -281,7 +281,7 @@ namespace path_manager
     // contract authoring needs the route, not a full solve.
     bool planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
-                        const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+                        const ego_planner::TailBoundary &tail = ego_planner::TailBoundary{},
                         bool junction_goal = false, bool junction_head = false,
                         const std::vector<Eigen::Vector3d> *route_override = nullptr,
                         const std::vector<double> *cap_ref_override = nullptr,
@@ -307,13 +307,19 @@ namespace path_manager
                     const Eigen::Vector3d &head_vel,
                     const Eigen::Vector3d &head_acc,
                     const Eigen::Vector3d &goal_pos,
-                    const Eigen::Vector3d &end_vel,
-                    const Eigen::Vector3d &end_acc,
+                    const ego_planner::TailBoundary &tail,
                     bool suppress_crossing_exempt,
                     poly_traj::Trajectory *out) const;
 
     // [CHAIN-PAR] read-only bits the chain planner needs for authoring.
     double maxVel() const { return max_vel_; }
+    // [PHASE] margin-backed stall floor (planner units) for tail-boundary
+    // validation — same floor the [STALL-FLOOR] start guard uses.
+    double stallFloorUnits() const
+    {
+        return poly_traj_opt_ ? poly_traj_opt_->dynamicsMinSpeedFloorUnits()
+                              : 0.0;
+    }
     int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
 
     // [CHAIN] committed front-end products of the most recent plan, retained
@@ -681,8 +687,7 @@ namespace path_manager
                        const Eigen::Vector3d &start_acc,
                        const std::vector<Eigen::Vector3d> &waypoints,
                        const std::vector<double> &cap_ref,
-                       const Eigen::Vector3d &end_vel,
-                       const Eigen::Vector3d &end_acc);
+                       const ego_planner::TailBoundary &tail);
 
     ego_planner::PolyTrajOptimizer::Ptr poly_traj_opt_;
     bool is_optimizer_initialized_;

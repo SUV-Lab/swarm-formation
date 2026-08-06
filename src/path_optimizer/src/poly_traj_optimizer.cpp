@@ -23,8 +23,7 @@ namespace ego_planner
                                            poly_traj::Trajectory &out_global,
                                            poly_traj::Trajectory &out_local,
                                            const std::vector<double> &cap_ref_z,
-                                           const Eigen::Vector3d &end_vel,
-                                           const Eigen::Vector3d &end_acc)
+                                           const TailBoundary &tail)
   {
     // Barrier exemptions for this plan (same start/goal rule as the
     // front-end): must be recomputed per plan since zones and endpoints
@@ -404,17 +403,21 @@ namespace ego_planner
     }
 
     Eigen::Vector3d traj_end_vel, traj_end_acc;
-    if (end_vel.squaredNorm() > 1e-18) {
-      // [CHAIN] Prescribed junction tail: the caller pins the exact PVA the
-      // neighbouring chained segment starts from. Verbatim — no level
-      // projection, no speed rewrite — so both sides of the junction share
-      // one hard BC and the stitched trajectory is C2 there by construction.
-      traj_end_vel = end_vel;
-      traj_end_acc = end_acc;
+    if (tail.prescribe_vel) {
+      // [CHAIN]/[PHASE] Prescribed tail: the caller pins the exact state
+      // (junction contract, or the mission's final boundary). Verbatim — no
+      // level projection, no speed rewrite — so both sides of a junction
+      // share one hard BC and the stitched trajectory is C2 there by
+      // construction. Flag-driven (not a magnitude sentinel): a zero or
+      // slow prescribed velocity is representable; its VALIDITY is the
+      // caller's contract (stall-floor policy lives at the plan entry).
+      traj_end_vel = tail.vel;
+      traj_end_acc = tail.prescribe_acc ? tail.acc : Eigen::Vector3d::Zero();
       LOG_INFO("[CHAIN] tail BC prescribed: vel=(%.3f, %.3f, %.3f) u/s "
                "(|v|=%.3f), acc=(%.3f, %.3f, %.3f)",
-               end_vel.x(), end_vel.y(), end_vel.z(), end_vel.norm(),
-               end_acc.x(), end_acc.y(), end_acc.z());
+               traj_end_vel.x(), traj_end_vel.y(), traj_end_vel.z(),
+               traj_end_vel.norm(), traj_end_acc.x(), traj_end_acc.y(),
+               traj_end_acc.z());
     } else {
     // Arrival contract: full cruise speed at the goal (a separate control
     // planner takes over there) — but LEVEL. Pinning the tail's velocity to
@@ -446,7 +449,8 @@ namespace ego_planner
     }
     approach_dir.normalize();
     traj_end_vel = approach_dir * max_vel;
-    traj_end_acc = Eigen::Vector3d::Zero();
+    // Acceleration-only prescription rides the level-entry velocity.
+    traj_end_acc = tail.prescribe_acc ? tail.acc : Eigen::Vector3d::Zero();
     }
 
     poly_traj::MinJerkOpt globalMJO;

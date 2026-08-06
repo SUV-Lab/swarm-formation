@@ -63,11 +63,16 @@ public:
   // Returns the planner<->FSM contract (planning_result.h): FAILED = do not
   // fly, SUCCESS = all stated requirements met, DEGRADED = flyable under an
   // approved relaxation (reason + detail say which).
+  // mission_tail: the mission's FINAL boundary ([PHASE]). Validated once
+  // at this entry (stall floor, finiteness); invalid without the
+  // planning/allow_final_boundary_relaxation opt-in fails the plan.
   PlanResult plan(const Eigen::Vector3d &start_pos,
                   const Eigen::Vector3d &start_vel,
                   const Eigen::Vector3d &start_acc,
                   const std::vector<Eigen::Vector3d> &waypoints,
-                  bool start_vel_synthesized);
+                  bool start_vel_synthesized,
+                  const ego_planner::TailBoundary &mission_tail =
+                      ego_planner::TailBoundary{});
 
   int segments() const { return segments_; }
 
@@ -118,7 +123,17 @@ private:
                                const Eigen::Vector3d &start_vel,
                                const Eigen::Vector3d &start_acc,
                                const std::vector<Eigen::Vector3d> &waypoints,
-                               bool start_vel_synthesized, bool run_parallel);
+                               bool start_vel_synthesized, bool run_parallel,
+                               const ego_planner::TailBoundary &mission_tail);
+
+  // plan() minus the final-boundary validation (which must run exactly
+  // once): every internal exit path receives the validated tail.
+  PlanResult planImpl(const Eigen::Vector3d &start_pos,
+                      const Eigen::Vector3d &start_vel,
+                      const Eigen::Vector3d &start_acc,
+                      const std::vector<Eigen::Vector3d> &waypoints,
+                      bool start_vel_synthesized,
+                      const ego_planner::TailBoundary &mission_tail);
 
   // [STAGE-4] Whole-flight evaluation of the FINAL stitched product — the
   // one artifact no per-solve audit ever sees whole (and the terminal

@@ -575,7 +575,7 @@ namespace path_manager
 
     bool PathManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
                                      const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
-                                     const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc,
+                                     const ego_planner::TailBoundary &tail,
                                      bool junction_goal, bool junction_head,
                                      const std::vector<Eigen::Vector3d> *route_override,
                                      const std::vector<double> *cap_ref_override,
@@ -910,7 +910,7 @@ namespace path_manager
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===
         bool opt_ok = optimizeStage(clean_path, full_route,
                                     start_pos, start_vel_eff, start_acc, wps,
-                                    cap_ref, end_vel, end_acc);
+                                    cap_ref, tail);
 
         auto t_total_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] === TOTAL planGlobalTraj: %.1f ms ===",
@@ -1415,8 +1415,7 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                                 const Eigen::Vector3d &start_acc,
                                 const std::vector<Eigen::Vector3d> &waypoints,
                                 const std::vector<double> &cap_ref,
-                                const Eigen::Vector3d &end_vel,
-                                const Eigen::Vector3d &end_acc)
+                                const ego_planner::TailBoundary &tail)
 {
         // Stage 2 = trajectory optimization. The optimizer owns the MINCO
         // initial-trajectory build + L-BFGS; we only pass the front-end path
@@ -1528,7 +1527,7 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             searcher_.zoneAvoidPass() == 1);
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
-            global_traj, local_traj, cap_ref, end_vel, end_acc);
+            global_traj, local_traj, cap_ref, tail);
         if (!opt_success) {
             log_manager_->errorf("Trajectory optimization failed");
             return false;
@@ -1589,8 +1588,7 @@ bool PathManager::solveSlice(ego_planner::PolyTrajOptimizer &opt,
                              const Eigen::Vector3d &head_vel,
                              const Eigen::Vector3d &head_acc,
                              const Eigen::Vector3d &goal_pos,
-                             const Eigen::Vector3d &end_vel,
-                             const Eigen::Vector3d &end_acc,
+                             const ego_planner::TailBoundary &tail,
                              bool suppress_crossing_exempt,
                              poly_traj::Trajectory *out) const
 {
@@ -1616,7 +1614,7 @@ bool PathManager::solveSlice(ego_planner::PolyTrajOptimizer &opt,
     const std::vector<Eigen::Vector3d> goal_wps{goal_pos};
     return opt.optimizeFromPath(slice, head_pos, head_vel, head_acc,
                                 goal_wps, max_vel_, out_global, *out, cap,
-                                end_vel, end_acc);
+                                tail);
 }
 
 // [CHAIN-VIZ] see the header comment. Tube sampling matches

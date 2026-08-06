@@ -775,7 +775,7 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         path_manager_->setStartVelSynthesized(start_vel_synthesized_);
         plan_res = path_manager_->planGlobalTraj(
                        start_pt_, start_vel_, start_acc_, waypoints,
-                       Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero())
+                       ego_planner::TailBoundary{})
                        ? PlanResult::success()
                        : PlanResult::failed("single plan failed");
     }

@@ -104,7 +104,8 @@ int main(int argc, char **argv)
   bool with_zone = false, with_segdiff = false, with_twice = false,
        with_failrestore = false, with_altcap = false, with_terminal = false,
        with_tinyturn = false, with_route = false, with_par = false,
-       with_auto = false, with_autosmall = false;
+       with_auto = false, with_autosmall = false, with_tailfix = false,
+       with_tailzero = false, with_tailacc = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -144,6 +145,14 @@ int main(int argc, char **argv)
     // usage block above for what each one pins.
     if (v == "auto") with_auto = true;
     if (v == "autosmall") with_autosmall = true;
+    // [PHASE] tail-boundary variants: tailfix (prescribed final vel+acc,
+    // 1e-8 arrival tolerance — observed 1e-13, the slack is test headroom),
+    // tailzero (sub-stall final speed: FAILED by default, DEGRADED with the
+    // relaxation opt-in), tailacc (acceleration-only prescription rides the
+    // level entry).
+    if (v == "tailfix") with_tailfix = true;
+    if (v == "tailzero") with_tailzero = true;
+    if (v == "tailacc") with_tailacc = true;
   }
   if (with_tinyturn) with_terminal = true;
 
@@ -231,8 +240,44 @@ int main(int argc, char **argv)
   const Eigen::Vector3d start_acc(0.0, 0.0, 0.0);
   const std::vector<Eigen::Vector3d> goal = {{330.0, 150.0, 1.5}};
 
+  ego_planner::TailBoundary mtail;
+  if (with_tailfix) {
+    mtail.prescribe_vel = true;
+    mtail.prescribe_acc = true;
+    mtail.vel = Eigen::Vector3d(1.55, 0.41, 0.0);   // |v|=1.60, +15 deg yaw
+    mtail.acc = Eigen::Vector3d(0.0, 0.05, 0.0);
+    std::cout << "tailfix: final vel (1.55,0.41,0) acc (0,0.05,0)\n";
+  } else if (with_tailacc) {
+    mtail.prescribe_acc = true;
+    mtail.acc = Eigen::Vector3d(0.0, 0.05, 0.0);
+    std::cout << "tailacc: final acc (0,0.05,0), velocity free\n";
+  }
+
+  if (with_tailzero) {
+    // Sub-stall prescribed final speed: FAILED without the opt-in, DEGRADED
+    // with it. Dedicated flow — the standard checks assume a normal tail.
+    ego_planner::TailBoundary bad;
+    bad.prescribe_vel = true;
+    bad.vel = Eigen::Vector3d(0.5, 0.0, 0.0);
+    const path_manager::PlanResult r1 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, bad);
+    expect(!r1.hasTrajectory(),
+           "sub-stall final boundary rejected (FAILED, no opt-in)");
+    force("planning/allow_final_boundary_relaxation", true);
+    const path_manager::PlanResult r2 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, bad);
+    expect(r2.hasTrajectory(), "relaxed plan produces a trajectory");
+    expect(r2.outcome == path_manager::PlanOutcome::DEGRADED &&
+               r2.reason == path_manager::PlanReason::FINAL_BOUNDARY_RELAXED,
+           "relaxed plan reports DEGRADED(FINAL_BOUNDARY_RELAXED)");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   const bool ok = chain.plan(start_pos, start_vel, start_acc, goal,
-                             /*start_vel_synthesized=*/true)
+                             /*start_vel_synthesized=*/true, mtail)
                       .hasTrajectory();
   expect(ok, "chained plan returns success");
   if (!ok) {
@@ -360,6 +405,23 @@ int main(int argc, char **argv)
     expect(std::abs(bt - ct) < 1e-9 &&
                baseline.getPieceNum() == chained.getPieceNum(),
            "route mode stores the chained flight in both slots");
+  }
+  if (with_tailfix) {
+    const Eigen::Vector3d tv = chained.getJuncVel(chained.getPieceNum());
+    const Eigen::Vector3d ta = chained.getJuncAcc(chained.getPieceNum());
+    std::cout << "tailfix arrival: |dv|=" << (tv - mtail.vel).norm()
+              << " |da|=" << (ta - mtail.acc).norm() << "\n";
+    expect((tv - mtail.vel).norm() < 1e-8,
+           "prescribed final velocity reached (1e-8)");
+    expect((ta - mtail.acc).norm() < 1e-8,
+           "prescribed final acceleration reached (1e-8)");
+  }
+  if (with_tailacc) {
+    const Eigen::Vector3d tv = chained.getJuncVel(chained.getPieceNum());
+    const Eigen::Vector3d ta = chained.getJuncAcc(chained.getPieceNum());
+    expect((ta - mtail.acc).norm() < 1e-8,
+           "acc-only prescription reached (1e-8)");
+    expect(tv.norm() > 1.5, "velocity stays a free level entry near cruise");
   }
   if (with_auto) {
     // [AUTO-N] 13 baseline pieces / target 6 -> round to 2, which differs
