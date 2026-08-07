@@ -137,6 +137,26 @@ private:
                                const std::vector<Eigen::Vector3d> &waypoints,
                                bool start_vel_synthesized, bool run_parallel,
                                const ego_planner::TailBoundary &mission_tail);
+  // [S13] planRouteParallel decomposed (contract 2 §13): commitRoute runs
+  // the ONE front-end pass and hands back the committed route + cap;
+  // planOverRoute authors/solves/stitches over an already committed route
+  // (or a slice of one) from an arbitrary head PVA. A transition
+  // coordinator calls them separately with the transition in between;
+  // planRouteParallel is their no-transition composition.
+  bool commitRoute(const Eigen::Vector3d &start_pos,
+                   const Eigen::Vector3d &start_vel,
+                   const Eigen::Vector3d &start_acc,
+                   const std::vector<Eigen::Vector3d> &waypoints,
+                   bool run_parallel, std::vector<Eigen::Vector3d> *route,
+                   std::vector<double> *cap, double *fe_ms);
+  PlanResult planOverRoute(const std::vector<Eigen::Vector3d> &route,
+                           const std::vector<double> &cap, double fe_ms,
+                           const Eigen::Vector3d &start_pos,
+                           const Eigen::Vector3d &start_vel,
+                           const Eigen::Vector3d &start_acc,
+                           const std::vector<Eigen::Vector3d> &waypoints,
+                           bool start_vel_synthesized, bool run_parallel,
+                           const ego_planner::TailBoundary &mission_tail);
 
   // plan() minus the final-boundary validation (which must run exactly
   // once): every internal exit path receives the validated tail.

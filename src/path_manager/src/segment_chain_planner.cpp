@@ -1239,9 +1239,71 @@ bool SegmentChainPlanner::authorContractsFromRoute(
   return true;
 }
 
+// [S13] The route-parallel plan decomposed into its two real stages, so a
+// transition coordinator can call them SEPARATELY: commit the global route
+// once, run a transition toward an entry point ON it, cut the route there,
+// and hand planOverRoute the slice with the transition end state as the
+// head. planRouteParallel itself is now just the no-transition composition
+// of the two.
 PlanResult SegmentChainPlanner::planRouteParallel(
     const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
     const Eigen::Vector3d &start_acc,
+    const std::vector<Eigen::Vector3d> &waypoints,
+    bool start_vel_synthesized, bool run_parallel,
+    const ego_planner::TailBoundary &mission_tail)
+{
+  std::vector<Eigen::Vector3d> route;
+  std::vector<double> cap;
+  double fe_ms = 0.0;
+  if (!commitRoute(start_pos, start_vel, start_acc, waypoints, run_parallel,
+                   &route, &cap, &fe_ms))
+    return PlanResult::failed("front-end failed");
+  return planOverRoute(route, cap, fe_ms, start_pos, start_vel, start_acc,
+                       waypoints, start_vel_synthesized, run_parallel,
+                       mission_tail);
+}
+
+// [S13] Stage 1: the ONE front-end pass that commits the global route
+// (AGL/bbox/SDF/zone binding happen here exactly once — route decided once,
+// the r3 homotopy lesson).
+bool SegmentChainPlanner::commitRoute(
+    const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
+    const Eigen::Vector3d &start_acc,
+    const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
+    std::vector<Eigen::Vector3d> *route, std::vector<double> *cap,
+    double *fe_ms)
+{
+  const auto t0 = std::chrono::steady_clock::now();
+  if (auto_segments_)
+    log_->infof("[CHAIN-PAR] route-%s plan, auto-sized segments "
+                "(no baseline)", run_parallel ? "parallel" : "sequential");
+  else
+    log_->infof("[CHAIN-PAR] route-%s plan, %d segments (no baseline)",
+                run_parallel ? "parallel" : "sequential", segments_);
+  pm_->setStartVelSynthesized(false);
+  if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
+                           ego_planner::TailBoundary{},
+                           false, false, nullptr, nullptr,
+                           /*front_end_only=*/true)) {
+    log_->errorf("[CHAIN-PAR] front-end failed — nothing to author on");
+    return false;
+  }
+  *route = pm_->lastCommittedRoute();
+  *cap = pm_->lastCommittedCapRef();
+  if (fe_ms)
+    *fe_ms = std::chrono::duration<double, std::milli>(
+                 std::chrono::steady_clock::now() - t0)
+                 .count();
+  return true;
+}
+
+// [S13] Stage 2: author + solve + merge + stitch over an ALREADY COMMITTED
+// route (or a slice of one). The head PVA is whatever the caller hands in —
+// today the mission start, under contract 2 the transition end state.
+PlanResult SegmentChainPlanner::planOverRoute(
+    const std::vector<Eigen::Vector3d> &route, const std::vector<double> &cap,
+    double fe_ms, const Eigen::Vector3d &start_pos,
+    const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
     const std::vector<Eigen::Vector3d> &waypoints,
     bool start_vel_synthesized, bool run_parallel,
     const ego_planner::TailBoundary &mission_tail)
@@ -1374,25 +1436,6 @@ PlanResult SegmentChainPlanner::planRouteParallel(
     return r;
   };
 
-  // === 1. front-end only: commit the route (AGL/bbox/SDF/zone binding
-  // happen here exactly once) ===
-  if (auto_segments_)
-    log_->infof("[CHAIN-PAR] route-%s plan, auto-sized segments "
-                "(no baseline)", run_parallel ? "parallel" : "sequential");
-  else
-    log_->infof("[CHAIN-PAR] route-%s plan, %d segments (no baseline)",
-                run_parallel ? "parallel" : "sequential", segments_);
-  pm_->setStartVelSynthesized(false);
-  if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                           ego_planner::TailBoundary{},
-                           false, false, nullptr, nullptr,
-                           /*front_end_only=*/true)) {
-    log_->errorf("[CHAIN-PAR] front-end failed — nothing to author on");
-    return PlanResult::failed("front-end failed");
-  }
-  const std::vector<Eigen::Vector3d> route = pm_->lastCommittedRoute();
-  const std::vector<double> cap = pm_->lastCommittedCapRef();
-  const double fe_ms = ms_since(t_wall);
   const bool phase_requested =
       readNumParam(node_, "chain/phase/enable", 0.0) != 0.0;
   if (!resolveAutoSegments(static_cast<int>(route.size()) - 1, "route"))
@@ -1452,7 +1495,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
       v0 = dir.normalized() * floor;
     }
   }
-  const double author_ms = ms_since(t_wall) - fe_ms;
+  const double author_ms = ms_since(t_wall);
 
   // === 3. per-worker optimizer instances (serial: setParam snapshots
   // node params; inner OpenMP is SHARED as cores/segments per worker —
@@ -2010,7 +2053,7 @@ PlanResult SegmentChainPlanner::planRouteParallel(
               run_parallel ? "PARALLEL" : "sequential", fe_ms, author_ms,
               per.c_str(), solve_wall_ms,
               *std::max_element(solve_ms.begin(), solve_ms.end()),
-              ms_since(t_wall), chained.getPieceNum(),
+              fe_ms + ms_since(t_wall), chained.getPieceNum(),
               chained.getTotalDuration());
   // A merge rescue that dropped no stated requirement stays SUCCESS
   // (outcome matrix); profile-loss degrades attach at the merge site once
