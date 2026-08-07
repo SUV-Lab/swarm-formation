@@ -111,7 +111,8 @@ int main(int argc, char **argv)
        with_depedge = false, with_arredge = false, with_departop = false,
        with_initfail = false, with_initok = false, with_synthclamp = false,
        with_unsafedirect = false, with_initaccfail = false,
-       with_initnan = false, with_arredge2 = false, with_twophase = false;
+       with_initnan = false, with_arredge2 = false, with_twophase = false,
+       with_pvaprobe = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -221,6 +222,16 @@ int main(int argc, char **argv)
     // BEFORE the dynamics-model-off early return, so a NaN state is
     // rejected whether or not the model is loaded (fail-closed ordering).
     if (v == "initnan") { with_route = true; with_phase = true; with_initnan = true; }
+    // [CONTRACT-2 EVAL] pvaprobe: INTERFACE-ONLY check that a
+    // transition-generator handoff state (the JSBSim experiment's
+    // dwell-complete PVA) can cross the boundary into the planner: fixed
+    // ENU -> planner axes, SI -> planner units, mission-anchor addition so
+    // ABSOLUTE altitude survives (air density), pvaEnvelopeProblem() call,
+    // and PlanReason/detail propagation. Deliberately NOT a physics
+    // verdict: the example aircraft and the cruise model are different
+    // vehicles, so pass or reject are both acceptable outcomes here —
+    // the assertions only pin that plan() agrees with the validator.
+    if (v == "pvaprobe") { with_route = true; with_phase = true; with_pvaprobe = true; }
     if (v == "initok") { with_route = true; with_phase = true; with_initok = true; }
     if (v == "synthclamp") { with_route = true; with_autosmall = true; with_synthclamp = true; }
     if (v == "unsafedirect") { with_route = true; with_autosmall = true; with_phase = true; with_unsafedirect = true; }
@@ -386,6 +397,64 @@ int main(int argc, char **argv)
            "reason is INITIAL_MODE_UNSUPPORTED");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
            "fault injection still armed — no front-end/optimizer work ran");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_pvaprobe) {
+    // Dwell-complete PVA from the JSBSim experiment, LOCAL ENU
+    // displacement / SI (experiments/jsbsim_probe, v1.3.1 @ 3b25f25e,
+    // f16, grid search stage [4]). Override with MMP_PVA_CSV =
+    // "t,px,py,pz,vx,vy,vz,ax,ay,az" to probe another state.
+    const char *csv = std::getenv("MMP_PVA_CSV");
+    double f[10] = {2.330000, -0.060543, -366.837515, 205.834561,
+                    -0.049650, -158.606414, 64.054758,
+                    -0.017891, -2.944771, -30.673533};
+    if (csv && std::sscanf(csv, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
+                           &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6],
+                           &f[7], &f[8], &f[9]) != 10) {
+      std::cout << "[FAIL] MMP_PVA_CSV malformed\n";
+      rclcpp::shutdown();
+      return 1;
+    }
+    // Anchor: the ENU p is a DISPLACEMENT from the JSBSim initial point,
+    // but pvaEnvelopeProblem uses ABSOLUTE altitude for air density. The
+    // anchor's z (15 u = 1500 m) matches the JSBSim initial ASL altitude,
+    // so planner_position = anchor + displacement/unit preserves the
+    // altitude the state was actually propagated at.
+    const double um = 100.0;  // optimization/dynamics_unit_xy_m == _z_m
+    const Eigen::Vector3d anchor(30.0, 150.0, 15.0);
+    const Eigen::Vector3d p_u = anchor + Eigen::Vector3d(f[1], f[2], f[3]) / um;
+    const Eigen::Vector3d v_u = Eigen::Vector3d(f[4], f[5], f[6]) / um;
+    const Eigen::Vector3d a_u = Eigen::Vector3d(f[7], f[8], f[9]) / um;
+    const std::string prob = pm->pvaEnvelopeProblem(p_u, v_u, a_u);
+    std::cout << "pvaprobe: dwell-complete state at t=" << f[0] << " s\n"
+              << "  planner p=(" << p_u.x() << ", " << p_u.y() << ", "
+              << p_u.z() << ") u  |v|=" << v_u.norm() << " u/s  |a|="
+              << a_u.norm() << " u/s^2\n"
+              << "  pvaEnvelopeProblem: "
+              << (prob.empty() ? "(within region)" : prob) << "\n"
+              << "  NOTE: NOT a physics verdict — example aircraft vs "
+                 "cruise model.\n";
+    // Interface contract: plan() must AGREE with the validator, and on
+    // rejection the reason and the validator's own words must reach the
+    // caller. (start_vel_synthesized=false, commanded=true: this is an
+    // explicit handoff state.)
+    const path_manager::PlanResult r =
+        chain.plan(p_u, v_u, a_u, goal, false, {}, true);
+    if (prob.empty()) {
+      expect(r.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+             "validator passed -> plan() does not reject the head");
+    } else {
+      expect(!r.hasTrajectory() &&
+                 r.reason ==
+                     path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+             "validator rejected -> FAILED(INITIAL_MODE_UNSUPPORTED)");
+      expect(r.detail.find(prob) != std::string::npos,
+             "validator's reason text reaches PlanResult.detail verbatim");
+    }
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
