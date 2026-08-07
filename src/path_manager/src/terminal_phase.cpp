@@ -1,5 +1,7 @@
 #include "path_manager/terminal_phase.h"
 
+#include "path_manager/quintic_hermite.h"
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -7,30 +9,6 @@
 namespace path_manager {
 
 namespace {
-
-// One quintic Hermite piece matching exact P/V/A at both ends. Coefficient
-// convention (poly_traj::Piece): p(t) = sum_i col(i) * t^(5-i), col(5) the
-// constant. Verified against getPos/getVel/getAcc closed forms.
-poly_traj::CoefficientMat hermite(const Eigen::Vector3d &p0,
-                                  const Eigen::Vector3d &v0,
-                                  const Eigen::Vector3d &a0,
-                                  const Eigen::Vector3d &p1,
-                                  const Eigen::Vector3d &v1,
-                                  const Eigen::Vector3d &a1, double T)
-{
-  const double T2 = T * T, T3 = T2 * T, T4 = T3 * T, T5 = T4 * T;
-  const Eigen::Vector3d A = p1 - p0 - v0 * T - 0.5 * a0 * T2;
-  const Eigen::Vector3d B = v1 - v0 - a0 * T;
-  const Eigen::Vector3d C = a1 - a0;
-  poly_traj::CoefficientMat M;
-  M.col(5) = p0;
-  M.col(4) = v0;
-  M.col(3) = 0.5 * a0;
-  M.col(2) = 10.0 * A / T3 - 4.0 * B / T2 + 0.5 * C / T;
-  M.col(1) = -15.0 * A / T4 + 7.0 * B / T3 - C / T2;
-  M.col(0) = 6.0 * A / T5 - 3.0 * B / T4 + 0.5 * C / T3;
-  return M;
-}
 
 // Quintic smoothstep and its first two derivatives on x in [0, 1]:
 // C2 with zero rate and curvature at both ends.
@@ -158,7 +136,7 @@ poly_traj::Trajectory TerminalPhase::helixDescent(
     if (k1 <= k0) continue;  // pathological piece_dt <= dt only
     const double T = sample_time(k1) - sample_time(k0);
     state_at(k1, &p1, &v1, &a1);
-    traj.emplace_back(T, hermite(p0, v0, a0, p1, v1, a1, T));
+    traj.emplace_back(T, quinticHermite(p0, v0, a0, p1, v1, a1, T));
     p0 = p1; v0 = v1; a0 = a1; k0 = k1;
   }
   if (min_agl_out) *min_agl_out = min_agl;
