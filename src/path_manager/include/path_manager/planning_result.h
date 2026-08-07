@@ -56,6 +56,14 @@ enum class PlanReason {
   // audits cannot see these: they judge one span at a time and the
   // prescribed terminal phase not at all.
   STITCHED_FLIGHT_UNSAFE,
+  // [S13] Transition coordinator outcomes. GENERATION_FAILED: no primitive
+  // candidate survived the propagation gates (or the zone policy could not
+  // be judged); ADAPTER_UNSOUND: a captured candidate failed the
+  // polynomial adapter's interior checks; JUNCTION_UNSOUND: the solved
+  // chain head did not sit on the transition tail within tolerance.
+  TRANSITION_GENERATION_FAILED,
+  TRANSITION_ADAPTER_UNSOUND,
+  TRANSITION_JUNCTION_UNSOUND,
 };
 
 struct PlanResult {

@@ -98,6 +98,16 @@ public:
                    const std::vector<Eigen::Vector3d> &waypoints,
                    bool run_parallel, std::vector<Eigen::Vector3d> *route,
                    std::vector<double> *cap, double *fe_ms);
+  // [S13] A transition product to PREPEND: planOverRoute then judges the
+  // C2 junction (chain head vs transition tail, planner units), shifts
+  // every span behind a leading TRANSITION span, and stores/visualizes
+  // the FULL flight. The prescribed head also disables the [VEL-ALIGN]/
+  // [STALL-FLOOR] rewrites structurally — a trajectory-derived head that
+  // already passed the handoff gate must never be re-aimed or floored.
+  struct TransitionPrefix {
+    poly_traj::Trajectory traj;      // planner units, quintic pieces
+    double junction_pva_tol_u{1e-6};
+  };
   PlanResult planOverRoute(const std::vector<Eigen::Vector3d> &route,
                            const std::vector<double> &cap, double fe_ms,
                            const Eigen::Vector3d &start_pos,
@@ -105,7 +115,8 @@ public:
                            const Eigen::Vector3d &start_acc,
                            const std::vector<Eigen::Vector3d> &waypoints,
                            bool start_vel_synthesized, bool run_parallel,
-                           const ego_planner::TailBoundary &mission_tail);
+                           const ego_planner::TailBoundary &mission_tail,
+                           const TransitionPrefix *transition = nullptr);
   // [S13] Which JUDGMENT applies to a span of the flight. The evaluator
   // selects the model by this CONTRACT TYPE — never by parsing the display
   // name (review point: labels are for output; a typo in a string must not
@@ -140,11 +151,6 @@ public:
   };
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
                                const std::vector<PhaseSpan> &spans) const;
-  // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
-  // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
-  // budget exceeded -> the given result degraded, otherwise unchanged.
-  PlanResult stitchedVerdictResult(const FlightVerdict &fv,
-                                   PlanResult ok_result) const;
 
   // [S13] Coordinator-owned: while true, every single-shot fallback inside
   // the route mode returns FAILED instead of re-planning from the mission
@@ -154,6 +160,13 @@ public:
   void setTransitionActive(bool on) { transition_active_ = on; }
 
 private:
+  // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
+  // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
+  // budget exceeded -> the given result degraded, otherwise unchanged.
+  // PRIVATE since the coordinator internalized it: the harness pins the
+  // mapping through the public planOverRoute path (coverage relocation).
+  PlanResult stitchedVerdictResult(const FlightVerdict &fv,
+                                   PlanResult ok_result) const;
   // Junction contract: the shared boundary state between two adjacent runs.
   struct Contract {
     double t;  // baseline trajectory time the state was sampled at

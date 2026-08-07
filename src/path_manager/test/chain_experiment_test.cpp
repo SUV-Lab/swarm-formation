@@ -876,18 +876,12 @@ int main(int argc, char **argv)
                          {T, PK::CRUISE, "tail"}})
                 .evaluated,
            "TERMINAL not last -> UNEVALUATED");
-    // And the verdict plumbing: UNEVALUATED -> FAILED + stored trajectory
-    // invalidated (the FSM executes on duration>0 && start_time>0 alone).
-    path_manager::SegmentChainPlanner::FlightVerdict unev;  // evaluated=false
-    const path_manager::PlanResult rv =
-        chain.stitchedVerdictResult(unev, path_manager::PlanResult::success());
-    expect(!rv.hasTrajectory() &&
-               rv.reason ==
-                   path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
-           "UNEVALUATED verdict -> FAILED(STITCHED_FLIGHT_UNSAFE)");
-    expect(pm->traj_.local_traj.duration == 0.0 &&
-               pm->traj_.local_traj.start_time == 0.0,
-           "stored trajectory invalidated on the UNEVALUATED verdict");
+    // The UNEVALUATED -> FAILED(+storage invalidated) verdict mapping is
+    // pinned through the PUBLIC path only now (stitchedVerdictResult went
+    // private with the coordinator): the transition coordinator variants
+    // exercise it end-to-end via planOverRoute. This variant owns the
+    // evaluateFlight span contract alone — an intentional coverage
+    // relocation, recorded in the privatizing commit.
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

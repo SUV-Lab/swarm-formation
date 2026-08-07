@@ -1359,7 +1359,8 @@ PlanResult SegmentChainPlanner::planOverRoute(
     const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
     const std::vector<Eigen::Vector3d> &waypoints,
     bool start_vel_synthesized, bool run_parallel,
-    const ego_planner::TailBoundary &mission_tail)
+    const ego_planner::TailBoundary &mission_tail,
+    const TransitionPrefix *transition)
 {
   // [S13] Fail-closed INPUT contract (review find): once a coordinator can
   // hand this function an external route slice and head PVA, a mismatch
@@ -1570,10 +1571,12 @@ PlanResult SegmentChainPlanner::planOverRoute(
   segments_restore.saved = segments_;
 
   // [VEL-ALIGN] resolved BEFORE authoring: the departure handoff screening
-  // measures the turn the EFFECTIVE start velocity needs.
+  // measures the turn the EFFECTIVE start velocity needs. A transition-
+  // prescribed head is exempt STRUCTURALLY: it already passed the handoff
+  // gate and must never be re-aimed.
   Eigen::Vector3d v0 = start_vel;
-  if (pm_->alignStartVelToRoute() && start_vel_synthesized &&
-      route.size() >= 2) {
+  if (transition == nullptr && pm_->alignStartVelToRoute() &&
+      start_vel_synthesized && route.size() >= 2) {
     Eigen::Vector3d dir = route[1] - route[0];
     dir.z() = 0.0;
     if (dir.head<2>().norm() > 1e-9)
@@ -1592,8 +1595,12 @@ PlanResult SegmentChainPlanner::planOverRoute(
 
   // Segment 1's head is the MISSION start: replicate [VEL-ALIGN] (the
   // route is known here) and the [STALL-FLOOR] the bypassed planGlobalTraj
-  // path would have applied.
-  if (const auto *dyn = pm_->dynamicsParams()) {
+  // path would have applied. Never on a transition-prescribed head: a
+  // trajectory-derived state that passed the handoff gate must not be
+  // speed-floored into a different one (the guard is structural, not a
+  // numeric coincidence).
+  if (const auto *dyn = transition == nullptr ? pm_->dynamicsParams()
+                                              : nullptr) {
     double um = 100.0;
     if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
       um = node_->get_parameter("optimization/dynamics_unit_xy_m")
@@ -2139,6 +2146,43 @@ PlanResult SegmentChainPlanner::planOverRoute(
   if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
     spans.push_back(
         {chained.getTotalDuration(), PhaseKind::TERMINAL, "terminal"});
+  }
+
+  if (transition != nullptr) {
+    // [S13] G5b C2 junction: the solved chain head must sit EXACTLY on
+    // the transition tail (planner units). The seam jerk jump is
+    // MEASURED and logged only — its cap is a section-8 number that must
+    // not be self-calibrated from generated output.
+    poly_traj::Trajectory tt = transition->traj;
+    const double Tt = tt.getTotalDuration();
+    const double dP = (tt.getPos(Tt) - chained.getPos(0.0)).norm();
+    const double dV = (tt.getVel(Tt) - chained.getVel(0.0)).norm();
+    const double dA = (tt.getAcc(Tt) - chained.getAcc(0.0)).norm();
+    const double djerk = (tt.getJer(Tt) - chained.getJer(0.0)).norm();
+    log_->infof("[S13] junction seam: dP %.3g dV %.3g dA %.3g u (tol %.3g)"
+                ", jerk jump %.3g u/s^3 (measured, ungated)",
+                dP, dV, dA, transition->junction_pva_tol_u, djerk);
+    if (!(dP <= transition->junction_pva_tol_u &&
+          dV <= transition->junction_pva_tol_u &&
+          dA <= transition->junction_pva_tol_u)) {
+      invalidateStoredTrajectory();
+      return PlanResult::failedBecause(
+          PlanReason::TRANSITION_JUNCTION_UNSOUND,
+          "chain head is not on the transition tail");
+    }
+    // Prepend: the FULL flight is judged, stored and visualized — with a
+    // leading TRANSITION span (measured, excluded from cruise envelope
+    // statistics; gates deferred by the anti-circularity doctrine).
+    poly_traj::Trajectory full = transition->traj;
+    full.append(chained);
+    std::vector<PhaseSpan> full_spans;
+    full_spans.push_back({Tt, PhaseKind::TRANSITION, "transition"});
+    for (PhaseSpan sp : spans) {
+      sp.t_end += Tt;
+      full_spans.push_back(sp);
+    }
+    chained = full;
+    spans = full_spans;
   }
 
   // [STITCH-GATE] JUDGE BEFORE STORING. The verdict has to precede
