@@ -277,6 +277,33 @@ private:
   // [CHAIN-PAR] see planRouteParallel. Contract.t carries pseudo-time
   // (arc / cruise) for the logs. v0 = the mission's effective start velocity
   // — the departure handoff screening needs it ([PHASE-DEP] design v2).
+  // [S13] Handoff screening (frozen v4 [PHASE] rules) extracted whole so
+  // the transition coordinator reuses the SAME predicates with a
+  // speed-change arc term (accel_arc_u). Const and value-returning: no
+  // member state is touched; the caller owns logging and assignment.
+  struct ReachLimits {
+    double dep_min_arc_u{30.0};
+    double calm_window_u{40.0};
+    double kappa_calm{0.01};
+    double grade_max{1e9};      // grade_frac * tan_grade_max
+    double tan_grade_max{1e9};
+    double turn_radius_u{0.0};
+    double accel_arc_u{0.0};    // transition speed-change arc; 0 = legacy
+    size_t max_candidates{3};
+  };
+  struct HandoffScreenResult {
+    std::vector<int> dep_candidates;  // first-fit forward (N>=3 rule)
+    std::vector<int> arr_candidates;  // first-fit backward (N>=3 rule)
+    int shared_idx{-1};             // N==2 rule: calmest both-way vertex
+    double shared_kappa{0.0};
+  };
+  static std::vector<double> routeArcTable(
+      const std::vector<Eigen::Vector3d> &route);
+  static std::vector<double> routeCurvature(
+      const std::vector<Eigen::Vector3d> &route);
+  HandoffScreenResult screenHandoffCandidates(
+      const std::vector<Eigen::Vector3d> &route, const Eigen::Vector3d &v0,
+      const ReachLimits &rl, double arr_min_arc_u) const;
   bool authorContractsFromRoute(const std::vector<Eigen::Vector3d> &route,
                                 const Eigen::Vector3d &v0,
                                 std::vector<Contract> *contracts) const;

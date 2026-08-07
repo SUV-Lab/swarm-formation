@@ -914,15 +914,118 @@ bool SegmentChainPlanner::validateConnector(
   return true;
 }
 
+std::vector<double> SegmentChainPlanner::routeArcTable(
+    const std::vector<Eigen::Vector3d> &route)
+{
+  std::vector<double> s(route.size(), 0.0);
+  for (size_t i = 1; i < route.size(); ++i)
+    s[i] = s[i - 1] + (route[i] - route[i - 1]).norm();
+  return s;
+}
+
+std::vector<double> SegmentChainPlanner::routeCurvature(
+    const std::vector<Eigen::Vector3d> &route)
+{
+  const int M = static_cast<int>(route.size());
+  std::vector<double> kappa(static_cast<size_t>(M), 0.0);
+  for (int i = 1; i + 1 < M; ++i) {
+    const Eigen::Vector3d a = route[i] - route[i - 1];
+    const Eigen::Vector3d b = route[i + 1] - route[i];
+    const double la = a.norm(), lb = b.norm();
+    if (la < 1e-9 || lb < 1e-9) continue;
+    const double c =
+        std::max(-1.0, std::min(1.0, a.dot(b) / (la * lb)));
+    kappa[static_cast<size_t>(i)] = std::acos(c) / (0.5 * (la + lb));
+  }
+  return kappa;
+}
+
+SegmentChainPlanner::HandoffScreenResult
+SegmentChainPlanner::screenHandoffCandidates(
+    const std::vector<Eigen::Vector3d> &route, const Eigen::Vector3d &v0,
+    const ReachLimits &rl, double arr_min_arc_u) const
+{
+  HandoffScreenResult out;
+  const int M = static_cast<int>(route.size());
+  if (M < 3) return out;
+  const std::vector<double> s = routeArcTable(route);
+  const std::vector<double> kappa = routeCurvature(route);
+  const double S = s.back();
+  const auto vertexCalm = [&](int k) {
+    if (kappa[static_cast<size_t>(k)] > rl.kappa_calm) return false;
+    const int km = std::max(0, k - 1), kp = std::min(M - 1, k + 1);
+    const double hxy = (route[kp] - route[km]).head<2>().norm();
+    const double gr =
+        hxy > 1e-9 ? std::abs(route[kp].z() - route[km].z()) / hxy : 1e3;
+    if (gr > rl.grade_max) return false;
+    return !nearRiskZone(route[k]);
+  };
+  const auto sustained = [&](int i, int dir) {  // +1 fwd, -1 back, 0 both
+    const auto leg = [&](int step) {
+      double acc = 0.0;
+      for (int k = i; k >= 1 && k + 1 < M; k += step) {
+        if (!vertexCalm(k)) return false;
+        acc += (route[k + 1] - route[k]).norm();
+        if (acc >= rl.calm_window_u) return true;
+      }
+      return true;  // window truncated by the route end — accept
+    };
+    if (dir >= 0 && !leg(+1)) return false;
+    if (dir <= 0 && !leg(-1)) return false;
+    return true;
+  };
+  const Eigen::Vector2d v0h = v0.head<2>();
+  const auto depRequired = [&](int i) {
+    double req = rl.dep_min_arc_u;
+    if (rl.turn_radius_u > 0.0 && v0h.norm() > 1e-6) {
+      Eigen::Vector2d tan_i =
+          (route[std::min(i + 1, M - 1)] - route[std::max(i - 1, 0)])
+              .head<2>();
+      if (tan_i.norm() > 1e-9) {
+        const double dpsi = std::abs(std::atan2(
+            v0h.normalized().x() * tan_i.normalized().y() -
+                v0h.normalized().y() * tan_i.normalized().x(),
+            v0h.normalized().dot(tan_i.normalized())));
+        req = std::max(req, rl.turn_radius_u * dpsi);
+      }
+    }
+    if (rl.tan_grade_max < 1e8)
+      req = std::max(req, std::abs(route[i].z() - route.front().z()) /
+                              std::max(1e-6, rl.tan_grade_max));
+    // Speed-change arc (transition only; 0 for the cruise-to-cruise
+    // screen): the entry must also be far enough to close the speed gap.
+    return req + rl.accel_arc_u;
+  };
+  for (int i = 1;
+       i + 1 < M && out.dep_candidates.size() < rl.max_candidates; ++i)
+    if (s[static_cast<size_t>(i)] >= depRequired(i) && sustained(i, +1))
+      out.dep_candidates.push_back(i);
+  for (int i = M - 2;
+       i >= 1 && out.arr_candidates.size() < rl.max_candidates; --i)
+    if (s[static_cast<size_t>(i)] <= S - arr_min_arc_u && sustained(i, -1))
+      out.arr_candidates.push_back(i);
+  double best_k = std::numeric_limits<double>::infinity();
+  for (int i = 1; i + 1 < M; ++i) {
+    if (s[static_cast<size_t>(i)] < depRequired(i) ||
+        s[static_cast<size_t>(i)] > S - arr_min_arc_u)
+      continue;
+    if (!sustained(i, 0)) continue;
+    if (kappa[static_cast<size_t>(i)] < best_k) {
+      best_k = kappa[static_cast<size_t>(i)];
+      out.shared_idx = i;
+    }
+  }
+  if (out.shared_idx >= 0) out.shared_kappa = best_k;
+  return out;
+}
+
 bool SegmentChainPlanner::authorContractsFromRoute(
     const std::vector<Eigen::Vector3d> &route, const Eigen::Vector3d &v0,
     std::vector<Contract> *contracts) const
 {
   const int M = static_cast<int>(route.size());
   if (M < segments_ + 1 || !contracts) return false;
-  std::vector<double> s(static_cast<size_t>(M), 0.0);
-  for (int i = 1; i < M; ++i)
-    s[i] = s[i - 1] + (route[i] - route[i - 1]).norm();
+  const std::vector<double> s = routeArcTable(route);
   const double S = s.back();
   if (S < 1e-6) return false;
   const double cruise = pm_->maxVel();
@@ -992,16 +1095,7 @@ bool SegmentChainPlanner::authorContractsFromRoute(
 
   // Discrete 3D curvature per interior vertex: turn angle over the mean
   // chord — the a-priori stand-in for the baseline's |a| (= v^2 * kappa).
-  std::vector<double> kappa(static_cast<size_t>(M), 0.0);
-  for (int i = 1; i + 1 < M; ++i) {
-    const Eigen::Vector3d a = route[i] - route[i - 1];
-    const Eigen::Vector3d b = route[i + 1] - route[i];
-    const double la = a.norm(), lb = b.norm();
-    if (la < 1e-9 || lb < 1e-9) continue;
-    const double c =
-        std::max(-1.0, std::min(1.0, a.dot(b) / (la * lb)));
-    kappa[static_cast<size_t>(i)] = std::acos(c) / (0.5 * (la + lb));
-  }
+  const std::vector<double> kappa = routeCurvature(route);
 
   // [PHASE] Departure/arrival handoff selection (frozen v4 rules). All
   // thresholds are ARC-based — vertex counts depend on sampling density.
@@ -1027,29 +1121,6 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     const double kcalm = readNumParam(node_, "chain/phase/kappa_calm", 0.01);
     const double gmax =
         readNumParam(node_, "chain/phase/grade_frac", 0.5) * tan_grade_max;
-    const auto vertexCalm = [&](int k) {
-      if (kappa[static_cast<size_t>(k)] > kcalm) return false;
-      const int km = std::max(0, k - 1), kp = std::min(M - 1, k + 1);
-      const double hxy = (route[kp] - route[km]).head<2>().norm();
-      const double gr =
-          hxy > 1e-9 ? std::abs(route[kp].z() - route[km].z()) / hxy : 1e3;
-      if (gr > gmax) return false;
-      return !nearRiskZone(route[k]);
-    };
-    const auto sustained = [&](int i, int dir) {  // +1 fwd, -1 back, 0 both
-      const auto leg = [&](int step) {
-        double acc = 0.0;
-        for (int k = i; k >= 1 && k + 1 < M; k += step) {
-          if (!vertexCalm(k)) return false;
-          acc += (route[k + 1] - route[k]).norm();
-          if (acc >= win) return true;
-        }
-        return true;  // window truncated by the route end — accept
-      };
-      if (dir >= 0 && !leg(+1)) return false;
-      if (dir <= 0 && !leg(-1)) return false;
-      return true;
-    };
     // [PHASE-DEP] reachability LOWER-BOUND screening (necessary, not
     // sufficient — the connector solve is the sufficiency check): the
     // handoff must sit beyond the arc a margin-backed minimum-radius turn
@@ -1069,26 +1140,6 @@ bool SegmentChainPlanner::authorContractsFromRoute(
           1.5 * vm * vm /
           (dyn->gravity_mps2 * std::sqrt(nmax * nmax - 1.0)) / um;
     }
-    const Eigen::Vector2d v0h = v0.head<2>();
-    const auto depRequired = [&](int i) {
-      double req = dep_min;
-      if (phase_turn_radius_u_ > 0.0 && v0h.norm() > 1e-6) {
-        Eigen::Vector2d tan_i =
-            (route[std::min(i + 1, M - 1)] - route[std::max(i - 1, 0)])
-                .head<2>();
-        if (tan_i.norm() > 1e-9) {
-          const double dpsi = std::abs(std::atan2(
-              v0h.normalized().x() * tan_i.normalized().y() -
-                  v0h.normalized().y() * tan_i.normalized().x(),
-              v0h.normalized().dot(tan_i.normalized())));
-          req = std::max(req, phase_turn_radius_u_ * dpsi);
-        }
-      }
-      if (tan_grade_max < 1e8)
-        req = std::max(req, std::abs(route[i].z() - route.front().z()) /
-                                std::max(1e-6, tan_grade_max));
-      return req;
-    };
     dep_candidates_.clear();
     arr_candidates_.clear();
     // Candidates are taken FIRST-FIT (nearest qualifying vertex), not
@@ -1102,14 +1153,21 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     const size_t max_cand = static_cast<size_t>(std::min(
         16.0, std::max(1.0,
                        readNumParam(node_, "chain/phase/max_candidates", 3.0))));
+    ReachLimits rl;
+    rl.dep_min_arc_u = dep_min;
+    rl.calm_window_u = win;
+    rl.kappa_calm = kcalm;
+    rl.grade_max = gmax;
+    rl.tan_grade_max = tan_grade_max;
+    rl.turn_radius_u = phase_turn_radius_u_;
+    rl.accel_arc_u = 0.0;  // cruise-to-cruise legacy screen: no speed change
+    rl.max_candidates = max_cand;
+    const HandoffScreenResult hs =
+        screenHandoffCandidates(route, v0, rl, arr_min);
     if (segments_ >= 3) {
-      for (int i = 1; i + 1 < M && dep_candidates_.size() < max_cand; ++i)
-        if (s[static_cast<size_t>(i)] >= depRequired(i) && sustained(i, +1))
-          dep_candidates_.push_back(i);
+      dep_candidates_ = hs.dep_candidates;
       if (!dep_candidates_.empty()) dep_idx = dep_candidates_.front();
-      for (int i = M - 2; i >= 1 && arr_candidates_.size() < max_cand; --i)
-        if (s[static_cast<size_t>(i)] <= S - arr_min && sustained(i, -1))
-          arr_candidates_.push_back(i);
+      arr_candidates_ = hs.arr_candidates;
       if (!arr_candidates_.empty()) arr_idx = arr_candidates_.front();
       if (dep_idx < 0 || arr_idx < 0 || arr_idx <= dep_idx ||
           s[static_cast<size_t>(arr_idx)] - s[static_cast<size_t>(dep_idx)] <
@@ -1131,22 +1189,12 @@ bool SegmentChainPlanner::authorContractsFromRoute(
                         s[static_cast<size_t>(dep_idx)]);
       }
     } else {  // N == 2: single shared handoff, BOTH screenings at once
-      double best_k = std::numeric_limits<double>::infinity();
-      for (int i = 1; i + 1 < M; ++i) {
-        if (s[static_cast<size_t>(i)] < depRequired(i) ||
-            s[static_cast<size_t>(i)] > S - arr_min)
-          continue;
-        if (!sustained(i, 0)) continue;
-        if (kappa[static_cast<size_t>(i)] < best_k) {
-          best_k = kappa[static_cast<size_t>(i)];
-          dep_idx = i;
-        }
-      }
+      dep_idx = hs.shared_idx;
       if (dep_idx >= 0) {
         phase_applied_ = true;
         dep_candidates_.assign(1, dep_idx);  // N=2: no boundary-move retry
         log_->infof("[PHASE] N=2 shared handoff @s=%.1f u (kappa %.4f)",
-                    s[static_cast<size_t>(dep_idx)], best_k);
+                    s[static_cast<size_t>(dep_idx)], hs.shared_kappa);
       } else {
         phase_note_ = "no shared departure/arrival handoff (N=2) — balanced "
                       "junction kept, phase semantics degraded";
