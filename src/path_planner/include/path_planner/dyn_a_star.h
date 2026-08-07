@@ -456,22 +456,8 @@ private:
             if (i < zone_no_barrier_.size() && zone_no_barrier_[i]) continue;
             if (skip_soft_override && i < zone_soft_override_.size() &&
                 zone_soft_override_[i]) continue;
-            const auto &tz = (*risk_zones_)[i];
-            const double rv = tz.vertical_reach > 0.0
-                                  ? tz.vertical_reach : tz.reach;
-            if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
-            const Eigen::Vector3d d = pos - tz.center;
-            const double q2 = d.head<2>().squaredNorm() /
-                                  (tz.reach * tz.reach) +
-                              d.z() * d.z() /
-                                  (rv * rv);
-            if (q2 < 1.0) {
-                // The front-end barrier is intentionally hard. Its terrain
-                // boundary is the 0.5 contour of the optimizer's smooth LOS
-                // transition, i.e. the exact radial-horizon ceiling.
-                if (!risk_visibility_ || risk_visibility_(i, pos) > 0.5)
-                    return static_cast<int>(i);
-            }
+            if (zoneVisibleVolumeContains(i, pos))
+                return static_cast<int>(i);
         }
         return -1;
     }
@@ -486,24 +472,11 @@ private:
     // pull 6-7x terrain restoring, terrain penetration, audit reject).
     inline bool insideHardZoneVol(const Eigen::Vector3d &pos) const {
         if (!risk_zones_ || risk_barrier_ <= 0.0) return false;
-        constexpr double kInflate2 = 1.05 * 1.05;
-        constexpr double kHardVis = 0.35;
         for (size_t i = 0; i < risk_zones_->size(); ++i) {
             if (i < zone_no_barrier_.size() && zone_no_barrier_[i]) continue;
             if (i < zone_soft_override_.size() && zone_soft_override_[i])
                 continue;
-            const auto &tz = (*risk_zones_)[i];
-            const double rv = tz.vertical_reach > 0.0
-                                  ? tz.vertical_reach : tz.reach;
-            if (!(tz.reach > 0.0) || !(rv > 0.0)) continue;
-            const Eigen::Vector3d d = pos - tz.center;
-            const double q2 = d.head<2>().squaredNorm() /
-                                  (tz.reach * tz.reach) +
-                              d.z() * d.z() / (rv * rv);
-            if (q2 < kInflate2) {
-                if (!risk_visibility_ || risk_visibility_(i, pos) > kHardVis)
-                    return true;
-            }
+            if (zoneHardVolumeContains(i, pos)) return true;
         }
         return false;
     }
@@ -684,14 +657,32 @@ public:
     const std::vector<char> &zoneSoftOverride() const {
       return zone_soft_override_;
     }
-    // [S13] GEOMETRY-ONLY visible-volume membership of ONE zone — the same
-    // ellipsoid + visibility>0.5 judgment the hard barrier uses
-    // (visibleBarrierZoneAt), WITHOUT the exemption filtering: exemptions
-    // are POLICY and live in the snapshot's dispositions, membership is
-    // geometry. This is the shared contact primitive the transition
-    // generator consumes through PathManager::zoneContact.
+    // [S13] GEOMETRY-ONLY NOMINAL-volume membership of ONE zone (1.0x
+    // ellipsoid, visibility > 0.5 — the barrier wall / risk-positive rim),
+    // WITHOUT exemption filtering. This identifies which zones a route
+    // actually PASSES THROUGH (the pass-2 crossed set, the barrier wall
+    // via visibleBarrierZoneAt) — it is NOT the contact gate; candidates
+    // are gated on the larger zoneHardVolumeContains below.
     inline bool zoneVisibleVolumeContains(size_t i,
                                           const Eigen::Vector3d &pos) const {
+        return zoneVolumeContains(i, pos, 1.0, 0.5);
+    }
+    // [S13] GEOMETRY-ONLY HARD-EXCLUSION volume of ONE zone — the exact
+    // 1.05x-inflated ellipsoid + visibility>0.35 standoff volume the hard
+    // passes exclude ROUTES from (insideHardZoneVol), WITHOUT the
+    // exemption filtering: exemptions are POLICY and live in the
+    // snapshot's dispositions. This is the shared contact primitive the
+    // transition generator consumes through PathManager::zoneContact — a
+    // candidate is judged by the same standard a route is (review find:
+    // the nominal 1.0x/0.5 volume read CLEAR inside the standoff band,
+    // where visibility in (0.35, 0.5] still carries positive risk).
+    inline bool zoneHardVolumeContains(size_t i,
+                                       const Eigen::Vector3d &pos) const {
+        return zoneVolumeContains(i, pos, kZoneHardInflate, kZoneHardVis);
+    }
+    // Shared single-zone volume test: scaled ellipsoid + LOS contour.
+    inline bool zoneVolumeContains(size_t i, const Eigen::Vector3d &pos,
+                                   double scale, double vis_floor) const {
         if (!risk_zones_ || i >= risk_zones_->size()) return false;
         const auto &tz = (*risk_zones_)[i];
         const double rv =
@@ -701,9 +692,13 @@ public:
         const double q2 =
             d.head<2>().squaredNorm() / (tz.reach * tz.reach) +
             d.z() * d.z() / (rv * rv);
-        if (q2 >= 1.0) return false;
-        return !risk_visibility_ || risk_visibility_(i, pos) > 0.5;
+        if (q2 >= scale * scale) return false;
+        return !risk_visibility_ || risk_visibility_(i, pos) > vis_floor;
     }
+    // [ZONE-AVOID] standoff constants shared by insideHardZoneVol and the
+    // transition contact gate (see insideHardZoneVol's rationale above).
+    static constexpr double kZoneHardInflate = 1.05;
+    static constexpr double kZoneHardVis = 0.35;
     void setSmhaW(double w) { smha_w_ = w; }
     void setFrontEnd(FrontEnd fe) { front_end_ = fe; }
     void setFm2CoarseK(int k) { fm2_coarse_k_ = (k >= 1 ? k : 1); }

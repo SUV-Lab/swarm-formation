@@ -596,16 +596,30 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                 // inside and the search collapses to the all-soft pass 2
                 // (observed on a 12-zone ring: one release of an
                 // overlapping pair kept the annulus sealed).
+                // Sampled along SEGMENTS (<=0.5 u, same step as
+                // probeRouteOk), not vertices only: a zone entered
+                // between two vertices would stay unmarked, be
+                // re-hardened by pass 3, and collapse the search the
+                // same way the first-hit marking did.
                 std::vector<char> crossed(risk_zones_->size(), 0);
-                for (const auto &pp : probe) {
+                auto mark = [&](const Eigen::Vector3d &q) {
                     for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
                         if (crossed[zi]) continue;
                         if (zi < zone_no_barrier_.size() &&
                             zone_no_barrier_[zi]) continue;
-                        if (zoneVisibleVolumeContains(zi, pp))
+                        if (zoneVisibleVolumeContains(zi, q))
                             crossed[zi] = 1;
                     }
+                };
+                for (size_t vi = 0; vi + 1 < probe.size(); ++vi) {
+                    const Eigen::Vector3d &a = probe[vi];
+                    const Eigen::Vector3d &b = probe[vi + 1];
+                    const int n = std::max(
+                        1, (int)std::ceil((b - a).norm() / 0.5));
+                    for (int t = 0; t < n; ++t)
+                        mark(a + (double)t / n * (b - a));
                 }
+                if (!probe.empty()) mark(probe.back());
                 zone_soft_override_ = crossed;
                 zone_hard_mode_ = true;
                 fm2BuildSpeedMap();

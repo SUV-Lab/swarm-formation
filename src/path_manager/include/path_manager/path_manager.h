@@ -466,22 +466,29 @@ namespace path_manager
     // Structured contact result — STALE/INVALID cannot be mistaken for
     // "no contact" (review find: an optional out-pointer let a caller read
     // a stale snapshot as CLEAR).
-    //   CLEAR    outside the zone's visible volume
+    //   CLEAR    outside the zone's hard-exclusion volume
     //   CONTACT  inside it — for a HARD_AVOID zone this disqualifies
     //   STALE    snapshot no longer matches the live state: fail the
     //            transition or re-commit the route, never guess
     //   INVALID  the snapshot never expressed a policy (see valid above)
     enum class ZoneContactResult { CLEAR, CONTACT, STALE, INVALID };
-    // CONTACT = the SAME visible-volume judgment the global searcher's
-    // hard barrier uses (ellipsoid + visibility > 0.5), via the searcher's
-    // own primitive — never the smooth risk field (review find: a faint
-    // smooth-risk tail is not hard contact).
+    // CONTACT = the SAME hard-exclusion volume the global search keeps
+    // routes out of (1.05x-inflated ellipsoid + visibility > 0.35
+    // standoff), via the searcher's own primitive — never the smooth risk
+    // field (review find: a faint smooth-risk tail is not hard contact),
+    // and never the nominal 1.0x/0.5 volume (review find: that read
+    // CLEAR inside the standoff band, where visibility in (0.35, 0.5]
+    // still carries positive risk).
     ZoneContactResult zoneContact(const ZonePolicySnapshot &snap, size_t idx,
                                   const Eigen::Vector3d &p) const;
-    // Smooth risk value for SOFT_* exposure statistics/minimization —
-    // separate from contact by design. False on stale/invalid snapshots.
-    bool zoneExposure(const ZonePolicySnapshot &snap, size_t idx,
-                      const Eigen::Vector3d &p, double *exposure) const;
+    // RAW smooth risk value for SOFT_* exposure statistics — separate
+    // from contact by design; false on stale/invalid snapshots. RAW means
+    // UNTAPERED: the live per-zone field (peak * u^2 * visibility) with
+    // no endpoint taper, so it is NOT the optimizer's cost field. If the
+    // transition generator ranks candidates by exposure near endpoints, a
+    // taper-consistent variant must be added with that cost design.
+    bool zoneExposureRaw(const ZonePolicySnapshot &snap, size_t idx,
+                         const Eigen::Vector3d &p, double *exposure) const;
     size_t numRiskZones() const { return risk_zones_.size(); }
     // [CHAIN] hooks for the segment-chain planner: junction placement must
     // stay clear of the zone moat + GNRON taper band, and the chained result

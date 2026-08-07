@@ -3705,16 +3705,19 @@ PathManager::ZoneContactResult PathManager::zoneContact(
 {
     if (!snap.valid) return ZoneContactResult::INVALID;
     if (!zoneSnapshotCurrent(snap, idx)) return ZoneContactResult::STALE;
-    // The searcher's OWN hard-volume primitive (ellipsoid + visibility>0.5)
-    // — identical judgment to the global barrier, no reimplementation.
-    return searcher_.zoneVisibleVolumeContains(idx, p)
+    // The searcher's OWN hard-exclusion primitive (1.05x ellipsoid +
+    // visibility>0.35 standoff) — the exact volume the hard passes keep
+    // ROUTES out of, so a candidate is judged by the same standard a
+    // route is. The nominal 1.0x/0.5 volume is NOT enough here (review
+    // find): visibility in (0.35, 0.5] still carries positive risk.
+    return searcher_.zoneHardVolumeContains(idx, p)
                ? ZoneContactResult::CONTACT
                : ZoneContactResult::CLEAR;
 }
 
-bool PathManager::zoneExposure(const ZonePolicySnapshot &snap, size_t idx,
-                               const Eigen::Vector3d &p,
-                               double *exposure) const
+bool PathManager::zoneExposureRaw(const ZonePolicySnapshot &snap,
+                                  size_t idx, const Eigen::Vector3d &p,
+                                  double *exposure) const
 {
     if (!snap.valid || !zoneSnapshotCurrent(snap, idx)) return false;
     if (exposure) *exposure = getEffectiveRisk(idx, p);

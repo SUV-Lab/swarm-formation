@@ -584,8 +584,26 @@ int main(int argc, char **argv)
                ZC::CLEAR,
            "mission start -> CLEAR");
     double exposure = -1.0;
-    expect(pm->zoneExposure(snap, 0, z.center, &exposure) && exposure > 0.0,
-           "smooth exposure available separately from contact");
+    expect(pm->zoneExposureRaw(snap, 0, z.center, &exposure) &&
+               exposure > 0.0,
+           "raw smooth exposure available separately from contact");
+    // Boundary pins for the contact gate: the standard is the search's
+    // OWN hard-exclusion volume (1.05x + vis>0.35), not the nominal
+    // 1.0x rim — a point in the standoff shell must read CONTACT.
+    // (A visibility-band pin (0.35 < vis <= 0.5) needs a deterministic
+    // terrain-shadow point this DEM harness cannot promise — the shared
+    // primitive is the guarantee there.)
+    // Probe from the SNAPSHOT's shape copy (the derived zone: AGL mode
+    // re-bases center.z on the DEM), exactly as the generator will.
+    const path_manager::RiskZone &zderived = snap.zones[0].zone;
+    const Eigen::Vector3d shell =
+        zderived.center + Eigen::Vector3d(zderived.reach * 1.02, 0.0, 0.0);
+    expect(pm->zoneContact(snap, 0, shell) == ZC::CONTACT,
+           "standoff shell (q=1.02) -> CONTACT, same standard as a route");
+    const Eigen::Vector3d beyond =
+        zderived.center + Eigen::Vector3d(zderived.reach * 1.10, 0.0, 0.0);
+    expect(pm->zoneContact(snap, 0, beyond) == ZC::CLEAR,
+           "beyond the standoff (q=1.10) -> CLEAR");
     // (b) SAME zone list, new plan with the goal INSIDE the zone: the
     // dispositions are per-plan state, so the OLD snapshot must go STALE
     // even though no zone data changed (policy epoch, review find).
