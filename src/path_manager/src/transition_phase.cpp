@@ -34,8 +34,16 @@ constexpr double kBankLevelsRad[] = {0.3, 0.6};
 constexpr double kGammaRampRadPerS = 0.15;   // enumerated-target approach
 constexpr double kGammaGain = 0.6;           // CL law: gamma-tracking [1/s]
 constexpr double kPsiGain = 0.5;             // bank proportional band [rad]
-constexpr double kSteerTgoS = 15.0;  // LOS capture-steer inside this t_go
+constexpr double kSteerTgoS = 30.0;  // LOS capture-steer inside this t_go
+                                     // (600 m of vertical offset at 15 s
+                                     // left 69 m unconverged at the window)
 constexpr double kTgoMinS = 1.5;     // shortest blend the envelope can fly
+constexpr double kLeadS = 4.0;       // pursuit lead: steer onto the entry
+                                     // LINE this many seconds ahead, so
+                                     // lateral offset decays EARLY (chasing
+                                     // the point itself keeps lateral
+                                     // proportional to t_go — never inside
+                                     // the corridor when the window opens)
 constexpr double kSpeedTargetFrac = 1.02;    // hold V_target just above floor
 // Interior-margin command discipline: a demand within this fraction of a
 // limit is DISQUALIFIED before pointMassForces ever clamps it — accepted
@@ -86,13 +94,13 @@ struct Commands {
 };
 
 Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
-                            const EntryCandidate &entry, double gamma_cmd,
+                            const Eigen::Vector3d &aim_m, double gamma_cmd,
                             double bank_level, const TransitionLimits &lim)
 {
   const double capture_align_rad = lim.capture_align_rad;
   Commands c;
-  // Bank: proportional band toward the entry bearing, zero once aligned.
-  const Eigen::Vector3d to_entry = entry.pos_m - s.position_m;
+  // Bank: proportional band toward the aim bearing, zero once aligned.
+  const Eigen::Vector3d to_entry = aim_m - s.position_m;
   const double psi_err =
       wrapPi(std::atan2(to_entry.y(), to_entry.x()) - s.heading_rad);
   double bank = 0.0;
@@ -173,10 +181,14 @@ Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
   else if (s.speed_mps > v_hi)
     thrust = dyn.thrust_min_n;
   else
-    thrust = std::min(
-        t_hi, drag_n + W * std::sin(s.flight_path_angle_rad));
-  if (thrust > dyn.thrust_max_n * (1.0 - kCmdInteriorFrac) ||
-      thrust < dyn.thrust_min_n)
+    // Hold speed on the slope, floored at idle: a shallow descent whose
+    // drag+gravity balance sits below thrust_min is flown at idle (a LAW
+    // decision — the speed-window gates judge any resulting drift), and
+    // min(t_hi, .) is the law choosing maximum available power.
+    thrust = std::max(
+        dyn.thrust_min_n,
+        std::min(t_hi, drag_n + W * std::sin(s.flight_path_angle_rad)));
+  if (thrust > dyn.thrust_max_n * (1.0 - kCmdInteriorFrac))
     c.demand_interior = false;
   c.thrust_n = std::min(
       std::max(thrust, dyn.thrust_min_n),
@@ -260,6 +272,8 @@ struct CandidateOutcome {
 
 TransitionResult generate(const TransitionRequest &req)
 {
+  const bool dbg = std::getenv("TP_TRACE") != nullptr;
+  if (dbg) std::fprintf(stderr, "[TP-TRACE] enter generate\n");
   TransitionResult out;
   TransitionAudit &audit = out.audit;
   const TransitionLimits &lim = req.limits;
@@ -320,6 +334,13 @@ TransitionResult generate(const TransitionRequest &req)
 
   bool zone_stale_abort = false;
   int primitive_id = -1;
+  if (dbg)
+    std::fprintf(stderr,
+                 "[TP-TRACE] preconditions ok: %zu entries, dt=%.3f "
+                 "tmax=%.1f window=[%.1f,%.1f] agl=%.1f\n",
+                 entries.size(), lim.dt_s, lim.t_max_s,
+                 lim.end_speed_min_mps, lim.end_speed_max_mps,
+                 lim.min_agl_m);
 
   for (const EntryCandidate &entry : entries) {
     for (int gi = 0; gi < n_gamma && !zone_stale_abort; ++gi) {
@@ -333,6 +354,9 @@ TransitionResult generate(const TransitionRequest &req)
             dyn.flight_path_angle_max_rad * (1.0 - kCmdInteriorFrac));
         const double bank_level = kBankLevelsRad[bi];
 
+        if (dbg)
+          std::fprintf(stderr, "[TP-TRACE] candidate prim=%d entry_s=%.1f\n",
+                       primitive_id, entry.route_start_s);
         CandidateOutcome co;
         PointMassState s = s0;
         double gamma_cmd = s0.flight_path_angle_rad;
@@ -346,14 +370,25 @@ TransitionResult generate(const TransitionRequest &req)
               std::abs(s.flight_path_angle_rad) > kPreguardGammaRad) {
             ++audit.disq_preguard; disq = true; break;
           }
+          if (dbg && k % 250 == 0)
+            std::fprintf(
+                stderr,
+                "[TP-TRACE] prim=%d k=%d V=%.1f gam=%.3f z=%.0f "
+                "dwell=%.1f\n",
+                primitive_id, k, s.speed_mps, s.flight_path_angle_rad,
+                s.position_m.z(), dwell);
           if (req.terrain_z) {
             double elev = 0.0;
+            if (dbg && k == 0)
+              std::fprintf(stderr, "[TP-TRACE] k0 terrain call\n");
             if (!req.terrain_z(s.position_m.x(), s.position_m.y(), &elev))
               elev = 0.0;   // sea-level floor: lookup false WITH a source
             if (s.position_m.z() - elev < lim.min_agl_m) {
               ++audit.disq_terrain; disq = true; break;
             }
           }
+          if (dbg && k == 0)
+            std::fprintf(stderr, "[TP-TRACE] k0 zone probe\n");
           switch (req.zone_probe(s.position_m)) {
             case ZoneProbe::CLEAR: break;
             case ZoneProbe::CONTACT_HARD:
@@ -381,6 +416,10 @@ TransitionResult generate(const TransitionRequest &req)
           const double lateral = (to_entry - along * entry.tangent).norm();
           const double t_go = along / std::max(1.0, s.speed_mps);
           const Eigen::Vector3d vel = mmp_vehicle_dynamics::pointMassVelocity(s);
+          if (dbg && k % 250 == 0)
+            std::fprintf(stderr,
+                         "[TP-TRACE]   along=%.0f lat=%.1f tgo=%.1f\n",
+                         along, lateral, t_go);
           if (dwell >= lim.dwell_s && along > 0.0 &&
               t_go >= kTgoMinS && t_go <= 0.85 * lim.blend_t_max_s &&
               lateral <= lim.capture_lateral_m &&
@@ -401,6 +440,13 @@ TransitionResult generate(const TransitionRequest &req)
           if (k == max_steps) { ++audit.disq_timeout; disq = true; break; }
 
           // --- command synthesis + interior-margin discipline ---------
+          // Pursuit aim: the point on the entry LINE kLeadS seconds
+          // ahead — join the line early, ride it into the window.
+          const Eigen::Vector3d aim =
+              entry.pos_m -
+              entry.tangent *
+                  std::max(0.0, along - std::max(1.0, s.speed_mps) * kLeadS);
+          const Eigen::Vector3d to_aim = aim - s.position_m;
           double g_cmd;
           if (!(along > 0.0) || t_go > kSteerTgoS) {
             const double dg = gamma_target - gamma_cmd;
@@ -408,9 +454,10 @@ TransitionResult generate(const TransitionRequest &req)
             gamma_cmd += std::min(std::max(dg, -step), step);
             g_cmd = gamma_cmd;
           } else {
-            // Capture steer: line-of-sight elevation, clipped to the cone.
+            // Capture steer: line-of-sight elevation to the AIM point,
+            // clipped to the cone.
             const double los = std::atan2(
-                to_entry.z(), std::max(1e-6, to_entry.head<2>().norm()));
+                to_aim.z(), std::max(1e-6, to_aim.head<2>().norm()));
             g_cmd = std::min(
                 std::max(los, -dyn.flight_path_angle_max_rad *
                                   (1.0 - kCmdInteriorFrac)),
@@ -418,7 +465,7 @@ TransitionResult generate(const TransitionRequest &req)
             gamma_cmd = g_cmd;
           }
           const Commands cmd =
-              synthesizeCommands(dyn, s, entry, g_cmd, bank_level, lim);
+              synthesizeCommands(dyn, s, aim, g_cmd, bank_level, lim);
           gamma_cmd = cmd.gamma_cmd_applied;  // anti-windup: the ramp
           // continues from what the model could actually follow
           if (!cmd.demand_interior) {
@@ -449,12 +496,18 @@ TransitionResult generate(const TransitionRequest &req)
           co.samples.push_back({s, pointMassAcceleration(dyn, s, closed.inputs)});
           s = next;
         }
+        if (dbg)
+          std::fprintf(stderr,
+                       "[TP-TRACE] candidate prim=%d done: disq=%d "
+                       "captured=%d samples=%zu\n",
+                       primitive_id, disq ? 1 : 0, co.captured ? 1 : 0,
+                       co.samples.size());
         if (zone_stale_abort) break;
         if (disq || !co.captured) continue;
         // Final captured state joins the record.
         {
-          const Commands cmd =
-              synthesizeCommands(dyn, s, entry, gamma_cmd, bank_level, lim);
+          const Commands cmd = synthesizeCommands(
+              dyn, s, entry.pos_m, gamma_cmd, bank_level, lim);
           const auto closed = mmp_vehicle_dynamics::pointMassForces(
               dyn, s, cmd.cl, cmd.thrust_n, cmd.bank_rad);
           co.samples.push_back({s, pointMassAcceleration(dyn, s, closed.inputs)});

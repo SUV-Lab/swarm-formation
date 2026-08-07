@@ -1,5 +1,9 @@
 #include "path_manager/segment_chain_planner.h"
 
+#include <cstdio>
+
+#include "path_manager/transition_phase.h"
+
 #include <algorithm>
 #include <chrono>
 #include <limits>
@@ -247,23 +251,42 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   // below returns early, so the reset has to precede it.
   resetPlanState();
   // [ENVELOPE] Contract 1 (2026-08-08): an EXPLICITLY commanded initial
-  // velocity outside the cruise model's validity region is rejected HERE,
-  // before the front end or any optimizer runs. No clamp — rewriting an
-  // operator's stated launch state into a different flyable one is how a
-  // 549 u worm once flew as "SUCCESS". The launch/transition regime is
-  // contract 2 (a transition planner with its own limit set), not a special
-  // case of this one. Synthesized/trajectory-derived starts are our own
-  // states and keep the [STALL-FLOOR] clamp doctrine.
+  // velocity outside the cruise model's validity region never reaches the
+  // cruise pipeline. No clamp — rewriting an operator's stated launch
+  // state into a different flyable one is how a 549 u worm once flew as
+  // "SUCCESS". Contract 2 (2026-08-08): the classifier now distinguishes
+  // the TRANSITION regime (outside cruise, inside the transition model's
+  // own validity) and dispatches it to the coordinator — behind
+  // transition/enable, default off, so the frozen contract-1 outcome is
+  // unchanged until the transition review passes. Synthesized/
+  // trajectory-derived starts are our own states and keep the
+  // [STALL-FLOOR] clamp doctrine.
+  StartRegime regime = StartRegime::CRUISE_VALID;
+  std::string regime_why;
   if (start_vel_commanded) {
-    const std::string prob =
-        pm_->pvaEnvelopeProblem(start_pos, start_vel, start_acc);
-    if (!prob.empty()) {
-      log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s — the "
-                   "launch/transition regime is outside this planner's "
-                   "envelope (INITIAL_MODE_UNSUPPORTED)", prob.c_str());
+    regime = classifyStartState(start_pos, start_vel, start_acc, &regime_why);
+    if (regime == StartRegime::UNSUPPORTED) {
+      log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s "
+                   "(INITIAL_MODE_UNSUPPORTED)", regime_why.c_str());
       return PlanResult::failedBecause(
           PlanReason::INITIAL_MODE_UNSUPPORTED,
-          "initial state unsupported: " + prob);
+          "initial state unsupported: " + regime_why);
+    }
+    if (regime == StartRegime::TRANSITION_REQUIRED) {
+      bool enabled = false;
+      if (!node_->has_parameter("transition/enable"))
+        node_->declare_parameter("transition/enable", false);
+      node_->get_parameter("transition/enable", enabled);
+      if (!enabled) {
+        log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s — "
+                     "transition regime recognized but transition/enable "
+                     "is off (INITIAL_MODE_UNSUPPORTED)",
+                     regime_why.c_str());
+        return PlanResult::failedBecause(
+            PlanReason::INITIAL_MODE_UNSUPPORTED,
+            "initial state unsupported: " + regime_why +
+                " (transition disabled)");
+      }
     }
   }
   // [PHASE] Final-boundary validation happens ONCE, here — every exit of
@@ -303,6 +326,15 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
       relaxed = true;
       relax_why = problem + " — final boundary relaxed (opt-in)";
     }
+  }
+  if (regime == StartRegime::TRANSITION_REQUIRED) {
+    // Tail validation above applies to EVERY mission shape — the
+    // transition dispatch happens after it so a bad final boundary can
+    // never slip out through the new path.
+    PlanResult r = planTransitionMission(start_pos, start_vel, start_acc,
+                                         waypoints, eff);
+    if (relaxed) r.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
+    return r;
   }
   PlanResult r = planImpl(start_pos, start_vel, start_acc, waypoints,
                           start_vel_synthesized, eff);
@@ -1298,6 +1330,345 @@ bool SegmentChainPlanner::authorContractsFromRoute(
 // and hand planOverRoute the slice with the transition end state as the
 // head. planRouteParallel itself is now just the no-transition composition
 // of the two.
+
+SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
+    const Eigen::Vector3d &pos_u, const Eigen::Vector3d &vel_u,
+    const Eigen::Vector3d &acc_u, std::string *why) const
+{
+  const auto unsupported = [&](const std::string &w) {
+    if (why) *why = w;
+    return StartRegime::UNSUPPORTED;
+  };
+  if (!pos_u.allFinite() || !vel_u.allFinite() || !acc_u.allFinite())
+    return unsupported("non-finite commanded state");
+  const std::string prob = pm_->pvaEnvelopeProblem(pos_u, vel_u, acc_u);
+  if (prob.empty()) return StartRegime::CRUISE_VALID;
+  if (why) *why = prob;
+  const auto *dyn = pm_->dynamicsParams();
+  if (!dyn || !mmp_vehicle_dynamics::parametersAreValid(*dyn))
+    return unsupported(prob +
+                       "; no valid assumption parameter set to transition "
+                       "under");
+  double um = 100.0, uz = 100.0;
+  if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+    um = node_->get_parameter("optimization/dynamics_unit_xy_m").as_double();
+  if (node_->has_parameter("optimization/dynamics_unit_z_m"))
+    uz = node_->get_parameter("optimization/dynamics_unit_z_m").as_double();
+  const Eigen::Vector3d v_si(vel_u.x() * um, vel_u.y() * um,
+                             vel_u.z() * uz);
+  const double V = v_si.norm();
+  if (V < dyn->model_activation_speed_mps)
+    return unsupported(prob + "; below the transition model's activation "
+                              "speed");
+  if (V > dyn->speed_max_mps)
+    return unsupported(prob + "; above the model ceiling — the model is "
+                              "undefined there, a transition claim would "
+                              "be a physics claim");
+  const double gamma = std::asin(
+      std::min(1.0, std::max(-1.0, v_si.z() / std::max(V, 1e-9))));
+  // Same explicit cone the generator pre-guards (never the EOM's silent
+  // kMinCosGamma absorption).
+  if (std::abs(gamma) > 1.40)
+    return unsupported(prob + "; flight-path angle at the model "
+                              "singularity cone");
+  return StartRegime::TRANSITION_REQUIRED;
+}
+
+bool SegmentChainPlanner::cutAtArc(const std::vector<Eigen::Vector3d> &route,
+                                   const std::vector<double> &cap,
+                                   double s_cut,
+                                   std::vector<Eigen::Vector3d> *out_route,
+                                   std::vector<double> *out_cap) const
+{
+  if (!out_route || !out_cap || route.size() < 2 ||
+      cap.size() != route.size() || !std::isfinite(s_cut) || s_cut < 0.0)
+    return false;
+  const std::vector<double> s = routeArcTable(route);
+  if (s_cut >= s.back()) return false;  // nothing left to chain over
+  size_t i = 0;
+  while (i + 2 < route.size() && s[i + 1] <= s_cut) ++i;
+  const double seg = s[i + 1] - s[i];
+  const double u = seg > 1e-12 ? (s_cut - s[i]) / seg : 0.0;
+  const Eigen::Vector3d v0 = route[i] + u * (route[i + 1] - route[i]);
+  if (!v0.allFinite()) return false;
+  out_route->clear();
+  out_cap->clear();
+  // cap never tightens across the cut, floored by the vertex's own z.
+  const double cap0 = std::max({cap[i], cap[i + 1], v0.z()});
+  if ((v0 - route[i + 1]).norm() < 1e-3) {
+    out_route->push_back(route[i + 1]);
+    out_cap->push_back(std::max(cap0, cap[i + 1]));
+    ++i;
+  } else {
+    out_route->push_back(v0);
+    out_cap->push_back(cap0);
+  }
+  for (size_t k = i + 1; k < route.size(); ++k) {
+    out_route->push_back(route[k]);
+    out_cap->push_back(cap[k]);
+  }
+  return out_route->size() >= 2;
+}
+
+PlanResult SegmentChainPlanner::planTransitionMission(
+    const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
+    const Eigen::Vector3d &start_acc,
+    const std::vector<Eigen::Vector3d> &waypoints,
+    const ego_planner::TailBoundary &mission_tail)
+{
+  namespace tp = transition_phase;
+  // The section-13 sequence, owned end to end. transition_active_ holds
+  // for the whole scope: every fallback() below the coordinator returns
+  // FAILED instead of re-planning the regime this function exists for.
+  struct ActiveGuard {
+    SegmentChainPlanner *p;
+    ~ActiveGuard() { p->setTransitionActive(false); }
+  } guard{this};
+  setTransitionActive(true);
+
+  const auto fail = [&](PlanReason why, const std::string &msg) {
+    log_->errorf("[S13] transition mission FAILED: %s", msg.c_str());
+    return PlanResult::failedBecause(why, msg);
+  };
+  const auto *dyn = pm_->dynamicsParams();
+  if (!dyn || !mmp_vehicle_dynamics::parametersAreValid(*dyn))
+    return fail(PlanReason::TRANSITION_GENERATION_FAILED,
+                "no valid assumption parameter set");
+  double um = 100.0, uz = 100.0;
+  if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+    um = node_->get_parameter("optimization/dynamics_unit_xy_m").as_double();
+  if (node_->has_parameter("optimization/dynamics_unit_z_m"))
+    uz = node_->get_parameter("optimization/dynamics_unit_z_m").as_double();
+  if (um <= 1e-9 || uz <= 1e-9)
+    return fail(PlanReason::TRANSITION_GENERATION_FAILED,
+                "degenerate dynamics unit scale");
+  bool run_parallel = false;
+  if (!node_->has_parameter("chain/parallel"))
+    node_->declare_parameter("chain/parallel", false);
+  node_->get_parameter("chain/parallel", run_parallel);
+
+  // [1] route commit — one front-end pass from the mission start.
+  std::vector<Eigen::Vector3d> route;
+  std::vector<double> cap;
+  double fe_ms = 0.0;
+  if (!commitRoute(start_pos, start_vel, start_acc, waypoints, run_parallel,
+                   &route, &cap, &fe_ms))
+    return fail(PlanReason::TRANSITION_GENERATION_FAILED,
+                "route commit failed");
+
+  // [2] zone policy snapshot — fail-closed precondition. INVALID (pass 0,
+  // stale data, multi-leg search) means the transition cannot be judged.
+  const auto snap = pm_->zonePolicySnapshot();
+  if (!snap.valid)
+    return fail(PlanReason::TRANSITION_GENERATION_FAILED,
+                "zone policy snapshot invalid — transition cannot be "
+                "judged against the committed policy");
+
+  // [3] entry screening — the SAME frozen [PHASE] predicates plus the
+  // speed-change arc a cruise-to-cruise screen never needed.
+  const double cruise = pm_->maxVel();
+  double tan_grade_max = std::numeric_limits<double>::infinity();
+  double turn_radius_u = 0.0, accel_arc_u = 0.0;
+  {
+    const double v_c = cruise * um;
+    const double q =
+        0.5 * mmp_vehicle_dynamics::airDensity(*dyn, 0.0) * v_c * v_c;
+    const double W = dyn->mass_kg * dyn->gravity_mps2;
+    const double CL = W / std::max(1e-9, q * dyn->wing_area_m2);
+    const double D = (dyn->zero_lift_drag_coefficient +
+                      dyn->induced_drag_factor * CL * CL) *
+                     q * dyn->wing_area_m2;
+    const double sg = std::max(
+        0.0,
+        std::min(1.0, (dyn->thrust_max_n * (1.0 - dyn->constraint_margin) -
+                       D) /
+                          W));
+    tan_grade_max = std::min(std::tan(dyn->flight_path_angle_max_rad),
+                             std::tan(std::asin(sg)));
+    const Eigen::Vector3d v0_si(start_vel.x() * um, start_vel.y() * um,
+                                start_vel.z() * uz);
+    const double vm = std::max(1e-3, v0_si.norm());
+    const double nmax = std::max(1.01, dyn->load_factor_max);
+    turn_radius_u = 1.5 * vm * vm /
+                    (dyn->gravity_mps2 * std::sqrt(nmax * nmax - 1.0)) / um;
+    const double a_avail = std::max(
+        0.5, (dyn->thrust_max_n * (1.0 - dyn->constraint_margin) - D) /
+                 dyn->mass_kg);
+    accel_arc_u =
+        std::max(0.0, (v_c * v_c - vm * vm) / (2.0 * a_avail)) / um;
+  }
+  ReachLimits rl;
+  rl.dep_min_arc_u = readNumParam(node_, "chain/phase/depart_min_arc_u", 30.0);
+  rl.calm_window_u = readNumParam(node_, "chain/phase/calm_window_u", 40.0);
+  rl.kappa_calm = readNumParam(node_, "chain/phase/kappa_calm", 0.01);
+  rl.grade_max =
+      readNumParam(node_, "chain/phase/grade_frac", 0.5) * tan_grade_max;
+  rl.tan_grade_max = tan_grade_max;
+  rl.turn_radius_u = turn_radius_u;
+  rl.accel_arc_u = accel_arc_u;
+  rl.max_candidates = 3;
+  const HandoffScreenResult hs = screenHandoffCandidates(
+      route, start_vel, rl,
+      readNumParam(node_, "chain/phase/arrive_min_arc_u", 30.0));
+  if (hs.dep_candidates.empty())
+    return fail(PlanReason::TRANSITION_GENERATION_FAILED,
+                "no reachable cruise entry candidate on the committed "
+                "route");
+  const std::vector<double> arc = routeArcTable(route);
+  std::vector<tp::EntryCandidate> cands;
+  for (int idx : hs.dep_candidates) {
+    tp::EntryCandidate e;
+    e.route_vertex = idx;
+    e.route_start_s = arc[static_cast<size_t>(idx)];
+    const Eigen::Vector3d &p = route[static_cast<size_t>(idx)];
+    e.pos_m = Eigen::Vector3d(p.x() * um, p.y() * um, p.z() * uz);
+    const Eigen::Vector3d d_u =
+        route[static_cast<size_t>(std::min<int>(idx + 1,
+                                                (int)route.size() - 1))] -
+        route[static_cast<size_t>(std::max(idx - 1, 0))];
+    Eigen::Vector3d d_si(d_u.x() * um, d_u.y() * um, d_u.z() * uz);
+    if (d_si.norm() < 1e-9) d_si = Eigen::Vector3d::UnitX();
+    e.tangent = d_si.normalized();
+    e.cap_z_m = cap[static_cast<size_t>(idx)] * uz;
+    cands.push_back(e);
+  }
+
+  // [4] generation — pure component; closures compose the snapshot
+  // policy, terrain and the handoff envelope (SI <-> planner units here,
+  // never inside the component).
+  tp::TransitionRequest req;
+  req.initial_pos_m =
+      Eigen::Vector3d(start_pos.x() * um, start_pos.y() * um,
+                      start_pos.z() * uz);
+  req.initial_vel_mps =
+      Eigen::Vector3d(start_vel.x() * um, start_vel.y() * um,
+                      start_vel.z() * uz);
+  req.initial_acc_mps2 =
+      Eigen::Vector3d(start_acc.x() * um, start_acc.y() * um,
+                      start_acc.z() * uz);
+  req.entry_candidates = cands;
+  req.limits.dyn = *dyn;
+  req.limits.unit_xy_m = um;
+  req.limits.unit_z_m = uz;
+  req.limits.min_agl_m = pm_->minGoalAgl() * uz;
+  req.limits.end_speed_min_mps =
+      dyn->speed_min_mps * (1.0 + dyn->constraint_margin);
+  double end_max = dyn->speed_max_mps;
+  if (node_->has_parameter("planning/handoff_max_vel_mps")) {
+    const double hc =
+        node_->get_parameter("planning/handoff_max_vel_mps").as_double();
+    if (hc > 0.0) end_max = std::min(end_max, hc);
+  }
+  req.limits.end_speed_max_mps = end_max;
+  const auto toU = [um, uz](const Eigen::Vector3d &p_m) {
+    return Eigen::Vector3d(p_m.x() / um, p_m.y() / um, p_m.z() / uz);
+  };
+  req.zone_probe = [this, &snap, toU](const Eigen::Vector3d &p_m) {
+    const Eigen::Vector3d p_u = toU(p_m);
+    for (size_t i = 0; i < snap.zones.size(); ++i) {
+      switch (pm_->zoneContact(snap, i, p_u)) {
+        case PathManager::ZoneContactResult::CLEAR:
+          break;
+        case PathManager::ZoneContactResult::CONTACT:
+          // Policy lives in the disposition: only HARD_AVOID contact
+          // disqualifies; soft crossings the global 3-pass chose (or
+          // endpoint exemptions) stay traversable, exposure measured.
+          if (snap.zones[i].disposition ==
+              PathManager::ZoneDisposition::HARD_AVOID)
+            return tp::ZoneProbe::CONTACT_HARD;
+          break;
+        case PathManager::ZoneContactResult::STALE:
+        case PathManager::ZoneContactResult::INVALID:
+          return tp::ZoneProbe::STALE_OR_INVALID;
+      }
+    }
+    return tp::ZoneProbe::CLEAR;
+  };
+  req.zone_exposure_raw = [this, &snap, toU](const Eigen::Vector3d &p_m) {
+    const Eigen::Vector3d p_u = toU(p_m);
+    double sum = 0.0;
+    for (size_t i = 0; i < snap.zones.size(); ++i) {
+      double e = 0.0;
+      if (pm_->zoneExposureRaw(snap, i, p_u, &e)) sum += e;
+    }
+    return sum;
+  };
+  if (pm_->hasTerrainData()) {
+    req.terrain_z = [this, um, uz](double x_m, double y_m, double *elev_m) {
+      double elev_u = 0.0;
+      if (!pm_->terrainElevation(x_m / um, y_m / um, &elev_u)) return false;
+      if (elev_m) *elev_m = elev_u * uz;
+      return true;
+    };
+  }  // else: null closure — the component refuses when an AGL floor is
+     // required without a terrain SOURCE (fail-closed precondition).
+  req.pva_problem = [this, toU, um, uz](const Eigen::Vector3d &p_m,
+                                        const Eigen::Vector3d &v_mps,
+                                        const Eigen::Vector3d &a_mps2) {
+    return pm_->pvaEnvelopeProblem(
+        toU(p_m),
+        Eigen::Vector3d(v_mps.x() / um, v_mps.y() / um, v_mps.z() / uz),
+        Eigen::Vector3d(a_mps2.x() / um, a_mps2.y() / um,
+                        a_mps2.z() / uz));
+  };
+
+  const tp::TransitionResult tr = tp::generate(req);
+  log_->infof(
+      "[S13] transition audit: enumerated %d, winner %d | disq fin %d "
+      "pre %d rep %d sat %d ter %d zone %d time %d pva %d adapter %d | "
+      "dwell %.2f s, risk max %.3g int %.3g, adapter err p/v/a "
+      "%.3g/%.3g/%.3g, start-seam %.3g m/s^2",
+      tr.audit.candidates_enumerated, tr.audit.winner_primitive_id,
+      tr.audit.disq_finiteness, tr.audit.disq_preguard,
+      tr.audit.disq_representable, tr.audit.disq_saturated,
+      tr.audit.disq_terrain, tr.audit.disq_zone, tr.audit.disq_timeout,
+      tr.audit.disq_end_pva, tr.audit.disq_adapter,
+      tr.audit.dwell_achieved_s, tr.audit.risk_max, tr.audit.risk_integral,
+      tr.audit.adapter_max_pos_err_m, tr.audit.adapter_max_vel_err_mps,
+      tr.audit.adapter_max_acc_err_mps2, tr.audit.seam_jerk_start);
+  if (!tr.ok)
+    return fail(tr.any_candidate_reached_adapter
+                    ? PlanReason::TRANSITION_ADAPTER_UNSOUND
+                    : PlanReason::TRANSITION_GENERATION_FAILED,
+                tr.reason);
+
+  // Coordinator-side re-check of the returned end PVA (belt and braces:
+  // the component gated it through the same closure, but the handoff is
+  // THIS seam's contract).
+  const Eigen::Vector3d end_pos_u = toU(tr.end_pos_m);
+  const Eigen::Vector3d end_vel_u(tr.end_vel_mps.x() / um,
+                                  tr.end_vel_mps.y() / um,
+                                  tr.end_vel_mps.z() / uz);
+  const Eigen::Vector3d end_acc_u(tr.end_acc_mps2.x() / um,
+                                  tr.end_acc_mps2.y() / um,
+                                  tr.end_acc_mps2.z() / uz);
+  const std::string end_prob =
+      pm_->pvaEnvelopeProblem(end_pos_u, end_vel_u, end_acc_u);
+  if (!end_prob.empty())
+    return fail(PlanReason::TRANSITION_GENERATION_FAILED,
+                "transition end PVA failed the handoff re-check: " +
+                    end_prob);
+
+  // [5] cut — materialize the sub-route ONCE; route_start_s never leaks
+  // further downstream.
+  std::vector<Eigen::Vector3d> sub_route;
+  std::vector<double> sub_cap;
+  if (!cutAtArc(route, cap, tr.route_start_s, &sub_route, &sub_cap))
+    return fail(PlanReason::TRANSITION_GENERATION_FAILED,
+                "route cut at the entry arc failed");
+
+  // [6] chain over the remainder with the transition prefix: junction
+  // gate, leading TRANSITION span, full-flight judgment, storage and viz
+  // all live inside planOverRoute.
+  TransitionPrefix prefix;
+  prefix.traj = tr.traj;
+  prefix.junction_pva_tol_u = 1e-6;
+  return planOverRoute(sub_route, sub_cap, fe_ms, end_pos_u, end_vel_u,
+                       end_acc_u, waypoints,
+                       /*start_vel_synthesized=*/false, run_parallel,
+                       mission_tail, &prefix);
+}
+
 PlanResult SegmentChainPlanner::planRouteParallel(
     const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
     const Eigen::Vector3d &start_acc,

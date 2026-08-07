@@ -91,8 +91,21 @@ grid_map_msgs::msg::GridMap::SharedPtr makeHillsMap()
 
 }  // namespace
 
+#include <csignal>
+#include <execinfo.h>
+static void segvHandler(int sig)
+{
+  void *frames[48];
+  const int n = backtrace(frames, 48);
+  fprintf(stderr, "=== signal %d backtrace (%d frames) ===\n", sig, n);
+  backtrace_symbols_fd(frames, n, 2);
+  _exit(139);
+}
+
 int main(int argc, char **argv)
 {
+  signal(SIGSEGV, segvHandler);
+  signal(SIGABRT, segvHandler);
   rclcpp::init(argc, argv);
 
   const std::string params =
@@ -117,7 +130,7 @@ int main(int argc, char **argv)
        with_transfallback = false, with_overrouteretry = false,
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false,
-       with_zonemultileg = false;
+       with_zonemultileg = false, with_transition = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -260,6 +273,7 @@ int main(int argc, char **argv)
     // zonepass0: zones + 3-pass policy OFF -> INVALID snapshot fail-closed.
     if (v == "zonepass0") { with_route = true; with_zonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
+    if (v == "transition") { with_route = true; with_transition = true; }
     // [S13] transfallback: with a transition active, the single-shot
     // fallback is forbidden — the below-threshold mission that normally
     // degrades to a direct plan must FAIL instead.
@@ -300,6 +314,8 @@ int main(int argc, char **argv)
     // zonewall: block the OVER-THE-TOP escape (default vertical ratio
     // 0.35 leaves a ~12 u ceiling the front end can climb past) so the
     // wall is genuinely unavoidable and the soft passes must run.
+    if (with_transition)
+      ovr.emplace_back("transition/enable", true);
     if (with_zonewall) {
       ovr.emplace_back("manager/risk_vertical_ratio", 3.0);
       // ... and the terrain-shadow escape: with LOS masking on, ridge
@@ -554,6 +570,63 @@ int main(int argc, char **argv)
     expect(p1 != p2, "segment count change reaches the second plan (no "
                      "per-plan state leak)");
     rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_transition) {
+    // [S13] Coordinator end-to-end: the r5-class commanded vector
+    // (188.7 m/s, gamma = 32 deg — outside the cruise cone, inside the
+    // transition model) toward the route direction. With
+    // transition/enable=true the mission must come back as a FULL flight:
+    // a leading TRANSITION span whose tail sits on the chain head at the
+    // C2 tolerance (the seam gate inside planOverRoute), storage and viz
+    // of the whole product. The disabled-default outcome is pinned by
+    // initfail (reason INITIAL_MODE_UNSUPPORTED, unchanged).
+    const Eigen::Vector3d v32(1.6, 0.0, 1.0);  // 188.7 m/s at 32 deg
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, v32, start_acc, goal,
+                   /*start_vel_synthesized=*/false, {},
+                   /*start_vel_commanded=*/true);
+    std::cout << "transition: outcome " << static_cast<int>(r.outcome)
+              << " reason " << static_cast<int>(r.reason) << "\n";
+    expect(r.hasTrajectory(), "transition mission returns a flight");
+    const poly_traj::Trajectory &full = pm->traj_.local_traj.traj;
+    expect(full.getPieceNum() > 0 && full.getTotalDuration() > 10.0,
+           "full flight stored (transition + chain)");
+    if (!r.hasTrajectory() || full.getPieceNum() == 0) {
+      // Probing an EMPTY trajectory is UB (locatePieceIdx indexes past
+      // the empty piece vector) — count the failures above and stop.
+      std::cout << "FAIL: " << failures << " failed check(s)\n";
+      return 1;
+    }
+    poly_traj::Trajectory probe = full;
+    expect((probe.getPos(0.0) - start_pos).norm() < 1e-6,
+           "stored flight starts at the COMMANDED mission start");
+    const Eigen::Vector3d vel0 = probe.getVel(0.0);
+    expect((vel0 - v32).norm() < 1e-6,
+           "stored flight leaves with the commanded velocity (no re-aim, "
+           "no floor — the head guards held)");
+    // The flight must end at the resolved goal (the chain finished the
+    // mission the transition opened).
+    const double T = probe.getTotalDuration();
+    std::cout << "transition: " << full.getPieceNum() << " pieces, " << T
+              << " s, end (" << probe.getPos(T).transpose() << ")\n";
+    expect((probe.getPos(T).head<2>() - goal[0].head<2>()).norm() < 12.0,
+           "flight reaches the goal area (terminal phase may extend)");
+
+    // UNSUPPORTED classification: above the model ceiling — immediate
+    // FAILED, nothing downstream runs (over-ceiling is a physics claim
+    // v1 refuses to make).
+    const path_manager::PlanResult r2 =
+        chain.plan(start_pos, Eigen::Vector3d(2.6, 0.0, 0.0), start_acc,
+                   goal, false, {}, true);
+    expect(!r2.hasTrajectory() &&
+               r2.reason ==
+                   path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "above the model ceiling -> UNSUPPORTED, not a transition");
+
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
     return 1;

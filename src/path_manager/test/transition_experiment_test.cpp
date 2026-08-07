@@ -448,13 +448,17 @@ int main(int argc, char **argv)
       expect(r.audit.risk_max == 0.0,
              "exposure statistics present and zero in a zone-free field");
     }
-    // Negative control: the SAME 32-deg climb at 140 m/s is below this
-    // model's recovery energy budget — the stall/saturation gates must
-    // refuse it, never hand back a clamped fiction.
+    // Negative control: the SAME 32-deg climb from BELOW the margin
+    // floor (125 m/s < speed_min*(1+margin)) is under this model's
+    // recovery energy budget — the stall/saturation gates must refuse
+    // it, never hand back a clamped fiction. (140 m/s was refused under
+    // the point-chase law, but the line-pursuit descent recovers it
+    // honestly — the boundary moved DOWN when the law stopped wasting
+    // energy, which is exactly what the audit counters are for.)
     auto req_lo = makeRequest(baseParams());
     const double g32b = 32.0 * M_PI / 180.0;
     req_lo.initial_vel_mps =
-        140.0 * Eigen::Vector3d(std::cos(g32b), 0.0, std::sin(g32b));
+        125.0 * Eigen::Vector3d(std::cos(g32b), 0.0, std::sin(g32b));
     const auto r_lo = tp::generate(req_lo);
     expect(!r_lo.ok && r_lo.audit.disq_saturated > 0,
            "energy-deficient 32-deg climb honestly refused (stall gate)");

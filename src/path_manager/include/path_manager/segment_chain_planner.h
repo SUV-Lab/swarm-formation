@@ -152,6 +152,17 @@ public:
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
                                const std::vector<PhaseSpan> &spans) const;
 
+  // [S13] Start-state regime classifier (enum, never string-matched): the
+  // single entry gate plan() dispatches on. TRANSITION_REQUIRED = outside
+  // the cruise envelope but inside the transition model's own validity
+  // (activation..ceiling speed band, flight path short of the singularity
+  // cone). Over the model ceiling is UNSUPPORTED: the model is undefined
+  // there and claiming a transition would be a physics claim v1 forbids.
+  enum class StartRegime { CRUISE_VALID, TRANSITION_REQUIRED, UNSUPPORTED };
+  StartRegime classifyStartState(const Eigen::Vector3d &pos_u,
+                                 const Eigen::Vector3d &vel_u,
+                                 const Eigen::Vector3d &acc_u,
+                                 std::string *why) const;
   // [S13] Coordinator-owned: while true, every single-shot fallback inside
   // the route mode returns FAILED instead of re-planning from the mission
   // start (contract §10 — the cruise planner must never re-plan the regime
@@ -160,6 +171,24 @@ public:
   void setTransitionActive(bool on) { transition_active_ = on; }
 
 private:
+  // [S13] The ONE coordinator function owning the section-13 sequence:
+  // commit -> snapshot -> entry screening -> generate -> cut -> chain with
+  // the transition prefix. transition_active_ is asserted for its whole
+  // scope, so every fallback inside returns FAILED.
+  PlanResult planTransitionMission(const Eigen::Vector3d &start_pos,
+                                   const Eigen::Vector3d &start_vel,
+                                   const Eigen::Vector3d &start_acc,
+                                   const std::vector<Eigen::Vector3d> &waypoints,
+                                   const ego_planner::TailBoundary &mission_tail);
+  // [S13] Materialize the sub-route from an arc coordinate ONCE — the cut
+  // vertex uses the same lerp arithmetic that produced the entry point, so
+  // the sub-route head matches the prescribed head to machine precision.
+  // cap0 never tightens (max of the straddling caps and the vertex's own
+  // z); >= 2 vertices or false.
+  bool cutAtArc(const std::vector<Eigen::Vector3d> &route,
+                const std::vector<double> &cap, double s_cut,
+                std::vector<Eigen::Vector3d> *out_route,
+                std::vector<double> *out_cap) const;
   // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
   // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
   // budget exceeded -> the given result degraded, otherwise unchanged.
