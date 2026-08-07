@@ -678,6 +678,12 @@ public:
     // Last plan's [ZONE-AVOID] pass (0 = policy off / no zones,
     // 1 = zone-free route, 2 = soft fallback, 3 = re-hardened).
     int zoneAvoidPass() const { return zone_avoid_pass_; }
+    // [S13] Read-only zone disposition state for the policy snapshot:
+    // endpoint containment exemptions and the pass-2/3 soft-crossing set.
+    const std::vector<char> &zoneNoBarrier() const { return zone_no_barrier_; }
+    const std::vector<char> &zoneSoftOverride() const {
+      return zone_soft_override_;
+    }
     void setSmhaW(double w) { smha_w_ = w; }
     void setFrontEnd(FrontEnd fe) { front_end_ = fe; }
     void setFm2CoarseK(int k) { fm2_coarse_k_ = (k >= 1 ? k : 1); }

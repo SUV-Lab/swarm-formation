@@ -421,6 +421,37 @@ namespace path_manager
     // Thread/timing: callers must ensure this is invoked on the same
     // callback group as trajectory commands (handled in ReplanFSM).
     void setRiskZonesRuntime(const std::vector<RiskZone>& zones);
+    // [S13] Per-zone policy snapshot for the transition generator (contract
+    // §5 zone_policy[]). A pass NUMBER is not a policy: endpoint-contained
+    // zones are exempt individually, the pass-2 fallback leaves the WHOLE
+    // field soft, and pass 3 re-hardens everything except the crossings the
+    // soft route actually needed. The snapshot freezes that per-zone
+    // outcome WITH the shapes and a generation id, so a later zone-list or
+    // terrain change can never be silently consulted through stale indices.
+    enum class ZoneDisposition {
+        HARD_AVOID,        // contact disqualifies a transition candidate
+        SOFT_UNAVOIDABLE,  // pass-3 kept soft: crossing the global route needed
+        SOFT_ENDPOINT,     // start/goal containment exemption
+        SOFT_FALLBACK,     // pass-2 final field: everything soft
+    };
+    struct ZonePolicySnapshot {
+        uint64_t generation{0};
+        struct Entry {
+            RiskZone zone;  // SHAPE COPY — identity, not an index
+            ZoneDisposition disposition{ZoneDisposition::HARD_AVOID};
+        };
+        std::vector<Entry> zones;
+    };
+    ZonePolicySnapshot zonePolicySnapshot() const;
+    uint64_t zonePolicyGeneration() const { return zone_policy_generation_; }
+    // Shared contact predicate — the generator must NOT reimplement zone
+    // geometry/visibility. Evaluates the LIVE field (terrain-masked,
+    // endpoint-tapered) for the snapshot entry; when the snapshot no longer
+    // matches the live state (generation or shape drift) it reports stale
+    // and returns false — the caller must FAIL the transition or re-commit
+    // the route, never guess.
+    bool zoneContact(const ZonePolicySnapshot &snap, size_t idx,
+                     const Eigen::Vector3d &p, bool *stale = nullptr) const;
     size_t numRiskZones() const { return risk_zones_.size(); }
     // [CHAIN] hooks for the segment-chain planner: junction placement must
     // stay clear of the zone moat + GNRON taper band, and the chained result
@@ -467,6 +498,9 @@ namespace path_manager
   private:
     std::shared_ptr<rclcpp::Node> node_;
     std::vector<RiskZone> risk_zones_;
+    // [S13] bumped by refreshEffectiveRiskZones (the single funnel every
+    // zone-list or terrain re-derivation goes through).
+    uint64_t zone_policy_generation_{0};
     // Searcher-facing copy of risk_zones_. PathSearcher::setRiskZones stores
     // a RAW POINTER to this vector, so it must outlive the plan call — a
     // function-local here left the searcher holding a dangling pointer

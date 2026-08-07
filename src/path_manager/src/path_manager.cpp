@@ -1919,6 +1919,8 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
 
 void PathManager::refreshEffectiveRiskZones()
 {
+    ++zone_policy_generation_;  // [S13] any zone/terrain re-derivation
+                                // invalidates every outstanding snapshot
     risk_zones_ = risk_zones_raw_;
     if (!risk_zone_agl_ || risk_zones_.empty()) return;
     if (!terrain_data_.valid) {
@@ -3625,6 +3627,53 @@ void PathManager::flushPendingObstacles()
     }
     log_manager_->infof("Flushed %zu deferred dynamic obstacle(s) after SDF ready",
                         pend.size());
+}
+
+PathManager::ZonePolicySnapshot PathManager::zonePolicySnapshot() const
+{
+    ZonePolicySnapshot snap;
+    snap.generation = zone_policy_generation_;
+    const int pass = searcher_.zoneAvoidPass();
+    const auto &nb = searcher_.zoneNoBarrier();
+    const auto &so = searcher_.zoneSoftOverride();
+    snap.zones.reserve(risk_zones_.size());
+    for (size_t i = 0; i < risk_zones_.size(); ++i) {
+        ZonePolicySnapshot::Entry e;
+        e.zone = risk_zones_[i];
+        const bool endpoint = i < nb.size() && nb[i];
+        const bool soft_override = i < so.size() && so[i];
+        e.disposition = endpoint ? ZoneDisposition::SOFT_ENDPOINT
+                        : pass == 2
+                            ? ZoneDisposition::SOFT_FALLBACK
+                            : soft_override ? ZoneDisposition::SOFT_UNAVOIDABLE
+                                            : ZoneDisposition::HARD_AVOID;
+        snap.zones.push_back(e);
+    }
+    return snap;
+}
+
+bool PathManager::zoneContact(const ZonePolicySnapshot &snap, size_t idx,
+                              const Eigen::Vector3d &p, bool *stale) const
+{
+    if (stale) *stale = false;
+    const auto mark_stale = [&]() {
+        if (stale) *stale = true;
+        return false;
+    };
+    if (snap.generation != zone_policy_generation_) return mark_stale();
+    if (idx >= snap.zones.size() || idx >= risk_zones_.size())
+        return mark_stale();
+    // Shape identity: the snapshot's copy must still describe the live zone
+    // at this index, or the index points at a DIFFERENT zone now.
+    const RiskZone &live = risk_zones_[idx];
+    const RiskZone &snapz = snap.zones[idx].zone;
+    if ((live.center - snapz.center).norm() > 1e-9 ||
+        std::abs(live.reach - snapz.reach) > 1e-9 ||
+        std::abs(live.peak - snapz.peak) > 1e-9)
+        return mark_stale();
+    // The LIVE field is the one authority (terrain-masked visibility,
+    // endpoint taper) — never a re-implementation.
+    return getEffectiveRisk(idx, p) > 1e-6;
 }
 
 void PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)

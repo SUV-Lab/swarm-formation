@@ -136,11 +136,16 @@ TransitionResult   { verdict(OK/FAILED+사유), transition_traj(PVA(t)),
                      end_pva, route_start_s, audit(전환 평가기 결과) }
 ```
 
-- `zone_policy[]`: 전역 3-pass가 확정한 **구역별** hard/soft 스냅샷.
-  현재 노출 API는 `zoneAvoidPassNow()`의 패스 번호뿐이라 "어느 구역이
-  불가피해서 소프트로 남았는지"를 알 수 없다 — 패스 번호만 보고 전 구역을
-  소프트 취급하는 구현은 금지. 생성기 착수 시 PathManager가 구역별
-  스냅샷(예: 탐색기의 불가피-횡단 집합)을 노출해야 한다.
+- `zone_policy[]`: 전역 3-pass가 확정한 **구역별** 조성 스냅샷 —
+  **구현 완료**: `PathManager::zonePolicySnapshot()`. 패스 번호는 정책이
+  아니다: 조성은 4단으로 구분된다(`HARD_AVOID` = 접촉 시 후보 실격 /
+  `SOFT_UNAVOIDABLE` = 전역 경로가 실제 필요로 한 횡단 / `SOFT_ENDPOINT`
+  = 시작·목표 포함 면제 / `SOFT_FALLBACK` = 패스 2 전면 소프트 필드).
+  스냅샷은 인덱스가 아니라 **형상 사본 + 세대 ID**를 갖고, 접촉 판정은
+  공용 `zoneContact()`(라이브 필드 = 지형 가시성·endpoint taper 포함)로만
+  한다 — 생성기의 기하 재구현 금지. 존 목록/지형이 바뀌면 스냅샷은
+  STALE로 거부되며, 그때 전이는 실패하거나 경로부터 재커밋한다
+  (회귀 zonesnapshot).
 
 ## 6. 다항 어댑터 — 구간 내부 검사와 접합 감사
 

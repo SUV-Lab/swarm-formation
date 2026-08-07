@@ -115,7 +115,7 @@ int main(int argc, char **argv)
        with_pvaprobe = false, with_initceiling = false,
        with_handoffcap = false, with_overroutebad = false,
        with_transfallback = false, with_overrouteretry = false,
-       with_badspans = false;
+       with_badspans = false, with_zonesnapshot = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -248,6 +248,11 @@ int main(int argc, char **argv)
     // UNEVALUATED, and stitchedVerdictResult must turn UNEVALUATED into
     // FAILED with the stored trajectory invalidated.
     if (v == "badspans") { with_route = true; with_badspans = true; }
+    // [S13] zonesnapshot: the per-zone policy snapshot the transition
+    // generator consumes — dispositions from the searcher's real state,
+    // the shared contact predicate, and generation-staleness on a zone
+    // list change.
+    if (v == "zonesnapshot") { with_route = true; with_zonesnapshot = true; }
     // [S13] transfallback: with a transition active, the single-shot
     // fallback is forbidden — the below-threshold mission that normally
     // degrades to a direct plan must FAIL instead.
@@ -516,6 +521,53 @@ int main(int argc, char **argv)
     // Equality is the leak signature (the second plan re-used stale N).
     expect(p1 != p2, "segment count change reaches the second plan (no "
                      "per-plan state leak)");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_zonesnapshot) {
+    using ZD = path_manager::PathManager::ZoneDisposition;
+    // (a) an AVOIDABLE zone off to the side of the route -> HARD_AVOID.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(130.0, 180.0, 2.0);
+    z.reach = 8.0;
+    z.peak = 0.8;
+    pm->setRiskZonesRuntime({z});
+    const path_manager::PlanResult r1 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r1.hasTrajectory(), "plan with an avoidable zone succeeds");
+    const auto snap = pm->zonePolicySnapshot();
+    expect(snap.zones.size() == 1, "snapshot carries the one zone");
+    expect(snap.zones[0].disposition == ZD::HARD_AVOID,
+           "avoidable zone -> HARD_AVOID");
+    expect(snap.generation == pm->zonePolicyGeneration(),
+           "snapshot generation matches the live generation");
+    bool stale = false;
+    expect(pm->zoneContact(snap, 0, z.center, &stale) && !stale,
+           "shared predicate: zone centre is contact");
+    expect(!pm->zoneContact(snap, 0, Eigen::Vector3d(30.0, 150.0, 3.0),
+                            &stale) &&
+               !stale,
+           "shared predicate: mission start is no contact");
+    // (b) zone list changes -> every outstanding snapshot goes STALE; the
+    // predicate must refuse, never consult drifting indices.
+    path_manager::RiskZone zg;
+    zg.center = Eigen::Vector3d(330.0, 150.0, 2.0);  // contains the goal
+    zg.reach = 10.0;
+    zg.peak = 0.8;
+    pm->setRiskZonesRuntime({zg});
+    expect(!pm->zoneContact(snap, 0, z.center, &stale) && stale,
+           "old snapshot is STALE after the zone list changed");
+    // (c) goal-contained zone -> SOFT_ENDPOINT after the next plan.
+    const path_manager::PlanResult r2 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r2.hasTrajectory(), "plan with a goal-contained zone succeeds");
+    const auto snap2 = pm->zonePolicySnapshot();
+    expect(snap2.zones.size() == 1 &&
+               snap2.zones[0].disposition == ZD::SOFT_ENDPOINT,
+           "goal-contained zone -> SOFT_ENDPOINT");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
