@@ -84,6 +84,35 @@ public:
 
   int segments() const { return segments_; }
 
+  // [S13] planRouteParallel decomposed (contract 2 §13): commitRoute runs
+  // the ONE front-end pass and hands back the committed route + cap;
+  // planOverRoute authors/solves/stitches over an already committed route
+  // (or a slice of one) from an arbitrary head PVA, with a fail-closed
+  // input contract (sizes, finiteness, head-on-route). A transition
+  // coordinator calls them separately with the transition in between;
+  // planRouteParallel is their no-transition composition. Public: the
+  // coordinator and the harness drive these seams directly.
+  bool commitRoute(const Eigen::Vector3d &start_pos,
+                   const Eigen::Vector3d &start_vel,
+                   const Eigen::Vector3d &start_acc,
+                   const std::vector<Eigen::Vector3d> &waypoints,
+                   bool run_parallel, std::vector<Eigen::Vector3d> *route,
+                   std::vector<double> *cap, double *fe_ms);
+  PlanResult planOverRoute(const std::vector<Eigen::Vector3d> &route,
+                           const std::vector<double> &cap, double fe_ms,
+                           const Eigen::Vector3d &start_pos,
+                           const Eigen::Vector3d &start_vel,
+                           const Eigen::Vector3d &start_acc,
+                           const std::vector<Eigen::Vector3d> &waypoints,
+                           bool start_vel_synthesized, bool run_parallel,
+                           const ego_planner::TailBoundary &mission_tail);
+  // [S13] Coordinator-owned: while true, every single-shot fallback inside
+  // the route mode returns FAILED instead of re-planning from the mission
+  // start (contract §10 — the cruise planner must never re-plan the regime
+  // the transition exists to handle). Cleared by resetPlanState at every
+  // plan() entry; the coordinator re-asserts it after entry.
+  void setTransitionActive(bool on) { transition_active_ = on; }
+
 private:
   // Junction contract: the shared boundary state between two adjacent runs.
   struct Contract {
@@ -129,34 +158,16 @@ private:
   // and arc-balanced — as (vertex, 3D tangent x cruise, a = 0), which at
   // calm vertices is measurably what the unsplit optimum flies there
   // (r4: |a| = 0.002). Segments then solve on per-worker optimizer
-  // instances, concurrently when chain/parallel is set. No baseline means
-  // no fallback: a failed segment fails the mission plan.
+  // instances, concurrently when chain/parallel is set. There is no
+  // baseline to restore; failures repair through the retry ladders or the
+  // gated single-shot fallback (DEGRADED), which a transition-active plan
+  // forbids outright.
   PlanResult planRouteParallel(const Eigen::Vector3d &start_pos,
                                const Eigen::Vector3d &start_vel,
                                const Eigen::Vector3d &start_acc,
                                const std::vector<Eigen::Vector3d> &waypoints,
                                bool start_vel_synthesized, bool run_parallel,
                                const ego_planner::TailBoundary &mission_tail);
-  // [S13] planRouteParallel decomposed (contract 2 §13): commitRoute runs
-  // the ONE front-end pass and hands back the committed route + cap;
-  // planOverRoute authors/solves/stitches over an already committed route
-  // (or a slice of one) from an arbitrary head PVA. A transition
-  // coordinator calls them separately with the transition in between;
-  // planRouteParallel is their no-transition composition.
-  bool commitRoute(const Eigen::Vector3d &start_pos,
-                   const Eigen::Vector3d &start_vel,
-                   const Eigen::Vector3d &start_acc,
-                   const std::vector<Eigen::Vector3d> &waypoints,
-                   bool run_parallel, std::vector<Eigen::Vector3d> *route,
-                   std::vector<double> *cap, double *fe_ms);
-  PlanResult planOverRoute(const std::vector<Eigen::Vector3d> &route,
-                           const std::vector<double> &cap, double fe_ms,
-                           const Eigen::Vector3d &start_pos,
-                           const Eigen::Vector3d &start_vel,
-                           const Eigen::Vector3d &start_acc,
-                           const std::vector<Eigen::Vector3d> &waypoints,
-                           bool start_vel_synthesized, bool run_parallel,
-                           const ego_planner::TailBoundary &mission_tail);
 
   // plan() minus the final-boundary validation (which must run exactly
   // once): every internal exit path receives the validated tail.
@@ -300,6 +311,8 @@ private:
   // [JITTER] deterministic worker-failure injection (1-based; 0 = off) for
   // testing the merge-retry ladder.
   int jitter_fail_segment_{0};
+  // [S13] see setTransitionActive.
+  bool transition_active_{false};
 
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;

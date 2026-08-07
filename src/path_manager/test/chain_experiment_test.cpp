@@ -113,7 +113,8 @@ int main(int argc, char **argv)
        with_unsafedirect = false, with_initaccfail = false,
        with_initnan = false, with_arredge2 = false, with_twophase = false,
        with_pvaprobe = false, with_initceiling = false,
-       with_handoffcap = false;
+       with_handoffcap = false, with_overroutebad = false,
+       with_transfallback = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -232,6 +233,14 @@ int main(int argc, char **argv)
     // from the planning cap — 220 admits 210 m/s (which the default cap
     // refuses), 190 refuses 195 m/s, and the reason names the explicit cap.
     if (v == "handoffcap") { with_route = true; with_handoffcap = true; }
+    // [S13] overroutebad: planOverRoute's fail-closed input contract — a
+    // truncated cap, a displaced head, and a NaN vertex must each FAIL,
+    // never silently degrade (sliceCommittedRoute would drop the cap).
+    if (v == "overroutebad") { with_route = true; with_overroutebad = true; }
+    // [S13] transfallback: with a transition active, the single-shot
+    // fallback is forbidden — the below-threshold mission that normally
+    // degrades to a direct plan must FAIL instead.
+    if (v == "transfallback") { with_route = true; with_phase = true; with_transfallback = true; }
     // [CONTRACT-2 EVAL] pvaprobe: INTERFACE-ONLY check that a
     // transition-generator handoff state (the JSBSim experiment's
     // dwell-complete PVA) can cross the boundary into the planner: fixed
@@ -490,6 +499,70 @@ int main(int argc, char **argv)
     // Equality is the leak signature (the second plan re-used stale N).
     expect(p1 != p2, "segment count change reaches the second plan (no "
                      "per-plan state leak)");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_overroutebad) {
+    std::vector<Eigen::Vector3d> route;
+    std::vector<double> cap;
+    double fe_ms = 0.0;
+    expect(chain.commitRoute(start_pos, start_vel, start_acc, goal, false,
+                             &route, &cap, &fe_ms),
+           "commitRoute produces a route to tamper with");
+    // (a) truncated cap — the silent-abandonment case
+    std::vector<double> cap_bad(cap.begin(), cap.end() - 1);
+    const path_manager::PlanResult ra = chain.planOverRoute(
+        route, cap_bad, fe_ms, start_pos, start_vel, start_acc, goal, true,
+        false, {});
+    expect(!ra.hasTrajectory() &&
+               ra.detail.find("cap size") != std::string::npos,
+           "mismatched cap FAILS with the invariant named");
+    // (b) head displaced off the route start
+    const path_manager::PlanResult rb = chain.planOverRoute(
+        route, cap, fe_ms, start_pos + Eigen::Vector3d(1.0, 0.0, 0.0),
+        start_vel, start_acc, goal, true, false, {});
+    expect(!rb.hasTrajectory() &&
+               rb.detail.find("head position") != std::string::npos,
+           "head off the route start FAILS");
+    // (c) NaN vertex
+    std::vector<Eigen::Vector3d> route_nan = route;
+    route_nan[route_nan.size() / 2].z() = std::nan("");
+    const path_manager::PlanResult rc = chain.planOverRoute(
+        route_nan, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
+        false, {});
+    expect(!rc.hasTrajectory() &&
+               rc.detail.find("non-finite route") != std::string::npos,
+           "NaN route vertex FAILS");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_transfallback) {
+    // Coordinator-style direct drive (plan() would clear the flag at its
+    // resetPlanState): commit the route, assert the transition, then make
+    // every worker fail so the repair path wants the single-shot fallback —
+    // which must now be REFUSED, not a re-plan from the mission start.
+    std::vector<Eigen::Vector3d> route;
+    std::vector<double> cap;
+    double fe_ms = 0.0;
+    expect(chain.commitRoute(start_pos, start_vel, start_acc, goal, false,
+                             &route, &cap, &fe_ms),
+           "commitRoute produces the route");
+    chain.setTransitionActive(true);
+    force("chain/jitter/fail_segment", -1);
+    const path_manager::PlanResult r = chain.planOverRoute(
+        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
+        false, {});
+    expect(!r.hasTrajectory(),
+           "transition-active: single-shot fallback refused (FAILED)");
+    expect(r.detail.find("forbidden while a transition is active") !=
+               std::string::npos,
+           "reason states the fallback prohibition");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

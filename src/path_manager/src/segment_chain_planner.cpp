@@ -181,6 +181,7 @@ void SegmentChainPlanner::resetPlanState()
   phase_tan_grade_ = 1e9;
   phase_turn_radius_u_ = 0.0;
   jitter_fail_segment_ = 0;
+  transition_active_ = false;
 }
 
 std::vector<double> SegmentChainPlanner::capAlongRoute(
@@ -1308,6 +1309,39 @@ PlanResult SegmentChainPlanner::planOverRoute(
     bool start_vel_synthesized, bool run_parallel,
     const ego_planner::TailBoundary &mission_tail)
 {
+  // [S13] Fail-closed INPUT contract (review find): once a coordinator can
+  // hand this function an external route slice and head PVA, a mismatch
+  // must be a FAILED plan, not a silent degradation — sliceCommittedRoute
+  // in particular quietly abandons the altitude cap when sizes disagree,
+  // which on a transition slice would judge the solve under the wrong
+  // altitude regime. Head/route TANGENT alignment is deliberately NOT
+  // required: a head velocity pointing away from the route is a legitimate
+  // departure case (the connector's whole job).
+  {
+    const char *bad = nullptr;
+    if (route.size() < 2) {
+      bad = "route has fewer than 2 vertices";
+    } else if (cap.size() != route.size()) {
+      bad = "cap size does not match route size (silent cap abandonment "
+            "downstream)";
+    } else if ((route.front() - start_pos).norm() > 1e-2) {
+      bad = "head position does not sit on the route start";
+    } else {
+      for (const auto &v : route)
+        if (!v.allFinite()) { bad = "non-finite route vertex"; break; }
+      if (!bad)
+        for (double c : cap)
+          if (!std::isfinite(c)) { bad = "non-finite cap value"; break; }
+      if (!bad && (!start_pos.allFinite() || !start_vel.allFinite() ||
+                   !start_acc.allFinite()))
+        bad = "non-finite head PVA";
+    }
+    if (bad) {
+      log_->errorf("[CHAIN-PAR] planOverRoute input contract violated: %s",
+                   bad);
+      return PlanResult::failed(std::string("planOverRoute input: ") + bad);
+    }
+  }
   const auto t_wall = std::chrono::steady_clock::now();
   const auto ms_since = [](const std::chrono::steady_clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(
@@ -1326,6 +1360,19 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // as_degraded=false marks the one caller where single-shot IS the correct
   // plan (mission below the split threshold), not a repair.
   const auto fallback = [&](const char *why, bool as_degraded = true) {
+    // [S13] With a transition ACTIVE the single-shot fallback is forbidden
+    // outright (contract §10/§13): it would re-plan FROM THE MISSION START
+    // with the cruise model — re-planning the very regime the transition
+    // exists to handle, and duplicating the transition span. Installed
+    // BEFORE any coordinator exists so the guard cannot be forgotten when
+    // one arrives.
+    if (transition_active_) {
+      log_->errorf("[CHAIN-PAR] %s — single-shot fallback FORBIDDEN while a "
+                   "transition is active", why);
+      return PlanResult::failed(
+          std::string(why) +
+          "; single-shot fallback is forbidden while a transition is active");
+    }
     log_->warnf("[CHAIN-PAR] %s — falling back to the single-shot plan", why);
     // [PHASE] Hard-tagged requirements survive the fallback CONSERVATIVELY
     // (min across all segments applied mission-wide). Frozen doctrine:
