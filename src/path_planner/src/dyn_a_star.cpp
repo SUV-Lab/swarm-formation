@@ -546,6 +546,26 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                         if (insideHardZoneVol(q)) return false;
                     }
                 }
+                // The WHOLE route body must stay out of every hard
+                // volume — not just the appended goal chord. Hard mode
+                // keeps kFMin porosity for terrain reasons, so on a
+                // mission a zone RING makes truly unavoidable the wave
+                // burrows THROUGH the wall at kFMin, the descent follows,
+                // and (terrain-clean, goal reached) the old checks
+                // accepted a zone-crossing route as "pass 1 zone-free" —
+                // the exact mislabel this probe exists to prevent
+                // (found by the zonewall ring fixture).
+                for (size_t vi = 0; vi + 1 < pr.size(); ++vi) {
+                    const Eigen::Vector3d &a = pr[vi];
+                    const Eigen::Vector3d &b = pr[vi + 1];
+                    const double seg = (b - a).norm();
+                    const int n = std::max(1, (int)std::ceil(seg / 0.5));
+                    for (int t = 0; t <= n; ++t) {
+                        const Eigen::Vector3d q =
+                            a + (double)t / n * (b - a);
+                        if (insideHardZoneVol(q)) return false;
+                    }
+                }
                 if (!terrain_height_) return true;
                 for (const auto &q : pr) {
                     if (q.z() <
@@ -569,11 +589,22 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                 fm2SolveEikonal(end_pt, start_pt);
                 std::vector<Eigen::Vector3d> probe;
                 if (fm2_valid_) probe = fm2ExtractGeodesic(start_pt, end_pt);
-                // Zones the soft route actually needs (visible-volume hits).
+                // Zones the soft route actually needs (visible-volume
+                // hits) — EVERY containing zone, not the first hit: a
+                // crossing through a two-zone overlap needs both members
+                // soft, or pass 3 re-hardens a zone the route is already
+                // inside and the search collapses to the all-soft pass 2
+                // (observed on a 12-zone ring: one release of an
+                // overlapping pair kept the annulus sealed).
                 std::vector<char> crossed(risk_zones_->size(), 0);
                 for (const auto &pp : probe) {
-                    const int zi = visibleBarrierZoneAt(pp, false);
-                    if (zi >= 0) crossed[static_cast<size_t>(zi)] = 1;
+                    for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
+                        if (crossed[zi]) continue;
+                        if (zi < zone_no_barrier_.size() &&
+                            zone_no_barrier_[zi]) continue;
+                        if (zoneVisibleVolumeContains(zi, pp))
+                            crossed[zi] = 1;
+                    }
                 }
                 zone_soft_override_ = crossed;
                 zone_hard_mode_ = true;

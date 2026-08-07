@@ -684,6 +684,26 @@ public:
     const std::vector<char> &zoneSoftOverride() const {
       return zone_soft_override_;
     }
+    // [S13] GEOMETRY-ONLY visible-volume membership of ONE zone — the same
+    // ellipsoid + visibility>0.5 judgment the hard barrier uses
+    // (visibleBarrierZoneAt), WITHOUT the exemption filtering: exemptions
+    // are POLICY and live in the snapshot's dispositions, membership is
+    // geometry. This is the shared contact primitive the transition
+    // generator consumes through PathManager::zoneContact.
+    inline bool zoneVisibleVolumeContains(size_t i,
+                                          const Eigen::Vector3d &pos) const {
+        if (!risk_zones_ || i >= risk_zones_->size()) return false;
+        const auto &tz = (*risk_zones_)[i];
+        const double rv =
+            tz.vertical_reach > 0.0 ? tz.vertical_reach : tz.reach;
+        if (!(tz.reach > 0.0) || !(rv > 0.0)) return false;
+        const Eigen::Vector3d d = pos - tz.center;
+        const double q2 =
+            d.head<2>().squaredNorm() / (tz.reach * tz.reach) +
+            d.z() * d.z() / (rv * rv);
+        if (q2 >= 1.0) return false;
+        return !risk_visibility_ || risk_visibility_(i, pos) > 0.5;
+    }
     void setSmhaW(double w) { smha_w_ = w; }
     void setFrontEnd(FrontEnd fe) { front_end_ = fe; }
     void setFm2CoarseK(int k) { fm2_coarse_k_ = (k >= 1 ? k : 1); }
