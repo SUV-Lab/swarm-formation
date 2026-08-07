@@ -29,12 +29,13 @@
 #include <initialization/FGInitialCondition.h>
 #include <models/FGPropagate.h>
 #include <models/FGAccelerations.h>
+#include <models/FGInertial.h>
+#include <math/FGLocation.h>
 
 namespace {
 
 constexpr double kFtToM = 0.3048;
 constexpr double kDegToRad = M_PI / 180.0;
-constexpr double kEarthR = 6378137.0;
 // Samples before this are discarded from the fidelity statistics: JSBSim
 // settles the model for a moment after RunIC.
 constexpr double kSettleS = 0.5;
@@ -85,8 +86,11 @@ Quintic hermite(const PVA &s0, const PVA &s1)
   return q;
 }
 
-// Propagate and record dense PVA. Same extraction as jsbsim_probe: JSBSim's
-// own Tb2l * UVWdot, never a numerical difference.
+// Propagate and record dense PVA in ONE fixed frame — the ENU tangent
+// plane anchored at the initial point (R0 = Tec2l at t=0, applied to ECEF
+// position deltas, ECEF velocity, and the analytic ECEF acceleration).
+// See jsbsim_probe.cpp's header for the formula and why the previous
+// mixed-frame extraction could never be self-consistent.
 std::vector<PVA> propagate(const std::string &root, const std::string &model,
                            double dt, double duration, double elevator,
                            double throttle, double hold_s)
@@ -110,7 +114,10 @@ std::vector<PVA> propagate(const std::string &root, const std::string &model,
   ic->SetPsiDegIC(180.0);
   if (!fdm.RunIC()) return out;
 
-  const double lat0r = lat0 * kDegToRad;
+  const JSBSim::FGMatrix33 R0 = fdm.GetPropagate()->GetTec2l();
+  const JSBSim::FGLocation &loc0 = fdm.GetPropagate()->GetLocation();
+  const JSBSim::FGColumnVector3 r0(loc0(1), loc0(2), loc0(3));
+  const JSBSim::FGColumnVector3 omega = fdm.GetInertial()->GetOmegaPlanet();
   const int n = static_cast<int>(duration / dt);
   out.reserve(static_cast<size_t>(n) + 1);
   for (int i = 0; i <= n; ++i) {
@@ -121,26 +128,20 @@ std::vector<PVA> propagate(const std::string &root, const std::string &model,
                          (t < hold_s) ? 0.0 : elevator);
     PVA s;
     s.t = t;
-    const double lat = fdm.GetPropertyValue("position/lat-gc-rad");
-    const double lon = fdm.GetPropertyValue("position/long-gc-rad");
-    s.p = Eigen::Vector3d(
-        (lon - lon0 * kDegToRad) * kEarthR * std::cos(lat0r),
-        (lat - lat0r) * kEarthR,
-        fdm.GetPropertyValue("position/h-sl-ft") * kFtToM);
-    s.v = Eigen::Vector3d(
-        fdm.GetPropertyValue("velocities/v-east-fps") * kFtToM,
-        fdm.GetPropertyValue("velocities/v-north-fps") * kFtToM,
-        -fdm.GetPropertyValue("velocities/v-down-fps") * kFtToM);
-    // d(V_local)/dt — the transport term must be added back to UVWdot,
-    // which is the rate of change of the BODY-FRAME COMPONENTS. See the
-    // long comment in jsbsim_probe.cpp; probe stage [2] measures that this
-    // form, and not the bare Tb2l*UVWdot, matches the velocity derivative.
-    const JSBSim::FGColumnVector3 a_ned =
-        fdm.GetPropagate()->GetTb2l() *
-        (fdm.GetAccelerations()->GetUVWdot() +
-         fdm.GetPropagate()->GetPQR() * fdm.GetPropagate()->GetUVW());
-    s.a = Eigen::Vector3d(a_ned(2) * kFtToM, a_ned(1) * kFtToM,
-                          -a_ned(3) * kFtToM);
+    const JSBSim::FGLocation &loc = fdm.GetPropagate()->GetLocation();
+    const JSBSim::FGColumnVector3 r_ecef(loc(1), loc(2), loc(3));
+    const JSBSim::FGColumnVector3 v_ecef =
+        fdm.GetPropagate()->GetECEFVelocity();
+    const JSBSim::FGColumnVector3 a_ecef =
+        fdm.GetPropagate()->GetTi2ec() *
+            fdm.GetAccelerations()->GetUVWidot() -
+        2.0 * (omega * v_ecef) - omega * (omega * r_ecef);
+    const JSBSim::FGColumnVector3 p_ned = R0 * (r_ecef - r0);
+    const JSBSim::FGColumnVector3 v_ned = R0 * v_ecef;
+    const JSBSim::FGColumnVector3 a_ned = R0 * a_ecef;
+    s.p = Eigen::Vector3d(p_ned(2), p_ned(1), -p_ned(3)) * kFtToM;
+    s.v = Eigen::Vector3d(v_ned(2), v_ned(1), -v_ned(3)) * kFtToM;
+    s.a = Eigen::Vector3d(a_ned(2), a_ned(1), -a_ned(3)) * kFtToM;
     out.push_back(s);
     if (i == n) break;
     if (!fdm.Run()) break;
@@ -263,8 +264,30 @@ int main(int argc, char **argv)
                    ((dense[i + 1].v - dense[i - 1].v) / h - dense[i].a).norm());
     vmax = std::max(vmax, dense[i].v.norm());
   }
-  std::printf("Source self-consistency (central differences of the extracted "
-              "triple)\n");
+  std::printf("Source self-consistency vs dt — frame-consistent extraction "
+              "must CONVERGE\n");
+  std::printf("  %8s %14s %16s   (masked = excluding the command-step response t in [0.95, 1.40])\n", "dt[s]", "|dp/dt-v|max", "|dv/dt-a|max");
+  for (double cdt : {0.02, 0.01, 0.005, 0.001}) {
+    const std::vector<PVA> d2 =
+        propagate(root, model, cdt, dur, 0.5, 0.4, 1.0);
+    if (d2.size() < 5) continue;
+    double e1 = 0.0, e2 = 0.0, e2_t = 0.0, e2_off = 0.0;
+    for (size_t i = 1; i + 1 < d2.size(); ++i) {
+      if (d2[i].t < kSettleS) continue;
+      const double h = d2[i + 1].t - d2[i - 1].t;
+      e1 = std::max(e1, ((d2[i + 1].p - d2[i - 1].p) / h - d2[i].v).norm());
+      const double e = ((d2[i + 1].v - d2[i - 1].v) / h - d2[i].a).norm();
+      if (e > e2) { e2 = e; e2_t = d2[i].t; }
+      // Same residual with the command-step RESPONSE masked: the elevator
+      // steps at t=1.0 s and the actuator sweeps for a fraction of a second
+      // after it. Inside that window `a` is near-discontinuous, which a
+      // central difference cannot track at any dt.
+      if (d2[i].t < 0.95 || d2[i].t > 1.40) e2_off = std::max(e2_off, e);
+    }
+    std::printf("  %8.3f %14.6f %16.6f  @t=%.2f   masked: %.6f\n",
+                cdt, e1, e2, e2_t, e2_off);
+  }
+  std::printf("\nSource self-consistency at dt=0.01 (all samples)\n");
   std::printf("  |d(p)/dt - v| max = %.4f m/s   (%.3f%% of |v|max %.1f)\n",
               dpv, 100.0 * dpv / std::max(1e-9, vmax), vmax);
   std::printf("  |d(v)/dt - a| max = %.4f m/s^2\n", dva);
@@ -290,16 +313,6 @@ int main(int argc, char **argv)
 
   std::printf("  (samples before t=%.1f s excluded: post-RunIC trim "
               "transient)\n", kSettleS);
-  std::printf("  NOTE the mid dV column does NOT converge with knot spacing, "
-              "and that is expected:\n"
-              "  the source triple is internally inconsistent by eps = "
-              "|d(p)/dt - v| above. A quintic\n"
-              "  pinned to p AND v at both ends must absorb eps*T of extra "
-              "travel inside the interval,\n"
-              "  so its mid velocity overshoots by ~2*eps regardless of T "
-              "(measured ~2x, as predicted).\n"
-              "  The fix is upstream: a proper ellipsoidal local-tangent "
-              "conversion, not a finer knot.\n");
   {
     const Report rw = check(dense, 10);
     std::printf("  worst velocity error after settling: %.3f m/s at t=%.2f s\n",

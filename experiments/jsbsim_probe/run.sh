@@ -28,8 +28,12 @@ done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$HERE/.jsbsim"
+# EVERY per-version artifact is suffixed (review find: a shared inst/ meant
+# "--version v1.2.1" after a v1.3.1 run silently reused the NEWER library
+# with the OLDER aircraft data — a cross-version chimera, not a re-check).
 SRC="$WORK/src-$VERSION"
-INST="$WORK/inst"
+INST="$WORK/inst-$VERSION"
+PROBE_BUILD="$WORK/build-$VERSION"
 
 mkdir -p "$WORK"
 if [[ ! -d "$SRC" ]]; then
@@ -37,6 +41,10 @@ if [[ ! -d "$SRC" ]]; then
   git clone --depth 1 --branch "$VERSION" \
     https://github.com/JSBSim-Team/jsbsim.git "$SRC"
 fi
+# Tag AND resolved SHA, so a re-run years later can prove it used the same
+# code even if the tag were moved.
+SHA="$(git -C "$SRC" rev-parse HEAD)"
+echo "[jsbsim] $VERSION @ $SHA"
 if [[ ! -f "$INST/lib/libJSBSim.so" ]]; then
   echo "[jsbsim] building $VERSION ($JOBS jobs)"
   cmake -S "$SRC" -B "$SRC/build" -DCMAKE_BUILD_TYPE=Release \
@@ -46,13 +54,13 @@ if [[ ! -f "$INST/lib/libJSBSim.so" ]]; then
   cmake --install "$SRC/build" >/dev/null
 fi
 
-echo "[probe] building"
-cmake -S "$HERE" -B "$WORK/build" -DJSBSIM_ROOT="$INST" >/dev/null
-cmake --build "$WORK/build" -j "$JOBS" >/dev/null
+echo "[probe] building against $VERSION"
+cmake -S "$HERE" -B "$PROBE_BUILD" -DJSBSIM_ROOT="$INST" >/dev/null
+cmake --build "$PROBE_BUILD" -j "$JOBS" >/dev/null
 
 # $SRC is the aircraft/engine/systems data root. No LD_LIBRARY_PATH: RPATH
-# is baked in by CMakeLists.
+# is baked in by CMakeLists (per-version, since JSBSIM_ROOT differs).
 echo
-"$WORK/build/jsbsim_probe" "$SRC" "$MODEL" "$DURATION"
+"$PROBE_BUILD/jsbsim_probe" "$SRC" "$MODEL" "$DURATION"
 echo
-"$WORK/build/hermite_check" "$SRC" "$MODEL" "$DURATION"
+"$PROBE_BUILD/hermite_check" "$SRC" "$MODEL" "$DURATION"

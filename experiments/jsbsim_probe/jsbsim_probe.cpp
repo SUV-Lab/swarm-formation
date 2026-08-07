@@ -11,6 +11,27 @@
 // load/acceleration limits, sustained dwell, and terrain/zone clearance —
 // none of which are checked here.
 //
+
+// Fixed mission frame (review find: the first version mixed a FIXED
+// approximate plane for position with the INSTANTANEOUS local NED for
+// velocity/acceleration — two different frames, so the triple could never
+// be self-consistent). Everything below is expressed in ONE frame: the
+// ENU tangent plane anchored at the initial point, via
+//
+//   R0     = ECEF->NED at t=0 (JSBSim's own Tec2l, captured once)
+//   p_enu  = ned2enu( R0 * (r_ecef(t) - r_ecef(0)) )
+//   v_enu  = ned2enu( R0 * v_ecef(t) )
+//   a_enu  = ned2enu( R0 * a_ecef(t) )
+//
+// a_ecef is computed analytically from JSBSim's inertial acceleration:
+//   a_ecef = Ti2ec * UVWidot - 2 w x v_ecef - w x (w x r_ecef)
+// (UVWidot is the inertial acceleration in ECI axes; the two omega terms
+// are the Coriolis and centrifugal corrections for differentiating in the
+// rotating ECEF frame.) This form is CROSS-CHECKED against a central
+// difference of v_enu in stage [2] rather than trusted — the previous
+// "add the transport term back" formula carried a 1.4% residual and was
+// nearly-right rather than right.
+//
 // The aircraft models are JSBSim's bundled examples, which the project
 // documents as approximations built from public data for education and
 // entertainment. Nothing here says anything about a real platform.
@@ -24,15 +45,13 @@
 #include <initialization/FGInitialCondition.h>
 #include <models/FGPropagate.h>
 #include <models/FGAccelerations.h>
+#include <models/FGInertial.h>
+#include <math/FGLocation.h>
 
 namespace {
 
 constexpr double kFtToM = 0.3048;
 constexpr double kDegToRad = M_PI / 180.0;
-// Local flat-earth tangent plane about the initial geodetic point. A
-// transition spans a few km, where the flat-earth error is far below the
-// terrain resolution the planner works at (30-60 m cells).
-constexpr double kEarthR = 6378137.0;
 
 struct Sample {
   double t;
@@ -101,7 +120,13 @@ RunResult propagate(const std::string &root, const std::string &model,
     return out;
   }
 
-  const double lat0r = lat0 * kDegToRad;
+  // Capture the FIXED frame at t=0: JSBSim's own ECEF->NED at the initial
+  // location, plus the ECEF origin. Never updated again.
+  const JSBSim::FGMatrix33 R0 = fdm.GetPropagate()->GetTec2l();
+  const JSBSim::FGLocation &loc0 = fdm.GetPropagate()->GetLocation();
+  const JSBSim::FGColumnVector3 r0(loc0(1), loc0(2), loc0(3));
+  const JSBSim::FGColumnVector3 omega =
+      fdm.GetInertial()->GetOmegaPlanet();
   const auto t0 = std::chrono::steady_clock::now();
   const int n = static_cast<int>(duration / dt);
   out.s.reserve(static_cast<size_t>(n) + 1);
@@ -115,51 +140,45 @@ RunResult propagate(const std::string &root, const std::string &model,
     fdm.SetPropertyValue("fcs/aileron-cmd-norm", 0.0);
     fdm.SetPropertyValue("fcs/rudder-cmd-norm", 0.0);
 
-    const double lat = fdm.GetPropertyValue("position/lat-gc-rad");
-    const double lon = fdm.GetPropertyValue("position/long-gc-rad");
-    const double alt_ft = fdm.GetPropertyValue("position/h-sl-ft");
+    const JSBSim::FGLocation &loc = fdm.GetPropagate()->GetLocation();
+    const JSBSim::FGColumnVector3 r_ecef(loc(1), loc(2), loc(3));
+    const JSBSim::FGColumnVector3 v_ecef =
+        fdm.GetPropagate()->GetECEFVelocity();
+    const JSBSim::FGColumnVector3 a_ecef =
+        fdm.GetPropagate()->GetTi2ec() *
+            fdm.GetAccelerations()->GetUVWidot() -
+        2.0 * (omega * v_ecef) - omega * (omega * r_ecef);
+    const JSBSim::FGColumnVector3 p_ned = R0 * (r_ecef - r0);
+    const JSBSim::FGColumnVector3 v_ned = R0 * v_ecef;
+    const JSBSim::FGColumnVector3 a_ned2 = R0 * a_ecef;
     Sample s;
     s.t = t;
-    s.x = (lon - lon0 * kDegToRad) * kEarthR * std::cos(lat0r);
-    s.y = (lat - lat0r) * kEarthR;
-    s.z = alt_ft * kFtToM;
-    const double vn = fdm.GetPropertyValue("velocities/v-north-fps") * kFtToM;
-    const double ve = fdm.GetPropertyValue("velocities/v-east-fps") * kFtToM;
-    const double vd = fdm.GetPropertyValue("velocities/v-down-fps") * kFtToM;
-    s.vx = ve; s.vy = vn; s.vz = -vd;
-    s.speed = std::sqrt(vn * vn + ve * ve + vd * vd);
+    s.x = p_ned(2) * kFtToM;   // NED->ENU: east
+    s.y = p_ned(1) * kFtToM;   //           north
+    s.z = -p_ned(3) * kFtToM;  //           up
+    s.vx = v_ned(2) * kFtToM;
+    s.vy = v_ned(1) * kFtToM;
+    s.vz = -v_ned(3) * kFtToM;
+    s.speed = std::sqrt(s.vx * s.vx + s.vy * s.vy + s.vz * s.vz);
     s.mach = fdm.GetPropertyValue("velocities/mach");
     s.alpha_deg = fdm.GetPropertyValue("aero/alpha-deg");
     s.gamma_deg = fdm.GetPropertyValue("flight-path/gamma-deg");
 
-    // Local-frame acceleration, analytically. What MINCO needs is the second
-    // derivative of the POSITION path in the local frame, i.e. d(V_local)/dt.
-    //
-    // FGAccelerations::CalculateUVWdot computes vUVWdot as the rate of change
-    // of the BODY-FRAME COMPONENTS: it already subtracts the transport term
-    // (vPQR + 2*Ti2b*omega_planet) x vUVW. So Tb2l * UVWdot is NOT
-    // d(V_local)/dt — the transport term has to be added back:
-    //
-    //   d(V_local)/dt = Tb2l * ( dUVW/dt + omega_body x UVW )
-    //
-    // Both forms are recorded here and both are compared against a central
-    // difference of the reported local velocity, because that difference is
-    // the ground truth for "the derivative of the trajectory we hand to the
-    // adapter". FGStateSpace uses the bare Tb2l*UVWdot form, which is why
-    // this probe measures rather than assumes.
-    const JSBSim::FGMatrix33 &Tb2l = fdm.GetPropagate()->GetTb2l();
-    const JSBSim::FGColumnVector3 uvwdot =
-        fdm.GetAccelerations()->GetUVWdot();
-    const JSBSim::FGColumnVector3 pqr = fdm.GetPropagate()->GetPQR();
-    const JSBSim::FGColumnVector3 uvw = fdm.GetPropagate()->GetUVW();
-    const JSBSim::FGColumnVector3 a_bare = Tb2l * uvwdot;
-    const JSBSim::FGColumnVector3 a_full = Tb2l * (uvwdot + pqr * uvw);
-    s.ax = a_full(2) * kFtToM;   // east
-    s.ay = a_full(1) * kFtToM;   // north
-    s.az = -a_full(3) * kFtToM;  // up (NED down -> ENU up)
-    s.bx = a_bare(2) * kFtToM;
-    s.by = a_bare(1) * kFtToM;
-    s.bz = -a_bare(3) * kFtToM;
+    // Acceleration in the SAME fixed frame (analytic, see header comment).
+    // The previous transport-term formula is kept as candidate B so stage
+    // [2] can show the difference instead of asserting it.
+    s.ax = a_ned2(2) * kFtToM;
+    s.ay = a_ned2(1) * kFtToM;
+    s.az = -a_ned2(3) * kFtToM;
+    {
+      const JSBSim::FGMatrix33 &Tb2l = fdm.GetPropagate()->GetTb2l();
+      const JSBSim::FGColumnVector3 a_b =
+          Tb2l * (fdm.GetAccelerations()->GetUVWdot() +
+                  fdm.GetPropagate()->GetPQR() * fdm.GetPropagate()->GetUVW());
+      s.bx = a_b(2) * kFtToM;
+      s.by = a_b(1) * kFtToM;
+      s.bz = -a_b(3) * kFtToM;
+    }
     s.dax = s.day = s.daz = 0.0;
     out.s.push_back(s);
     if (i == n) break;
@@ -230,13 +249,14 @@ int main(int argc, char **argv)
                                    (s.by - s.day) * (s.by - s.day) +
                                    (s.bz - s.daz) * (s.bz - s.daz)));
   }
-  std::printf("\n[2] which analytic form IS d(V_local)/dt?\n");
+  std::printf("\n[2] acceleration candidates vs central difference of v "
+              "(fixed ENU frame)\n");
   std::printf("  peak |a| = %.3f m/s^2\n", amax);
-  std::printf("  Tb2l*(UVWdot + PQR x UVW) vs central difference: "
-              "peak gap %.4f m/s^2 (%.2f%% of peak)\n",
+  std::printf("  A: R0*(Ti2ec*UVWidot - 2w x v - w x (w x r)):  peak gap "
+              "%.4f m/s^2 (%.3f%% of peak)\n",
               dmax_full, 100.0 * dmax_full / std::max(1e-9, amax));
-  std::printf("  Tb2l* UVWdot            vs central difference: "
-              "peak gap %.4f m/s^2 (%.2f%% of peak)\n",
+  std::printf("  B: Tb2l*(UVWdot + PQR x UVW), moving frame:    peak gap "
+              "%.4f m/s^2 (%.3f%% of peak)\n",
               dmax_bare, 100.0 * dmax_bare / std::max(1e-9, amax));
 
   std::printf("\n[3] cost and step-size sensitivity\n");
