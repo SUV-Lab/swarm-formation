@@ -38,10 +38,14 @@ foreach(prog jsbsim_probe hermite_check)
   target_include_directories(${prog} PRIVATE
     "${JSBSIM_INCLUDE_DIR}" "${EIGEN3_INCLUDE_DIR}")
   target_link_libraries(${prog} PRIVATE "${JSBSIM_LIBRARY}")
-  # RPATH, not LD_LIBRARY_PATH: the first version of this experiment could
-  # only be run by exporting the path by hand, which meant "it builds" and
-  # "it runs" were two different claims (review find).
+  # RPATH, not LD_LIBRARY_PATH — and RELATIVE ($ORIGIN), not absolute
+  # (review find, round 2): an absolute RPATH bakes in the CONTAINER path
+  # (/ws/...), so the same bind-mounted binary run from the HOST path
+  # (/home/.../ws) could not find libJSBSim. The workspace layout is
+  # identical on both sides of the mount, so a binary-relative path works
+  # everywhere.
+  file(RELATIVE_PATH _rel_lib "${CMAKE_BINARY_DIR}" "${JSBSIM_ROOT}/lib")
   set_target_properties(${prog} PROPERTIES
-    BUILD_RPATH "${JSBSIM_ROOT}/lib"
-    INSTALL_RPATH "${JSBSIM_ROOT}/lib")
+    BUILD_RPATH "\$ORIGIN/${_rel_lib}"
+    INSTALL_RPATH "\$ORIGIN/${_rel_lib}")
 endforeach()
