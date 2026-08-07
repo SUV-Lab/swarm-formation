@@ -412,37 +412,32 @@
     optimization/dynamics_unit_xy_m: 100.0
     optimization/dynamics_unit_z_m: 100.0
 
-    # REFERENCE VEHICLE (ADR-0001): the open JSBSim F-16A model is the
-    # development spec — vehicle physics below are extracted/fitted from
-    # aircraft/f16/f16.xml at JSBSim v1.3.1 (pinned SHA in
-    # experiments/jsbsim_probe/run.sh). Research/structure validation only;
-    # no real-platform suitability is claimed. Full derivation:
-    # docs/adr/0001-reference-vehicle.md. Regressions re-run on the swap:
-    # 34/34 (the penalties are utilization-normalized, so the physics change
-    # moves readings, not verdicts).
-    optimization/dynamics_mass_kg: 9357.6       # empty+pilot+default fuel loadout
-    optimization/dynamics_wing_area_m2: 27.871  # 300 ft^2
+    # Publicly reproducible representative high-subsonic fixed-wing baseline.
+    # These are explicit assumptions, not a claim of an exact proprietary
+    # coefficient/thrust data set. See mmp_vehicle_dynamics/README.md (모델 절).
+    # NOTE: a reference-vehicle profile experiment lives under
+    # experiments/jsbsim_probe/ (ADR-0001, ON HOLD pending model
+    # re-selection) — it must NOT change these production defaults.
+    optimization/dynamics_mass_kg: 1300.0
+    optimization/dynamics_wing_area_m2: 1.0
     optimization/dynamics_g: 9.80665
     optimization/dynamics_rho0_kgpm3: 1.225
     optimization/dynamics_density_scale_height_m: 8500.0
     optimization/dynamics_altitude_reference_m: 0.0
-    optimization/dynamics_cd0: 0.017            # fit of CLDh/CDdHT elevator=0, alpha 0-15 deg
-    optimization/dynamics_induced_drag_factor: 0.152  # same fit, RMS 0.002
-    optimization/dynamics_cl_min: -0.40         # inert (never consumed) — see cpp note
-    optimization/dynamics_cl_max: 1.829         # CLDh peak at alpha 35 deg
-    optimization/dynamics_load_factor_max: 2.50 # OPERATIONAL limit (airframe: 5.06 g aero
-                                        # worst-corner, 9 g FCS) — mission policy subset
+    optimization/dynamics_cd0: 0.035
+    optimization/dynamics_induced_drag_factor: 0.080
+    optimization/dynamics_cl_min: -0.40
+    optimization/dynamics_cl_max: 1.40
+    optimization/dynamics_load_factor_max: 2.50
     optimization/dynamics_thrust_min_n: 0.0
-    optimization/dynamics_thrust_max_n: 61000.0 # regime-minimum MIL thrust (61.1-77.4 kN
-                                        # across the band) as a conservative constant; AB
-                                        # excluded by policy
-    optimization/dynamics_speed_min_mps: 122.0  # OPERATIONAL floor, mission policy.
-                                        # Under ADR-0001 physics the aero stall is
-                                        # 54.2 m/s (CL_max 1.829 @ 9357.6 kg), so this
-                                        # floor is 2.25x stall — it no longer doubles
-                                        # as a stall proxy the way it did at 1300 kg
-                                        # (where stall was 121.9 and 122 was the
-                                        # feasibility edge).
+    optimization/dynamics_thrust_max_n: 3200.0
+    optimization/dynamics_speed_min_mps: 122.0  # >= aero stall from CL_max 1.40
+                                        # (v_stall = 121.9 m/s @ 1300 kg): the old
+                                        # 120 declared an envelope with NO feasible
+                                        # level-flight state at its own minimum —
+                                        # every 120-122 m/s crossing logged
+                                        # unavoidable CL violations + a permanent
+                                        # startup consistency warning.
     optimization/dynamics_speed_max_mps: 230.0    # margined 211.6 m/s; SHADOWED by
                                         # the frame feasibility cap (max_vel 2.0 u/s
                                         # = 200 m/s) unless max_vel is raised — cruise

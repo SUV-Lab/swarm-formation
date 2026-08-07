@@ -112,7 +112,7 @@ int main(int argc, char **argv)
        with_initfail = false, with_initok = false, with_synthclamp = false,
        with_unsafedirect = false, with_initaccfail = false,
        with_initnan = false, with_arredge2 = false, with_twophase = false,
-       with_pvaprobe = false;
+       with_pvaprobe = false, with_initceiling = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -222,6 +222,11 @@ int main(int argc, char **argv)
     // BEFORE the dynamics-model-off early return, so a NaN state is
     // rejected whether or not the model is loaded (fail-closed ordering).
     if (v == "initnan") { with_route = true; with_phase = true; with_initnan = true; }
+    // initceiling: 210 m/s level — INSIDE the dynamics model's speed range
+    // (max 230) but ABOVE the frame cap (max_vel 2.0 u/s = 200 m/s). The
+    // validator must reject on the EFFECTIVE ceiling, or the state passes
+    // the entrance and fails in the solve.
+    if (v == "initceiling") { with_route = true; with_phase = true; with_initceiling = true; }
     // [CONTRACT-2 EVAL] pvaprobe: INTERFACE-ONLY check that a
     // transition-generator handoff state (the JSBSim experiment's
     // dwell-complete PVA) can cross the boundary into the planner: fixed
@@ -274,7 +279,7 @@ int main(int argc, char **argv)
   // initfail arms all-worker failure injection as a tripwire: entry
   // validation must exit BEFORE the worker stage that consumes (and resets)
   // it, so the parameter still reads -1 after the plan.
-  if (with_initfail || with_initaccfail || with_initnan)
+  if (with_initfail || with_initaccfail || with_initnan || with_initceiling)
     force("chain/jitter/fail_segment", -1);
   if (with_mergetail) force("chain/jitter/fail_segment", 3);
   if (with_arredge2) force("chain/jitter/fail_segment", 2);  // last of N=2
@@ -480,6 +485,27 @@ int main(int argc, char **argv)
     // Equality is the leak signature (the second plan re-used stale N).
     expect(p1 != p2, "segment count change reaches the second plan (no "
                      "per-plan state leak)");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_initceiling) {
+    // 2.1 u/s = 210 m/s level: within the model's 230 m/s but above the
+    // frame's max_vel 200 m/s. Must reject on the EFFECTIVE ceiling with
+    // the frame cap named in the reason.
+    const path_manager::PlanResult r = chain.plan(
+        start_pos, Eigen::Vector3d(2.1, 0.0, 0.0), start_acc, goal,
+        /*start_vel_synthesized=*/false, {}, /*start_vel_commanded=*/true);
+    expect(!r.hasTrajectory(),
+           "above-frame-cap commanded speed FAILED (no trajectory)");
+    expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "reason is INITIAL_MODE_UNSUPPORTED");
+    expect(r.detail.find("frame max_vel cap") != std::string::npos,
+           "reason names the frame cap, not the model maximum");
+    expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
+           "fault injection still armed — no front-end/optimizer work ran");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

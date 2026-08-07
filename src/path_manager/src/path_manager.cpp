@@ -601,10 +601,23 @@ namespace path_manager
                      floor_mps);
             return buf;
         }
-        if (vm > dyn.speed_max_mps) {
+        // Effective ceiling = min(model, FRAME): the optimizer's max_vel is
+        // its own hard cap, so a state between the two (e.g. 210 m/s when
+        // the model allows 230 but max_vel is 2.0 u/s = 200 m/s) would pass
+        // this gate and then fail in the solve — the exact
+        // "entrance accepts, solver rejects" defect class the entry
+        // validation exists to kill (review find).
+        const double frame_cap_mps = max_vel_ * um_xy;
+        const double vmax_mps =
+            frame_cap_mps > 1e-9 ? std::min(dyn.speed_max_mps, frame_cap_mps)
+                                 : dyn.speed_max_mps;
+        if (vm > vmax_mps) {
             snprintf(buf, sizeof buf,
-                     "speed %.1f m/s above the model maximum %.1f m/s", vm,
-                     dyn.speed_max_mps);
+                     "speed %.1f m/s above the effective maximum %.1f m/s "
+                     "(%s)", vm, vmax_mps,
+                     vmax_mps < dyn.speed_max_mps - 1e-9
+                         ? "frame max_vel cap"
+                         : "model maximum");
             return buf;
         }
         const double gamma = std::atan2(std::abs(vz), vh);
