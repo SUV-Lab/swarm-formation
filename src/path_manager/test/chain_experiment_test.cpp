@@ -411,12 +411,12 @@ int main(int argc, char **argv)
   if (with_pvaprobe) {
     // Dwell-complete PVA from the JSBSim experiment, LOCAL ENU
     // displacement / SI (experiments/jsbsim_probe, v1.3.1 @ 3b25f25e,
-    // f16, grid search stage [4]). Override with MMP_PVA_CSV =
-    // "t,px,py,pz,vx,vy,vz,ax,ay,az" to probe another state.
+    // neutral civilian example model, grid search stage [4]). Override
+    // with MMP_PVA_CSV = "t,px,py,pz,vx,vy,vz,ax,ay,az" for other states.
     const char *csv = std::getenv("MMP_PVA_CSV");
-    double f[10] = {2.330000, -0.060543, -366.837515, 205.834561,
-                    -0.049650, -158.606414, 64.054758,
-                    -0.017891, -2.944771, -30.673533};
+    double f[10] = {2.280000, -0.060109, -362.933609, 194.702555,
+                    -0.053851, -160.150060, 50.897341,
+                    -0.022946, 7.116869, -44.595838};
     if (csv && std::sscanf(csv, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
                            &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6],
                            &f[7], &f[8], &f[9]) != 10) {

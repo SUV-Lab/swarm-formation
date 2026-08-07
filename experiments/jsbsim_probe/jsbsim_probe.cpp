@@ -217,7 +217,7 @@ RunResult propagate(const std::string &root, const std::string &model,
 int main(int argc, char **argv)
 {
   const std::string root = argc > 1 ? argv[1] : "jsbsim";
-  const std::string model = argc > 2 ? argv[2] : "f16";
+  const std::string model = argc > 2 ? argv[2] : "global5000";
   const double duration = argc > 3 ? std::atof(argv[3]) : 12.0;
 
   std::printf("=== JSBSim integration probe (structure + cost only) ===\n");

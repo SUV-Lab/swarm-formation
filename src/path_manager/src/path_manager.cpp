@@ -601,16 +601,36 @@ namespace path_manager
                      floor_mps);
             return buf;
         }
-        // Effective ceiling = min(model, FRAME): the optimizer's max_vel is
-        // its own hard cap, so a state between the two (e.g. 210 m/s when
-        // the model allows 230 but max_vel is 2.0 u/s = 200 m/s) would pass
-        // this gate and then fail in the solve — the exact
-        // "entrance accepts, solver rejects" defect class the entry
-        // validation exists to kill (review find).
-        const double frame_cap_mps = max_vel_ * um_xy;
-        const double vmax_mps =
-            frame_cap_mps > 1e-9 ? std::min(dyn.speed_max_mps, frame_cap_mps)
-                                 : dyn.speed_max_mps;
+        // THREE ceilings, three meanings — conflated once, separated on
+        // review find:
+        //   dynamics_speed_max      the physics model's validity ceiling
+        //   optimization/max_vel    the planner's frame cap (cubic soft
+        //                           cost in the solver; contracts author
+        //                           at it) — a PLANNING preference
+        //   planning/handoff_max_vel_mps
+        //                           the ENTRY/HANDOFF contract ceiling
+        //                           this validator enforces. Default 0 =
+        //                           follow the frame cap, which keeps the
+        //                           gate consistent with what the solver
+        //                           will accept (a 200-230 m/s state must
+        //                           not pass the entrance and then fail in
+        //                           the solve). Setting it explicitly
+        //                           decouples the handoff contract from
+        //                           planning preference — whether an
+        //                           above-cap state should instead
+        //                           classify as TRANSITION_REQUIRED is a
+        //                           contract-2 decision, made there.
+        const auto handoff_cap = [&]() {
+            const char *n = "planning/handoff_max_vel_mps";
+            if (node_->has_parameter(n)) {
+                const double v = node_->get_parameter(n).as_double();
+                if (v > 1e-9) return v;
+            }
+            return max_vel_ > 1e-9 ? max_vel_ * um_xy
+                                   : dyn.speed_max_mps;
+        };
+        const double cap_mps = handoff_cap();
+        const double vmax_mps = std::min(dyn.speed_max_mps, cap_mps);
         if (vm > vmax_mps) {
             snprintf(buf, sizeof buf,
                      "speed %.1f m/s above the effective maximum %.1f m/s "

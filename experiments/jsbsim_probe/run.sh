@@ -2,9 +2,9 @@
 # [CONTRACT-2 EVAL] Fetch the pinned JSBSim, build the probes, run them.
 # Everything lands under .jsbsim/ next to this script (gitignored).
 #
-#   ./run.sh                     # pinned version, f16
+#   ./run.sh                     # pinned version, default model
 #   ./run.sh --version v1.2.1    # another pinned tag
-#   ./run.sh --model X15         # another bundled example aircraft
+#   ./run.sh --model Concorde    # another bundled example aircraft
 set -euo pipefail
 
 # Pin rationale (README.md): v1.3.1 is the current stable release and the
@@ -15,7 +15,7 @@ declare -A PINNED_SHA=(
   [v1.3.1]="3b25f25e49b42d0489c04ac805674fc1450ca579"
   [v1.2.1]="9b95d1b5ccff59916c79a0e3eb8f548377910598"
 )
-MODEL="f16"
+MODEL="global5000"
 DURATION="12"
 JOBS="$(nproc 2>/dev/null || echo 4)"
 

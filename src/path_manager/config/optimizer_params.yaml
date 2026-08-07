@@ -415,9 +415,9 @@
     # Publicly reproducible representative high-subsonic fixed-wing baseline.
     # These are explicit assumptions, not a claim of an exact proprietary
     # coefficient/thrust data set. See mmp_vehicle_dynamics/README.md (모델 절).
-    # NOTE: a reference-vehicle profile experiment lives under
-    # experiments/jsbsim_probe/ (ADR-0001, ON HOLD pending model
-    # re-selection) — it must NOT change these production defaults.
+    # NOTE: reference-model work is governed by docs/adr/ (0001 rejected,
+    # 0002 defines the neutral benchmark). Experiments must NOT change
+    # these production defaults.
     optimization/dynamics_mass_kg: 1300.0
     optimization/dynamics_wing_area_m2: 1.0
     optimization/dynamics_g: 9.80665
