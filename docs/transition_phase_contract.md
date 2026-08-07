@@ -130,10 +130,17 @@ prescribed head = TransitionPhase 종료 PVA
 
 ```
 TransitionRequest  { initial_pva, global_route(+cap), entry_candidates[]
-                     (기존 선별 규칙 재사용), transition_limits }
+                     (기존 선별 규칙 재사용), transition_limits,
+                     zone_policy[] }
 TransitionResult   { verdict(OK/FAILED+사유), transition_traj(PVA(t)),
                      end_pva, route_start_s, audit(전환 평가기 결과) }
 ```
+
+- `zone_policy[]`: 전역 3-pass가 확정한 **구역별** hard/soft 스냅샷.
+  현재 노출 API는 `zoneAvoidPassNow()`의 패스 번호뿐이라 "어느 구역이
+  불가피해서 소프트로 남았는지"를 알 수 없다 — 패스 번호만 보고 전 구역을
+  소프트 취급하는 구현은 금지. 생성기 착수 시 PathManager가 구역별
+  스냅샷(예: 탐색기의 불가피-횡단 집합)을 노출해야 한다.
 
 ## 6. 다항 어댑터 — 구간 내부 검사와 접합 감사
 

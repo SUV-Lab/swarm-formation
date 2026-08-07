@@ -106,6 +106,46 @@ public:
                            const std::vector<Eigen::Vector3d> &waypoints,
                            bool start_vel_synthesized, bool run_parallel,
                            const ego_planner::TailBoundary &mission_tail);
+  // [S13] Which JUDGMENT applies to a span of the flight. The evaluator
+  // selects the model by this CONTRACT TYPE — never by parsing the display
+  // name (review point: labels are for output; a typo in a string must not
+  // silently change physics).
+  //   CRUISE     full cruise-model envelope judgment (today's audit)
+  //   TERMINAL   prescribed helix — judged under the cruise model today
+  //              (distinct kind so a dedicated judgment can attach later)
+  //   TRANSITION outside the cruise model BY DEFINITION: excluded from the
+  //              cruise envelope statistics and MEASURED only — its own
+  //              gate arrives with the transition evaluator (ADR-0002
+  //              freezes the v0 limits as experimental, not acceptance).
+  //              Terrain/zone/risk checks still apply: those are
+  //              model-agnostic.
+  enum class PhaseKind { CRUISE, TERMINAL, TRANSITION };
+  struct PhaseSpan {
+    double t_end{0.0};
+    PhaseKind kind{PhaseKind::CRUISE};
+    std::string name;  // display only
+  };
+
+  struct FlightVerdict {
+    bool evaluated{false};  // false: degenerate input, nothing was judged
+    bool clean{true};
+    bool underground{false};
+    bool no_cruise{false};
+    double viol_pct{0.0};
+    double util_peak{0.0};
+    // The two counts above that no trajectory may ever fly with, whatever
+    // produced it. Envelope over-utilization is graded separately: it is a
+    // margin the caller may knowingly spend, terrain is not.
+    bool unflyable() const { return evaluated && (underground || no_cruise); }
+  };
+  FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
+                               const std::vector<PhaseSpan> &spans) const;
+  // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
+  // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
+  // budget exceeded -> the given result degraded, otherwise unchanged.
+  PlanResult stitchedVerdictResult(const FlightVerdict &fv,
+                                   PlanResult ok_result) const;
+
   // [S13] Coordinator-owned: while true, every single-shot fallback inside
   // the route mode returns FAILED instead of re-planning from the mission
   // start (contract §10 — the cruise planner must never re-plan the regime
@@ -194,45 +234,6 @@ private:
   // transition phase is by definition outside it, so per-phase model
   // selection has to land here before any transition trajectory does —
   // see docs/transition_phase_contract.md §4.
-  // [S13] Which JUDGMENT applies to a span of the flight. The evaluator
-  // selects the model by this CONTRACT TYPE — never by parsing the display
-  // name (review point: labels are for output; a typo in a string must not
-  // silently change physics).
-  //   CRUISE     full cruise-model envelope judgment (today's audit)
-  //   TERMINAL   prescribed helix — judged under the cruise model today
-  //              (distinct kind so a dedicated judgment can attach later)
-  //   TRANSITION outside the cruise model BY DEFINITION: excluded from the
-  //              cruise envelope statistics and MEASURED only — its own
-  //              gate arrives with the transition evaluator (ADR-0002
-  //              freezes the v0 limits as experimental, not acceptance).
-  //              Terrain/zone/risk checks still apply: those are
-  //              model-agnostic.
-  enum class PhaseKind { CRUISE, TERMINAL, TRANSITION };
-  struct PhaseSpan {
-    double t_end{0.0};
-    PhaseKind kind{PhaseKind::CRUISE};
-    std::string name;  // display only
-  };
-
-  struct FlightVerdict {
-    bool evaluated{false};  // false: degenerate input, nothing was judged
-    bool clean{true};
-    bool underground{false};
-    bool no_cruise{false};
-    double viol_pct{0.0};
-    double util_peak{0.0};
-    // The two counts above that no trajectory may ever fly with, whatever
-    // produced it. Envelope over-utilization is graded separately: it is a
-    // margin the caller may knowingly spend, terrain is not.
-    bool unflyable() const { return evaluated && (underground || no_cruise); }
-  };
-  FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
-                               const std::vector<PhaseSpan> &spans) const;
-  // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
-  // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
-  // budget exceeded -> the given result degraded, otherwise unchanged.
-  PlanResult stitchedVerdictResult(const FlightVerdict &fv,
-                                   PlanResult ok_result) const;
 
   // [STAGE-3] Optional PRESCRIBED terminal phase (chain/terminal/enable):
   // a helix descent of genuinely different character — analytic geometry,

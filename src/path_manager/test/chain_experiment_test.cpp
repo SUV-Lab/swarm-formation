@@ -99,7 +99,7 @@ int main(int argc, char **argv)
       argc > 1 ? argv[1]
                : "src/mmp_path_planning/src/path_manager/config/"
                  "optimizer_params.yaml";
-  const int segments = argc > 2 ? std::atoi(argv[2]) : 3;
+  int segments = argc > 2 ? std::atoi(argv[2]) : 3;
 
   bool with_zone = false, with_segdiff = false, with_twice = false,
        with_failrestore = false, with_altcap = false, with_terminal = false,
@@ -114,7 +114,8 @@ int main(int argc, char **argv)
        with_initnan = false, with_arredge2 = false, with_twophase = false,
        with_pvaprobe = false, with_initceiling = false,
        with_handoffcap = false, with_overroutebad = false,
-       with_transfallback = false, with_overrouteretry = false;
+       with_transfallback = false, with_overrouteretry = false,
+       with_badspans = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -242,6 +243,11 @@ int main(int argc, char **argv)
     // plan-scoped state (phase blackboard reset, segments_ restored after
     // the first call's possible merge), so both produce the same chain.
     if (v == "overrouteretry") { with_route = true; with_phase = true; with_overrouteretry = true; }
+    // [S13] badspans: the evaluator's span input contract and the
+    // stitched-verdict fail-closed path — malformed spans must yield
+    // UNEVALUATED, and stitchedVerdictResult must turn UNEVALUATED into
+    // FAILED with the stored trajectory invalidated.
+    if (v == "badspans") { with_route = true; with_badspans = true; }
     // [S13] transfallback: with a transition active, the single-shot
     // fallback is forbidden — the below-threshold mission that normally
     // degrades to a direct plan must FAIL instead.
@@ -261,6 +267,12 @@ int main(int argc, char **argv)
     if (v == "unsafedirect") { with_route = true; with_autosmall = true; with_phase = true; with_unsafedirect = true; }
   }
   if (with_tinyturn) with_terminal = true;
+  // overrouteretry needs a mergeable interior junction: at N=3 with phase
+  // on, the middle segment's BOTH junctions are protected (departure +
+  // arrival), so the ladder exhausts into the single-shot fallback — a
+  // false positive for "merge happened" (review find). N=4 leaves an
+  // interior cruise junction the generic merge may drop.
+  if (with_overrouteretry) segments = std::max(segments, 4);
 
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", params});
@@ -510,6 +522,52 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_badspans) {
+    // A real flight to judge: plan once, keep the stored trajectory.
+    const path_manager::PlanResult r0 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r0.hasTrajectory(), "fixture plan succeeds");
+    const poly_traj::Trajectory traj = pm->traj_.local_traj.traj;
+    const double T = traj.getTotalDuration();
+    using PK = path_manager::SegmentChainPlanner::PhaseKind;
+    using Span = path_manager::SegmentChainPlanner::PhaseSpan;
+    // Each span-contract violation must yield UNEVALUATED.
+    expect(!chain.evaluateFlight(traj, {{T * 0.5, PK::CRUISE, "short"}})
+                .evaluated,
+           "last span not covering the flight -> UNEVALUATED");
+    expect(!chain.evaluateFlight(
+                  traj, {{T * 0.6, PK::CRUISE, "a"}, {T * 0.4, PK::CRUISE,
+                                                      "b"}})
+                .evaluated,
+           "non-increasing t_end -> UNEVALUATED");
+    expect(!chain.evaluateFlight(
+                  traj, {{T * 0.5, PK::CRUISE, "cruise"},
+                         {T, PK::TRANSITION, "late-transition"}})
+                .evaluated,
+           "TRANSITION after cruise -> UNEVALUATED");
+    expect(!chain.evaluateFlight(
+                  traj, {{T * 0.5, PK::TERMINAL, "terminal"},
+                         {T, PK::CRUISE, "tail"}})
+                .evaluated,
+           "TERMINAL not last -> UNEVALUATED");
+    // And the verdict plumbing: UNEVALUATED -> FAILED + stored trajectory
+    // invalidated (the FSM executes on duration>0 && start_time>0 alone).
+    path_manager::SegmentChainPlanner::FlightVerdict unev;  // evaluated=false
+    const path_manager::PlanResult rv =
+        chain.stitchedVerdictResult(unev, path_manager::PlanResult::success());
+    expect(!rv.hasTrajectory() &&
+               rv.reason ==
+                   path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
+           "UNEVALUATED verdict -> FAILED(STITCHED_FLIGHT_UNSAFE)");
+    expect(pm->traj_.local_traj.duration == 0.0 &&
+               pm->traj_.local_traj.start_time == 0.0,
+           "stored trajectory invalidated on the UNEVALUATED verdict");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_overrouteretry) {
     // Coordinator retry pattern, with the leak actually FORCED (review
     // find: piece-count equality on two clean calls never exercised the
@@ -539,7 +597,14 @@ int main(int argc, char **argv)
         false, {});
     expect(rb.hasTrajectory(), "merged call still delivers a trajectory");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == 0,
-           "fault injection consumed (merge actually happened)");
+           "fault injection consumed (the failure was actually injected)");
+    // The MERGE must be what repaired it — not the single-shot fallback
+    // (review find: at N=3 the protected phase boundaries exhausted the
+    // ladder and the fallback produced a false positive here).
+    expect(rb.outcome == path_manager::PlanOutcome::SUCCESS,
+           "merge rescue stays SUCCESS (no fallback, no degrade)");
+    expect(rb.reason != path_manager::PlanReason::SINGLE_PLAN_FALLBACK,
+           "repair was the merge ladder, not the single-shot fallback");
     expect(chain.segments() == n_confirmed,
            "segments() restored to the confirmed N after the merge call");
 
@@ -555,12 +620,14 @@ int main(int argc, char **argv)
     expect(out.getPieceNum() == ref.getPieceNum(),
            "post-merge clean call reproduces the reference piece count");
     expect(std::abs(out.getTotalDuration() - ref.getTotalDuration()) < 1e-9,
-           "duration reproduced bitwise (solver is deterministic)");
+           "duration reproduced within deterministic tolerance");
     bool junc_ok = true;
     for (int j = 1; j < ref.getPieceNum() && junc_ok; ++j)
       junc_ok = (out.getJuncPos(j) - ref.getJuncPos(j)).norm() < 1e-9 &&
-                (out.getJuncVel(j) - ref.getJuncVel(j)).norm() < 1e-9;
-    expect(junc_ok, "every junction PVA reproduced (no plan-state leak)");
+                (out.getJuncVel(j) - ref.getJuncVel(j)).norm() < 1e-9 &&
+                (out.getJuncAcc(j) - ref.getJuncAcc(j)).norm() < 1e-9;
+    expect(junc_ok, "every junction P/V/A reproduced within deterministic "
+                    "tolerance (no plan-state leak)");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

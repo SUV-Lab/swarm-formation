@@ -682,9 +682,13 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   // of failing (review find). Route mode has no baseline, so there FAILED
   // is the only honest answer.
   const FlightVerdict fv = evaluateFlight(chained, spans);
-  if (fv.unflyable()) {
-    log_->errorf("[STITCH-GATE] stitched flight is unflyable (%s%s) — "
-                 "restoring the baseline",
+  if (!fv.evaluated || fv.unflyable()) {
+    // UNEVALUATED joins unflyable here too (fail-closed): the baseline is
+    // still the honest repair — a judged-good baseline beats refusing the
+    // mission because the STITCH could not be judged.
+    log_->errorf("[STITCH-GATE] stitched flight %s (%s%s) — restoring the "
+                 "baseline",
+                 fv.evaluated ? "is unflyable" : "could not be evaluated",
                  fv.underground ? "terrain overlap" : "",
                  fv.no_cruise ? (fv.underground ? ", never reaches cruise"
                                                 : "never reaches cruise")
@@ -2095,7 +2099,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // in RViz tells the operator it was accepted. FAILED leaves both untouched.
   const FlightVerdict stitched_fv =
       evaluateFlight(chained, spans);
-  if (stitched_fv.unflyable())
+  if (!stitched_fv.evaluated || stitched_fv.unflyable())
     return stitchedVerdictResult(stitched_fv, PlanResult::success());
 
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
@@ -2141,6 +2145,20 @@ PlanResult SegmentChainPlanner::planOverRoute(
 PlanResult SegmentChainPlanner::stitchedVerdictResult(
     const FlightVerdict &fv, PlanResult ok_result) const
 {
+  // Fail-closed on UNEVALUATED (review find: unflyable() is false when
+  // evaluated is false, so a malformed span set slid a stitched product
+  // through as SUCCESS with the trajectory already stored): a flight the
+  // evaluator could not judge is refused like one it condemned, and
+  // whatever was stored is invalidated.
+  if (!fv.evaluated) {
+    log_->errorf("[STITCH-GATE] whole-flight evaluation did not run "
+                 "(malformed spans or degenerate flight) — FAILED");
+    invalidateStoredTrajectory();
+    return PlanResult::failedBecause(
+        PlanReason::STITCHED_FLIGHT_UNSAFE,
+        "stitched flight could not be evaluated (span contract violation "
+        "or degenerate product)");
+  }
   // [STITCH-GATE] Frozen policy for the whole-flight verdict on the product
   // the caller is about to fly. Two tiers, because the two failure kinds are
   // not the same kind of thing:
