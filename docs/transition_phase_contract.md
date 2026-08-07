@@ -487,6 +487,13 @@ TRANSITION_GENERATION_FAILED   (direct fallback 금지)
   \|v0\| 일정을 가정하는데, 전이는 정확히 그 가정을 깨뜨린다.
 - `validateConnector`는 전환 콘을 넘겨주면 재사용 가능(지형·존·grade 기하
   검사). 단 이것은 **기하 스크린일 뿐** 모델 판정이 아니다.
+- **존 정책 상속 (정정 기록)**: 현행 `evaluateFlight`의 위험도는 **통계일
+  뿐 CLEAN 판정에 들어가지 않는다** — 불가피 판정된 소프트 존 통과가
+  허용되는 설계라 그 자체로 오류는 아니다. 그러나 전이 생성기는 전역
+  3-pass가 확정한 존 정책을 **별도 합격 게이트로 상속**해야 한다:
+  하드 유지(비면제) 존 접촉 = 후보 실격; 전역이 불가피로 선택한 소프트
+  존은 통과 가능하되 노출을 측정·최소화; 단순 risk_max 기록 후 승인은
+  금지.
 - `buildDepartureConnector` / `contractFromVertex`는 전이 생성기로 재사용
   **금지**. 시간이 없고, 종료 가속도를 0으로 못박으며(`contractFromVertex`는
   `c.t = 0`, `c.acc = Zero`), 방향이 경로 정점 현으로 고정된다.

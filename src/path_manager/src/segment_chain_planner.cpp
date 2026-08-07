@@ -1510,6 +1510,12 @@ PlanResult SegmentChainPlanner::planOverRoute(
                         ? "auto-N below threshold (phase mode: direct)"
                         : "auto-N: mission below the split threshold",
                     /*as_degraded=*/phase_requested);
+  // The restore target is the CONFIRMED N — auto resolution just decided
+  // it (review find: saving before this point made the RAII revert an
+  // auto-resolved N=2 back to the entry value after a successful plan,
+  // breaking segments() for every route+auto combination). A mid-plan
+  // merge decrement still restores to this confirmed value.
+  segments_restore.saved = segments_;
 
   // [VEL-ALIGN] resolved BEFORE authoring: the departure handoff screening
   // measures the turn the EFFECTIVE start velocity needs.
@@ -2184,6 +2190,46 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
 {
   const double T = flight.getTotalDuration();
   if (T <= 1e-9 || spans.empty()) return {};
+  // [S13] Span input contract, fail-closed to UNEVALUATED (the direct
+  // fallback gate treats that as FAILED; the stitched paths build their
+  // own spans, so a violation here is a programming error to surface):
+  //  - every t_end finite and strictly increasing
+  //  - the last t_end covers the whole flight
+  //  - TRANSITION only as the LEADING contiguous spans (a transition in
+  //    the middle of a cruise flight is not a thing this contract knows)
+  //  - TERMINAL only as the last span
+  {
+    double prev = 0.0;
+    bool cruise_seen = false;
+    for (size_t i = 0; i < spans.size(); ++i) {
+      const PhaseSpan &sp = spans[i];
+      if (!std::isfinite(sp.t_end) || sp.t_end <= prev + 1e-9) {
+        log_->errorf("[FINAL-EVAL] span contract: t_end not finite/strictly "
+                     "increasing at span %zu", i);
+        return {};
+      }
+      prev = sp.t_end;
+      if (sp.kind == PhaseKind::TRANSITION) {
+        if (cruise_seen) {
+          log_->errorf("[FINAL-EVAL] span contract: TRANSITION after a "
+                       "non-transition span (%zu)", i);
+          return {};
+        }
+      } else {
+        cruise_seen = true;
+      }
+      if (sp.kind == PhaseKind::TERMINAL && i + 1 != spans.size()) {
+        log_->errorf("[FINAL-EVAL] span contract: TERMINAL not last (%zu)",
+                     i);
+        return {};
+      }
+    }
+    if (std::abs(spans.back().t_end - T) > 1e-6) {
+      log_->errorf("[FINAL-EVAL] span contract: last t_end %.6f != flight "
+                   "duration %.6f", spans.back().t_end, T);
+      return {};
+    }
+  }
 
   const mmp_vehicle_dynamics::Parameters *dyn = pm_->dynamicsParams();
   const auto param_or = [&](const char *n, double def) {

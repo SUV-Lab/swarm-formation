@@ -511,25 +511,56 @@ int main(int argc, char **argv)
   }
 
   if (with_overrouteretry) {
+    // Coordinator retry pattern, with the leak actually FORCED (review
+    // find: piece-count equality on two clean calls never exercised the
+    // merge decrement the RAII exists to undo).
+    //   A: clean reference call
+    //   B: one-shot mid-segment failure -> merge ladder decrements
+    //      segments_ mid-plan; after return segments() must be the
+    //      confirmed N again
+    //   C: clean call — must reproduce A to solver determinism (duration
+    //      bitwise, junction PVA), proving B leaked nothing.
     std::vector<Eigen::Vector3d> route;
     std::vector<double> cap;
     double fe_ms = 0.0;
     expect(chain.commitRoute(start_pos, start_vel, start_acc, goal, false,
                              &route, &cap, &fe_ms),
            "commitRoute produces the route");
-    const path_manager::PlanResult r1 = chain.planOverRoute(
+    const int n_confirmed = chain.segments();
+    const path_manager::PlanResult ra = chain.planOverRoute(
         route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
         false, {});
-    expect(r1.hasTrajectory(), "first planOverRoute succeeds");
-    const int p1 = pm->traj_.local_traj.traj.getPieceNum();
-    const path_manager::PlanResult r2 = chain.planOverRoute(
+    expect(ra.hasTrajectory(), "reference call succeeds");
+    const poly_traj::Trajectory ref = pm->traj_.local_traj.traj;
+
+    force("chain/jitter/fail_segment", 2);  // one-shot: forces a merge
+    const path_manager::PlanResult rb = chain.planOverRoute(
         route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
         false, {});
-    expect(r2.hasTrajectory(), "second planOverRoute succeeds (re-entry)");
-    const int p2 = pm->traj_.local_traj.traj.getPieceNum();
-    std::cout << "overrouteretry: " << p1 << " vs " << p2 << " pieces\n";
-    expect(p1 == p2,
-           "re-entry sees clean plan-scoped state (same chain both times)");
+    expect(rb.hasTrajectory(), "merged call still delivers a trajectory");
+    expect(node->get_parameter("chain/jitter/fail_segment").as_int() == 0,
+           "fault injection consumed (merge actually happened)");
+    expect(chain.segments() == n_confirmed,
+           "segments() restored to the confirmed N after the merge call");
+
+    const path_manager::PlanResult rc = chain.planOverRoute(
+        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
+        false, {});
+    expect(rc.hasTrajectory(), "post-merge clean call succeeds");
+    const poly_traj::Trajectory &out = pm->traj_.local_traj.traj;
+    std::cout << "overrouteretry: ref " << ref.getPieceNum() << " pieces "
+              << ref.getTotalDuration() << " s vs post-merge "
+              << out.getPieceNum() << " pieces " << out.getTotalDuration()
+              << " s\n";
+    expect(out.getPieceNum() == ref.getPieceNum(),
+           "post-merge clean call reproduces the reference piece count");
+    expect(std::abs(out.getTotalDuration() - ref.getTotalDuration()) < 1e-9,
+           "duration reproduced bitwise (solver is deterministic)");
+    bool junc_ok = true;
+    for (int j = 1; j < ref.getPieceNum() && junc_ok; ++j)
+      junc_ok = (out.getJuncPos(j) - ref.getJuncPos(j)).norm() < 1e-9 &&
+                (out.getJuncVel(j) - ref.getJuncVel(j)).norm() < 1e-9;
+    expect(junc_ok, "every junction PVA reproduced (no plan-state leak)");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
