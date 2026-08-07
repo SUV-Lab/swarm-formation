@@ -112,7 +112,8 @@ int main(int argc, char **argv)
        with_initfail = false, with_initok = false, with_synthclamp = false,
        with_unsafedirect = false, with_initaccfail = false,
        with_initnan = false, with_arredge2 = false, with_twophase = false,
-       with_pvaprobe = false, with_initceiling = false;
+       with_pvaprobe = false, with_initceiling = false,
+       with_handoffcap = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -227,6 +228,10 @@ int main(int argc, char **argv)
     // validator must reject on the EFFECTIVE ceiling, or the state passes
     // the entrance and fails in the solve.
     if (v == "initceiling") { with_route = true; with_phase = true; with_initceiling = true; }
+    // handoffcap: the EXPLICIT handoff ceiling decouples the entry contract
+    // from the planning cap — 220 admits 210 m/s (which the default cap
+    // refuses), 190 refuses 195 m/s, and the reason names the explicit cap.
+    if (v == "handoffcap") { with_route = true; with_handoffcap = true; }
     // [CONTRACT-2 EVAL] pvaprobe: INTERFACE-ONLY check that a
     // transition-generator handoff state (the JSBSim experiment's
     // dwell-complete PVA) can cross the boundary into the planner: fixed
@@ -491,6 +496,26 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_handoffcap) {
+    // Direct validator probes — no plan needed: the contract under test is
+    // the ceiling arithmetic and its reason string.
+    force("planning/handoff_max_vel_mps", 220.0);
+    const std::string ok210 =
+        pm->stateEnvelopeProblem(Eigen::Vector3d(2.1, 0.0, 0.0));
+    expect(ok210.empty(),
+           "handoff cap 220: 210 m/s passes the speed check");
+    force("planning/handoff_max_vel_mps", 190.0);
+    const std::string no195 =
+        pm->stateEnvelopeProblem(Eigen::Vector3d(1.95, 0.0, 0.0));
+    expect(!no195.empty() &&
+               no195.find("explicit handoff cap") != std::string::npos,
+           "handoff cap 190: 195 m/s refused, reason names the explicit cap");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_initceiling) {
     // 2.1 u/s = 210 m/s level: within the model's 230 m/s but above the
     // frame's max_vel 200 m/s. Must reject on the EFFECTIVE ceiling with
@@ -502,8 +527,8 @@ int main(int argc, char **argv)
            "above-frame-cap commanded speed FAILED (no trajectory)");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "reason is INITIAL_MODE_UNSUPPORTED");
-    expect(r.detail.find("frame max_vel cap") != std::string::npos,
-           "reason names the frame cap, not the model maximum");
+    expect(r.detail.find("default planning cap") != std::string::npos,
+           "reason names the DEFAULT planning cap (handoff param unset)");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
            "fault injection still armed — no front-end/optimizer work ran");
     rclcpp::shutdown();

@@ -102,6 +102,9 @@ RunResult propagate(const std::string &root, const std::string &model,
     std::printf("FAIL: LoadModel(%s)\n", model.c_str());
     return out;
   }
+  // The example model's own <output> logger spams undefined-property
+  // warnings and dumps a CSV into the CWD — physics-irrelevant, off.
+  fdm.DisableOutput();
   fdm.Setdt(dt);
 
   // A transition-shaped initial state, commanded programmatically: 190 m/s

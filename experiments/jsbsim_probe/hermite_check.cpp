@@ -103,6 +103,9 @@ std::vector<PVA> propagate(const std::string &root, const std::string &model,
   fdm.SetSystemsPath(SGPath(root + "/systems"));
   fdm.SetDebugLevel(0);
   if (!fdm.LoadModel(model)) return out;
+  // The example model's own <output> logger spams undefined-property
+  // warnings and dumps a CSV into the CWD — physics-irrelevant, off.
+  fdm.DisableOutput();
   fdm.Setdt(dt);
   auto ic = fdm.GetIC();
   const double lat0 = 37.5, lon0 = 127.0;

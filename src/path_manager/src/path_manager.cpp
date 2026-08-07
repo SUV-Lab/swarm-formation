@@ -31,6 +31,12 @@ namespace path_manager
 
         node_->declare_parameter("manager/max_vel", -1.0);
         node_->declare_parameter("manager/max_acc", -1.0);
+        // [ENVELOPE] Handoff contract speed ceiling in m/s (ADR-0002 §속도
+        // 상한 분리). 0 = follow the planner's own cap (optimization/
+        // max_vel). Declared HERE or a yaml value silently never applies
+        // (review find: the validator polled an undeclared name and always
+        // used the fallback).
+        node_->declare_parameter("planning/handoff_max_vel_mps", 0.0);
         node_->declare_parameter("manager/length_per_piece", 3.0);
         node_->declare_parameter("manager/risk_weight", 1.0);
         node_->declare_parameter("manager/risk_barrier", 100.0);
@@ -620,24 +626,38 @@ namespace path_manager
         //                           above-cap state should instead
         //                           classify as TRANSITION_REQUIRED is a
         //                           contract-2 decision, made there.
-        const auto handoff_cap = [&]() {
-            const char *n = "planning/handoff_max_vel_mps";
-            if (node_->has_parameter(n)) {
-                const double v = node_->get_parameter(n).as_double();
-                if (v > 1e-9) return v;
-            }
-            return max_vel_ > 1e-9 ? max_vel_ * um_xy
-                                   : dyn.speed_max_mps;
-        };
-        const double cap_mps = handoff_cap();
+        // Which ceiling binds decides both the number AND the reason string:
+        //   explicit handoff cap   planning/handoff_max_vel_mps > 0
+        //   default planning cap   handoff unset -> the OPTIMIZER's own
+        //                          frame cap (optimization/max_vel — the
+        //                          cap the solve actually enforces; the
+        //                          manager copy is a separate parameter
+        //                          and may drift)
+        //   model maximum          dynamics speed_max is the tightest
+        double explicit_cap = 0.0;
+        if (node_->has_parameter("planning/handoff_max_vel_mps"))
+            node_->get_parameter("planning/handoff_max_vel_mps",
+                                 explicit_cap);
+        double planning_cap = 0.0;
+        if (node_->has_parameter("optimization/max_vel")) {
+            double mv = 0.0;
+            node_->get_parameter("optimization/max_vel", mv);
+            planning_cap = mv * um_xy;
+        }
+        const double cap_mps =
+            explicit_cap > 1e-9
+                ? explicit_cap
+                : (planning_cap > 1e-9 ? planning_cap : dyn.speed_max_mps);
         const double vmax_mps = std::min(dyn.speed_max_mps, cap_mps);
         if (vm > vmax_mps) {
+            const char *which =
+                vmax_mps >= dyn.speed_max_mps - 1e-9
+                    ? "model maximum"
+                    : (explicit_cap > 1e-9 ? "explicit handoff cap"
+                                           : "default planning cap");
             snprintf(buf, sizeof buf,
                      "speed %.1f m/s above the effective maximum %.1f m/s "
-                     "(%s)", vm, vmax_mps,
-                     vmax_mps < dyn.speed_max_mps - 1e-9
-                         ? "frame max_vel cap"
-                         : "model maximum");
+                     "(%s)", vm, vmax_mps, which);
             return buf;
         }
         const double gamma = std::atan2(std::abs(vz), vh);

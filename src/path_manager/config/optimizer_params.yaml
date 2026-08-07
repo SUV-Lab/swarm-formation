@@ -28,6 +28,9 @@
     # chain/phase/arrival/params: ["optimization/max_vel=1.8"]
     # 미션 최종 상태(msg use_final_*)가 실속 이하 등 무효일 때 완화 허용(기본 거부):
     # planning/allow_final_boundary_relaxation: false
+    # 인계 계약 속도 상한(m/s). 0 = 계획 상한(optimization/max_vel) 추종.
+    # 물리 상한(dynamics_speed_max)·계획 선호 상한과 의미가 다르다(ADR-0002).
+    # planning/handoff_max_vel_mps: 0.0
     # (스윕 실측: 잘게(25~40)는 험지 기각·품질 최악 +2.8%, 70이 평균 +0.8%/
     #  최악 +1.8%로 최선 절충. 험지 회랑은 90~120이 더 안전.)
     # inherit_route (기본 on): 체인 run이 자기 구간의 FM2를 다시 돌리지 않고
