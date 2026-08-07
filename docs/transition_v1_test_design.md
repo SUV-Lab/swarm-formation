@@ -32,7 +32,9 @@ fail-closed로 판정해야 한다(§13 회귀로 고정):
   (존/지형 변경, 이후 검색, 다중 leg, 3-pass 미실행)이면 후보 전체
   실격 또는 경로 재커밋. 하드 유지 존 접촉(`zoneContact`=CONTACT) =
   실격; 전역 3-pass가 불가피로 선택한 소프트 존만 통과
-  가능(`zoneExposureRaw`로 노출 측정·최소화); risk_max 기록만으로 승인
+  가능(`zoneExposureRaw`로 노출 **측정** — v1은 통계 전용이며, 노출
+  최소화·후보 순위는 테이퍼 일치 비용 API가 그 비용 설계와 함께 생기기
+  전에는 금지); risk_max 기록만으로 승인
   금지 — 현행 evaluateFlight의 위험도가 판정이 아니라 통계라는 사실을
   생성기가 메우는 지점이다
 - 종료 PVA의 `pvaEnvelopeProblem` 통과 (인계 적합성)

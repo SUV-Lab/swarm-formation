@@ -498,8 +498,8 @@ private:
     inline bool insideHardZoneCell(const Eigen::Vector3d &c,
                                    double hx, double hy, double hz) const {
         if (!risk_zones_ || risk_barrier_ <= 0.0) return false;
-        constexpr double kInflate2 = 1.05 * 1.05;
-        constexpr double kHardVis = 0.35;
+        constexpr double kInflate2 = kZoneHardInflate * kZoneHardInflate;
+        constexpr double kHardVis = kZoneHardVis;
         for (size_t i = 0; i < risk_zones_->size(); ++i) {
             if (i < zone_no_barrier_.size() && zone_no_barrier_[i]) continue;
             if (i < zone_soft_override_.size() && zone_soft_override_[i])

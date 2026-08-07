@@ -579,7 +579,7 @@ int main(int argc, char **argv)
                snap.zones[0].disposition == ZD::HARD_AVOID,
            "avoidable zone -> HARD_AVOID");
     expect(pm->zoneContact(snap, 0, z.center) == ZC::CONTACT,
-           "zone centre -> CONTACT (searcher's visible-volume judgment)");
+           "zone centre -> CONTACT (searcher's hard-exclusion judgment)");
     expect(pm->zoneContact(snap, 0, Eigen::Vector3d(30.0, 150.0, 3.0)) ==
                ZC::CLEAR,
            "mission start -> CLEAR");
