@@ -194,6 +194,26 @@ private:
   // transition phase is by definition outside it, so per-phase model
   // selection has to land here before any transition trajectory does —
   // see docs/transition_phase_contract.md §4.
+  // [S13] Which JUDGMENT applies to a span of the flight. The evaluator
+  // selects the model by this CONTRACT TYPE — never by parsing the display
+  // name (review point: labels are for output; a typo in a string must not
+  // silently change physics).
+  //   CRUISE     full cruise-model envelope judgment (today's audit)
+  //   TERMINAL   prescribed helix — judged under the cruise model today
+  //              (distinct kind so a dedicated judgment can attach later)
+  //   TRANSITION outside the cruise model BY DEFINITION: excluded from the
+  //              cruise envelope statistics and MEASURED only — its own
+  //              gate arrives with the transition evaluator (ADR-0002
+  //              freezes the v0 limits as experimental, not acceptance).
+  //              Terrain/zone/risk checks still apply: those are
+  //              model-agnostic.
+  enum class PhaseKind { CRUISE, TERMINAL, TRANSITION };
+  struct PhaseSpan {
+    double t_end{0.0};
+    PhaseKind kind{PhaseKind::CRUISE};
+    std::string name;  // display only
+  };
+
   struct FlightVerdict {
     bool evaluated{false};  // false: degenerate input, nothing was judged
     bool clean{true};
@@ -206,10 +226,8 @@ private:
     // margin the caller may knowingly spend, terrain is not.
     bool unflyable() const { return evaluated && (underground || no_cruise); }
   };
-  FlightVerdict evaluateFlight(
-      const poly_traj::Trajectory &flight,
-      const std::vector<double> &phase_ends,
-      const std::vector<std::string> &phase_names) const;
+  FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
+                               const std::vector<PhaseSpan> &spans) const;
   // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
   // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
   // budget exceeded -> the given result degraded, otherwise unchanged.

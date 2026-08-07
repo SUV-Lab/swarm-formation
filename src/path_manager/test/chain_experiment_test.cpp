@@ -114,7 +114,7 @@ int main(int argc, char **argv)
        with_initnan = false, with_arredge2 = false, with_twophase = false,
        with_pvaprobe = false, with_initceiling = false,
        with_handoffcap = false, with_overroutebad = false,
-       with_transfallback = false;
+       with_transfallback = false, with_overrouteretry = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -237,6 +237,11 @@ int main(int argc, char **argv)
     // truncated cap, a displaced head, and a NaN vertex must each FAIL,
     // never silently degrade (sliceCommittedRoute would drop the cap).
     if (v == "overroutebad") { with_route = true; with_overroutebad = true; }
+    // [S13] overrouteretry: the coordinator's retry pattern — planOverRoute
+    // twice on the SAME committed route. The second call must see clean
+    // plan-scoped state (phase blackboard reset, segments_ restored after
+    // the first call's possible merge), so both produce the same chain.
+    if (v == "overrouteretry") { with_route = true; with_phase = true; with_overrouteretry = true; }
     // [S13] transfallback: with a transition active, the single-shot
     // fallback is forbidden — the below-threshold mission that normally
     // degrades to a direct plan must FAIL instead.
@@ -499,6 +504,32 @@ int main(int argc, char **argv)
     // Equality is the leak signature (the second plan re-used stale N).
     expect(p1 != p2, "segment count change reaches the second plan (no "
                      "per-plan state leak)");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_overrouteretry) {
+    std::vector<Eigen::Vector3d> route;
+    std::vector<double> cap;
+    double fe_ms = 0.0;
+    expect(chain.commitRoute(start_pos, start_vel, start_acc, goal, false,
+                             &route, &cap, &fe_ms),
+           "commitRoute produces the route");
+    const path_manager::PlanResult r1 = chain.planOverRoute(
+        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
+        false, {});
+    expect(r1.hasTrajectory(), "first planOverRoute succeeds");
+    const int p1 = pm->traj_.local_traj.traj.getPieceNum();
+    const path_manager::PlanResult r2 = chain.planOverRoute(
+        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
+        false, {});
+    expect(r2.hasTrajectory(), "second planOverRoute succeeds (re-entry)");
+    const int p2 = pm->traj_.local_traj.traj.getPieceNum();
+    std::cout << "overrouteretry: " << p1 << " vs " << p2 << " pieces\n";
+    expect(p1 == p2,
+           "re-entry sees clean plan-scoped state (same chain both times)");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

@@ -405,7 +405,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     pm_->traj_.setGlobalTraj(baseline, now_s);
     pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
     pm_->publishTrajectoryViz(baseline, baseline);
-    evaluateFlight(baseline, {T}, {"baseline"});
+    evaluateFlight(baseline, {{T, PhaseKind::CRUISE, "baseline"}});
     // A mission genuinely too small to split IS correctly served by the
     // baseline — SUCCESS, not a degradation (outcome matrix, frozen).
     return PlanResult::success();
@@ -624,8 +624,8 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
       // failed segment's overrides — same order as the success path.
       restore_guard.restore();
       pm_->publishTrajectoryViz(baseline, baseline);
-      evaluateFlight(baseline, {baseline.getTotalDuration()},
-                         {"baseline"});
+      evaluateFlight(baseline, {{baseline.getTotalDuration(),
+                                 PhaseKind::CRUISE, "baseline"}});
       PlanResult r = PlanResult::success();
       r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
                 "segment " + std::to_string(i + 1) + "/" +
@@ -648,27 +648,27 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   // Report on the CHAIN portion (baseline deviation stays apples-to-apples),
   // then append the optional prescribed terminal phase before storage.
   logChainReport(baseline, runs, contracts, chained, seg_over);
-  std::vector<double> phase_ends;
-  std::vector<std::string> phase_names;
+  std::vector<PhaseSpan> spans;
   double acc_t = 0.0;
   for (size_t i = 0; i < runs.size(); ++i) {
     acc_t += runs[i].getTotalDuration();
-    phase_ends.push_back(acc_t);
-    if (phase_applied_) {
-      phase_names.push_back(i == 0 ? "departure"
+    // All chained spans are CRUISE-judged today; the transition coordinator
+    // will prepend a TRANSITION span. Kind is the judgment contract, the
+    // name is display only.
+    spans.push_back({acc_t, PhaseKind::CRUISE,
+                     phase_applied_
+                         ? (i == 0 ? std::string("departure")
                             : i + 1 == runs.size()
-                                ? "arrival"
-                                : "cruise-" + std::to_string(i));
-    } else {
-      phase_names.push_back("seg" + std::to_string(i + 1));
-    }
+                                ? std::string("arrival")
+                                : "cruise-" + std::to_string(i))
+                         : "seg" + std::to_string(i + 1)});
   }
   const double t_pre_terminal = chained.getTotalDuration();
   const poly_traj::Trajectory term =
       appendTerminalPhase(&chained, mission_tail.anyPrescribed());
   if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
-    phase_ends.push_back(chained.getTotalDuration());
-    phase_names.push_back("terminal");
+    spans.push_back(
+        {chained.getTotalDuration(), PhaseKind::TERMINAL, "terminal"});
   }
 
   // [STITCH-GATE] Judged before storage — see the route-mode twin: a refused
@@ -681,7 +681,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   // and flown"), so an unflyable STITCH degrades onto the baseline instead
   // of failing (review find). Route mode has no baseline, so there FAILED
   // is the only honest answer.
-  const FlightVerdict fv = evaluateFlight(chained, phase_ends, phase_names);
+  const FlightVerdict fv = evaluateFlight(chained, spans);
   if (fv.unflyable()) {
     log_->errorf("[STITCH-GATE] stitched flight is unflyable (%s%s) — "
                  "restoring the baseline",
@@ -1342,6 +1342,24 @@ PlanResult SegmentChainPlanner::planOverRoute(
       return PlanResult::failed(std::string("planOverRoute input: ") + bad);
     }
   }
+  // [S13] RE-ENTRY safety, targeted at what actually leaks: the transition
+  // coordinator retries planOverRoute with a different entry candidate, and
+  // between two calls the ONLY plan-scoped residue is (a) the phase
+  // blackboard this function writes and (b) segments_, which the merge
+  // ladder decrements mid-plan. Both are scoped here — the blackboard reset
+  // now, segments_ restored on every exit — instead of a wholesale state
+  // refactor nothing else needs (plan() already resets at its own entry).
+  phase_applied_ = false;
+  phase_note_.clear();
+  dep_candidates_.clear();
+  arr_candidates_.clear();
+  phase_tan_grade_ = 1e9;
+  phase_turn_radius_u_ = 0.0;
+  struct SegmentsRestore {
+    int &ref;
+    int saved;
+    ~SegmentsRestore() { ref = saved; }
+  } segments_restore{segments_, segments_};
   const auto t_wall = std::chrono::steady_clock::now();
   const auto ms_since = [](const std::chrono::steady_clock::time_point &t0) {
     return std::chrono::duration<double, std::milli>(
@@ -1450,7 +1468,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
       // seed would gate on a trajectory nobody flies — review find.
       const poly_traj::Trajectory &fly = pm_->traj_.local_traj.traj;
       const FlightVerdict fv = evaluateFlight(
-          fly, {fly.getTotalDuration()}, {"direct"});
+          fly, {{fly.getTotalDuration(), PhaseKind::CRUISE, "direct"}});
       // Fail-CLOSED (review find): a flight the evaluator could not judge
       // is as unflyable as one it condemned — "no verdict" must never read
       // as "clean" for a product that skipped every whole-flight audit.
@@ -2042,27 +2060,27 @@ PlanResult SegmentChainPlanner::planOverRoute(
                  std::vector<SegmentOverrides>(
                      static_cast<size_t>(segments_)));
 
-  std::vector<double> phase_ends;
-  std::vector<std::string> phase_names;
+  std::vector<PhaseSpan> spans;
   double acc_t = 0.0;
   for (size_t i = 0; i < runs.size(); ++i) {
     acc_t += runs[i].getTotalDuration();
-    phase_ends.push_back(acc_t);
-    if (phase_applied_) {
-      phase_names.push_back(i == 0 ? "departure"
+    // All chained spans are CRUISE-judged today; the transition coordinator
+    // will prepend a TRANSITION span. Kind is the judgment contract, the
+    // name is display only.
+    spans.push_back({acc_t, PhaseKind::CRUISE,
+                     phase_applied_
+                         ? (i == 0 ? std::string("departure")
                             : i + 1 == runs.size()
-                                ? "arrival"
-                                : "cruise-" + std::to_string(i));
-    } else {
-      phase_names.push_back("seg" + std::to_string(i + 1));
-    }
+                                ? std::string("arrival")
+                                : "cruise-" + std::to_string(i))
+                         : "seg" + std::to_string(i + 1)});
   }
   const double t_pre_terminal = chained.getTotalDuration();
   const poly_traj::Trajectory term =
       appendTerminalPhase(&chained, mission_tail.anyPrescribed());
   if (chained.getTotalDuration() > t_pre_terminal + 1e-9) {
-    phase_ends.push_back(chained.getTotalDuration());
-    phase_names.push_back("terminal");
+    spans.push_back(
+        {chained.getTotalDuration(), PhaseKind::TERMINAL, "terminal"});
   }
 
   // [STITCH-GATE] JUDGE BEFORE STORING. The verdict has to precede
@@ -2070,7 +2088,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // trajectory the next state transition can pick up, and one already drawn
   // in RViz tells the operator it was accepted. FAILED leaves both untouched.
   const FlightVerdict stitched_fv =
-      evaluateFlight(chained, phase_ends, phase_names);
+      evaluateFlight(chained, spans);
   if (stitched_fv.unflyable())
     return stitchedVerdictResult(stitched_fv, PlanResult::success());
 
@@ -2162,13 +2180,10 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
 
 SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     const poly_traj::Trajectory &flight,
-    const std::vector<double> &phase_ends,
-    const std::vector<std::string> &phase_names) const
+    const std::vector<PhaseSpan> &spans) const
 {
   const double T = flight.getTotalDuration();
-  if (T <= 1e-9 || phase_ends.empty() ||
-      phase_ends.size() != phase_names.size())
-    return {};
+  if (T <= 1e-9 || spans.empty()) return {};
 
   const mmp_vehicle_dynamics::Parameters *dyn = pm_->dynamicsParams();
   const auto param_or = [&](const char *n, double def) {
@@ -2191,7 +2206,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
         mmp_vehicle_dynamics::EnvelopeLimit::None};
     double risk_max{0.0}, risk_int{0.0};
   };
-  std::vector<PhaseStat> st(phase_ends.size());
+  std::vector<PhaseStat> st(spans.size());
 
   const double dt = 0.1;
   const size_t nz = pm_->numRiskZones();
@@ -2205,8 +2220,15 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   bool reached_cruise = false;
   for (double t = 0.0; t < T; t += dt) {
     size_t ph = 0;
-    while (ph + 1 < phase_ends.size() && t >= phase_ends[ph]) ++ph;
+    while (ph + 1 < spans.size() && t >= spans[ph].t_end) ++ph;
     PhaseStat &s = st[ph];
+    // Judgment selection by CONTRACT TYPE, never by the display name. A
+    // TRANSITION span is outside the cruise model by definition: its
+    // samples never enter the cruise envelope statistics (its own
+    // evaluator attaches with the generator, per ADR-0002 — v0 limits are
+    // experimental, not gates). Terrain/zone/risk below stay: those are
+    // model-agnostic.
+    const bool cruise_judged = spans[ph].kind != PhaseKind::TRANSITION;
     const Eigen::Vector3d p = flight.getPos(t);
     double g = 0.0;
     pm_->terrainElevation(p.x(), p.y(), &g);  // false: sea level 0
@@ -2216,7 +2238,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     ++s.n;
     if (agl < clr_band) ++s.n_below_band;
     if (agl < 0.0) ++s.n_below_ground;
-    if (dyn) {
+    if (dyn && cruise_judged) {
       const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
           *dyn, S.cwiseProduct(p), S.cwiseProduct(flight.getVel(t)),
           S.cwiseProduct(flight.getAcc(t)));
@@ -2245,10 +2267,10 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
 
   log_->infof("[FINAL-EVAL] ===== whole-flight evaluation: %.1f s, %d "
               "pieces, %zu phase(s) =====",
-              T, flight.getPieceNum(), phase_ends.size());
+              T, flight.getPieceNum(), spans.size());
   double t0 = 0.0;
   PhaseStat tot;
-  for (size_t ph = 0; ph < phase_ends.size(); ++ph) {
+  for (size_t ph = 0; ph < spans.size(); ++ph) {
     const PhaseStat &s = st[ph];
     if (s.n > 0) {
       // A phase with dynamics on but ZERO cruise-domain samples has no
@@ -2256,6 +2278,9 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       char env[96];
       if (!dyn) {
         snprintf(env, sizeof env, "env model off");
+      } else if (spans[ph].kind == PhaseKind::TRANSITION) {
+        snprintf(env, sizeof env,
+                 "env n/a (TRANSITION — cruise judgment not applicable)");
       } else if (s.env_n == 0) {
         snprintf(env, sizeof env, "env NO CRUISE DATA (pre-cruise ramp)");
       } else {
@@ -2267,11 +2292,11 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
           "[FINAL-EVAL] %-9s %6.1f s | AGL min %7.3f@%.0fs mean %6.2f u, "
           "<band %4.1f%%, underground %s | %s | risk max %.3f, "
           "exposure %.1f s",
-          phase_names[ph].c_str(), phase_ends[ph] - t0, s.min_agl,
+          spans[ph].name.c_str(), spans[ph].t_end - t0, s.min_agl,
           s.min_agl_t, s.agl_sum / s.n, 100.0 * s.n_below_band / s.n,
           s.n_below_ground ? "YES" : "no", env, s.risk_max, s.risk_int);
     }
-    t0 = phase_ends[ph];
+    t0 = spans[ph].t_end;
     if (s.min_agl < tot.min_agl) {
       tot.min_agl = s.min_agl;
       tot.min_agl_t = s.min_agl_t;
