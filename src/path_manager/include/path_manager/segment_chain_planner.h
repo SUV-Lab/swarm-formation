@@ -80,7 +80,8 @@ public:
                   bool start_vel_synthesized,
                   const ego_planner::TailBoundary &mission_tail =
                       ego_planner::TailBoundary{},
-                  bool start_vel_commanded = false);
+                  bool start_vel_commanded = false,
+                  bool start_acc_commanded = false);
 
   int segments() const { return segments_; }
 
@@ -178,6 +179,7 @@ private:
   PlanResult planTransitionMission(const Eigen::Vector3d &start_pos,
                                    const Eigen::Vector3d &start_vel,
                                    const Eigen::Vector3d &start_acc,
+                                   bool start_acc_commanded,
                                    const std::vector<Eigen::Vector3d> &waypoints,
                                    const ego_planner::TailBoundary &mission_tail);
   // [S13] Materialize the sub-route from an arc coordinate ONCE — the cut

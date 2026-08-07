@@ -210,6 +210,7 @@ Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
   return c;
 }
 
+
 }  // namespace
 
 Eigen::Vector3d pointMassAcceleration(const Parameters &dyn,
@@ -228,6 +229,42 @@ Eigen::Vector3d pointMassAcceleration(const Parameters &dyn,
   return d.speed * dir +
          s.speed_mps * (d.flight_path_angle * ddir_dgamma +
                         d.heading * ddir_dpsi);
+}
+
+// Signed inverse of the point-mass closure at one state: decompose the
+// required aero+thrust force m*(a + g*z) in the wind triad (t, n, l) —
+// l = (-sin psi, cos psi, 0), the direction a POSITIVE bank accelerates
+// toward (the shared evaluateInverseDynamics reports |bank| via acos and
+// loses exactly this sign; a left-turn start command would come back as
+// a right-bank u0 and the repro check would refuse every lateral start).
+void invertPointMassCommands(const Parameters &dyn,
+                             const PointMassState &s,
+                         const Eigen::Vector3d &a_cmd, double *cl,
+                         double *thrust_n, double *bank_rad)
+{
+  const double cg = std::cos(s.flight_path_angle_rad);
+  const double sg = std::sin(s.flight_path_angle_rad);
+  const double cp = std::cos(s.heading_rad);
+  const double sp = std::sin(s.heading_rad);
+  const Eigen::Vector3d t_hat(cg * cp, cg * sp, sg);
+  const Eigen::Vector3d n_hat(-sg * cp, -sg * sp, cg);
+  const Eigen::Vector3d l_hat(-sp, cp, 0.0);
+  const Eigen::Vector3d F =
+      dyn.mass_kg *
+      (a_cmd + Eigen::Vector3d(0.0, 0.0, dyn.gravity_mps2));
+  const double f_t = F.dot(t_hat);
+  const double f_n = F.dot(n_hat);
+  const double f_l = F.dot(l_hat);
+  const double lift = std::hypot(f_n, f_l);
+  *bank_rad = lift > 1e-12 ? std::atan2(f_l, f_n) : 0.0;
+  const double rho =
+      mmp_vehicle_dynamics::airDensity(dyn, s.position_m.z());
+  const double qs = std::max(
+      1e-9, 0.5 * rho * s.speed_mps * s.speed_mps * dyn.wing_area_m2);
+  *cl = lift / qs;
+  const double cd = dyn.zero_lift_drag_coefficient +
+                    dyn.induced_drag_factor * (*cl) * (*cl);
+  *thrust_n = f_t + qs * cd;
 }
 
 PointMassState rk4Step(const Parameters &dyn, const PointMassState &s,
@@ -285,6 +322,112 @@ struct CandidateOutcome {
 };
 
 }  // namespace
+
+TrajectoryVerdict validateTransitionTrajectory(
+    poly_traj::Trajectory traj, const TransitionRequest &req,
+    double tail_blend_T, double acc_slack_mps2, double *risk_max,
+    double *risk_integral)
+{
+  const TransitionLimits &lim = req.limits;
+  const Parameters &dyn = lim.dyn;
+  const double ux = lim.unit_xy_m, uz = lim.unit_z_m;
+  const double total_T = traj.getTotalDuration();
+  if (!(total_T > 0.0)) return TrajectoryVerdict::FAIL;
+  const double W = dyn.mass_kg * dyn.gravity_mps2;
+  bool stale = false;
+  double rmax = 0.0, rint = 0.0;
+  // One sample: every gate, slack only where RK4 truth exists.
+  std::function<bool(double, bool)> sampleOk;
+  sampleOk = [&](double t, bool refine) -> bool {
+    const Eigen::Vector3d pu = traj.getPos(t);
+    const Eigen::Vector3d vu = traj.getVel(t);
+    const Eigen::Vector3d au = traj.getAcc(t);
+    const Eigen::Vector3d p(pu.x() * ux, pu.y() * ux, pu.z() * uz);
+    const Eigen::Vector3d v(vu.x() * ux, vu.y() * ux, vu.z() * uz);
+    const Eigen::Vector3d a(au.x() * ux, au.y() * ux, au.z() * uz);
+    if (!p.allFinite() || !v.allFinite() || !a.allFinite()) return false;
+    const auto refineAround = [&](double tc) {
+      for (double tt = std::max(0.0, tc - lim.dt_s);
+           tt <= std::min(total_T, tc + lim.dt_s); tt += lim.dt_s / 16.0)
+        if (!sampleOk(tt, false)) return false;
+      return true;
+    };
+    if (req.terrain_z) {
+      double elev = 0.0;
+      if (!req.terrain_z(p.x(), p.y(), &elev)) elev = 0.0;
+      const double margin = p.z() - elev - lim.min_agl_m;
+      if (margin < 0.0) return false;
+      if (refine && margin < 2.0 * lim.adapter_pos_tol_m &&
+          !refineAround(t))
+        return false;
+    }
+    switch (req.zone_probe(p)) {
+      case ZoneProbe::CLEAR: break;
+      case ZoneProbe::CONTACT_HARD: return false;
+      case ZoneProbe::STALE_OR_INVALID: stale = true; return false;
+    }
+    const double V = v.norm();
+    if (V > dyn.speed_max_mps + 1e-9 ||
+        V < dyn.model_activation_speed_mps - 1e-9)
+      return false;
+    const double rho_t = mmp_vehicle_dynamics::airDensity(dyn, p.z());
+    const double q_t = 0.5 * rho_t * V * V;
+    if (q_t > dyn.dynamic_pressure_max_pa) return false;
+    // Inverse dynamics EVERYWHERE (minus the cruise flight-path cone).
+    // Slack: acceleration-level quantities inherit the measured fit
+    // error against the RK4 truth; the tail blend has no truth and gets
+    // none. Position/velocity-level gates above carry no slack anywhere.
+    const bool in_tail_blend = t >= total_T - tail_blend_T - 1e-9;
+    const double slack_a = in_tail_blend ? 0.0 : acc_slack_mps2;
+    const double slack_n = slack_a / dyn.gravity_mps2;
+    const double slack_thrust = dyn.mass_kg * slack_a;
+    const double qs_t = std::max(1e-9, q_t * dyn.wing_area_m2);
+    const double slack_cl = dyn.mass_kg * slack_a / qs_t;
+    const auto ev =
+        mmp_vehicle_dynamics::evaluateInverseDynamics(dyn, p, v, a);
+    const bool bad =
+        !ev.valid || ev.load_factor > dyn.load_factor_max + slack_n ||
+        ev.lift_coefficient > dyn.lift_coefficient_max + slack_cl ||
+        ev.thrust_required_n > dyn.thrust_max_n + slack_thrust + 1e-6 ||
+        ev.thrust_required_n < dyn.thrust_min_n - slack_thrust - 1e-6 ||
+        std::abs(ev.bank_angle_rad) >
+            dyn.bank_angle_max_rad + slack_n + 1e-9;
+    if (bad) {
+      if (std::getenv("TP_DEBUG"))
+        std::fprintf(stderr,
+                     "[TPDBG-VAL] t=%.2f/%.2f valid=%d V=%.2f q=%.0f "
+                     "cl=%.3f nz=%.2f th=%.0f mu=%.3f slack_a=%.3g\n",
+                     t, total_T, ev.valid ? 1 : 0, ev.speed_mps,
+                     ev.dynamic_pressure_pa, ev.lift_coefficient,
+                     ev.load_factor, ev.thrust_required_n,
+                     ev.bank_angle_rad, slack_a);
+      return false;
+    }
+    // Thin dynamic margins: refine the neighbourhood too.
+    if (refine &&
+        (ev.load_factor > dyn.load_factor_max - 0.1 ||
+         ev.thrust_required_n > dyn.thrust_max_n - 2.0 * slack_thrust ||
+         q_t > 0.95 * dyn.dynamic_pressure_max_pa) &&
+        !refineAround(t))
+      return false;
+    if (refine && req.zone_exposure_raw) {
+      const double e = req.zone_exposure_raw(p);
+      rmax = std::max(rmax, e);
+      rint += e * lim.dt_s;
+    }
+    return true;
+  };
+  bool ok = true;
+  for (double t = 0.0; ok && t < total_T; t += std::min(
+           lim.dt_s, 2.0 / std::max(1.0, traj.getVel(t).norm() *
+                                             std::max(ux, uz))))
+    ok = sampleOk(t, true);
+  if (ok) ok = sampleOk(total_T, false);
+  if (stale) return TrajectoryVerdict::STALE;
+  if (risk_max) *risk_max = rmax;
+  if (risk_integral) *risk_integral = rint;
+  return ok ? TrajectoryVerdict::OK : TrajectoryVerdict::FAIL;
+}
 
 TransitionResult generate(const TransitionRequest &req)
 {
@@ -351,21 +494,30 @@ TransitionResult generate(const TransitionRequest &req)
   bool zone_stale_abort = false;
   int primitive_id = -1;
 
-  // Commanded-acc handling (ZERO = unspecified sentinel, see the header).
-  const bool acc_specified = req.initial_acc_mps2.norm() > 1e-9;
+  // Commanded-acc handling: the PLUMBED message bool decides, never the
+  // numeric value ("prescribed exactly zero" is representable).
+  const bool acc_specified = req.initial_acc_prescribed;
   double u0_cl = 0.0, u0_thrust = 0.0, u0_bank = 0.0;
+  double start_acc_repro_err = 0.0;
   if (acc_specified) {
-    const auto ev0 = mmp_vehicle_dynamics::evaluateInverseDynamics(
-        dyn, s0.position_m, mmp_vehicle_dynamics::pointMassVelocity(s0),
-        req.initial_acc_mps2);
-    if (!ev0.valid) {
+    invertPointMassCommands(dyn, s0, req.initial_acc_mps2, &u0_cl,
+                            &u0_thrust, &u0_bank);
+    // Accept u0 only if the EOM CLOSED over it reproduces the commanded
+    // acceleration — sign errors, clamps and out-of-range demands all
+    // surface here as a mismatch, and the mission is refused rather
+    // than flown with a rewritten start.
+    const auto r0 = mmp_vehicle_dynamics::pointMassForces(
+        dyn, s0, u0_cl, u0_thrust, u0_bank);
+    start_acc_repro_err =
+        (pointMassAcceleration(dyn, s0, r0.inputs) - req.initial_acc_mps2)
+            .norm();
+    if (start_acc_repro_err > 1e-5 || r0.saturated() ||
+        !r0.state_representable) {
       out.reason =
-          "commanded start acceleration not representable by the model";
+          "commanded start acceleration is not flyable by the model "
+          "(inverse commands do not reproduce it inside the envelope)";
       return out;
     }
-    u0_cl = ev0.signed_lift_coefficient;
-    u0_thrust = ev0.thrust_required_n;
-    u0_bank = ev0.bank_angle_rad;
   }
   if (dbg)
     std::fprintf(stderr,
@@ -612,17 +764,6 @@ TransitionResult generate(const TransitionRequest &req)
             1, static_cast<int>(std::round(lim.knot_dt_s / lim.dt_s)));
         const int last = static_cast<int>(co.samples.size()) - 1;
         bool adapter_ok = last >= 1;
-        // Start seam: with the command-space ramp, samples[0].acc IS the
-        // commanded acceleration when one was specified (ZERO stays the
-        // unspecified sentinel — model-implied start, mismatch reported).
-        const double acc_mismatch =
-            acc_specified
-                ? (req.initial_acc_mps2 - co.samples.front().acc).norm()
-                : co.samples.front().acc.norm() > 0.0
-                      ? (req.initial_acc_mps2 - co.samples.front().acc)
-                            .norm()
-                      : 0.0;
-        const double start_blend_T = 0.0;  // no posthoc bridge piece
         double max_pe = 0.0, max_ve = 0.0, max_ae = 0.0;
         for (int i0 = 0; adapter_ok && i0 < last; i0 += kstep) {
           const int i1 = std::min(last, i0 + kstep);
@@ -703,91 +844,19 @@ TransitionResult generate(const TransitionRequest &req)
         traj.emplace_back(blend_T, blend_cm);
 
         // ==== full-trajectory fail-closed re-verification ===========
-        // The COMPLETE polynomial (start bridge + Hermite pieces +
-        // capture blend) is what actually flies — re-gate IT, not just
-        // the RK4 samples it was fitted to. Everywhere: finiteness,
-        // terrain AGL (locally refined where the margin is thin), zone
-        // policy, speed band and dynamic pressure. Inside the two blend
-        // windows (which have no RK4 truth): additionally the model's
-        // own inverse dynamics — load factor, CL, thrust range, bank —
-        // WITHOUT the cruise flight-path cone (the transition exists to
-        // recover from outside it; its own cone is a section-8 number).
-        // For the Hermite interior the acceleration-level limits are
-        // carried by the per-step gates + the error budget above.
-        const double total_T = traj.getTotalDuration();
-        bool final_ok = true;
+        // The COMPLETE polynomial is what actually flies — re-judge IT
+        // with the shared validator (see its contract in the header).
+        // Pieces with RK4 truth carry the candidate's MEASURED fit error
+        // as slack; the capture blend carries none.
         double w_risk_max = 0.0, w_risk_int = 0.0;
-        std::function<bool(double, bool)> sampleOk;
-        sampleOk = [&](double t, bool refine) -> bool {
-          const Eigen::Vector3d pu = traj.getPos(t);
-          const Eigen::Vector3d vu = traj.getVel(t);
-          const Eigen::Vector3d au = traj.getAcc(t);
-          const Eigen::Vector3d p(pu.x() * ux, pu.y() * ux, pu.z() * uz);
-          const Eigen::Vector3d v(vu.x() * ux, vu.y() * ux, vu.z() * uz);
-          const Eigen::Vector3d a(au.x() * ux, au.y() * ux, au.z() * uz);
-          if (!p.allFinite() || !v.allFinite() || !a.allFinite())
-            return false;
-          if (req.terrain_z) {
-            double elev = 0.0;
-            if (!req.terrain_z(p.x(), p.y(), &elev)) elev = 0.0;
-            const double margin = p.z() - elev - lim.min_agl_m;
-            if (margin < 0.0) return false;
-            if (refine && margin < 2.0 * lim.adapter_pos_tol_m) {
-              // Thin AGL margin: refine this neighbourhood at dt/16.
-              for (double tt = std::max(0.0, t - lim.dt_s);
-                   tt <= std::min(total_T, t + lim.dt_s);
-                   tt += lim.dt_s / 16.0)
-                if (!sampleOk(tt, false)) return false;
-            }
-          }
-          switch (req.zone_probe(p)) {
-            case ZoneProbe::CLEAR: break;
-            case ZoneProbe::CONTACT_HARD: return false;
-            case ZoneProbe::STALE_OR_INVALID:
-              zone_stale_abort = true; return false;
-          }
-          const double V = v.norm();
-          if (V > dyn.speed_max_mps + 1e-9 ||
-              V < dyn.model_activation_speed_mps - 1e-9)
-            return false;
-          const double rho_t =
-              mmp_vehicle_dynamics::airDensity(dyn, p.z());
-          if (0.5 * rho_t * V * V > dyn.dynamic_pressure_max_pa)
-            return false;
-          const bool in_blend =
-              t <= start_blend_T + 1e-9 || t >= total_T - blend_T - 1e-9;
-          if (in_blend) {
-            const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
-                dyn, p, v, a);
-            if (!ev.valid || ev.load_factor > dyn.load_factor_max + 1e-9 ||
-                ev.lift_coefficient > dyn.lift_coefficient_max + 1e-9 ||
-                ev.thrust_required_n > dyn.thrust_max_n + 1e-6 ||
-                ev.thrust_required_n < dyn.thrust_min_n - 1e-6 ||
-                std::abs(ev.bank_angle_rad) >
-                    dyn.bank_angle_max_rad + 1e-9) {
-              if (std::getenv("TP_DEBUG"))
-                std::fprintf(stderr,
-                             "[TPDBG-BLEND] t=%.2f/%.2f valid=%d V=%.2f "
-                             "q=%.0f cl=%.3f nz=%.2f th=%.0f mu=%.3f\n",
-                             t, total_T, ev.valid ? 1 : 0, ev.speed_mps,
-                             ev.dynamic_pressure_pa, ev.lift_coefficient,
-                             ev.load_factor, ev.thrust_required_n,
-                             ev.bank_angle_rad);
-              return false;
-            }
-          }
-          if (refine && req.zone_exposure_raw) {
-            const double e = req.zone_exposure_raw(p);
-            w_risk_max = std::max(w_risk_max, e);
-            w_risk_int += e * lim.dt_s;
-          }
-          return true;
-        };
-        for (double t = 0.0; final_ok && t <= total_T; t += lim.dt_s)
-          final_ok = sampleOk(t, true);
-        if (final_ok) final_ok = sampleOk(total_T, false);
-        if (zone_stale_abort) break;
-        if (!final_ok) { ++audit.disq_adapter; continue; }
+        const TrajectoryVerdict tv = validateTransitionTrajectory(
+            traj, req, blend_T, max_ae, &w_risk_max, &w_risk_int);
+        if (tv == TrajectoryVerdict::STALE) {
+          zone_stale_abort = true;
+          break;
+        }
+        if (tv != TrajectoryVerdict::OK) { ++audit.disq_adapter; continue; }
+        const double total_T = traj.getTotalDuration();
 
         // ==== winner ================================================
         out.ok = true;
@@ -803,7 +872,11 @@ TransitionResult generate(const TransitionRequest &req)
         // flight that is actually handed off), not the search.
         audit.risk_max = w_risk_max;
         audit.risk_integral = w_risk_int;
-        audit.start_acc_mismatch_mps2 = acc_mismatch;
+        if (acc_specified) {
+          audit.start_acc_repro_err_mps2 = start_acc_repro_err;
+        } else {
+          audit.start_acc_model_mps2 = co.samples.front().acc.norm();
+        }
         out.reason.clear();
         return out;
       }

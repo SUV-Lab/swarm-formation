@@ -76,11 +76,14 @@ enum class ZoneProbe { CLEAR, CONTACT_HARD, STALE_OR_INVALID };
 struct TransitionRequest {
   Eigen::Vector3d initial_pos_m{0.0, 0.0, 0.0};
   Eigen::Vector3d initial_vel_mps{0.0, 0.0, 0.0};
-  // ZERO = unspecified (model-implied start acc, mismatch reported in
-  // the audit). NONZERO = commanded: the returned trajectory leaves with
-  // it EXACTLY (a C2 start bridge absorbs the model gap) or generation
-  // refuses — a commanded start state is never silently rewritten.
+  // Meaningful ONLY when initial_acc_prescribed is true — the message
+  // contract's use_initial_acceleration bool, plumbed through, decides;
+  // the VALUE never does (a numeric-0 sentinel could not represent
+  // "prescribed exactly zero"). Prescribed: the returned trajectory
+  // leaves with this acceleration exactly (command-space ramp) or
+  // generation refuses. Unprescribed: model-implied start acc, reported.
   Eigen::Vector3d initial_acc_mps2{0.0, 0.0, 0.0};
+  bool initial_acc_prescribed{false};
   std::vector<EntryCandidate> entry_candidates;
   TransitionLimits limits;
   // Closures (all SI). Null zone_probe or null pva_problem refuses
@@ -125,10 +128,14 @@ struct TransitionAudit {
   double adapter_max_vel_err_mps{0.0};
   double adapter_max_acc_err_mps2{0.0};
   double dwell_achieved_s{0.0};
-  // |commanded a0 - model-implied a0| (m/s^2). With the start blend the
-  // returned trajectory LEAVES with the commanded acceleration exactly;
-  // this records how much the blend had to absorb.
-  double start_acc_mismatch_mps2{0.0};
+  // Prescribed start: |reproduced a0 - commanded a0| (the signed-inverse
+  // command set re-evaluated through the EOM; machine-noise scale or the
+  // candidate was refused). Unprescribed start: 0.
+  double start_acc_repro_err_mps2{0.0};
+  // Unprescribed start: |model-implied start acceleration| — what the
+  // trajectory actually leaves with, reported so nothing is silent.
+  // Prescribed start: 0.
+  double start_acc_model_mps2{0.0};
   int winner_primitive_id{-1};   // enumeration index — reproducibility pin
 };
 
@@ -151,6 +158,23 @@ struct TransitionResult {
 // threads, no unordered containers in the decision path).
 TransitionResult generate(const TransitionRequest &req);
 
+// [S13] Fail-closed re-verification of a COMPLETE transition polynomial —
+// the flown curve, not the samples it was fitted to. Every sample
+// (spacing = min(dt, 2 m of arc), locally refined where any margin is
+// thin): finiteness, terrain AGL, zone policy, speed band, dynamic
+// pressure, and the model's inverse dynamics (load factor, CL, thrust
+// range, bank, representability — the cruise flight-path cone excluded:
+// the transition exists to recover from outside it). acc_slack_mps2 is
+// the candidate's MEASURED polynomial-fit acceleration error: pieces
+// with RK4 truth are held to limit + slack (what the fit can prove),
+// the tail blend (no truth) to the bare limit. Exposed for the harness
+// and reused by generate() on every winner.
+enum class TrajectoryVerdict { OK, FAIL, STALE };
+TrajectoryVerdict validateTransitionTrajectory(
+    poly_traj::Trajectory traj, const TransitionRequest &req,
+    double tail_blend_T, double acc_slack_mps2, double *risk_max,
+    double *risk_integral);
+
 // Exposed for the harness (convergence/analytic variants): a single RK4
 // step of the point-mass EOM under held commands, forces re-evaluated at
 // every stage state; representable = AND over stages, saturated = OR.
@@ -164,6 +188,18 @@ mmp_vehicle_dynamics::PointMassState rk4Step(
     const mmp_vehicle_dynamics::PointMassState &s, double dt_s,
     double cl_cmd, double thrust_cmd_n, double bank_cmd_rad,
     StepFlags *flags);
+
+// Signed inverse of the point-mass closure at one state: the command set
+// (CL, thrust, bank) whose CLOSED forces reproduce a commanded inertial
+// acceleration — bank from atan2 in the wind triad, so the turn DIRECTION
+// survives (the shared evaluateInverseDynamics reports |bank| via acos).
+// generate() accepts a prescribed start only when re-evaluating these
+// commands through the EOM reproduces the commanded acc within 1e-5.
+void invertPointMassCommands(const mmp_vehicle_dynamics::Parameters &dyn,
+                             const mmp_vehicle_dynamics::PointMassState &s,
+                             const Eigen::Vector3d &acc_cmd_mps2,
+                             double *cl, double *thrust_n,
+                             double *bank_rad);
 
 // EOM-implied inertial acceleration at (state, closed inputs) — the knot
 // acceleration the adapter uses; also the seam-jerk measurement input.

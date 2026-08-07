@@ -776,7 +776,8 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // envelope-validates a commanded start at its entry ([ENVELOPE]).
         plan_res = chain_planner_->plan(start_pt_, start_vel_, start_acc_,
                                         waypoints, start_vel_synthesized_,
-                                        mission_tail_, start_vel_commanded_);
+                                        mission_tail_, start_vel_commanded_,
+                                        use_commanded_initial_acceleration_);
     } else {
         // [PHASE] The single path validates the boundaries HERE (the chain
         // planner validates inside plan()) — same frozen policy: a

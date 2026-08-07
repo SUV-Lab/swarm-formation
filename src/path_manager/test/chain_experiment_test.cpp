@@ -625,10 +625,18 @@ int main(int argc, char **argv)
     // protection is not allowed to be laundered through the new path.
     const path_manager::PlanResult racc =
         chain.plan(start_pos, v32, Eigen::Vector3d(0.0, 0.0, 5.0), goal,
-                   false, {}, true);
+                   false, {}, true, /*start_acc_commanded=*/true);
     expect(!racc.hasTrajectory(),
            "unflyable commanded start acceleration FAILED with the "
            "transition enabled (no laundering)");
+    // Prescribed EXACTLY ZERO through the plumbed message bool: at the
+    // 32-deg start a=0 is unflyable — refuse, never model-substitute.
+    const path_manager::PlanResult rz =
+        chain.plan(start_pos, v32, Eigen::Vector3d::Zero(), goal, false,
+                   {}, true, /*start_acc_commanded=*/true);
+    expect(!rz.hasTrajectory(),
+           "prescribed zero acc refused (the numeric value never decides "
+           "prescription)");
 
     // UNSUPPORTED classification: above the model ceiling — immediate
     // FAILED, nothing downstream runs (over-ceiling is a physics claim

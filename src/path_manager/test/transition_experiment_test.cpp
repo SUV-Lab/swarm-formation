@@ -426,8 +426,9 @@ int main(int argc, char **argv)
               << " s, adapter errs p/v/a=" << r.audit.adapter_max_pos_err_m
               << "/" << r.audit.adapter_max_vel_err_mps << "/"
               << r.audit.adapter_max_acc_err_mps2
-              << ", start-acc mismatch=" << r.audit.start_acc_mismatch_mps2
-              << "\n";
+              << ", start acc repro/model="
+              << r.audit.start_acc_repro_err_mps2 << "/"
+              << r.audit.start_acc_model_mps2 << "\n";
     expect(r.ok, "gamma=32 deg start recovers to a route entry");
     if (r.ok) {
       expect(r.duration_s > 1.0 && r.duration_s < 60.0,
@@ -447,11 +448,11 @@ int main(int argc, char **argv)
              "trajectory tail touches the entry state exactly (blend)");
       expect(r.audit.risk_max == 0.0,
              "exposure statistics present and zero in a zone-free field");
-      // a0 = 0 is the UNSPECIFIED sentinel: model-implied start acc,
-      // mismatch REPORTED (the preserve-or-refuse contract for a
-      // commanded nonzero acc is pinned by acc_preserve/gate_startacc).
-      expect(r.audit.start_acc_mismatch_mps2 > 0.0,
-             "unspecified-acc convention: model mismatch measured and "
+      // UNPRESCRIBED (the plumbed message bool is false): the model-
+      // implied start acceleration is used and REPORTED. Preserve/refuse
+      // for prescribed starts is pinned by the acc_* variants.
+      expect(r.audit.start_acc_model_mps2 > 0.0,
+             "unprescribed start: model-implied acc measured and "
              "reported, never hidden");
     }
     // Negative control: the SAME 32-deg climb from BELOW the margin
@@ -470,11 +471,55 @@ int main(int argc, char **argv)
            "energy-deficient 32-deg climb honestly refused (stall gate)");
   }
 
+  if (run("acc_preserve_lat")) {
+    // SIGNED lateral acceleration inverse: the shared inverse reports
+    // |bank| via acos and loses the turn direction. The transition's
+    // signed inverse must return sign-correct bank AND reproduce the
+    // commanded acceleration through the closed EOM to machine
+    // precision, for +lateral, -lateral and pure-longitudinal commands.
+    // (Mission-level lateral acceptance is a primitive-family capability
+    // question — the audit counters diagnose it; the CONTRACT pinned
+    // here is that no command is ever mirrored or silently bent.)
+    vd::Parameters p = baseParams();
+    const double g32 = 32.0 * M_PI / 180.0;
+    const auto s0 = makeState({0.0, 0.0, 800.0}, 165.0, g32, 0.0);
+    const Eigen::Vector3d along =
+        -4.0 * Eigen::Vector3d(std::cos(g32), 0.0, std::sin(g32));
+    for (double lat : {+3.0, -3.0, 0.0}) {
+      const Eigen::Vector3d a_cmd = along + Eigen::Vector3d(0.0, lat, 0.0);
+      double cl = 0.0, thrust = 0.0, bank = 0.0;
+      tp::invertPointMassCommands(p, s0, a_cmd, &cl, &thrust, &bank);
+      const auto r = vd::pointMassForces(p, s0, cl, thrust, bank);
+      const Eigen::Vector3d a_chk = tp::pointMassAcceleration(p, s0, r.inputs);
+      std::cout << "acc_preserve_lat: lat=" << lat << " bank=" << bank
+                << " repro err=" << (a_chk - a_cmd).norm() << "\n";
+      expect((a_chk - a_cmd).norm() < 1e-9,
+             "signed inverse reproduces the commanded acceleration");
+      expect(lat == 0.0 ? std::abs(bank) < 1e-9
+                        : (lat > 0.0) == (bank > 0.0),
+             "bank sign follows the commanded turn direction");
+      expect(!r.saturated(), "reproduction used interior commands");
+    }
+  }
+
+  if (run("acc_prescribed_zero")) {
+    // Prescribed EXACTLY ZERO at a 32-deg climb: holding a=0 there needs
+    // ~7.9 kN of the model's 3.2 kN — preserve is impossible, so the
+    // mission must be REFUSED (a numeric-0 sentinel silently switched
+    // this to model-derived; the plumbed bool cannot).
+    auto req = makeRequest(baseParams());
+    req.initial_acc_prescribed = true;
+    req.initial_acc_mps2 = Eigen::Vector3d::Zero();
+    const auto r = tp::generate(req);
+    expect(!r.ok, "prescribed zero acc at a steep climb honestly refused");
+  }
+
   if (run("acc_preserve")) {
     // A commanded, MODEL-FLYABLE nonzero start acceleration (ballistic
     // along-track deceleration at the 32-deg climb: thrust ~ drag, CL
-    // ~ 0.86) must be preserved EXACTLY by the start bridge.
+    // ~ 0.86) must be preserved EXACTLY by the command-space ramp.
     auto req = makeRequest(baseParams());
+    req.initial_acc_prescribed = true;
     const double g32 = 32.0 * M_PI / 180.0;
     // -4.0 along track: thrust ~ 2.7 kN, CL ~ 0.86 — comfortably inside
     // the envelope, and close enough to the model's own start acc
@@ -494,27 +539,63 @@ int main(int argc, char **argv)
           req.initial_acc_mps2.z() / req.limits.unit_z_m);
       const double a0_err = (t0.getAcc(0.0) - a0_u).norm();
       std::cout << "acc_preserve: |acc(0) - a0| = " << a0_err
-                << " u/s^2, mismatch audit = "
-                << r.audit.start_acc_mismatch_mps2 << " m/s^2, winner "
+                << " u/s^2, repro err = "
+                << r.audit.start_acc_repro_err_mps2 << " m/s^2, winner "
                 << r.audit.winner_primitive_id << "\n";
       // 1e-7 u/s^2 = 1e-5 m/s^2: the inverse-dynamics command closure
       // reproduces the commanded acc to ~1e-7 m/s^2 (relative 3e-8) —
       // machine-noise scale, no physical meaning at any tighter bound.
       expect(a0_err < 1e-7,
              "trajectory leaves with the COMMANDED acceleration exactly");
-      expect(r.audit.start_acc_mismatch_mps2 > 0.0,
-             "the absorbed model gap is measured and reported");
+      expect(r.audit.start_acc_repro_err_mps2 < 1e-5,
+             "signed-inverse commands reproduce the commanded acc");
     }
   }
 
   if (run("gate_startacc")) {
     // A commanded initial acceleration the model cannot fly (50 g) must
-    // be REFUSED — the start bridge carries it into the inverse-dynamics
-    // envelope, which says no. Never silently replaced.
+    // be REFUSED — the signed inverse demands commands far outside the
+    // envelope and the repro check says no. Never silently replaced.
     auto req = makeRequest(baseParams());
+    req.initial_acc_prescribed = true;
     req.initial_acc_mps2 = Eigen::Vector3d(0.0, 0.0, 500.0);
     const auto r = tp::generate(req);
     expect(!r.ok, "unflyable commanded start acceleration refused");
+  }
+
+  if (run("validator_negative")) {
+    // The validator must catch what dt-grid RK4 agreement cannot: a
+    // polynomial whose sampled fit looks fine but whose interior
+    // violates a limit. Take a real winner, bump one mid-piece with a
+    // t^2(T-t)^2-shaped dip (zero position/velocity at the piece ends,
+    // deep interior excursion below the AGL floor over terrain raised
+    // for the probe) — the full-span validator must refuse it while the
+    // unmodified winner passes the same call.
+    auto req = makeRequest(baseParams());
+    const auto r = tp::generate(req);
+    expect(r.ok, "baseline winner exists");
+    if (r.ok) {
+      double rm = 0.0, ri = 0.0;
+      expect(tp::validateTransitionTrajectory(r.traj, req, 0.0, 1.0, &rm,
+                                              &ri) ==
+                 tp::TrajectoryVerdict::OK,
+             "unmodified winner passes the standalone validator");
+      poly_traj::Trajectory bad = r.traj;
+      const int mid = bad.getPieceNum() / 2;
+      const double Tm = bad[mid].getDuration();
+      poly_traj::CoefficientMat cm = bad[mid].getCoeffMat();
+      // z(t) += -c * t^2 (Tm - t)^2: expand to monomial coefficients on
+      // the p(t) = sum col(i) t^(5-i) convention.
+      const double c = 900.0 / req.limits.unit_z_m / std::pow(Tm, 4.0);
+      cm(2, 1) -= c;                 // t^4
+      cm(2, 2) += 2.0 * c * Tm;      // t^3
+      cm(2, 3) -= c * Tm * Tm;       // t^2
+      bad[mid] = poly_traj::Piece(Tm, cm);
+      expect(tp::validateTransitionTrajectory(bad, req, 0.0, 1.0, &rm,
+                                              &ri) ==
+                 tp::TrajectoryVerdict::FAIL,
+             "interior-dip trajectory REFUSED by the full-span validator");
+    }
   }
 
   if (run("gate_overspeed")) {

@@ -244,7 +244,8 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                                      const std::vector<Eigen::Vector3d> &waypoints,
                                      bool start_vel_synthesized,
                                      const ego_planner::TailBoundary &mission_tail,
-                                     bool start_vel_commanded)
+                                     bool start_vel_commanded,
+                                     bool start_acc_commanded)
 {
   // [PLAN-STATE] First statement of the only public entry: no member may
   // carry a previous mission's value into this one. The envelope rejection
@@ -332,7 +333,8 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     // transition dispatch happens after it so a bad final boundary can
     // never slip out through the new path.
     PlanResult r = planTransitionMission(start_pos, start_vel, start_acc,
-                                         waypoints, eff);
+                                         start_acc_commanded, waypoints,
+                                         eff);
     if (relaxed) r.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
     return r;
   }
@@ -1412,7 +1414,7 @@ bool SegmentChainPlanner::cutAtArc(const std::vector<Eigen::Vector3d> &route,
 
 PlanResult SegmentChainPlanner::planTransitionMission(
     const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
-    const Eigen::Vector3d &start_acc,
+    const Eigen::Vector3d &start_acc, bool start_acc_commanded,
     const std::vector<Eigen::Vector3d> &waypoints,
     const ego_planner::TailBoundary &mission_tail)
 {
@@ -1545,6 +1547,10 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   req.initial_acc_mps2 =
       Eigen::Vector3d(start_acc.x() * um, start_acc.y() * um,
                       start_acc.z() * uz);
+  // The message contract's use_initial_acceleration bool, plumbed all the
+  // way — the VALUE never decides prescription (review find: a numeric-0
+  // sentinel cannot express "prescribed exactly zero").
+  req.initial_acc_prescribed = start_acc_commanded;
   req.entry_candidates = cands;
   req.limits.dyn = *dyn;
   req.limits.unit_xy_m = um;
@@ -1611,19 +1617,20 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   const tp::TransitionResult tr = tp::generate(req);
   log_->infof(
       "[S13] transition audit: enumerated %d, winner %d | disq fin %d "
-      "pre %d rep %d sat %d ter %d zone %d time %d pva %d adapter %d | "
-      "dwell %.2f s, risk max %.3g int %.3g, adapter err p/v/a "
-      "%.3g/%.3g/%.3g, start-acc mismatch %.3g m/s^2 (absorbed by the "
-      "start bridge)",
+      "pre %d rep %d sat %d ter %d zone %d limits %d time %d pva %d "
+      "adapter %d | dwell %.2f s, winner risk max %.3g int %.3g (search "
+      "%.3g/%.3g), adapter err p/v/a %.3g/%.3g/%.3g, start acc: "
+      "repro err %.3g / model %.3g m/s^2",
       tr.audit.candidates_enumerated, tr.audit.winner_primitive_id,
       tr.audit.disq_finiteness, tr.audit.disq_preguard,
       tr.audit.disq_representable, tr.audit.disq_saturated,
-      tr.audit.disq_terrain, tr.audit.disq_zone, tr.audit.disq_timeout,
-      tr.audit.disq_end_pva, tr.audit.disq_adapter,
+      tr.audit.disq_terrain, tr.audit.disq_zone, tr.audit.disq_limits,
+      tr.audit.disq_timeout, tr.audit.disq_end_pva, tr.audit.disq_adapter,
       tr.audit.dwell_achieved_s, tr.audit.risk_max, tr.audit.risk_integral,
+      tr.audit.search_risk_max, tr.audit.search_risk_integral,
       tr.audit.adapter_max_pos_err_m, tr.audit.adapter_max_vel_err_mps,
-      tr.audit.adapter_max_acc_err_mps2,
-      tr.audit.start_acc_mismatch_mps2);
+      tr.audit.adapter_max_acc_err_mps2, tr.audit.start_acc_repro_err_mps2,
+      tr.audit.start_acc_model_mps2);
   if (!tr.ok)
     return fail(tr.any_candidate_reached_adapter
                     ? PlanReason::TRANSITION_ADAPTER_UNSOUND
