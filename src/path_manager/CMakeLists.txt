@@ -45,6 +45,7 @@ add_library(${PROJECT_NAME}_lib
   src/replan_fsm.cpp
   src/segment_chain_planner.cpp
   src/terminal_phase.cpp
+  src/transition_phase.cpp
   ../common/log_manager.cpp
 )
 
@@ -133,6 +134,15 @@ target_link_libraries(chain_experiment_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(chain_experiment_test
   ${PATH_MANAGER_DEPENDENCIES})
 
+# Transition generator harness: the model-math variants (analytic trims,
+# RK4 convergence, roundtrip consistency, Hermite representation) are pure
+# functions and run in milliseconds; the gate/feasibility variants drive
+# transition_phase::generate with synthetic closures. No node, no params.
+add_executable(transition_experiment_test test/transition_experiment_test.cpp)
+target_link_libraries(transition_experiment_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(transition_experiment_test
+  ${PATH_MANAGER_DEPENDENCIES})
+
 
 # Register the self-contained tests with ctest. They existed for months as
 # plain executables that `colcon test` never ran — a regression net that
@@ -154,6 +164,12 @@ if(BUILD_TESTING)
     COMMAND $<TARGET_FILE:terrain_risk_mask_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 300)
+  # Pure math + synthetic-closure gates: fast and hermetic, so it IS
+  # ctest-registered (unlike the solver-driving chain harness).
+  ament_add_test(transition_experiment_test
+    COMMAND $<TARGET_FILE:transition_experiment_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
 endif()
 
 install(TARGETS ${PROJECT_NAME}_lib
@@ -180,6 +196,10 @@ install(TARGETS terrain_risk_mask_test
 )
 
 install(TARGETS chain_experiment_test
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS transition_experiment_test
   DESTINATION lib/${PROJECT_NAME}
 )
 
