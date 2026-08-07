@@ -30,6 +30,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(mmp_mission_msgs REQUIRED)
 find_package(mmp_traj_msgs REQUIRED)
+find_package(mmp_vehicle_dynamics REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(grid_map_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
@@ -57,6 +58,7 @@ set(PATH_MANAGER_DEPENDENCIES
   geometry_msgs
   mmp_mission_msgs
   mmp_traj_msgs
+  mmp_vehicle_dynamics
   visualization_msgs
   grid_map_msgs
 )

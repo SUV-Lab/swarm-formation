@@ -27,7 +27,7 @@
   <!-- package://mmp_viz_assets/meshes/* (dynamic-obstacle mesh catalog) -->
   <exec_depend>mmp_viz_assets</exec_depend>
   <!-- rviz_path_manager.launch.py 의 기본 follower (shared_3dof) -->
-  <exec_depend>mmp_vehicle_dynamics</exec_depend>
+  <depend>mmp_vehicle_dynamics</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
