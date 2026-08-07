@@ -141,11 +141,20 @@ TransitionResult   { verdict(OK/FAILED+사유), transition_traj(PVA(t)),
   아니다: 조성은 4단으로 구분된다(`HARD_AVOID` = 접촉 시 후보 실격 /
   `SOFT_UNAVOIDABLE` = 전역 경로가 실제 필요로 한 횡단 / `SOFT_ENDPOINT`
   = 시작·목표 포함 면제 / `SOFT_FALLBACK` = 패스 2 전면 소프트 필드).
-  스냅샷은 인덱스가 아니라 **형상 사본 + 세대 ID**를 갖고, 접촉 판정은
-  공용 `zoneContact()`(라이브 필드 = 지형 가시성·endpoint taper 포함)로만
-  한다 — 생성기의 기하 재구현 금지. 존 목록/지형이 바뀌면 스냅샷은
-  STALE로 거부되며, 그때 전이는 실패하거나 경로부터 재커밋한다
-  (회귀 zonesnapshot).
+  - 스냅샷은 인덱스가 아니라 **형상 사본 + 세대(데이터)·에포크(검색)
+    ID**를 갖는다. 유효 조건은 "현재 데이터 위에서 **단일 목표 검색이
+    정확히 1회**" — 다중 경유점 미션은 leg마다 정책 상태를 덮어써
+    마지막 leg만 남으므로 INVALID로 fail-closed 한다(회귀
+    zonemultileg).
+  - 접촉 판정은 공용 `zoneContact()`로만 한다 — 전역 검색기의 하드
+    장벽과 **같은 가시-부피 기하**(타원체 + 가시성 > 0.5)이며 면제
+    필터가 없다(면제는 조성이 정책으로 든다). 결과는 4상
+    `CLEAR/CONTACT/STALE/INVALID`: STALE(존/지형 변경 또는 이후 검색)과
+    INVALID(3-pass 미실행·다중 leg)는 "접촉 없음"으로 못 읽는다 —
+    전이는 실패하거나 경로부터 재커밋한다(회귀 zonesnapshot·zonepass0).
+  - 연속 위험 노출은 판정이 아니라 측정이며 별도 API
+    `zoneExposure()`(라이브 유효 위험 필드)로 얻는다. 생성기의 기하
+    재구현 금지.
 
 ## 6. 다항 어댑터 — 구간 내부 검사와 접합 감사
 

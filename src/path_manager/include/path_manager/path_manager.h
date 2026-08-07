@@ -426,8 +426,9 @@ namespace path_manager
     // zones are exempt individually, the pass-2 fallback leaves the WHOLE
     // field soft, and pass 3 re-hardens everything except the crossings the
     // soft route actually needed. The snapshot freezes that per-zone
-    // outcome WITH the shapes and a generation id, so a later zone-list or
-    // terrain change can never be silently consulted through stale indices.
+    // outcome WITH the shapes plus generation AND epoch ids, so a later
+    // zone-list/terrain change or ANY later search can never be silently
+    // consulted through stale indices.
     enum class ZoneDisposition {
         HARD_AVOID,        // contact disqualifies a transition candidate
         SOFT_UNAVOIDABLE,  // pass-3 kept soft: crossing the global route needed
@@ -435,7 +436,25 @@ namespace path_manager
         SOFT_FALLBACK,     // pass-2 final field: everything soft
     };
     struct ZonePolicySnapshot {
+        // DATA generation (zone list / terrain re-derivation) AND policy
+        // epoch (per front-end search) — dispositions are PER-SEARCH state
+        // (endpoint containment, unavoidable-soft set, final pass), so a
+        // re-plan with the SAME zone list still invalidates an older
+        // snapshot (review find: generation alone missed that).
         uint64_t generation{0};
+        uint64_t epoch{0};
+        // False when the snapshot cannot express a policy: zones exist but
+        // the 3-pass never ran (pass 0 — policy off or a different front
+        // end; the soft-override buffer may hold a PREVIOUS search's
+        // values then), no search has run since the last zone/terrain
+        // change, or the epoch's front-end ran MORE than one segment
+        // search (multi-waypoint mission: each leg rewrites the whole
+        // policy state, so the buffers describe only the LAST leg —
+        // publishing that as plan-wide policy is fail-open; review find).
+        // Valid means exactly: ONE single-goal search ran on current
+        // data. Contract 2 requires that; an invalid snapshot is
+        // fail-closed at every consumer.
+        bool valid{true};
         struct Entry {
             RiskZone zone;  // SHAPE COPY — identity, not an index
             ZoneDisposition disposition{ZoneDisposition::HARD_AVOID};
@@ -444,14 +463,25 @@ namespace path_manager
     };
     ZonePolicySnapshot zonePolicySnapshot() const;
     uint64_t zonePolicyGeneration() const { return zone_policy_generation_; }
-    // Shared contact predicate — the generator must NOT reimplement zone
-    // geometry/visibility. Evaluates the LIVE field (terrain-masked,
-    // endpoint-tapered) for the snapshot entry; when the snapshot no longer
-    // matches the live state (generation or shape drift) it reports stale
-    // and returns false — the caller must FAIL the transition or re-commit
-    // the route, never guess.
-    bool zoneContact(const ZonePolicySnapshot &snap, size_t idx,
-                     const Eigen::Vector3d &p, bool *stale = nullptr) const;
+    // Structured contact result — STALE/INVALID cannot be mistaken for
+    // "no contact" (review find: an optional out-pointer let a caller read
+    // a stale snapshot as CLEAR).
+    //   CLEAR    outside the zone's visible volume
+    //   CONTACT  inside it — for a HARD_AVOID zone this disqualifies
+    //   STALE    snapshot no longer matches the live state: fail the
+    //            transition or re-commit the route, never guess
+    //   INVALID  the snapshot never expressed a policy (see valid above)
+    enum class ZoneContactResult { CLEAR, CONTACT, STALE, INVALID };
+    // CONTACT = the SAME visible-volume judgment the global searcher's
+    // hard barrier uses (ellipsoid + visibility > 0.5), via the searcher's
+    // own primitive — never the smooth risk field (review find: a faint
+    // smooth-risk tail is not hard contact).
+    ZoneContactResult zoneContact(const ZonePolicySnapshot &snap, size_t idx,
+                                  const Eigen::Vector3d &p) const;
+    // Smooth risk value for SOFT_* exposure statistics/minimization —
+    // separate from contact by design. False on stale/invalid snapshots.
+    bool zoneExposure(const ZonePolicySnapshot &snap, size_t idx,
+                      const Eigen::Vector3d &p, double *exposure) const;
     size_t numRiskZones() const { return risk_zones_.size(); }
     // [CHAIN] hooks for the segment-chain planner: junction placement must
     // stay clear of the zone moat + GNRON taper band, and the chained result
@@ -501,6 +531,17 @@ namespace path_manager
     // [S13] bumped by refreshEffectiveRiskZones (the single funnel every
     // zone-list or terrain re-derivation goes through).
     uint64_t zone_policy_generation_{0};
+    bool zoneSnapshotCurrent(const ZonePolicySnapshot &snap,
+                             size_t idx) const;
+    // [S13] bumped at every front-end search; epoch_generation_ records
+    // WHICH data generation that search ran on, so a snapshot taken after
+    // a zone change but before the next search reads invalid.
+    // epoch_searches_ counts segment searches under the current epoch:
+    // the snapshot is only valid at exactly 1 (a multi-leg mission leaves
+    // only the last leg's policy in the searcher buffers).
+    uint64_t zone_policy_epoch_{0};
+    uint64_t zone_policy_epoch_generation_{0};
+    uint64_t zone_policy_epoch_searches_{0};
     // Searcher-facing copy of risk_zones_. PathSearcher::setRiskZones stores
     // a RAW POINTER to this vector, so it must outlive the plan call — a
     // function-local here left the searcher holding a dangling pointer

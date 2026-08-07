@@ -115,7 +115,9 @@ int main(int argc, char **argv)
        with_pvaprobe = false, with_initceiling = false,
        with_handoffcap = false, with_overroutebad = false,
        with_transfallback = false, with_overrouteretry = false,
-       with_badspans = false, with_zonesnapshot = false;
+       with_badspans = false, with_zonesnapshot = false,
+       with_zonewall = false, with_zonepass0 = false,
+       with_zonemultileg = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -253,6 +255,11 @@ int main(int argc, char **argv)
     // the shared contact predicate, and generation-staleness on a zone
     // list change.
     if (v == "zonesnapshot") { with_route = true; with_zonesnapshot = true; }
+    // zonewall: pass-2/3 dispositions on an unavoidable full-corridor wall.
+    if (v == "zonewall") { with_route = true; with_zonewall = true; }
+    // zonepass0: zones + 3-pass policy OFF -> INVALID snapshot fail-closed.
+    if (v == "zonepass0") { with_route = true; with_zonepass0 = true; }
+    if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     // [S13] transfallback: with a transition active, the single-shot
     // fallback is forbidden — the below-threshold mission that normally
     // degrades to a direct plan must FAIL instead.
@@ -281,6 +288,28 @@ int main(int argc, char **argv)
 
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", params});
+  // manager/* values are read ONCE in the PathManager constructor, and
+  // force() before construction collides with its declare_parameter — so
+  // variant-specific manager overrides ride NodeOptions instead (the
+  // later declare then returns the override).
+  {
+    std::vector<rclcpp::Parameter> ovr;
+    // zonepass0: 3-pass policy off -> pass stays 0 with zones present.
+    if (with_zonepass0)
+      ovr.emplace_back("manager/zone_avoid_lexicographic", false);
+    // zonewall: block the OVER-THE-TOP escape (default vertical ratio
+    // 0.35 leaves a ~12 u ceiling the front end can climb past) so the
+    // wall is genuinely unavoidable and the soft passes must run.
+    if (with_zonewall) {
+      ovr.emplace_back("manager/risk_vertical_ratio", 3.0);
+      // ... and the terrain-shadow escape: with LOS masking on, ridge
+      // shadows carve INVISIBLE corridors through the wall and pass 1
+      // legitimately threads them. Whole-ellipsoid volumes make the wall
+      // airtight.
+      ovr.emplace_back("manager/risk_terrain_mask_enable", false);
+    }
+    if (!ovr.empty()) options.parameter_overrides(ovr);
+  }
   auto node = std::make_shared<rclcpp::Node>("chain_experiment", options);
   node->declare_parameter("drone_id", 0);
 
@@ -310,6 +339,9 @@ int main(int argc, char **argv)
   // the phase-mode fitness gate (observed: synthclamp's clamped-floor flight
   // gated FAILED at 765% thrust peak instead of pinning the clamp doctrine).
   force("chain/phase/enable", with_phase);
+  // zonepass0 needs the lexicographic policy OFF before PathManager reads
+  // it at construction.
+
   if (with_depedge) force("chain/jitter/fail_segment", 1);
   if (with_arredge) force("chain/jitter/fail_segment", 3);
   // initfail arms all-worker failure injection as a tripwire: entry
@@ -529,7 +561,10 @@ int main(int argc, char **argv)
 
   if (with_zonesnapshot) {
     using ZD = path_manager::PathManager::ZoneDisposition;
-    // (a) an AVOIDABLE zone off to the side of the route -> HARD_AVOID.
+    using ZC = path_manager::PathManager::ZoneContactResult;
+    // (a) an AVOIDABLE zone off to the side of the route -> HARD_AVOID,
+    // and the structured contact result agrees with the searcher's own
+    // hard-volume judgment (not the smooth risk tail).
     path_manager::RiskZone z;
     z.center = Eigen::Vector3d(130.0, 180.0, 2.0);
     z.reach = 8.0;
@@ -539,35 +574,256 @@ int main(int argc, char **argv)
         chain.plan(start_pos, start_vel, start_acc, goal, true, {});
     expect(r1.hasTrajectory(), "plan with an avoidable zone succeeds");
     const auto snap = pm->zonePolicySnapshot();
-    expect(snap.zones.size() == 1, "snapshot carries the one zone");
-    expect(snap.zones[0].disposition == ZD::HARD_AVOID,
+    expect(snap.valid, "snapshot valid after a 3-pass search");
+    expect(snap.zones.size() == 1 &&
+               snap.zones[0].disposition == ZD::HARD_AVOID,
            "avoidable zone -> HARD_AVOID");
-    expect(snap.generation == pm->zonePolicyGeneration(),
-           "snapshot generation matches the live generation");
-    bool stale = false;
-    expect(pm->zoneContact(snap, 0, z.center, &stale) && !stale,
-           "shared predicate: zone centre is contact");
-    expect(!pm->zoneContact(snap, 0, Eigen::Vector3d(30.0, 150.0, 3.0),
-                            &stale) &&
-               !stale,
-           "shared predicate: mission start is no contact");
-    // (b) zone list changes -> every outstanding snapshot goes STALE; the
-    // predicate must refuse, never consult drifting indices.
-    path_manager::RiskZone zg;
-    zg.center = Eigen::Vector3d(330.0, 150.0, 2.0);  // contains the goal
-    zg.reach = 10.0;
-    zg.peak = 0.8;
-    pm->setRiskZonesRuntime({zg});
-    expect(!pm->zoneContact(snap, 0, z.center, &stale) && stale,
-           "old snapshot is STALE after the zone list changed");
-    // (c) goal-contained zone -> SOFT_ENDPOINT after the next plan.
-    const path_manager::PlanResult r2 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
-    expect(r2.hasTrajectory(), "plan with a goal-contained zone succeeds");
+    expect(pm->zoneContact(snap, 0, z.center) == ZC::CONTACT,
+           "zone centre -> CONTACT (searcher's visible-volume judgment)");
+    expect(pm->zoneContact(snap, 0, Eigen::Vector3d(30.0, 150.0, 3.0)) ==
+               ZC::CLEAR,
+           "mission start -> CLEAR");
+    double exposure = -1.0;
+    expect(pm->zoneExposure(snap, 0, z.center, &exposure) && exposure > 0.0,
+           "smooth exposure available separately from contact");
+    // (b) SAME zone list, new plan with the goal INSIDE the zone: the
+    // dispositions are per-plan state, so the OLD snapshot must go STALE
+    // even though no zone data changed (policy epoch, review find).
+    const Eigen::Vector3d goal_in_zone(130.0, 180.0, 2.2);
+    const path_manager::PlanResult r2 = chain.plan(
+        start_pos, start_vel, start_acc, {goal_in_zone}, true, {});
+    expect(r2.hasTrajectory(), "re-plan into the zone succeeds");
+    expect(pm->zoneContact(snap, 0, z.center) == ZC::STALE,
+           "same-list re-plan makes the old snapshot STALE (epoch)");
     const auto snap2 = pm->zonePolicySnapshot();
-    expect(snap2.zones.size() == 1 &&
+    expect(snap2.valid && snap2.zones.size() == 1 &&
                snap2.zones[0].disposition == ZD::SOFT_ENDPOINT,
            "goal-contained zone -> SOFT_ENDPOINT");
+    // (c) zone-list change: snapshot taken BEFORE the next search reads
+    // INVALID (the searcher still holds the previous binding), and the
+    // pre-change snapshot is STALE.
+    path_manager::RiskZone z2 = z;
+    z2.center = Eigen::Vector3d(200.0, 150.0, 2.0);
+    pm->setRiskZonesRuntime({z2});
+    expect(pm->zoneContact(snap2, 0, z.center) == ZC::STALE,
+           "zone-list change makes the previous snapshot STALE");
+    const auto snap3 = pm->zonePolicySnapshot();
+    expect(!snap3.valid,
+           "snapshot between zone change and next search is INVALID");
+    expect(pm->zoneContact(snap3, 0, z2.center) == ZC::INVALID,
+           "contact on an INVALID snapshot says INVALID, never CLEAR");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_zonewall) {
+    using ZD = path_manager::PathManager::ZoneDisposition;
+    // A WALL of overlapping zones spanning the corridor's full height,
+    // NOT containing start or goal (a single giant circle swallowed both
+    // endpoints and read as an exemption — fixture lesson). Pass 1 finds
+    // no zone-free route, pass 2 crosses where exposure is least, pass 3
+    // re-hardens the zones the crossing did not need: the crossed zones
+    // must read SOFT (UNAVOIDABLE at pass 3, FALLBACK at pass 2), never
+    // HARD_AVOID.
+    // A straight wall kept losing to the planning grid's true extent (the
+    // pass-1 probe legally went around at y=344, then y=463 — the domain
+    // is far larger than the DEM's nominal 360x300). Topology beats
+    // extent: a RING around the goal cannot be circumnavigated, so every
+    // route must cross it.
+    std::vector<path_manager::RiskZone> wall;
+    const Eigen::Vector3d ring_c(330.0, 150.0, 1.0);
+    const double ring_r = 60.0;
+    for (int k = 0; k < 12; ++k) {
+      const double a = 2.0 * M_PI * k / 12.0;
+      path_manager::RiskZone z;
+      z.center = ring_c + Eigen::Vector3d(ring_r * std::cos(a),
+                                          ring_r * std::sin(a), 0.0);
+      z.reach = 30.0;
+      z.peak = 0.4;
+      wall.push_back(z);
+    }
+    pm->setRiskZonesRuntime(wall);
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r.hasTrajectory(), "plan through the unavoidable wall succeeds");
+    const int pass = pm->zoneAvoidPassNow();
+    std::cout << "zonewall: zone-avoid pass " << pass << "\n";
+    // diagnostics: did the overrides land, and does the committed route
+    // touch any wall volume under the snapshot's own contact judgment?
+    double vr = -1.0; bool mask = true;
+    node->get_parameter("manager/risk_vertical_ratio", vr);
+    node->get_parameter("manager/risk_terrain_mask_enable", mask);
+    std::cout << "zonewall: vertical_ratio=" << vr << " mask="
+              << (mask ? "on" : "off") << "\n";
+    const auto snap = pm->zonePolicySnapshot();
+    expect(snap.valid, "snapshot valid after the wall search");
+    expect(snap.zones.size() == wall.size(), "all wall zones in snapshot");
+    expect(pass >= 2, "search actually needed the soft passes");
+    int soft_unavoid = 0, soft_fallback = 0, hard = 0;
+    for (const auto &e : snap.zones) {
+      if (e.disposition == ZD::SOFT_UNAVOIDABLE) ++soft_unavoid;
+      else if (e.disposition == ZD::SOFT_FALLBACK) ++soft_fallback;
+      else if (e.disposition == ZD::HARD_AVOID) ++hard;
+    }
+    std::cout << "zonewall: dispositions unavoid=" << soft_unavoid
+              << " fallback=" << soft_fallback << " hard=" << hard << "\n";
+    {
+      const auto &route = pm->lastCommittedRoute();
+      int contact_pts = 0;
+      for (const auto &v : route)
+        for (size_t zi = 0; zi < snap.zones.size(); ++zi)
+          if (pm->zoneContact(snap, zi, v) ==
+              path_manager::PathManager::ZoneContactResult::CONTACT) {
+            ++contact_pts;
+            break;
+          }
+      std::cout << "zonewall: route vertices in contact " << contact_pts
+                << "/" << route.size() << "\n";
+
+
+    }
+    expect(soft_unavoid + soft_fallback >= 1,
+           "the needed crossing is SOFT (UNAVOIDABLE/FALLBACK), never "
+           "HARD_AVOID");
+    expect(pass == 3 && soft_unavoid >= 2 && hard >= 1,
+           "overlap crossing releases BOTH members and pass 3 re-hardens "
+           "the rest (first-hit marking collapsed this ring to the "
+           "all-soft pass 2)");
+    if (pass == 3)
+      expect(soft_fallback == 0,
+             "pass 3: only the needed crossings stay soft (no fallback "
+             "labels)");
+
+    // Stage 2 — pass 3 with a disposition MIX: three circles enclosing the
+    // goal in their curvilinear-triangle hole. A crossing threads ONE
+    // circle's body, so pass 3 re-hardens the other two: expect
+    // SOFT_UNAVOIDABLE for the crossed and HARD_AVOID for the rest.
+    std::vector<path_manager::RiskZone> tri;
+    for (int k = 0; k < 3; ++k) {
+      const double a = M_PI / 2.0 + 2.0 * M_PI * k / 3.0;
+      path_manager::RiskZone z;
+      z.center = ring_c + Eigen::Vector3d(50.0 * std::cos(a),
+                                          50.0 * std::sin(a), 0.0);
+      z.reach = 45.0;
+      z.peak = 0.4;
+      tri.push_back(z);
+    }
+    pm->setRiskZonesRuntime(tri);
+    const path_manager::PlanResult r3 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r3.hasTrajectory(), "triangle-enclosure plan succeeds");
+    const int pass3 = pm->zoneAvoidPassNow();
+    const auto snap3 = pm->zonePolicySnapshot();
+    int t_unavoid = 0, t_hard = 0, t_fb = 0;
+    for (const auto &e : snap3.zones) {
+      if (e.disposition == ZD::SOFT_UNAVOIDABLE) ++t_unavoid;
+      else if (e.disposition == ZD::HARD_AVOID) ++t_hard;
+      else if (e.disposition == ZD::SOFT_FALLBACK) ++t_fb;
+    }
+    std::cout << "zonewall: triangle pass " << pass3 << " unavoid="
+              << t_unavoid << " hard=" << t_hard << " fallback=" << t_fb
+              << "\n";
+    expect(pass3 >= 2, "triangle enclosure needed the soft passes too");
+    if (pass3 == 3) {
+      expect(t_unavoid >= 1 && t_hard >= 1,
+             "pass 3 mixes SOFT_UNAVOIDABLE (crossed) with re-hardened "
+             "HARD_AVOID");
+    } else {
+      expect(t_fb == 3, "pass 2: all three read SOFT_FALLBACK");
+    }
+
+    // Stage 3 — deterministic pass-2 SOFT_FALLBACK: a POROUS ring. Six
+    // zones leave 1 u rim gaps the zero-risk soft geodesic threads, so
+    // the crossed set stays empty; but the hard field's inflated standoff
+    // (1.05 x reach) seals those gaps, so pass 3 (== pass 1 field) cannot
+    // connect and the search must settle on the all-soft pass 2.
+    std::vector<path_manager::RiskZone> porous;
+    for (int k = 0; k < 6; ++k) {
+      const double a = 2.0 * M_PI * k / 6.0;
+      path_manager::RiskZone z;
+      z.center = ring_c + Eigen::Vector3d(60.0 * std::cos(a),
+                                          60.0 * std::sin(a), 0.0);
+      z.reach = 29.5;
+      z.peak = 0.4;
+      porous.push_back(z);
+    }
+    pm->setRiskZonesRuntime(porous);
+    const path_manager::PlanResult r4 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r4.hasTrajectory(), "porous-ring plan succeeds");
+    const int pass4 = pm->zoneAvoidPassNow();
+    const auto snap4 = pm->zonePolicySnapshot();
+    int p_fb = 0, p_other = 0;
+    for (const auto &e : snap4.zones) {
+      if (e.disposition == ZD::SOFT_FALLBACK) ++p_fb;
+      else if (e.disposition != ZD::SOFT_ENDPOINT) ++p_other;
+    }
+    std::cout << "zonewall: porous pass " << pass4 << " fallback=" << p_fb
+              << " other=" << p_other << "\n";
+    expect(pass4 == 2, "sealed gaps force the all-soft pass 2");
+    expect(p_fb == 6 && p_other == 0,
+           "pass 2: every non-endpoint zone reads SOFT_FALLBACK");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_zonemultileg) {
+    using ZC = path_manager::PathManager::ZoneContactResult;
+    // A multi-waypoint mission runs one segment search per leg; each leg
+    // rewrites the searcher's whole policy state, so the snapshot after
+    // such a plan describes only the LAST leg. Publishing that as
+    // plan-wide policy is fail-open (a zone an earlier leg hard-avoided
+    // could read soft) — the contract is fail-closed: INVALID.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(130.0, 180.0, 2.0);
+    z.reach = 8.0;
+    z.peak = 0.8;
+    pm->setRiskZonesRuntime({z});
+    const bool ok = pm->planGlobalTraj(
+        start_pos, start_vel, start_acc,
+        {Eigen::Vector3d(180.0, 80.0, 3.0), goal[0]});
+    expect(ok, "two-leg mission plans");
+    const auto snap = pm->zonePolicySnapshot();
+    expect(!snap.valid, "multi-leg epoch -> snapshot INVALID (fail-closed)");
+    expect(pm->zoneContact(snap, 0, z.center) == ZC::INVALID,
+           "contact through a multi-leg snapshot reads INVALID");
+    // A fresh SINGLE-goal search restores validity on the same zone list.
+    const path_manager::PlanResult r1 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r1.hasTrajectory(), "single-goal replan succeeds");
+    const auto snap2 = pm->zonePolicySnapshot();
+    expect(snap2.valid, "single-goal epoch -> snapshot valid again");
+
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_zonepass0) {
+    using ZC = path_manager::PathManager::ZoneContactResult;
+    // Zones present but the lexicographic 3-pass DISABLED: pass stays 0
+    // and the soft-override buffer is untrustworthy — the snapshot must be
+    // INVALID, fail-closed (review find: the default mapping would have
+    // read HARD_AVOID plus possibly a previous search's soft set).
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(130.0, 180.0, 2.0);
+    z.reach = 8.0;
+    z.peak = 0.8;
+    pm->setRiskZonesRuntime({z});
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r.hasTrajectory(), "plan with policy off succeeds");
+    std::cout << "zonepass0: zone-avoid pass " << pm->zoneAvoidPassNow()
+              << "\n";
+    expect(pm->zoneAvoidPassNow() == 0, "3-pass did not run (policy off)");
+    const auto snap = pm->zonePolicySnapshot();
+    expect(!snap.valid, "zones + pass 0 -> INVALID snapshot");
+    expect(pm->zoneContact(snap, 0, z.center) == ZC::INVALID,
+           "contact on the pass-0 snapshot is INVALID, never CLEAR/CONTACT");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

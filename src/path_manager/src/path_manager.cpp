@@ -1074,6 +1074,13 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                                std::vector<Eigen::Vector3d> &clean_path,
                                std::vector<double> &cap_ref)
 {
+    // [S13] policy epoch: dispositions are per-search state, so every
+    // front-end run invalidates outstanding zone-policy snapshots; the
+    // recorded generation says WHICH zone data this search saw.
+    ++zone_policy_epoch_;
+    zone_policy_epoch_generation_ = zone_policy_generation_;
+    zone_policy_epoch_searches_ = 0;
+
         // Segment list: start -> wp1 -> ... -> wpN
         std::vector<Eigen::Vector3d> all_points;
         all_points.push_back(start_pos);
@@ -1229,6 +1236,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                 searcher_.astarSearchAndGetSimplePath(
                     astar_step_size_, all_points[seg], all_points[seg + 1],
                     traj_.local_traj.drone_id);
+            ++zone_policy_epoch_searches_;
 
             log_manager_->infof("A* segment %zu: simple_path_size=%zu",
                 seg, seg_path.size());
@@ -3633,7 +3641,30 @@ PathManager::ZonePolicySnapshot PathManager::zonePolicySnapshot() const
 {
     ZonePolicySnapshot snap;
     snap.generation = zone_policy_generation_;
+    snap.epoch = zone_policy_epoch_;
     const int pass = searcher_.zoneAvoidPass();
+    // INVALID, fail-closed:
+    //  - zones exist but the 3-pass never ran (pass 0: policy off or a
+    //    different front end; zone_soft_override_ may hold a PREVIOUS
+    //    search's values — reading it would be fiction)
+    //  - no search has run since the last zone/terrain change (the
+    //    searcher still holds the previous zone binding)
+    // Multi-leg searches rewrite the policy buffers once per leg, so a
+    // snapshot after such an epoch would publish the LAST leg's policy as
+    // plan-wide — fail-closed instead (review find).
+    snap.valid = (risk_zones_.empty() ||
+                  (pass != 0 && zone_policy_epoch_searches_ == 1)) &&
+                 zone_policy_epoch_generation_ == zone_policy_generation_;
+    if (!snap.valid && log_manager_) {
+        log_manager_->warnf(
+            "[ZONE-POLICY] snapshot INVALID (pass %d, %zu zones, %lu leg "
+            "searches this epoch, search generation %lu vs data %lu) — "
+            "contract 2 requires ONE single-goal 3-pass on current data",
+            pass, risk_zones_.size(),
+            static_cast<unsigned long>(zone_policy_epoch_searches_),
+            static_cast<unsigned long>(zone_policy_epoch_generation_),
+            static_cast<unsigned long>(zone_policy_generation_));
+    }
     const auto &nb = searcher_.zoneNoBarrier();
     const auto &so = searcher_.zoneSoftOverride();
     snap.zones.reserve(risk_zones_.size());
@@ -3652,28 +3683,42 @@ PathManager::ZonePolicySnapshot PathManager::zonePolicySnapshot() const
     return snap;
 }
 
-bool PathManager::zoneContact(const ZonePolicySnapshot &snap, size_t idx,
-                              const Eigen::Vector3d &p, bool *stale) const
+// Staleness shared by contact and exposure: generation, epoch, index
+// range, and shape identity (the snapshot's copy must still describe the
+// live zone at this index, or the index now points at a DIFFERENT zone).
+bool PathManager::zoneSnapshotCurrent(const ZonePolicySnapshot &snap,
+                                      size_t idx) const
 {
-    if (stale) *stale = false;
-    const auto mark_stale = [&]() {
-        if (stale) *stale = true;
-        return false;
-    };
-    if (snap.generation != zone_policy_generation_) return mark_stale();
-    if (idx >= snap.zones.size() || idx >= risk_zones_.size())
-        return mark_stale();
-    // Shape identity: the snapshot's copy must still describe the live zone
-    // at this index, or the index points at a DIFFERENT zone now.
+    if (snap.generation != zone_policy_generation_) return false;
+    if (snap.epoch != zone_policy_epoch_) return false;
+    if (idx >= snap.zones.size() || idx >= risk_zones_.size()) return false;
     const RiskZone &live = risk_zones_[idx];
     const RiskZone &snapz = snap.zones[idx].zone;
-    if ((live.center - snapz.center).norm() > 1e-9 ||
-        std::abs(live.reach - snapz.reach) > 1e-9 ||
-        std::abs(live.peak - snapz.peak) > 1e-9)
-        return mark_stale();
-    // The LIVE field is the one authority (terrain-masked visibility,
-    // endpoint taper) — never a re-implementation.
-    return getEffectiveRisk(idx, p) > 1e-6;
+    return (live.center - snapz.center).norm() <= 1e-9 &&
+           std::abs(live.reach - snapz.reach) <= 1e-9 &&
+           std::abs(live.peak - snapz.peak) <= 1e-9;
+}
+
+PathManager::ZoneContactResult PathManager::zoneContact(
+    const ZonePolicySnapshot &snap, size_t idx,
+    const Eigen::Vector3d &p) const
+{
+    if (!snap.valid) return ZoneContactResult::INVALID;
+    if (!zoneSnapshotCurrent(snap, idx)) return ZoneContactResult::STALE;
+    // The searcher's OWN hard-volume primitive (ellipsoid + visibility>0.5)
+    // — identical judgment to the global barrier, no reimplementation.
+    return searcher_.zoneVisibleVolumeContains(idx, p)
+               ? ZoneContactResult::CONTACT
+               : ZoneContactResult::CLEAR;
+}
+
+bool PathManager::zoneExposure(const ZonePolicySnapshot &snap, size_t idx,
+                               const Eigen::Vector3d &p,
+                               double *exposure) const
+{
+    if (!snap.valid || !zoneSnapshotCurrent(snap, idx)) return false;
+    if (exposure) *exposure = getEffectiveRisk(idx, p);
+    return true;
 }
 
 void PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
