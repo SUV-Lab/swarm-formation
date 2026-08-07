@@ -628,11 +628,15 @@ namespace path_manager
         //                           contract-2 decision, made there.
         // Which ceiling binds decides both the number AND the reason string:
         //   explicit handoff cap   planning/handoff_max_vel_mps > 0
-        //   default planning cap   handoff unset -> the OPTIMIZER's own
-        //                          frame cap (optimization/max_vel — the
-        //                          cap the solve actually enforces; the
+        //   default planning cap   handoff unset -> the optimizer's own
+        //                          optimization/max_vel. POLICY alignment,
+        //                          not hard enforcement: in the solver that
+        //                          value is a cubic SOFT cost, so following
+        //                          it keeps the handoff contract consistent
+        //                          with planning preference without
+        //                          claiming the solve guarantees it. (The
         //                          manager copy is a separate parameter
-        //                          and may drift)
+        //                          and may drift — not used here.)
         //   model maximum          dynamics speed_max is the tightest
         double explicit_cap = 0.0;
         if (node_->has_parameter("planning/handoff_max_vel_mps"))

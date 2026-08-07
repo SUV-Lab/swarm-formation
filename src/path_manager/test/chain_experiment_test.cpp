@@ -497,14 +497,24 @@ int main(int argc, char **argv)
   }
 
   if (with_handoffcap) {
-    // Direct validator probes — no plan needed: the contract under test is
-    // the ceiling arithmetic and its reason string.
-    force("planning/handoff_max_vel_mps", 220.0);
+    // The PRODUCTION declaration is part of the contract: force() would
+    // declare the name itself, so a deleted declare_parameter() in
+    // PathManager would go unnoticed (review find). Assert it exists
+    // FIRST, then use plain set_parameter — which fails on undeclared
+    // names — for the rest.
+    expect(node->has_parameter("planning/handoff_max_vel_mps"),
+           "PathManager declares the handoff cap parameter");
+    auto sp = [&](double v) {
+      return node->set_parameter(
+                     rclcpp::Parameter("planning/handoff_max_vel_mps", v))
+          .successful;
+    };
+    expect(sp(220.0), "set_parameter(220) accepted");
     const std::string ok210 =
         pm->stateEnvelopeProblem(Eigen::Vector3d(2.1, 0.0, 0.0));
     expect(ok210.empty(),
            "handoff cap 220: 210 m/s passes the speed check");
-    force("planning/handoff_max_vel_mps", 190.0);
+    expect(sp(190.0), "set_parameter(190) accepted");
     const std::string no195 =
         pm->stateEnvelopeProblem(Eigen::Vector3d(1.95, 0.0, 0.0));
     expect(!no195.empty() &&

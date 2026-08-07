@@ -25,10 +25,12 @@
 4. **"정합 완료" 과장**: 연료 상태 선택·트림 제외 적합·추력 테이블
    상수화는 동일 기체 정합이 아니라 coarse surrogate다. 회귀 통과는 배관
    회귀일 뿐 물리 일치의 증거가 아니다.
-5. **인계 상한 충돌**: 모델 상한(230 m/s)과 MINCO 프레임 상한(max_vel
-   200 m/s) 사이 상태가 입구 검증을 통과한 뒤 솔버에서 실패한다. →
-   `stateEnvelopeProblem`이 유효 상한 min(모델, 프레임)으로 검사하도록
-   수정됐다(회귀 initceiling).
+5. **인계 상한 혼용**: 인계 계약 상한과 계획 선호 상한(optimization/
+   max_vel — 솔버에선 cubic 소프트 비용)이 혼용됐다. 모델 상한(230 m/s)과
+   계획 선호(200 m/s) 사이 상태가 입구 검증만 통과하는 불일치. →
+   상한 3분리(`planning/handoff_max_vel_mps` 신설) 후
+   `stateEnvelopeProblem`이 유효 상한 min(모델, 인계 계약)으로 검사한다
+   (회귀 initceiling·handoffcap).
 6. **연구 정책 값 조기 동결**: 실험 초깃값을 acceptance contract로
    동결하기엔 이르고, 생성 결과의 분포로 그 결과의 합격선을 정하는 것은
    순환 논리다.
