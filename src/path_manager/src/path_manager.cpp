@@ -579,7 +579,31 @@ namespace path_manager
         }
     }
 
-    std::string PathManager::stateEnvelopeProblem(
+    double PathManager::effectiveHandoffMaxMps() const
+{
+    const auto *dynp = dynamicsParams();
+    const double model_max =
+        dynp ? dynp->speed_max_mps : std::numeric_limits<double>::infinity();
+    double um_xy = 100.0;
+    if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+        node_->get_parameter("optimization/dynamics_unit_xy_m", um_xy);
+    double explicit_cap = 0.0;
+    if (node_->has_parameter("planning/handoff_max_vel_mps"))
+        node_->get_parameter("planning/handoff_max_vel_mps", explicit_cap);
+    double planning_cap = 0.0;
+    if (node_->has_parameter("optimization/max_vel")) {
+        double mv = 0.0;
+        node_->get_parameter("optimization/max_vel", mv);
+        planning_cap = mv * um_xy;
+    }
+    const double cap_mps =
+        explicit_cap > 1e-9
+            ? explicit_cap
+            : (planning_cap > 1e-9 ? planning_cap : model_max);
+    return std::min(model_max, cap_mps);
+}
+
+std::string PathManager::stateEnvelopeProblem(
         const Eigen::Vector3d &vel_units) const
     {
         // Finiteness is judged BEFORE the model-off early return (review
@@ -638,21 +662,11 @@ namespace path_manager
         //                          manager copy is a separate parameter
         //                          and may drift — not used here.)
         //   model maximum          dynamics speed_max is the tightest
+        const double vmax_mps = effectiveHandoffMaxMps();
         double explicit_cap = 0.0;
         if (node_->has_parameter("planning/handoff_max_vel_mps"))
             node_->get_parameter("planning/handoff_max_vel_mps",
                                  explicit_cap);
-        double planning_cap = 0.0;
-        if (node_->has_parameter("optimization/max_vel")) {
-            double mv = 0.0;
-            node_->get_parameter("optimization/max_vel", mv);
-            planning_cap = mv * um_xy;
-        }
-        const double cap_mps =
-            explicit_cap > 1e-9
-                ? explicit_cap
-                : (planning_cap > 1e-9 ? planning_cap : dyn.speed_max_mps);
-        const double vmax_mps = std::min(dyn.speed_max_mps, cap_mps);
         if (vm > vmax_mps) {
             const char *which =
                 vmax_mps >= dyn.speed_max_mps - 1e-9

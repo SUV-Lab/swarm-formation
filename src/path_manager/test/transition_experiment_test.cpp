@@ -99,7 +99,6 @@ static tp::TransitionRequest makeRequest(const vd::Parameters &dyn)
     e.route_start_s = 48.0 + 2.0 * i;
     e.pos_m = Eigen::Vector3d(5000.0, 0.0, 950.0 + 150.0 * i);
     e.tangent = Eigen::Vector3d(1.0, 0.0, 0.0);
-    e.cap_z_m = 4000.0;
     req.entry_candidates.push_back(e);
   }
   req.zone_probe = [](const Eigen::Vector3d &) { return tp::ZoneProbe::CLEAR; };
@@ -427,7 +426,8 @@ int main(int argc, char **argv)
               << " s, adapter errs p/v/a=" << r.audit.adapter_max_pos_err_m
               << "/" << r.audit.adapter_max_vel_err_mps << "/"
               << r.audit.adapter_max_acc_err_mps2
-              << ", start-seam jump=" << r.audit.seam_jerk_start << "\n";
+              << ", start-acc mismatch=" << r.audit.start_acc_mismatch_mps2
+              << "\n";
     expect(r.ok, "gamma=32 deg start recovers to a route entry");
     if (r.ok) {
       expect(r.duration_s > 1.0 && r.duration_s < 60.0,
@@ -447,6 +447,12 @@ int main(int argc, char **argv)
              "trajectory tail touches the entry state exactly (blend)");
       expect(r.audit.risk_max == 0.0,
              "exposure statistics present and zero in a zone-free field");
+      // a0 = 0 is the UNSPECIFIED sentinel: model-implied start acc,
+      // mismatch REPORTED (the preserve-or-refuse contract for a
+      // commanded nonzero acc is pinned by acc_preserve/gate_startacc).
+      expect(r.audit.start_acc_mismatch_mps2 > 0.0,
+             "unspecified-acc convention: model mismatch measured and "
+             "reported, never hidden");
     }
     // Negative control: the SAME 32-deg climb from BELOW the margin
     // floor (125 m/s < speed_min*(1+margin)) is under this model's
@@ -462,6 +468,64 @@ int main(int argc, char **argv)
     const auto r_lo = tp::generate(req_lo);
     expect(!r_lo.ok && r_lo.audit.disq_saturated > 0,
            "energy-deficient 32-deg climb honestly refused (stall gate)");
+  }
+
+  if (run("acc_preserve")) {
+    // A commanded, MODEL-FLYABLE nonzero start acceleration (ballistic
+    // along-track deceleration at the 32-deg climb: thrust ~ drag, CL
+    // ~ 0.86) must be preserved EXACTLY by the start bridge.
+    auto req = makeRequest(baseParams());
+    const double g32 = 32.0 * M_PI / 180.0;
+    // -4.0 along track: thrust ~ 2.7 kN, CL ~ 0.86 — comfortably inside
+    // the envelope, and close enough to the model's own start acc
+    // (~ -3.7 tangential) that the bridge's quintic interior overshoot
+    // stays under the thrust ceiling (a -5.23 command overshot to
+    // 3.22 kN > 3.2 kN and was HONESTLY refused — that boundary lives in
+    // gate_startacc's unflyable case).
+    req.initial_acc_mps2 =
+        -4.0 * Eigen::Vector3d(std::cos(g32), 0.0, std::sin(g32));
+    const auto r = tp::generate(req);
+    expect(r.ok, "flyable commanded start acceleration accepted");
+    if (r.ok) {
+      poly_traj::Trajectory t0 = r.traj;
+      const Eigen::Vector3d a0_u(
+          req.initial_acc_mps2.x() / req.limits.unit_xy_m,
+          req.initial_acc_mps2.y() / req.limits.unit_xy_m,
+          req.initial_acc_mps2.z() / req.limits.unit_z_m);
+      const double a0_err = (t0.getAcc(0.0) - a0_u).norm();
+      std::cout << "acc_preserve: |acc(0) - a0| = " << a0_err
+                << " u/s^2, mismatch audit = "
+                << r.audit.start_acc_mismatch_mps2 << " m/s^2, winner "
+                << r.audit.winner_primitive_id << "\n";
+      // 1e-7 u/s^2 = 1e-5 m/s^2: the inverse-dynamics command closure
+      // reproduces the commanded acc to ~1e-7 m/s^2 (relative 3e-8) —
+      // machine-noise scale, no physical meaning at any tighter bound.
+      expect(a0_err < 1e-7,
+             "trajectory leaves with the COMMANDED acceleration exactly");
+      expect(r.audit.start_acc_mismatch_mps2 > 0.0,
+             "the absorbed model gap is measured and reported");
+    }
+  }
+
+  if (run("gate_startacc")) {
+    // A commanded initial acceleration the model cannot fly (50 g) must
+    // be REFUSED — the start bridge carries it into the inverse-dynamics
+    // envelope, which says no. Never silently replaced.
+    auto req = makeRequest(baseParams());
+    req.initial_acc_mps2 = Eigen::Vector3d(0.0, 0.0, 500.0);
+    const auto r = tp::generate(req);
+    expect(!r.ok, "unflyable commanded start acceleration refused");
+  }
+
+  if (run("gate_overspeed")) {
+    // Model ceiling below the start speed: the per-step limit gate (not
+    // the saturation flags — speed is not a command) disqualifies.
+    vd::Parameters p = baseParams();
+    p.speed_max_mps = 150.0;  // start is 165 m/s
+    auto req = makeRequest(p);
+    const auto r = tp::generate(req);
+    expect(!r.ok && r.audit.disq_limits > 0,
+           "speed above the model ceiling dies at the limit gate");
   }
 
   if (run("determinism")) {

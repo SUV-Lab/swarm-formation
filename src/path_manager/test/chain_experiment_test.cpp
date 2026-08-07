@@ -608,6 +608,10 @@ int main(int argc, char **argv)
     expect((vel0 - v32).norm() < 1e-6,
            "stored flight leaves with the commanded velocity (no re-aim, "
            "no floor — the head guards held)");
+    // start_acc here is 0 = the UNSPECIFIED sentinel (model-implied
+    // start acc, mismatch reported in the audit log). The exact-preserve
+    // contract for a commanded nonzero acc is pinned at component level
+    // (acc_preserve), the refusal of an unflyable one right below.
     // The flight must end at the resolved goal (the chain finished the
     // mission the transition opened).
     const double T = probe.getTotalDuration();
@@ -615,6 +619,16 @@ int main(int argc, char **argv)
               << " s, end (" << probe.getPos(T).transpose() << ")\n";
     expect((probe.getPos(T).head<2>() - goal[0].head<2>()).norm() < 12.0,
            "flight reaches the goal area (terminal phase may extend)");
+
+    // A commanded acceleration the model cannot fly (50 g class) with
+    // the transition ENABLED must still fail — the initaccfail
+    // protection is not allowed to be laundered through the new path.
+    const path_manager::PlanResult racc =
+        chain.plan(start_pos, v32, Eigen::Vector3d(0.0, 0.0, 5.0), goal,
+                   false, {}, true);
+    expect(!racc.hasTrajectory(),
+           "unflyable commanded start acceleration FAILED with the "
+           "transition enabled (no laundering)");
 
     // UNSUPPORTED classification: above the model ceiling — immediate
     // FAILED, nothing downstream runs (over-ceiling is a physics claim

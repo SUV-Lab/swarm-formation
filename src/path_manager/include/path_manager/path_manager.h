@@ -329,6 +329,13 @@ namespace path_manager
     // mean two different things at the two ends of the mission. Dynamics
     // model off = no region to violate = always empty.
     std::string stateEnvelopeProblem(const Eigen::Vector3d &vel_units) const;
+    // [S13] The ONE effective handoff speed ceiling (SI): explicit
+    // planning/handoff_max_vel_mps, else the planning cap
+    // optimization/max_vel (scaled), else the model maximum — always
+    // min'd with the model maximum. The envelope validator and the
+    // transition coordinator MUST read the same number, or the generator
+    // accepts end speeds the judge refuses (review find).
+    double effectiveHandoffMaxMps() const;
     // [ENVELOPE] Full-PVA judgment for a COMMANDED initial state (review
     // find: the velocity check alone certified states whose commanded
     // acceleration no thrust/load budget can deliver). Velocity region

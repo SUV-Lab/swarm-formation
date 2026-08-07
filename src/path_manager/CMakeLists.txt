@@ -213,7 +213,7 @@ install(DIRECTORY config launch
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
-set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner mmp_mission_msgs mmp_traj_msgs visualization_msgs grid_map_msgs)
+set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner mmp_mission_msgs mmp_traj_msgs mmp_vehicle_dynamics visualization_msgs grid_map_msgs)
 ament_export_dependencies(${EXPORT_DEPS})
 
 ament_package()

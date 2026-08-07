@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <cstdlib>
 #include <limits>
 
@@ -38,7 +39,20 @@ constexpr double kSteerTgoS = 30.0;  // LOS capture-steer inside this t_go
                                      // (600 m of vertical offset at 15 s
                                      // left 69 m unconverged at the window)
 constexpr double kTgoMinS = 1.5;     // shortest blend the envelope can fly
-constexpr double kLeadS = 4.0;       // pursuit lead: steer onto the entry
+constexpr double kLeadS = 4.0;
+// Commanded-start ramp: a NONZERO commanded acceleration is honored by
+// COMMAND-SPACE interpolation — inverse dynamics gives the command set
+// u0 that produces a0 exactly, and the first kStartBlendS seconds ramp
+// u0 -> the primitive law. The propagation itself then LEAVES with the
+// commanded acceleration, every step passes the ordinary gates, and no
+// posthoc polynomial bridge exists to overshoot the thrust ceiling
+// (a position-level bridge to the full-throttle record demanded ~3.21 kN
+// > 3.2 kN for ANY bridge duration: a start decelerating harder than the
+// record must out-accelerate full throttle to catch it).
+constexpr double kStartBlendS = 4.0;  // start-seam bridge: the trajectory
+                                      // LEAVES with the commanded PVA and
+                                      // reaches a model state over this
+                                      // window — or the envelope refuses       // pursuit lead: steer onto the entry
                                      // LINE this many seconds ahead, so
                                      // lateral offset decays EARLY (chasing
                                      // the point itself keeps lateral
@@ -266,6 +280,8 @@ struct CandidateOutcome {
   bool reached_adapter{false};
   std::vector<Sample> samples;   // at dt_s spacing, index 0 = start
   double dwell_s{0.0};
+  double risk_max{0.0};          // search-side exposure (this candidate)
+  double risk_integral{0.0};
 };
 
 }  // namespace
@@ -334,6 +350,23 @@ TransitionResult generate(const TransitionRequest &req)
 
   bool zone_stale_abort = false;
   int primitive_id = -1;
+
+  // Commanded-acc handling (ZERO = unspecified sentinel, see the header).
+  const bool acc_specified = req.initial_acc_mps2.norm() > 1e-9;
+  double u0_cl = 0.0, u0_thrust = 0.0, u0_bank = 0.0;
+  if (acc_specified) {
+    const auto ev0 = mmp_vehicle_dynamics::evaluateInverseDynamics(
+        dyn, s0.position_m, mmp_vehicle_dynamics::pointMassVelocity(s0),
+        req.initial_acc_mps2);
+    if (!ev0.valid) {
+      out.reason =
+          "commanded start acceleration not representable by the model";
+      return out;
+    }
+    u0_cl = ev0.signed_lift_coefficient;
+    u0_thrust = ev0.thrust_required_n;
+    u0_bank = ev0.bank_angle_rad;
+  }
   if (dbg)
     std::fprintf(stderr,
                  "[TP-TRACE] preconditions ok: %zu entries, dt=%.3f "
@@ -399,8 +432,8 @@ TransitionResult generate(const TransitionRequest &req)
           if (disq) break;
           if (req.zone_exposure_raw) {
             const double e = req.zone_exposure_raw(s.position_m);
-            audit.risk_max = std::max(audit.risk_max, e);
-            audit.risk_integral += e * lim.dt_s;
+            co.risk_max = std::max(co.risk_max, e);
+            co.risk_integral += e * lim.dt_s;
           }
 
           // --- termination: overlap-region dwell + capture ------------
@@ -464,10 +497,28 @@ TransitionResult generate(const TransitionRequest &req)
                 dyn.flight_path_angle_max_rad * (1.0 - kCmdInteriorFrac));
             gamma_cmd = g_cmd;
           }
-          const Commands cmd =
+          Commands cmd =
               synthesizeCommands(dyn, s, aim, g_cmd, bank_level, lim);
           gamma_cmd = cmd.gamma_cmd_applied;  // anti-windup: the ramp
           // continues from what the model could actually follow
+          if (acc_specified && k * lim.dt_s < kStartBlendS) {
+            // Command-space ramp from the inverse-dynamics start set to
+            // the law; the blended commands face the SAME interior
+            // discipline — an unflyable commanded acc dies here at k=0.
+            const double w = (k * lim.dt_s) / kStartBlendS;
+            cmd.cl = (1.0 - w) * u0_cl + w * cmd.cl;
+            cmd.thrust_n = (1.0 - w) * u0_thrust + w * cmd.thrust_n;
+            cmd.bank_rad = (1.0 - w) * u0_bank + w * cmd.bank_rad;
+            const double cl_lo_b = std::max(0.0, dyn.lift_coefficient_min);
+            if (cmd.cl < cl_lo_b - 1e-12 ||
+                cmd.cl > dyn.lift_coefficient_max * (1.0 - kCmdInteriorFrac) ||
+                cmd.thrust_n < dyn.thrust_min_n - 1e-12 ||
+                cmd.thrust_n >
+                    dyn.thrust_max_n * (1.0 - kCmdInteriorFrac) ||
+                std::abs(cmd.bank_rad) >
+                    dyn.bank_angle_max_rad * (1.0 - kCmdInteriorFrac))
+              cmd.demand_interior = false;
+          }
           if (!cmd.demand_interior) {
             if (std::getenv("TP_DEBUG"))
               std::fprintf(stderr,
@@ -493,6 +544,24 @@ TransitionResult generate(const TransitionRequest &req)
           }
           const auto closed = mmp_vehicle_dynamics::pointMassForces(
               dyn, s, cmd.cl, cmd.thrust_n, cmd.bank_rad);
+          // Transition-model limits the saturation flags cannot see:
+          // speed band, dynamic pressure, load factor — the SAME
+          // Parameters the EOM closes over, enforced per step. (The
+          // gamma range stays the pre-guard cone: the section-8
+          // transition cone is not a confirmed number yet.)
+          {
+            const double rho_s =
+                mmp_vehicle_dynamics::airDensity(dyn, s.position_m.z());
+            const double q_s = 0.5 * rho_s * s.speed_mps * s.speed_mps;
+            const double n_s = std::abs(closed.inputs.lift_n) /
+                               (dyn.mass_kg * dyn.gravity_mps2);
+            if (s.speed_mps > dyn.speed_max_mps ||
+                s.speed_mps < dyn.model_activation_speed_mps ||
+                q_s > dyn.dynamic_pressure_max_pa ||
+                n_s > dyn.load_factor_max) {
+              ++audit.disq_limits; disq = true; break;
+            }
+          }
           co.samples.push_back({s, pointMassAcceleration(dyn, s, closed.inputs)});
           s = next;
         }
@@ -502,6 +571,8 @@ TransitionResult generate(const TransitionRequest &req)
                        "captured=%d samples=%zu\n",
                        primitive_id, disq ? 1 : 0, co.captured ? 1 : 0,
                        co.samples.size());
+        audit.search_risk_max = std::max(audit.search_risk_max, co.risk_max);
+        audit.search_risk_integral += co.risk_integral;
         if (zone_stale_abort) break;
         if (disq || !co.captured) continue;
         // Final captured state joins the record.
@@ -533,11 +604,25 @@ TransitionResult generate(const TransitionRequest &req)
         const auto toU = [&](const Eigen::Vector3d &p) {
           return Eigen::Vector3d(p.x() / ux, p.y() / ux, p.z() / uz);
         };
+        const auto toUvel = [&](const Eigen::Vector3d &v) {
+          return Eigen::Vector3d(v.x() / ux, v.y() / ux, v.z() / uz);
+        };
         poly_traj::Trajectory traj;
         const int kstep = std::max(
             1, static_cast<int>(std::round(lim.knot_dt_s / lim.dt_s)));
         const int last = static_cast<int>(co.samples.size()) - 1;
         bool adapter_ok = last >= 1;
+        // Start seam: with the command-space ramp, samples[0].acc IS the
+        // commanded acceleration when one was specified (ZERO stays the
+        // unspecified sentinel — model-implied start, mismatch reported).
+        const double acc_mismatch =
+            acc_specified
+                ? (req.initial_acc_mps2 - co.samples.front().acc).norm()
+                : co.samples.front().acc.norm() > 0.0
+                      ? (req.initial_acc_mps2 - co.samples.front().acc)
+                            .norm()
+                      : 0.0;
+        const double start_blend_T = 0.0;  // no posthoc bridge piece
         double max_pe = 0.0, max_ve = 0.0, max_ae = 0.0;
         for (int i0 = 0; adapter_ok && i0 < last; i0 += kstep) {
           const int i1 = std::min(last, i0 + kstep);
@@ -615,50 +700,94 @@ TransitionResult generate(const TransitionRequest &req)
             Eigen::Vector3d(end_vel.x() / ux, end_vel.y() / ux,
                             end_vel.z() / uz),
             Eigen::Vector3d::Zero(), blend_T);
-        poly_traj::Piece blend(blend_T, blend_cm);
-        // The blend has no RK4 truth — it is re-gated sample-by-sample
-        // AND held to the model's own envelope via inverse dynamics.
-        bool blend_ok = true;
-        for (double t = 0.0; blend_ok && t <= blend_T; t += lim.dt_s) {
-          const Eigen::Vector3d pu = blend.getPos(t);
-          const Eigen::Vector3d vu = blend.getVel(t);
-          const Eigen::Vector3d au = blend.getAcc(t);
+        traj.emplace_back(blend_T, blend_cm);
+
+        // ==== full-trajectory fail-closed re-verification ===========
+        // The COMPLETE polynomial (start bridge + Hermite pieces +
+        // capture blend) is what actually flies — re-gate IT, not just
+        // the RK4 samples it was fitted to. Everywhere: finiteness,
+        // terrain AGL (locally refined where the margin is thin), zone
+        // policy, speed band and dynamic pressure. Inside the two blend
+        // windows (which have no RK4 truth): additionally the model's
+        // own inverse dynamics — load factor, CL, thrust range, bank —
+        // WITHOUT the cruise flight-path cone (the transition exists to
+        // recover from outside it; its own cone is a section-8 number).
+        // For the Hermite interior the acceleration-level limits are
+        // carried by the per-step gates + the error budget above.
+        const double total_T = traj.getTotalDuration();
+        bool final_ok = true;
+        double w_risk_max = 0.0, w_risk_int = 0.0;
+        std::function<bool(double, bool)> sampleOk;
+        sampleOk = [&](double t, bool refine) -> bool {
+          const Eigen::Vector3d pu = traj.getPos(t);
+          const Eigen::Vector3d vu = traj.getVel(t);
+          const Eigen::Vector3d au = traj.getAcc(t);
           const Eigen::Vector3d p(pu.x() * ux, pu.y() * ux, pu.z() * uz);
           const Eigen::Vector3d v(vu.x() * ux, vu.y() * ux, vu.z() * uz);
           const Eigen::Vector3d a(au.x() * ux, au.y() * ux, au.z() * uz);
-          if (!p.allFinite() || !v.allFinite() || !a.allFinite()) {
-            blend_ok = false; break;
-          }
+          if (!p.allFinite() || !v.allFinite() || !a.allFinite())
+            return false;
           if (req.terrain_z) {
             double elev = 0.0;
             if (!req.terrain_z(p.x(), p.y(), &elev)) elev = 0.0;
-            if (p.z() - elev < lim.min_agl_m) { blend_ok = false; break; }
+            const double margin = p.z() - elev - lim.min_agl_m;
+            if (margin < 0.0) return false;
+            if (refine && margin < 2.0 * lim.adapter_pos_tol_m) {
+              // Thin AGL margin: refine this neighbourhood at dt/16.
+              for (double tt = std::max(0.0, t - lim.dt_s);
+                   tt <= std::min(total_T, t + lim.dt_s);
+                   tt += lim.dt_s / 16.0)
+                if (!sampleOk(tt, false)) return false;
+            }
           }
           switch (req.zone_probe(p)) {
             case ZoneProbe::CLEAR: break;
-            case ZoneProbe::CONTACT_HARD: blend_ok = false; break;
+            case ZoneProbe::CONTACT_HARD: return false;
             case ZoneProbe::STALE_OR_INVALID:
-              zone_stale_abort = true; blend_ok = false; break;
+              zone_stale_abort = true; return false;
           }
-          if (!blend_ok) break;
-          const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
-              dyn, p, v, a);
-          if (!ev.valid || !mmp_vehicle_dynamics::isWithinEnvelope(dyn, ev)) {
-            if (std::getenv("TP_DEBUG"))
-              std::fprintf(stderr,
-                           "[TPDBG-BLEND] t=%.2f/%.2f valid=%d V=%.2f "
-                           "q=%.0f cl=%.3f nz=%.2f th=%.0f mu=%.3f "
-                           "gam=%.3f\n",
-                           t, blend_T, ev.valid ? 1 : 0, ev.speed_mps,
-                           ev.dynamic_pressure_pa, ev.lift_coefficient,
-                           ev.load_factor, ev.thrust_required_n,
-                           ev.bank_angle_rad, ev.flight_path_angle_rad);
-            blend_ok = false; break;
+          const double V = v.norm();
+          if (V > dyn.speed_max_mps + 1e-9 ||
+              V < dyn.model_activation_speed_mps - 1e-9)
+            return false;
+          const double rho_t =
+              mmp_vehicle_dynamics::airDensity(dyn, p.z());
+          if (0.5 * rho_t * V * V > dyn.dynamic_pressure_max_pa)
+            return false;
+          const bool in_blend =
+              t <= start_blend_T + 1e-9 || t >= total_T - blend_T - 1e-9;
+          if (in_blend) {
+            const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
+                dyn, p, v, a);
+            if (!ev.valid || ev.load_factor > dyn.load_factor_max + 1e-9 ||
+                ev.lift_coefficient > dyn.lift_coefficient_max + 1e-9 ||
+                ev.thrust_required_n > dyn.thrust_max_n + 1e-6 ||
+                ev.thrust_required_n < dyn.thrust_min_n - 1e-6 ||
+                std::abs(ev.bank_angle_rad) >
+                    dyn.bank_angle_max_rad + 1e-9) {
+              if (std::getenv("TP_DEBUG"))
+                std::fprintf(stderr,
+                             "[TPDBG-BLEND] t=%.2f/%.2f valid=%d V=%.2f "
+                             "q=%.0f cl=%.3f nz=%.2f th=%.0f mu=%.3f\n",
+                             t, total_T, ev.valid ? 1 : 0, ev.speed_mps,
+                             ev.dynamic_pressure_pa, ev.lift_coefficient,
+                             ev.load_factor, ev.thrust_required_n,
+                             ev.bank_angle_rad);
+              return false;
+            }
           }
-        }
+          if (refine && req.zone_exposure_raw) {
+            const double e = req.zone_exposure_raw(p);
+            w_risk_max = std::max(w_risk_max, e);
+            w_risk_int += e * lim.dt_s;
+          }
+          return true;
+        };
+        for (double t = 0.0; final_ok && t <= total_T; t += lim.dt_s)
+          final_ok = sampleOk(t, true);
+        if (final_ok) final_ok = sampleOk(total_T, false);
         if (zone_stale_abort) break;
-        if (!blend_ok) { ++audit.disq_adapter; continue; }
-        traj.emplace_back(blend_T, blend_cm);
+        if (!final_ok) { ++audit.disq_adapter; continue; }
 
         // ==== winner ================================================
         out.ok = true;
@@ -667,13 +796,14 @@ TransitionResult generate(const TransitionRequest &req)
         out.end_vel_mps = end_vel;
         out.end_acc_mps2 = end_acc;
         out.route_start_s = entry.route_start_s;
-        out.duration_s = traj.getTotalDuration();
+        out.duration_s = total_T;
         audit.winner_primitive_id = primitive_id;
         audit.dwell_achieved_s = co.dwell_s;
-        // Start-seam mismatch (commanded initial acc vs model-implied) —
-        // measured every run, never gated in v1 (§8-pending cap).
-        audit.seam_jerk_start =
-            (req.initial_acc_mps2 - co.samples.front().acc).norm();
+        // WINNER exposure statistics come from the final polynomial (the
+        // flight that is actually handed off), not the search.
+        audit.risk_max = w_risk_max;
+        audit.risk_integral = w_risk_int;
+        audit.start_acc_mismatch_mps2 = acc_mismatch;
         out.reason.clear();
         return out;
       }

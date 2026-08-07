@@ -67,7 +67,6 @@ struct EntryCandidate {
   double route_start_s{0.0};   // arc on the committed route (planner units)
   Eigen::Vector3d pos_m{0.0, 0.0, 0.0};      // exact route point (SI)
   Eigen::Vector3d tangent{1.0, 0.0, 0.0};    // unit route tangent
-  double cap_z_m{0.0};         // per-vertex altitude ceiling (SI)
 };
 
 // Zone judgment through the coordinator's snapshot closure. STALE/INVALID
@@ -77,6 +76,10 @@ enum class ZoneProbe { CLEAR, CONTACT_HARD, STALE_OR_INVALID };
 struct TransitionRequest {
   Eigen::Vector3d initial_pos_m{0.0, 0.0, 0.0};
   Eigen::Vector3d initial_vel_mps{0.0, 0.0, 0.0};
+  // ZERO = unspecified (model-implied start acc, mismatch reported in
+  // the audit). NONZERO = commanded: the returned trajectory leaves with
+  // it EXACTLY (a C2 start bridge absorbs the model gap) or generation
+  // refuses — a commanded start state is never silently rewritten.
   Eigen::Vector3d initial_acc_mps2{0.0, 0.0, 0.0};
   std::vector<EntryCandidate> entry_candidates;
   TransitionLimits limits;
@@ -103,17 +106,29 @@ struct TransitionAudit {
   int disq_saturated{0};
   int disq_terrain{0};
   int disq_zone{0};
+  // Transition-model limits DURING propagation: speed band, dynamic
+  // pressure, load factor — the same Parameters the EOM closes over,
+  // enforced per step (saturation flags alone see only CL/thrust/bank).
+  int disq_limits{0};
   int disq_timeout{0};
   int disq_end_pva{0};
   int disq_adapter{0};
   // zoneExposureRaw statistics — MEASUREMENT ONLY, never selection.
+  // risk_* describe the WINNER trajectory; search_risk_* accumulate over
+  // the whole enumeration (disqualified candidates included) — mixing
+  // them made the winner's exposure unreadable (review find).
   double risk_max{0.0};
   double risk_integral{0.0};
+  double search_risk_max{0.0};
+  double search_risk_integral{0.0};
   double adapter_max_pos_err_m{0.0};
   double adapter_max_vel_err_mps{0.0};
   double adapter_max_acc_err_mps2{0.0};
   double dwell_achieved_s{0.0};
-  double seam_jerk_start{0.0};   // measured, logged, NOT gated (§8 pending)
+  // |commanded a0 - model-implied a0| (m/s^2). With the start blend the
+  // returned trajectory LEAVES with the commanded acceleration exactly;
+  // this records how much the blend had to absorb.
+  double start_acc_mismatch_mps2{0.0};
   int winner_primitive_id{-1};   // enumeration index — reproducibility pin
 };
 

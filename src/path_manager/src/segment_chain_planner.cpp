@@ -1529,7 +1529,6 @@ PlanResult SegmentChainPlanner::planTransitionMission(
     Eigen::Vector3d d_si(d_u.x() * um, d_u.y() * um, d_u.z() * uz);
     if (d_si.norm() < 1e-9) d_si = Eigen::Vector3d::UnitX();
     e.tangent = d_si.normalized();
-    e.cap_z_m = cap[static_cast<size_t>(idx)] * uz;
     cands.push_back(e);
   }
 
@@ -1553,13 +1552,10 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   req.limits.min_agl_m = pm_->minGoalAgl() * uz;
   req.limits.end_speed_min_mps =
       dyn->speed_min_mps * (1.0 + dyn->constraint_margin);
-  double end_max = dyn->speed_max_mps;
-  if (node_->has_parameter("planning/handoff_max_vel_mps")) {
-    const double hc =
-        node_->get_parameter("planning/handoff_max_vel_mps").as_double();
-    if (hc > 0.0) end_max = std::min(end_max, hc);
-  }
-  req.limits.end_speed_max_mps = end_max;
+  // The SAME ceiling the envelope validator judges by — computed in one
+  // place, or the generator captures end speeds the judge refuses.
+  req.limits.end_speed_max_mps =
+      std::min(dyn->speed_max_mps, pm_->effectiveHandoffMaxMps());
   const auto toU = [um, uz](const Eigen::Vector3d &p_m) {
     return Eigen::Vector3d(p_m.x() / um, p_m.y() / um, p_m.z() / uz);
   };
@@ -1617,7 +1613,8 @@ PlanResult SegmentChainPlanner::planTransitionMission(
       "[S13] transition audit: enumerated %d, winner %d | disq fin %d "
       "pre %d rep %d sat %d ter %d zone %d time %d pva %d adapter %d | "
       "dwell %.2f s, risk max %.3g int %.3g, adapter err p/v/a "
-      "%.3g/%.3g/%.3g, start-seam %.3g m/s^2",
+      "%.3g/%.3g/%.3g, start-acc mismatch %.3g m/s^2 (absorbed by the "
+      "start bridge)",
       tr.audit.candidates_enumerated, tr.audit.winner_primitive_id,
       tr.audit.disq_finiteness, tr.audit.disq_preguard,
       tr.audit.disq_representable, tr.audit.disq_saturated,
@@ -1625,7 +1622,8 @@ PlanResult SegmentChainPlanner::planTransitionMission(
       tr.audit.disq_end_pva, tr.audit.disq_adapter,
       tr.audit.dwell_achieved_s, tr.audit.risk_max, tr.audit.risk_integral,
       tr.audit.adapter_max_pos_err_m, tr.audit.adapter_max_vel_err_mps,
-      tr.audit.adapter_max_acc_err_mps2, tr.audit.seam_jerk_start);
+      tr.audit.adapter_max_acc_err_mps2,
+      tr.audit.start_acc_mismatch_mps2);
   if (!tr.ok)
     return fail(tr.any_candidate_reached_adapter
                     ? PlanReason::TRANSITION_ADAPTER_UNSOUND
