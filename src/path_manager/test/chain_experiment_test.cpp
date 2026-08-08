@@ -274,7 +274,9 @@ int main(int argc, char **argv)
     // zonepass0: zones + 3-pass policy OFF -> INVALID snapshot fail-closed.
     if (v == "zonepass0") { with_route = true; with_zonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
-    if (v == "transition") { with_route = true; with_transition = true; }
+    if (v == "transition") {
+      with_route = true; with_phase = true; with_transition = true;
+    }
     if (v == "transitionauto") {
       with_route = true; with_phase = true; with_transition = true;
       with_transitionauto = true;
@@ -357,10 +359,12 @@ int main(int argc, char **argv)
   if (with_auto) force("chain/auto_pieces_per_segment", 6);
   if (with_transitionauto) {
     force("chain/segments", 0);  // auto-N
-    // The harness corridor is nearly straight, so the committed route
-    // thins to few vertices — a tiny per-segment target makes auto-N
-    // land >= 4 (this variant pins the OPTION reaching the transition
-    // path, not a performance operating point).
+    // resolveAutoSegments floors the target at 5, and the straight
+    // corridor's sub-route thins to ~10 pieces — the HONEST auto result
+    // here is N=2. That is exactly what this variant pins: N=2 applied
+    // means the option reached the transition path (the pre-fix code
+    // kept the constructor's fixed 3). N>=4 sizing is pinned by the r5
+    // live smoke's 276-piece route.
     force("chain/auto_pieces_per_segment", 2);
   }
   // Forced BOTH ways: the live yaml ships chain/phase/enable true, and a
@@ -690,6 +694,22 @@ int main(int argc, char **argv)
               << " s, end (" << probe.getPos(T).transpose() << ")\n";
     expect((probe.getPos(T).head<2>() - goal[0].head<2>()).norm() < 12.0,
            "flight reaches the goal area (terminal phase may extend)");
+    // Fixed N=3 + phase mode: the FULL phase order behind the transition
+    // is deliverable on the straight corridor (no lateral-capture
+    // dependence) — assert it explicitly.
+    {
+      using PK = path_manager::SegmentChainPlanner::PhaseKind;
+      const auto &spans = chain.lastPhaseSpans();
+      std::vector<std::string> names;
+      for (const auto &sp : spans) names.push_back(sp.name);
+      std::string joined;
+      for (const auto &nm : names) joined += nm + " ";
+      std::cout << "transition: spans = " << joined << "\n";
+      expect(spans.size() >= 4 && spans[0].kind == PK::TRANSITION &&
+                 names[1] == "departure" && names[2] == "cruise-1" &&
+                 names[3] == "arrival",
+             "span order TRANSITION -> departure -> cruise-1 -> arrival");
+    }
 
     // A commanded acceleration the model cannot fly (50 g class) with
     // the transition ENABLED must still fail — the initaccfail

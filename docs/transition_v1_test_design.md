@@ -1,6 +1,8 @@
 # 계약 2 v1 테스트 설계 (ADR-0002 벤치마크 기준)
 
-- 상태: 설계 — 리뷰 후 구현. §13 구현은 이 설계와 ADR-0002 리뷰 뒤 시작.
+- 상태: **구현 반영** (2026-08-08). §1의 게이트는 transition_phase v1과
+  하니스(transition_experiment_test + 체인 transition/transitionauto
+  변형)로 구현·고정됨; §8 수치 확정만 남음.
 - 원칙: 검사마다 **무엇을 보증하고 무엇을 보증하지 않는지**를 이름에
   담는다. 같은 공식끼리의 일치는 consistency(당연한 일치의 확인)지
   검증(validation)이 아니다.

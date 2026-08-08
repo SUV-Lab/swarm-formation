@@ -64,8 +64,10 @@ UNSUPPORTED           전환 영역까지도 밖
   → 즉시 FAILED(INITIAL_MODE_UNSUPPORTED)
 ```
 
-- 계약 1의 현재 동작은 "TRANSITION_REQUIRED 미구현 → UNSUPPORTED와 동일
-  취급"이다. 계약 2가 켜지면 가운데 분기만 새로 열린다.
+- 가운데 분기는 **구현 완료** (2026-08-08, `classifyStartState` +
+  `planTransitionMission`): `transition/enable=true`일 때 열리고, 기본
+  false에서는 계약 1의 원래 결과(INITIAL_MODE_UNSUPPORTED, "(transition
+  disabled)" 사유 접미)가 그대로 유지된다.
 
 ## 3. 파이프라인 (수렴 구조)
 
