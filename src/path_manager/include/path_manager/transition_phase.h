@@ -164,16 +164,18 @@ TransitionResult generate(const TransitionRequest &req);
 // thin): finiteness, terrain AGL, zone policy, speed band, dynamic
 // pressure, and the model's inverse dynamics (load factor, CL, thrust
 // range, bank, representability — the cruise flight-path cone excluded:
-// the transition exists to recover from outside it). acc_slack_mps2 is
-// the candidate's MEASURED polynomial-fit acceleration error: pieces
-// with RK4 truth are held to limit + slack (what the fit can prove),
-// the tail blend (no truth) to the bare limit. Exposed for the harness
-// and reused by generate() on every winner.
+// the transition exists to recover from outside it). BARE limits, zero
+// slack: the polynomial IS the executed trajectory, so interpolation
+// error is never grounds to widen a physical limit (review find — the
+// earlier slack model even added a dimensionless load slack to a rad
+// bank bound). Fit error belongs to the adapter QUALITY gate; a
+// polynomial that fails here is re-expressed on finer knots or the
+// candidate is refused. Exposed for the harness and reused by
+// generate() on every winner.
 enum class TrajectoryVerdict { OK, FAIL, STALE };
 TrajectoryVerdict validateTransitionTrajectory(
     poly_traj::Trajectory traj, const TransitionRequest &req,
-    double tail_blend_T, double acc_slack_mps2, double *risk_max,
-    double *risk_integral);
+    double *risk_max, double *risk_integral);
 
 // Exposed for the harness (convergence/analytic variants): a single RK4
 // step of the point-mass EOM under held commands, forces re-evaluated at

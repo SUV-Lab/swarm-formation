@@ -160,9 +160,14 @@ public:
   // cone). Over the model ceiling is UNSUPPORTED: the model is undefined
   // there and claiming a transition would be a physics claim v1 forbids.
   enum class StartRegime { CRUISE_VALID, TRANSITION_REQUIRED, UNSUPPORTED };
+  // acc_prescribed mirrors the message bool: an UNPRESCRIBED internal
+  // acc value (the FSM's 0) is never classification evidence — judgment
+  // then uses the velocity state alone (review find: internal a=0 at an
+  // in-cone climb reads as an unflyable hold and flipped the regime).
   StartRegime classifyStartState(const Eigen::Vector3d &pos_u,
                                  const Eigen::Vector3d &vel_u,
                                  const Eigen::Vector3d &acc_u,
+                                 bool acc_prescribed,
                                  std::string *why) const;
   // [S13] Coordinator-owned: while true, every single-shot fallback inside
   // the route mode returns FAILED instead of re-planning from the mission

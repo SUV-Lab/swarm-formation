@@ -64,6 +64,12 @@ constexpr double kSpeedTargetFrac = 1.02;    // hold V_target just above floor
 // candidates prove strict interior margins, and the EOM's saturation
 // flags become pure implementation-drift tripwires.
 constexpr double kCmdInteriorFrac = 1e-3;
+// The law's idle command sits 2% of the thrust range ABOVE thrust_min —
+// symmetric with the margin-backed top (t_hi = max*(1-margin)). Riding
+// the exact floor left the polynomial's fit noise (~2 N) crossing the
+// bare lower bound at any knot density: an ACTIVE boundary admits no
+// interior-margin proof (review round: zero-slack validation).
+constexpr double kIdleMarginFrac = 0.02;
 // Pre-guard bounds AHEAD of the EOM's silent guards: disqualification must
 // provably precede the kMinSpeedForRates / kMinCosGamma distortion, so an
 // accepted trajectory never flew a silently-guarded derivative.
@@ -189,18 +195,21 @@ Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
   const double v_lo = std::max(
       lim.end_speed_min_mps * kSpeedTargetFrac, 1.1 * stall);
   const double v_hi = lim.end_speed_max_mps * 0.98;
+  const double t_lo =
+      dyn.thrust_min_n +
+      kIdleMarginFrac * (dyn.thrust_max_n - dyn.thrust_min_n);
   double thrust;
   if (s.speed_mps < v_lo)
     thrust = t_hi;
   else if (s.speed_mps > v_hi)
-    thrust = dyn.thrust_min_n;
+    thrust = t_lo;
   else
-    // Hold speed on the slope, floored at idle: a shallow descent whose
-    // drag+gravity balance sits below thrust_min is flown at idle (a LAW
-    // decision — the speed-window gates judge any resulting drift), and
-    // min(t_hi, .) is the law choosing maximum available power.
+    // Hold speed on the slope, floored at the margined idle: a shallow
+    // descent whose drag+gravity balance sits below it is flown there (a
+    // LAW decision — the speed-window gates judge any resulting drift),
+    // and min(t_hi, .) is the law choosing maximum available power.
     thrust = std::max(
-        dyn.thrust_min_n,
+        t_lo,
         std::min(t_hi, drag_n + W * std::sin(s.flight_path_angle_rad)));
   if (thrust > dyn.thrust_max_n * (1.0 - kCmdInteriorFrac))
     c.demand_interior = false;
@@ -325,8 +334,7 @@ struct CandidateOutcome {
 
 TrajectoryVerdict validateTransitionTrajectory(
     poly_traj::Trajectory traj, const TransitionRequest &req,
-    double tail_blend_T, double acc_slack_mps2, double *risk_max,
-    double *risk_integral)
+    double *risk_max, double *risk_integral)
 {
   const TransitionLimits &lim = req.limits;
   const Parameters &dyn = lim.dyn;
@@ -373,40 +381,33 @@ TrajectoryVerdict validateTransitionTrajectory(
     const double rho_t = mmp_vehicle_dynamics::airDensity(dyn, p.z());
     const double q_t = 0.5 * rho_t * V * V;
     if (q_t > dyn.dynamic_pressure_max_pa) return false;
-    // Inverse dynamics EVERYWHERE (minus the cruise flight-path cone).
-    // Slack: acceleration-level quantities inherit the measured fit
-    // error against the RK4 truth; the tail blend has no truth and gets
-    // none. Position/velocity-level gates above carry no slack anywhere.
-    const bool in_tail_blend = t >= total_T - tail_blend_T - 1e-9;
-    const double slack_a = in_tail_blend ? 0.0 : acc_slack_mps2;
-    const double slack_n = slack_a / dyn.gravity_mps2;
-    const double slack_thrust = dyn.mass_kg * slack_a;
-    const double qs_t = std::max(1e-9, q_t * dyn.wing_area_m2);
-    const double slack_cl = dyn.mass_kg * slack_a / qs_t;
+    // Inverse dynamics EVERYWHERE (minus the cruise flight-path cone),
+    // at BARE limits: the polynomial is the executed trajectory, so fit
+    // error never widens a physical bound — a candidate whose curve
+    // cannot satisfy them is re-expressed on finer knots or refused.
     const auto ev =
         mmp_vehicle_dynamics::evaluateInverseDynamics(dyn, p, v, a);
     const bool bad =
-        !ev.valid || ev.load_factor > dyn.load_factor_max + slack_n ||
-        ev.lift_coefficient > dyn.lift_coefficient_max + slack_cl ||
-        ev.thrust_required_n > dyn.thrust_max_n + slack_thrust + 1e-6 ||
-        ev.thrust_required_n < dyn.thrust_min_n - slack_thrust - 1e-6 ||
-        std::abs(ev.bank_angle_rad) >
-            dyn.bank_angle_max_rad + slack_n + 1e-9;
+        !ev.valid || ev.load_factor > dyn.load_factor_max + 1e-9 ||
+        ev.lift_coefficient > dyn.lift_coefficient_max + 1e-9 ||
+        ev.thrust_required_n > dyn.thrust_max_n + 1e-6 ||
+        ev.thrust_required_n < dyn.thrust_min_n - 1e-6 ||
+        std::abs(ev.bank_angle_rad) > dyn.bank_angle_max_rad + 1e-9;
     if (bad) {
       if (std::getenv("TP_DEBUG"))
         std::fprintf(stderr,
                      "[TPDBG-VAL] t=%.2f/%.2f valid=%d V=%.2f q=%.0f "
-                     "cl=%.3f nz=%.2f th=%.0f mu=%.3f slack_a=%.3g\n",
+                     "cl=%.3f nz=%.2f th=%.0f mu=%.3f\n",
                      t, total_T, ev.valid ? 1 : 0, ev.speed_mps,
                      ev.dynamic_pressure_pa, ev.lift_coefficient,
                      ev.load_factor, ev.thrust_required_n,
-                     ev.bank_angle_rad, slack_a);
+                     ev.bank_angle_rad);
       return false;
     }
     // Thin dynamic margins: refine the neighbourhood too.
     if (refine &&
         (ev.load_factor > dyn.load_factor_max - 0.1 ||
-         ev.thrust_required_n > dyn.thrust_max_n - 2.0 * slack_thrust ||
+         ev.thrust_required_n > 0.98 * dyn.thrust_max_n ||
          q_t > 0.95 * dyn.dynamic_pressure_max_pa) &&
         !refineAround(t))
       return false;
@@ -759,71 +760,15 @@ TransitionResult generate(const TransitionRequest &req)
         const auto toUvel = [&](const Eigen::Vector3d &v) {
           return Eigen::Vector3d(v.x() / ux, v.y() / ux, v.z() / uz);
         };
-        poly_traj::Trajectory traj;
-        const int kstep = std::max(
-            1, static_cast<int>(std::round(lim.knot_dt_s / lim.dt_s)));
+        // The knot ladder: express on the configured knot spacing; if
+        // the BARE-limit validator rejects the curve, re-express on
+        // halved knots (fit error shrinks ~16x per halving for a
+        // quintic) and try again — never widen a physical limit to fit
+        // the curve. All levels failing = candidate refused.
         const int last = static_cast<int>(co.samples.size()) - 1;
-        bool adapter_ok = last >= 1;
-        double max_pe = 0.0, max_ve = 0.0, max_ae = 0.0;
-        for (int i0 = 0; adapter_ok && i0 < last; i0 += kstep) {
-          const int i1 = std::min(last, i0 + kstep);
-          const double T = (i1 - i0) * lim.dt_s;
-          if (T <= 0.0) break;
-          const Sample &a = co.samples[static_cast<size_t>(i0)];
-          const Sample &b = co.samples[static_cast<size_t>(i1)];
-          const Eigen::Vector3d va = mmp_vehicle_dynamics::pointMassVelocity(a.state);
-          const Eigen::Vector3d vb = mmp_vehicle_dynamics::pointMassVelocity(b.state);
-          const poly_traj::CoefficientMat cm = quinticHermite(
-              toU(a.state.position_m),
-              Eigen::Vector3d(va.x() / ux, va.y() / ux, va.z() / uz),
-              Eigen::Vector3d(a.acc.x() / ux, a.acc.y() / ux, a.acc.z() / uz),
-              toU(b.state.position_m),
-              Eigen::Vector3d(vb.x() / ux, vb.y() / ux, vb.z() / uz),
-              Eigen::Vector3d(b.acc.x() / ux, b.acc.y() / ux, b.acc.z() / uz),
-              T);
-          poly_traj::Piece piece(T, cm);
-          // Interior: poly vs the dense RK4 record between the knots.
-          for (int k = i0 + 1; k < i1; ++k) {
-            const double t = (k - i0) * lim.dt_s;
-            const Sample &m = co.samples[static_cast<size_t>(k)];
-            const Eigen::Vector3d pp = piece.getPos(t);
-            const Eigen::Vector3d pv = piece.getVel(t);
-            const Eigen::Vector3d pa = piece.getAcc(t);
-            const Eigen::Vector3d pe(
-                pp.x() * ux - m.state.position_m.x(),
-                pp.y() * ux - m.state.position_m.y(),
-                pp.z() * uz - m.state.position_m.z());
-            const Eigen::Vector3d vm = mmp_vehicle_dynamics::pointMassVelocity(m.state);
-            const Eigen::Vector3d ve(pv.x() * ux - vm.x(),
-                                     pv.y() * ux - vm.y(),
-                                     pv.z() * uz - vm.z());
-            const Eigen::Vector3d ae(pa.x() * ux - m.acc.x(),
-                                     pa.y() * ux - m.acc.y(),
-                                     pa.z() * uz - m.acc.z());
-            max_pe = std::max(max_pe, pe.norm());
-            max_ve = std::max(max_ve, ve.norm());
-            max_ae = std::max(max_ae, ae.norm());
-          }
-          traj.emplace_back(T, cm);
-        }
-        if (!adapter_ok || max_pe > lim.adapter_pos_tol_m ||
-            max_ve > lim.adapter_vel_tol_mps ||
-            max_ae > lim.adapter_acc_tol_mps2) {
-          ++audit.disq_adapter;
-          audit.adapter_max_pos_err_m =
-              std::max(audit.adapter_max_pos_err_m, max_pe);
-          continue;
-        }
-        audit.adapter_max_pos_err_m =
-            std::max(audit.adapter_max_pos_err_m, max_pe);
-        audit.adapter_max_vel_err_mps =
-            std::max(audit.adapter_max_vel_err_mps, max_ve);
-        audit.adapter_max_acc_err_mps2 =
-            std::max(audit.adapter_max_acc_err_mps2, max_ae);
-
-        // ==== capture blend: exact-touch piece to the entry state ====
         const Sample &cap = co.samples.back();
-        const Eigen::Vector3d cap_vel = mmp_vehicle_dynamics::pointMassVelocity(cap.state);
+        const Eigen::Vector3d cap_vel =
+            mmp_vehicle_dynamics::pointMassVelocity(cap.state);
         // Blend spans the along-track time-to-go at capture, so the
         // quintic's average speed IS the flight speed (no teleport).
         const double blend_T = std::min(
@@ -832,30 +777,80 @@ TransitionResult generate(const TransitionRequest &req)
                      kTgoMinS),
             lim.blend_t_max_s);
         const poly_traj::CoefficientMat blend_cm = quinticHermite(
-            toU(cap.state.position_m),
-            Eigen::Vector3d(cap_vel.x() / ux, cap_vel.y() / ux,
-                            cap_vel.z() / uz),
-            Eigen::Vector3d(cap.acc.x() / ux, cap.acc.y() / ux,
-                            cap.acc.z() / uz),
-            toU(end_pos),
-            Eigen::Vector3d(end_vel.x() / ux, end_vel.y() / ux,
-                            end_vel.z() / uz),
-            Eigen::Vector3d::Zero(), blend_T);
-        traj.emplace_back(blend_T, blend_cm);
-
-        // ==== full-trajectory fail-closed re-verification ===========
-        // The COMPLETE polynomial is what actually flies — re-judge IT
-        // with the shared validator (see its contract in the header).
-        // Pieces with RK4 truth carry the candidate's MEASURED fit error
-        // as slack; the capture blend carries none.
+            toU(cap.state.position_m), toUvel(cap_vel), toUvel(cap.acc),
+            toU(end_pos), toUvel(end_vel), Eigen::Vector3d::Zero(),
+            blend_T);
+        poly_traj::Trajectory traj;
+        double max_pe = 0.0, max_ve = 0.0, max_ae = 0.0;
         double w_risk_max = 0.0, w_risk_int = 0.0;
-        const TrajectoryVerdict tv = validateTransitionTrajectory(
-            traj, req, blend_T, max_ae, &w_risk_max, &w_risk_int);
-        if (tv == TrajectoryVerdict::STALE) {
-          zone_stale_abort = true;
-          break;
+        bool accepted = false;
+        const int kstep0 = std::max(
+            1, static_cast<int>(std::round(lim.knot_dt_s / lim.dt_s)));
+        for (int level = 0; level < 3 && !accepted && !zone_stale_abort;
+             ++level) {
+          const int kstep = std::max(1, kstep0 >> level);
+          traj.clear();
+          max_pe = max_ve = max_ae = 0.0;
+          bool adapter_ok = last >= 1;
+          for (int i0 = 0; adapter_ok && i0 < last; i0 += kstep) {
+            const int i1 = std::min(last, i0 + kstep);
+            const double T = (i1 - i0) * lim.dt_s;
+            if (T <= 0.0) break;
+            const Sample &a = co.samples[static_cast<size_t>(i0)];
+            const Sample &b = co.samples[static_cast<size_t>(i1)];
+            const poly_traj::CoefficientMat cm = quinticHermite(
+                toU(a.state.position_m),
+                toUvel(mmp_vehicle_dynamics::pointMassVelocity(a.state)),
+                toUvel(a.acc), toU(b.state.position_m),
+                toUvel(mmp_vehicle_dynamics::pointMassVelocity(b.state)),
+                toUvel(b.acc), T);
+            poly_traj::Piece piece(T, cm);
+            // Interior: poly vs the dense RK4 record between the knots.
+            for (int k = i0 + 1; k < i1; ++k) {
+              const double t = (k - i0) * lim.dt_s;
+              const Sample &m = co.samples[static_cast<size_t>(k)];
+              const Eigen::Vector3d pp = piece.getPos(t);
+              const Eigen::Vector3d pv = piece.getVel(t);
+              const Eigen::Vector3d pa = piece.getAcc(t);
+              const Eigen::Vector3d pe(
+                  pp.x() * ux - m.state.position_m.x(),
+                  pp.y() * ux - m.state.position_m.y(),
+                  pp.z() * uz - m.state.position_m.z());
+              const Eigen::Vector3d vm =
+                  mmp_vehicle_dynamics::pointMassVelocity(m.state);
+              const Eigen::Vector3d ve(pv.x() * ux - vm.x(),
+                                       pv.y() * ux - vm.y(),
+                                       pv.z() * uz - vm.z());
+              const Eigen::Vector3d ae(pa.x() * ux - m.acc.x(),
+                                       pa.y() * ux - m.acc.y(),
+                                       pa.z() * uz - m.acc.z());
+              max_pe = std::max(max_pe, pe.norm());
+              max_ve = std::max(max_ve, ve.norm());
+              max_ae = std::max(max_ae, ae.norm());
+            }
+            traj.emplace_back(T, cm);
+          }
+          if (!adapter_ok || max_pe > lim.adapter_pos_tol_m ||
+              max_ve > lim.adapter_vel_tol_mps ||
+              max_ae > lim.adapter_acc_tol_mps2)
+            continue;   // representation quality gate (finer may help)
+          traj.emplace_back(blend_T, blend_cm);
+          const TrajectoryVerdict tv = validateTransitionTrajectory(
+              traj, req, &w_risk_max, &w_risk_int);
+          if (tv == TrajectoryVerdict::STALE) {
+            zone_stale_abort = true;
+            break;
+          }
+          accepted = tv == TrajectoryVerdict::OK;
         }
-        if (tv != TrajectoryVerdict::OK) { ++audit.disq_adapter; continue; }
+        if (zone_stale_abort) break;
+        audit.adapter_max_pos_err_m =
+            std::max(audit.adapter_max_pos_err_m, max_pe);
+        audit.adapter_max_vel_err_mps =
+            std::max(audit.adapter_max_vel_err_mps, max_ve);
+        audit.adapter_max_acc_err_mps2 =
+            std::max(audit.adapter_max_acc_err_mps2, max_ae);
+        if (!accepted) { ++audit.disq_adapter; continue; }
         const double total_T = traj.getTotalDuration();
 
         // ==== winner ================================================

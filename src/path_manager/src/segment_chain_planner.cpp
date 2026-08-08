@@ -265,7 +265,8 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   StartRegime regime = StartRegime::CRUISE_VALID;
   std::string regime_why;
   if (start_vel_commanded) {
-    regime = classifyStartState(start_pos, start_vel, start_acc, &regime_why);
+    regime = classifyStartState(start_pos, start_vel, start_acc,
+                                start_acc_commanded, &regime_why);
     if (regime == StartRegime::UNSUPPORTED) {
       log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s "
                    "(INITIAL_MODE_UNSUPPORTED)", regime_why.c_str());
@@ -1335,15 +1336,22 @@ bool SegmentChainPlanner::authorContractsFromRoute(
 
 SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
     const Eigen::Vector3d &pos_u, const Eigen::Vector3d &vel_u,
-    const Eigen::Vector3d &acc_u, std::string *why) const
+    const Eigen::Vector3d &acc_u, bool acc_prescribed,
+    std::string *why) const
 {
   const auto unsupported = [&](const std::string &w) {
     if (why) *why = w;
     return StartRegime::UNSUPPORTED;
   };
+  // Finiteness is judged regardless of prescription — garbage is garbage.
   if (!pos_u.allFinite() || !vel_u.allFinite() || !acc_u.allFinite())
     return unsupported("non-finite commanded state");
-  const std::string prob = pm_->pvaEnvelopeProblem(pos_u, vel_u, acc_u);
+  // Prescribed: the full PVA is the operator's claim — judge all of it.
+  // Unprescribed: the internal acc value is NOT evidence; the velocity
+  // state alone decides the regime.
+  const std::string prob =
+      acc_prescribed ? pm_->pvaEnvelopeProblem(pos_u, vel_u, acc_u)
+                     : pm_->stateEnvelopeProblem(vel_u);
   if (prob.empty()) return StartRegime::CRUISE_VALID;
   if (why) *why = prob;
   const auto *dyn = pm_->dynamicsParams();

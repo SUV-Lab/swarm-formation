@@ -502,6 +502,29 @@ int main(int argc, char **argv)
     }
   }
 
+  if (run("classify_acc")) {
+    // Classification must not read an UNPRESCRIBED internal acc value:
+    // an in-cone climbing velocity (25 deg, inside the 30 deg cone) with
+    // the FSM's internal a=0 is a CRUISE-VALID state — but the same PVA
+    // with a PRESCRIBED zero is an unflyable hold (thrust ~ 6.6 kN of
+    // 3.2 kN) and must classify differently. Pinned at the component
+    // contract level here; the coordinator-side pin lives in the chain
+    // harness transition variant.
+    // (No node here: exercised through generate()'s own gates via the
+    // prescribed path — the coordinator classifier pin is integration-
+    // level.)
+    auto req = makeRequest(baseParams());
+    req.initial_acc_prescribed = false;
+    req.initial_acc_mps2 = Eigen::Vector3d::Zero();
+    const auto r_un = tp::generate(req);
+    expect(r_un.ok, "unprescribed internal zero: mission generates");
+    req.initial_acc_prescribed = true;
+    const auto r_pre = tp::generate(req);
+    expect(!r_pre.ok,
+           "prescribed zero at the same PVA refused — the bool, never "
+           "the value, decides");
+  }
+
   if (run("acc_prescribed_zero")) {
     // Prescribed EXACTLY ZERO at a 32-deg climb: holding a=0 there needs
     // ~7.9 kN of the model's 3.2 kN — preserve is impossible, so the
@@ -576,25 +599,55 @@ int main(int argc, char **argv)
     expect(r.ok, "baseline winner exists");
     if (r.ok) {
       double rm = 0.0, ri = 0.0;
-      expect(tp::validateTransitionTrajectory(r.traj, req, 0.0, 1.0, &rm,
-                                              &ri) ==
+      // ZERO slack: the winner's own polynomial satisfies the BARE
+      // physical limits — this is the acceptance the review demanded
+      // (fit error re-expresses the curve, it never widens a limit).
+      expect(tp::validateTransitionTrajectory(r.traj, req, &rm, &ri) ==
                  tp::TrajectoryVerdict::OK,
-             "unmodified winner passes the standalone validator");
-      poly_traj::Trajectory bad = r.traj;
-      const int mid = bad.getPieceNum() / 2;
-      const double Tm = bad[mid].getDuration();
-      poly_traj::CoefficientMat cm = bad[mid].getCoeffMat();
-      // z(t) += -c * t^2 (Tm - t)^2: expand to monomial coefficients on
-      // the p(t) = sum col(i) t^(5-i) convention.
-      const double c = 900.0 / req.limits.unit_z_m / std::pow(Tm, 4.0);
-      cm(2, 1) -= c;                 // t^4
-      cm(2, 2) += 2.0 * c * Tm;      // t^3
-      cm(2, 3) -= c * Tm * Tm;       // t^2
-      bad[mid] = poly_traj::Piece(Tm, cm);
-      expect(tp::validateTransitionTrajectory(bad, req, 0.0, 1.0, &rm,
-                                              &ri) ==
-                 tp::TrajectoryVerdict::FAIL,
-             "interior-dip trajectory REFUSED by the full-span validator");
+             "winner passes the standalone validator at BARE limits");
+      const int mid = r.traj.getPieceNum() / 2;
+      const double Tm =
+          const_cast<poly_traj::Trajectory &>(r.traj)[mid].getDuration();
+      // (a) Terrain: z(t) -= c2 t^2 (Tm-t)^2 — endpoints' pos/vel kept,
+      // interior dips below the AGL floor between the fit samples.
+      {
+        poly_traj::Trajectory bad = r.traj;
+        poly_traj::CoefficientMat cm = bad[mid].getCoeffMat();
+        const double c2 =
+            900.0 / req.limits.unit_z_m / std::pow(Tm, 4.0);
+        cm(2, 1) -= c2;
+        cm(2, 2) += 2.0 * c2 * Tm;
+        cm(2, 3) -= c2 * Tm * Tm;
+        bad[mid] = poly_traj::Piece(Tm, cm);
+        expect(tp::validateTransitionTrajectory(bad, req, &rm, &ri) ==
+                   tp::TrajectoryVerdict::FAIL,
+               "interior terrain dip REFUSED by the validator");
+      }
+      // (b) Dynamics: x(t) += c3 t^3 (Tm-t)^3 — position, velocity AND
+      // acceleration untouched at the piece ends, but the interior
+      // acceleration bump demands thrust/load beyond the model. This is
+      // the fail-closed property the review asked pinned: a curve whose
+      // ENDS look flyable must still die on its interior physics.
+      {
+        poly_traj::Trajectory bad = r.traj;
+        poly_traj::CoefficientMat cm = bad[mid].getCoeffMat();
+        // t^3(Tm-t)^3 = Tm^3 t^3 - 3 Tm^2 t^4 + 3 Tm t^5 - t^6: the t^6
+        // term exceeds the quintic basis, so use t^3 (Tm-t)^2 (zero
+        // pos/vel at both ends, acc zero at t=0 only) on an interior
+        // piece where the seam acc jump is not judged.
+        // Peak interior acceleration ~ c3 * Tm^3 / 8 — size it for
+        // ~25 m/s^2 of extra along-track demand (thrust >> ceiling).
+        const double c3 =
+            200.0 / req.limits.unit_xy_m / std::pow(Tm, 3.0);
+        // x(t) += c3 * (Tm^2 t^3 - 2 Tm t^4 + t^5)
+        cm(0, 0) += c3;
+        cm(0, 1) -= 2.0 * c3 * Tm;
+        cm(0, 2) += c3 * Tm * Tm;
+        bad[mid] = poly_traj::Piece(Tm, cm);
+        expect(tp::validateTransitionTrajectory(bad, req, &rm, &ri) ==
+                   tp::TrajectoryVerdict::FAIL,
+               "interior thrust/load excursion REFUSED by the validator");
+      }
     }
   }
 

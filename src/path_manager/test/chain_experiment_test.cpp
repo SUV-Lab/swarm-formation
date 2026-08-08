@@ -638,6 +638,27 @@ int main(int argc, char **argv)
            "prescribed zero acc refused (the numeric value never decides "
            "prescription)");
 
+    // Classification must not read an UNPRESCRIBED internal acc: an
+    // in-cone climb (25 deg < 30) with the FSM's internal a=0 is
+    // CRUISE_VALID; the SAME pos/vel with a PRESCRIBED zero is an
+    // unflyable hold and must classify differently.
+    {
+      using SR = path_manager::SegmentChainPlanner::StartRegime;
+      const Eigen::Vector3d v25(1.6 * std::cos(25.0 * M_PI / 180.0), 0.0,
+                                1.6 * std::sin(25.0 * M_PI / 180.0));
+      std::string why;
+      const SR un = chain.classifyStartState(
+          start_pos, v25, Eigen::Vector3d::Zero(), false, &why);
+      const SR pre = chain.classifyStartState(
+          start_pos, v25, Eigen::Vector3d::Zero(), true, &why);
+      expect(un == SR::CRUISE_VALID,
+             "in-cone climb with UNPRESCRIBED internal a=0 -> CRUISE_VALID "
+             "(the value is not evidence)");
+      expect(pre != SR::CRUISE_VALID,
+             "same PVA with PRESCRIBED zero classifies differently (an "
+             "unflyable hold)");
+    }
+
     // UNSUPPORTED classification: above the model ceiling — immediate
     // FAILED, nothing downstream runs (over-ceiling is a physics claim
     // v1 refuses to make).
