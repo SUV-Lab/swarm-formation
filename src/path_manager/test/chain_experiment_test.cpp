@@ -531,8 +531,8 @@ int main(int argc, char **argv)
     // rejection the reason and the validator's own words must reach the
     // caller. (start_vel_synthesized=false, commanded=true: this is an
     // explicit handoff state.)
-    const path_manager::PlanResult r =
-        chain.plan(p_u, v_u, a_u, goal, false, {}, true);
+    const path_manager::PlanResult r = chain.plan(
+        p_u, v_u, a_u, goal, false, {}, true, /*start_acc_commanded=*/true);
     if (prob.empty()) {
       expect(r.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
              "validator passed -> plan() does not reject the head");
@@ -1209,7 +1209,8 @@ int main(int argc, char **argv)
         chain.plan(start_pos, Eigen::Vector3d(1.8, 0.0, 0.0),
                    Eigen::Vector3d(0.0, 5.0, 0.0), goal,
                    /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/true);
+                   /*start_vel_commanded=*/true,
+                   /*start_acc_commanded=*/true);
     expect(!r.hasTrajectory(),
            "undeliverable commanded acceleration FAILED (no trajectory)");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
