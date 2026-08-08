@@ -36,6 +36,13 @@ constexpr double kGammaRampRadPerS = 0.15;   // enumerated-target approach
 constexpr double kGammaGain = 0.6;           // CL law: gamma-tracking [1/s]
 constexpr double kPsiGain = 0.5;             // bank proportional band [rad]
 constexpr double kSteerTgoS = 30.0;  // LOS capture-steer inside this t_go
+constexpr double kSteerBlendS = 5.0; // ramp->LOS reference CROSS-FADE: a
+                                     // hard branch switch stepped the CL
+                                     // command level->pushover in one dt
+                                     // (measured 8.6 m/s^2 record jump at
+                                     // the t_go=30 boundary — no polynomial
+                                     // fits a step, the zero-slack
+                                     // validator rightly refused)
                                      // (600 m of vertical offset at 15 s
                                      // left 69 m unconverged at the window)
 constexpr double kTgoMinS = 1.5;     // shortest blend the envelope can fly
@@ -70,6 +77,7 @@ constexpr double kCmdInteriorFrac = 1e-3;
 // bare lower bound at any knot density: an ACTIVE boundary admits no
 // interior-margin proof (review round: zero-slack validation).
 constexpr double kIdleMarginFrac = 0.02;
+constexpr double kThrustGainNPerMps = 400.0;  // speed-servo slope (continuous)
 // Pre-guard bounds AHEAD of the EOM's silent guards: disqualification must
 // provably precede the kMinSpeedForRates / kMinCosGamma distortion, so an
 // accepted trajectory never flew a silently-guarded derivative.
@@ -123,10 +131,14 @@ Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
   const Eigen::Vector3d to_entry = aim_m - s.position_m;
   const double psi_err =
       wrapPi(std::atan2(to_entry.y(), to_entry.x()) - s.heading_rad);
-  double bank = 0.0;
-  if (std::abs(psi_err) >= capture_align_rad)
-    bank = (psi_err > 0.0 ? 1.0 : -1.0) *
-           std::min(bank_level, std::abs(psi_err) / kPsiGain * bank_level);
+  // Continuous proportional bank (no deadband cutoff: the hard zeroing
+  // at capture_align stepped the lateral acceleration whenever the
+  // heading error crossed the threshold; the proportional law already
+  // vanishes smoothly as the error does).
+  (void)capture_align_rad;
+  const double bank =
+      (psi_err > 0.0 ? 1.0 : -1.0) *
+      std::min(bank_level, std::abs(psi_err) / kPsiGain * bank_level);
   const double bank_hi =
       dyn.bank_angle_max_rad * (1.0 - kCmdInteriorFrac);
   if (std::abs(bank) > bank_hi) c.demand_interior = false;
@@ -198,19 +210,23 @@ Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
   const double t_lo =
       dyn.thrust_min_n +
       kIdleMarginFrac * (dyn.thrust_max_n - dyn.thrust_min_n);
-  double thrust;
-  if (s.speed_mps < v_lo)
-    thrust = t_hi;
-  else if (s.speed_mps > v_hi)
-    thrust = t_lo;
-  else
-    // Hold speed on the slope, floored at the margined idle: a shallow
-    // descent whose drag+gravity balance sits below it is flown there (a
-    // LAW decision — the speed-window gates judge any resulting drift),
-    // and min(t_hi, .) is the law choosing maximum available power.
-    thrust = std::max(
-        t_lo,
-        std::min(t_hi, drag_n + W * std::sin(s.flight_path_angle_rad)));
+  // CONTINUOUS thrust law: hold (drag + gravity compensation) plus a
+  // proportional speed servo toward the [v_lo, v_hi] band, clamped to
+  // [t_lo, t_hi]. The earlier hard branch switch (full power below v_lo,
+  // idle above v_hi) put ~2-3 m/s^2 acceleration DISCONTINUITIES into
+  // the record whenever V rode a band edge (real-terrain smoke: the
+  // fit's acceleration error pinned at ~4 m/s^2 at EVERY knot density —
+  // no polynomial follows a square wave, and the zero-slack validator
+  // rightly refused the curve). A continuous law is fittable; the
+  // window gates still judge the outcome.
+  const double v_ref =
+      std::min(std::max(s.speed_mps, v_lo), v_hi);  // nearest band point
+  const double t_hold = std::max(
+      t_lo,
+      std::min(t_hi, drag_n + W * std::sin(s.flight_path_angle_rad)));
+  const double thrust = std::max(
+      t_lo, std::min(t_hi, t_hold + kThrustGainNPerMps *
+                                        (v_ref - s.speed_mps)));
   if (thrust > dyn.thrust_max_n * (1.0 - kCmdInteriorFrac))
     c.demand_interior = false;
   c.thrust_n = std::min(
@@ -344,7 +360,7 @@ TrajectoryVerdict validateTransitionTrajectory(
   const double W = dyn.mass_kg * dyn.gravity_mps2;
   bool stale = false;
   double rmax = 0.0, rint = 0.0;
-  // One sample: every gate, slack only where RK4 truth exists.
+  // One sample: every gate at BARE limits (no slack anywhere).
   std::function<bool(double, bool)> sampleOk;
   sampleOk = [&](double t, bool refine) -> bool {
     const Eigen::Vector3d pu = traj.getPos(t);
@@ -411,18 +427,25 @@ TrajectoryVerdict validateTransitionTrajectory(
          q_t > 0.95 * dyn.dynamic_pressure_max_pa) &&
         !refineAround(t))
       return false;
-    if (refine && req.zone_exposure_raw) {
-      const double e = req.zone_exposure_raw(p);
-      rmax = std::max(rmax, e);
-      rint += e * lim.dt_s;
-    }
     return true;
   };
   bool ok = true;
-  for (double t = 0.0; ok && t < total_T; t += std::min(
-           lim.dt_s, 2.0 / std::max(1.0, traj.getVel(t).norm() *
-                                             std::max(ux, uz))))
+  for (double t = 0.0; ok && t < total_T;) {
     ok = sampleOk(t, true);
+    const double step = std::min(
+        lim.dt_s, 2.0 / std::max(1.0, traj.getVel(t).norm() *
+                                          std::max(ux, uz)));
+    if (ok && req.zone_exposure_raw) {
+      // Exposure integrates with the ACTUAL sample step — the adaptive
+      // spacing must not inflate the statistic (audit-only value).
+      const Eigen::Vector3d pu = traj.getPos(t);
+      const double e = req.zone_exposure_raw(
+          Eigen::Vector3d(pu.x() * ux, pu.y() * ux, pu.z() * uz));
+      rmax = std::max(rmax, e);
+      rint += e * std::min(step, total_T - t);
+    }
+    t += step;
+  }
   if (ok) ok = sampleOk(total_T, false);
   if (stale) return TrajectoryVerdict::STALE;
   if (risk_max) *risk_max = rmax;
@@ -633,23 +656,26 @@ TransitionResult generate(const TransitionRequest &req)
               entry.tangent *
                   std::max(0.0, along - std::max(1.0, s.speed_mps) * kLeadS);
           const Eigen::Vector3d to_aim = aim - s.position_m;
-          double g_cmd;
-          if (!(along > 0.0) || t_go > kSteerTgoS) {
-            const double dg = gamma_target - gamma_cmd;
-            const double step = kGammaRampRadPerS * lim.dt_s;
-            gamma_cmd += std::min(std::max(dg, -step), step);
-            g_cmd = gamma_cmd;
-          } else {
-            // Capture steer: line-of-sight elevation to the AIM point,
-            // clipped to the cone.
-            const double los = std::atan2(
-                to_aim.z(), std::max(1e-6, to_aim.head<2>().norm()));
-            g_cmd = std::min(
-                std::max(los, -dyn.flight_path_angle_max_rad *
-                                  (1.0 - kCmdInteriorFrac)),
-                dyn.flight_path_angle_max_rad * (1.0 - kCmdInteriorFrac));
-            gamma_cmd = g_cmd;
-          }
+          // Two gamma references, CROSS-FADED over kSteerBlendS around
+          // the t_go = kSteerTgoS boundary (w continuous in state):
+          // the enumerated-target ramp far out, the LOS elevation to the
+          // aim point near capture.
+          const double dg = gamma_target - gamma_cmd;
+          const double step = kGammaRampRadPerS * lim.dt_s;
+          const double g_ramp =
+              gamma_cmd + std::min(std::max(dg, -step), step);
+          const double cone =
+              dyn.flight_path_angle_max_rad * (1.0 - kCmdInteriorFrac);
+          const double los = std::atan2(
+              to_aim.z(), std::max(1e-6, to_aim.head<2>().norm()));
+          const double g_los = std::min(std::max(los, -cone), cone);
+          const double w =
+              !(along > 0.0)
+                  ? 0.0
+                  : std::min(1.0, std::max(0.0, (kSteerTgoS - t_go) /
+                                                    kSteerBlendS));
+          double g_cmd = (1.0 - w) * g_ramp + w * g_los;
+          gamma_cmd = g_cmd;
           Commands cmd =
               synthesizeCommands(dyn, s, aim, g_cmd, bank_level, lim);
           gamma_cmd = cmd.gamma_cmd_applied;  // anti-windup: the ramp
@@ -760,6 +786,27 @@ TransitionResult generate(const TransitionRequest &req)
         const auto toUvel = [&](const Eigen::Vector3d &v) {
           return Eigen::Vector3d(v.x() / ux, v.y() / ux, v.z() / uz);
         };
+        if (std::getenv("TP_DEBUG")) {
+          // Locate the record's worst acceleration jump — the fit can
+          // never beat the record's own discontinuities.
+          double worst = 0.0; size_t kw = 0;
+          for (size_t k = 0; k + 1 < co.samples.size(); ++k) {
+            const double dj =
+                (co.samples[k + 1].acc - co.samples[k].acc).norm();
+            if (dj > worst) { worst = dj; kw = k; }
+          }
+          std::fprintf(stderr,
+                       "[TPDBG-JUMP] prim=%d worst dAcc=%.3f at k=%zu "
+                       "(t=%.2f) acc_k=(%.2f,%.2f,%.2f) acc_k1="
+                       "(%.2f,%.2f,%.2f) V=%.1f gam=%.3f\n",
+                       primitive_id, worst, kw, kw * lim.dt_s,
+                       co.samples[kw].acc.x(), co.samples[kw].acc.y(),
+                       co.samples[kw].acc.z(), co.samples[kw + 1].acc.x(),
+                       co.samples[kw + 1].acc.y(),
+                       co.samples[kw + 1].acc.z(),
+                       co.samples[kw].state.speed_mps,
+                       co.samples[kw].state.flight_path_angle_rad);
+        }
         // The knot ladder: express on the configured knot spacing; if
         // the BARE-limit validator rejects the curve, re-express on
         // halved knots (fit error shrinks ~16x per halving for a
@@ -830,6 +877,12 @@ TransitionResult generate(const TransitionRequest &req)
             }
             traj.emplace_back(T, cm);
           }
+          if (std::getenv("TP_DEBUG"))
+            std::fprintf(stderr,
+                         "[TPDBG-LADDER] prim=%d level=%d kstep=%d "
+                         "err p/v/a=%.3g/%.3g/%.3g ok=%d\n",
+                         primitive_id, level, kstep, max_pe, max_ve,
+                         max_ae, adapter_ok ? 1 : 0);
           if (!adapter_ok || max_pe > lim.adapter_pos_tol_m ||
               max_ve > lim.adapter_vel_tol_mps ||
               max_ae > lim.adapter_acc_tol_mps2)
@@ -837,6 +890,9 @@ TransitionResult generate(const TransitionRequest &req)
           traj.emplace_back(blend_T, blend_cm);
           const TrajectoryVerdict tv = validateTransitionTrajectory(
               traj, req, &w_risk_max, &w_risk_int);
+          if (std::getenv("TP_DEBUG"))
+            std::fprintf(stderr, "[TPDBG-LADDER] prim=%d level=%d verdict=%d\n",
+                         primitive_id, level, static_cast<int>(tv));
           if (tv == TrajectoryVerdict::STALE) {
             zone_stale_abort = true;
             break;

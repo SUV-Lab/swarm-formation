@@ -623,11 +623,12 @@ int main(int argc, char **argv)
                    tp::TrajectoryVerdict::FAIL,
                "interior terrain dip REFUSED by the validator");
       }
-      // (b) Dynamics: x(t) += c3 t^3 (Tm-t)^3 — position, velocity AND
-      // acceleration untouched at the piece ends, but the interior
-      // acceleration bump demands thrust/load beyond the model. This is
-      // the fail-closed property the review asked pinned: a curve whose
-      // ENDS look flyable must still die on its interior physics.
+      // (b) Dynamics: x(t) += c3 t^3 (Tm-t)^2 — position and velocity
+      // untouched at BOTH piece ends (left-end acceleration too; the
+      // right-end acc does change, which the validator may also see) —
+      // the point pinned is that the interior acceleration bump demands
+      // thrust/load beyond the model and the curve dies on its interior
+      // physics, not merely on a seam.
       {
         poly_traj::Trajectory bad = r.traj;
         poly_traj::CoefficientMat cm = bad[mid].getCoeffMat();
