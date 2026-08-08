@@ -791,6 +791,66 @@ int main(int argc, char **argv)
              "CL above the limit (below stall speed) refused");
     }
 
+    // Transition-policy gamma bound on the flown curve: BALLISTIC
+    // pieces (a = -g z, so lift = 0 and thrust = drag — no other limit
+    // can mask) with the velocity at gamma below/at/above the policy.
+    // gamma DECREASES along a ballistic arc, so the AT point drifts to
+    // the inclusive side deterministically.
+    {
+      const double g_pol = req.limits.max_abs_gamma_rad;
+      const auto gammaPiece = [&](double gam) {
+        poly_traj::CoefficientMat cm = poly_traj::CoefficientMat::Zero();
+        cm.col(5) = Eigen::Vector3d(0.0, 0.0, z0 / uz);
+        cm.col(4) =
+            Eigen::Vector3d(165.0 * std::cos(gam) / ux, 0.0,
+                            165.0 * std::sin(gam) / uz);
+        cm.col(3) = Eigen::Vector3d(0.0, 0.0, -0.5 * p.gravity_mps2 / uz);
+        poly_traj::Trajectory t;
+        t.emplace_back(0.1, cm);
+        return t;
+      };
+      expect(verdict(gammaPiece(g_pol - 0.01)) == OK,
+             "gamma below the policy cone accepted");
+      expect(verdict(gammaPiece(g_pol)) == OK,
+             "gamma AT the policy cone accepted (inclusive; ballistic "
+             "drift is downward)");
+      expect(verdict(gammaPiece(g_pol + 0.01)) == FAIL,
+             "gamma above the policy cone refused");
+    }
+
+    // Bank: a level turn's lateral acceleration a_y gives
+    // bank = atan(a_y/g) exactly at t=0; thrust is pinned interior with
+    // a compensating along-track deceleration (same pattern as load).
+    // The frame rotates with the turn, so the inclusive witness sits
+    // inside the drift like the load one.
+    {
+      const double v_b = 229.0;
+      const double qs_b = 0.5 * rho * v_b * v_b * p.wing_area_m2;
+      const auto bankPiece = [&](double bank) {
+        const double ay = p.gravity_mps2 * std::tan(bank);
+        const double lift =
+            p.mass_kg * std::hypot(p.gravity_mps2, ay);
+        const double cl = lift / qs_b;
+        const double cd = p.zero_lift_drag_coefficient +
+                          p.induced_drag_factor * cl * cl;
+        const double ax = (2000.0 - qs_b * cd) / p.mass_kg;
+        poly_traj::CoefficientMat cm = poly_traj::CoefficientMat::Zero();
+        cm.col(5) = Eigen::Vector3d(0.0, 0.0, z0 / uz);
+        cm.col(4) = Eigen::Vector3d(v_b / ux, 0.0, 0.0);
+        cm.col(3) =
+            Eigen::Vector3d(0.5 * ax / ux, 0.5 * ay / ux, 0.0);
+        poly_traj::Trajectory t;
+        t.emplace_back(0.1, cm);
+        return t;
+      };
+      expect(verdict(bankPiece(p.bank_angle_max_rad - 0.02)) == OK,
+             "bank below the limit accepted");
+      expect(verdict(bankPiece(p.bank_angle_max_rad - 5e-3)) == OK,
+             "bank AT the boundary (within drift) accepted");
+      expect(verdict(bankPiece(p.bank_angle_max_rad + 0.02)) == FAIL,
+             "bank above the limit refused");
+    }
+
     // Thrust ceiling/floor: along-track acceleration a_x demands
     // T = D + m a_x at level flight; D is the model's own drag at the
     // piece's exact CL.

@@ -38,6 +38,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "path_manager/segment_chain_planner.h"
+#include "path_manager/transition_phase.h"
 
 namespace {
 
@@ -602,6 +603,13 @@ int main(int argc, char **argv)
     // band check.
     using SR = path_manager::SegmentChainPlanner::StartRegime;
     const double g32 = 32.0 * M_PI / 180.0;
+    // The band edges come from the INJECTED Parameters, never literals —
+    // the contract's 'computed, not written down' rule applies to the
+    // test as much as to the code.
+    const auto *dynp = pm->dynamicsParams();
+    expect(dynp != nullptr, "assumption parameter set available");
+    const double v_act = dynp->model_activation_speed_mps;
+    const double v_ceiling = dynp->speed_max_mps;
     const auto classify = [&](double v_mps) {
       const Eigen::Vector3d vel_u =
           (v_mps / 100.0) *
@@ -610,53 +618,38 @@ int main(int argc, char **argv)
       return chain.classifyStartState(start_pos, vel_u, Eigen::Vector3d::Zero(),
                                       false, &why);
     };
-    expect(classify(39.99) == SR::UNSUPPORTED,
+    expect(classify(v_act - 0.01) == SR::UNSUPPORTED,
            "below the activation floor -> UNSUPPORTED");
-    expect(classify(40.0) == SR::TRANSITION_REQUIRED,
+    expect(classify(v_act) == SR::TRANSITION_REQUIRED,
            "AT the activation floor -> inside the band (inclusive)");
-    expect(classify(40.01) == SR::TRANSITION_REQUIRED,
+    expect(classify(v_act + 0.01) == SR::TRANSITION_REQUIRED,
            "above the activation floor -> inside the band");
-    expect(classify(229.99) == SR::TRANSITION_REQUIRED,
+    expect(classify(v_ceiling - 0.01) == SR::TRANSITION_REQUIRED,
            "below the model ceiling -> inside the band");
-    expect(classify(230.0) == SR::TRANSITION_REQUIRED,
+    expect(classify(v_ceiling) == SR::TRANSITION_REQUIRED,
            "AT the model ceiling -> inside the band (inclusive)");
-    expect(classify(230.01) == SR::UNSUPPORTED,
+    expect(classify(v_ceiling + 0.01) == SR::UNSUPPORTED,
            "above the model ceiling -> UNSUPPORTED");
-
-    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
-    std::cout << "FAIL: " << failures << " failed check(s)\n";
-    return 1;
-  }
-
-  if (with_s8bounds) {
-    // [S8] Classifier band boundaries, below/at/above. The band is a
-    // MODEL hard limit computed from the injected Parameters
-    // (model_activation_speed_mps .. speed_max_mps); boundary semantics
-    // are inclusive (V == edge is inside). gamma = 32 deg keeps the
-    // envelope problem non-empty so the classifier actually reaches the
-    // band check.
-    using SR = path_manager::SegmentChainPlanner::StartRegime;
-    const double g32 = 32.0 * M_PI / 180.0;
-    const auto classify = [&](double v_mps) {
-      const Eigen::Vector3d vel_u =
-          (v_mps / 100.0) *
-          Eigen::Vector3d(std::cos(g32), 0.0, std::sin(g32));
-      std::string why;
-      return chain.classifyStartState(start_pos, vel_u, Eigen::Vector3d::Zero(),
-                                      false, &why);
-    };
-    expect(classify(39.99) == SR::UNSUPPORTED,
-           "below the activation floor -> UNSUPPORTED");
-    expect(classify(40.0) == SR::TRANSITION_REQUIRED,
-           "AT the activation floor -> inside the band (inclusive)");
-    expect(classify(40.01) == SR::TRANSITION_REQUIRED,
-           "above the activation floor -> inside the band");
-    expect(classify(229.99) == SR::TRANSITION_REQUIRED,
-           "below the model ceiling -> inside the band");
-    expect(classify(230.0) == SR::TRANSITION_REQUIRED,
-           "AT the model ceiling -> inside the band (inclusive)");
-    expect(classify(230.01) == SR::UNSUPPORTED,
-           "above the model ceiling -> UNSUPPORTED");
+    // Transition-policy gamma cone at the classifier, below/at/above —
+    // same single definition the generator and validator read.
+    {
+      const double g_pol = path_manager::transition_phase::TransitionLimits{}
+                               .max_abs_gamma_rad;
+      const auto classifyG = [&](double gam) {
+        const Eigen::Vector3d vel_u =
+            1.65 * Eigen::Vector3d(std::cos(gam), 0.0, std::sin(gam));
+        std::string why;
+        return chain.classifyStartState(start_pos, vel_u,
+                                        Eigen::Vector3d::Zero(), false,
+                                        &why);
+      };
+      expect(classifyG(g_pol - 0.01) == SR::TRANSITION_REQUIRED,
+             "gamma below the policy cone -> inside");
+      expect(classifyG(g_pol) == SR::TRANSITION_REQUIRED,
+             "gamma AT the policy cone -> inside (inclusive)");
+      expect(classifyG(g_pol + 0.01) == SR::UNSUPPORTED,
+             "gamma above the policy cone -> UNSUPPORTED");
+    }
 
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

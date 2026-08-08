@@ -54,6 +54,12 @@ struct TransitionLimits {
   double capture_align_rad{0.10};
   // §8 experimental initial value, not an acceptance-calibrated number.
   double dwell_s{1.0};
+  // [S8] TRANSITION POLICY gamma bound (single definition — classifier,
+  // per-step pre-guard and the polynomial validator all read THIS).
+  // Distinct from the STRUCTURAL model cone acos(kMinCosGamma) ~ 1.521:
+  // the policy is deliberately inside it, and generate() refuses limits
+  // where policy >= structural.
+  double max_abs_gamma_rad{1.40};
   double knot_dt_s{0.5};                 // adapter knot spacing (snapped)
   double blend_t_max_s{6.0};
   // Adapter interior budgets (poly vs dense RK4 states, SI):

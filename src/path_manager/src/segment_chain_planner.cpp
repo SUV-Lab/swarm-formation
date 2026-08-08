@@ -1386,11 +1386,13 @@ SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
                               "be a physics claim");
   const double gamma = std::asin(
       std::min(1.0, std::max(-1.0, v_si.z() / std::max(V, 1e-9))));
-  // Same explicit cone the generator pre-guards (never the EOM's silent
-  // kMinCosGamma absorption).
-  if (std::abs(gamma) > 1.40)
-    return unsupported(prob + "; flight-path angle at the model "
-                              "singularity cone");
+  // The TRANSITION POLICY gamma bound — the same single definition the
+  // generator pre-guards and the polynomial validator enforce
+  // (TransitionLimits default member), never a duplicated literal.
+  if (std::abs(gamma) >
+      transition_phase::TransitionLimits{}.max_abs_gamma_rad)
+    return unsupported(prob + "; flight-path angle outside the "
+                              "transition policy cone");
   return StartRegime::TRANSITION_REQUIRED;
 }
 

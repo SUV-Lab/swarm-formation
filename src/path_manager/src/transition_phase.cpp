@@ -80,10 +80,12 @@ constexpr double kIdleMarginFrac = 0.02;
 constexpr double kThrustGainNPerMps = 400.0;  // speed-servo slope (continuous)
 // Pre-guard bounds AHEAD of the EOM's silent guards: disqualification must
 // provably precede the kMinSpeedForRates / kMinCosGamma distortion, so an
-// accepted trajectory never flew a silently-guarded derivative.
+// accepted trajectory never flew a silently-guarded derivative. The gamma
+// bound is the POLICY value TransitionLimits::max_abs_gamma_rad (single
+// definition, shared with the classifier and the polynomial validator);
+// the STRUCTURAL cone is acos(kMinCosGamma).
 constexpr double kPreguardSpeedMps =
     2.0 * mmp_vehicle_dynamics::kMinSpeedForRates;
-constexpr double kPreguardGammaRad = 1.40;   // |cos| = 0.17 >> kMinCosGamma
 
 PointMassState advance(const PointMassState &s, const PointMassDerivative &d,
                        double h)
@@ -394,6 +396,12 @@ TrajectoryVerdict validateTransitionTrajectory(
     if (V > dyn.speed_max_mps + 1e-9 ||
         V < dyn.model_activation_speed_mps - 1e-9)
       return false;
+    // [S8] The transition-policy gamma bound applies to the FLOWN curve
+    // too — a Hermite interior overshoot past it must refuse, not slip
+    // through because the other limits held (review find: fail-open).
+    const double gamma_t = std::asin(
+        std::min(1.0, std::max(-1.0, v.z() / std::max(V, 1e-9))));
+    if (std::abs(gamma_t) > lim.max_abs_gamma_rad + 1e-9) return false;
     const double rho_t = mmp_vehicle_dynamics::airDensity(dyn, p.z());
     const double q_t = 0.5 * rho_t * V * V;
     if (q_t > dyn.dynamic_pressure_max_pa) return false;
@@ -483,8 +491,12 @@ TransitionResult generate(const TransitionRequest &req)
   }
   if (!(lim.dt_s > 0.0) || !(lim.t_max_s > 0.0) ||
       !(lim.end_speed_min_mps > 0.0) ||
-      !(lim.end_speed_max_mps >= lim.end_speed_min_mps)) {
-    out.reason = "transition limits malformed — generation refused";
+      !(lim.end_speed_max_mps >= lim.end_speed_min_mps) ||
+      !(lim.max_abs_gamma_rad > 0.0) ||
+      lim.max_abs_gamma_rad >=
+          std::acos(mmp_vehicle_dynamics::kMinCosGamma)) {
+    out.reason = "transition limits malformed — generation refused "
+                 "(gamma policy must sit INSIDE the structural cone)";
     return out;
   }
 
@@ -576,7 +588,8 @@ TransitionResult generate(const TransitionRequest &req)
           // --- state gates on the CURRENT state -----------------------
           if (!finiteState(s)) { ++audit.disq_finiteness; disq = true; break; }
           if (s.speed_mps < kPreguardSpeedMps ||
-              std::abs(s.flight_path_angle_rad) > kPreguardGammaRad) {
+              std::abs(s.flight_path_angle_rad) >
+                  lim.max_abs_gamma_rad) {
             ++audit.disq_preguard; disq = true; break;
           }
           if (dbg && k % 250 == 0)

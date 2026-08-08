@@ -97,7 +97,7 @@ SegmentChainPlanner — 경로 슬라이스 [route_start_s .. goal] 재계획
 |---|---|
 | TransitionPhase 구간 | 전환 모델·전환 한계 (§8) |
 | departure/cruise/arrival | 순항 모델 (기존 per-solve 감사 그대로) |
-| 접합부 (전이→체인, 체인 내부) | PVA 오차 + jerk 점프 크기·상한 (§6) |
+| 접합부 (전이→체인, 체인 내부) | PVA 오차 게이트 + jerk 점프 측정 (§6·§8c) |
 | 전체 결합 궤적 | 지형·구역·시간·수치 건전성 |
 
 - **로깅과 판정 분리**: 현행 `logFinalEvaluation`은 로그+판정 겸용이고,
@@ -170,7 +170,8 @@ TransitionResult   { verdict(OK/FAILED+사유), transition_traj(PVA(t)),
   - 적응형 세분화: 위반 여유가 얇은 구간을 재귀 분할, 수렴까지.
 - 접합 연속성: 체인은 C² (P/V/A ~1e-13). C³은 보장하지 않는다. 전이→체인
   접합의 jerk는 "연속 보장"이 아니라 **좌/우 극한 jerk 차 노름의 점프
-  감사 + 상한 판정**(상한은 §8 항목)으로 정의한다.
+  감사**로 정의한다 — §8(c)에 따라 측정 전용이며, 상한 판정은 실행
+  계층의 실제 허용치가 생겨 게이트로 승격될 때만 붙는다.
 
 ## 7. 참조 추종 최적화 계약 (2단계, 후속)
 
@@ -194,8 +195,12 @@ TransitionResult   { verdict(OK/FAILED+사유), transition_traj(PVA(t)),
   스텝별 한계 게이트가 같은 값.
 - 상승각: 모델 유효 콘 |γ| ≤ 1.40 rad (특이점 프리가드; kMinCosGamma
   기원). 순항 콘 ±30°는 순항 판정 전용 — 전이 중에는 적용하지 않는다.
-- CL·추력 범위·하중계수·동압: pointMassForces 폐쇄와 검증기·스텝
+- CL·추력 범위·하중계수·동압·뱅크: pointMassForces 폐쇄와 검증기·스텝
   게이트가 동일 Parameters로 강제.
+- 전이 정책 상승각 콘: `TransitionLimits::max_abs_gamma_rad`(1.40 rad,
+  정책 (b)에 속하지만 게이트로 강제) — 분류기·스텝 프리가드·다항
+  검증기가 같은 한 정의를 읽고, 구조 콘 acos(kMinCosGamma)=1.521 안에
+  있어야 생성이 수락된다.
 - 인계 속력 상한: **유효 상한 = min(모델 speed_max, 명시 캡, 계획
   캡)** — `effectiveHandoffMaxMps()` 한 곳에서 정의, 분류기·생성기·종료
   판정 공용.
@@ -235,7 +240,8 @@ margin)(§9 겹침 하한과 동일). 변경은 결정성·실현성 회귀 재�
 - `INITIAL_MODE_UNSUPPORTED` — 분류기 UNSUPPORTED (전환 영역까지도 밖)
 - `TRANSITION_GENERATION_FAILED` — 전이 생성기가 진입점까지 못 감
 - `TRANSITION_ADAPTER_UNSOUND` — 다항화 내부 검사 실패 (극값/세분화)
-- `TRANSITION_JUNCTION_UNSOUND` — 접합 PVA 오차 또는 jerk 점프 상한 초과
+- `TRANSITION_JUNCTION_UNSOUND` — 접합 PVA 오차 (jerk 점프는 §8c 측정
+  전용 — 게이트 승격 전에는 이 사유를 만들지 않는다)
 - 전환 영역에서 direct fallback은 없다 — 순항 플래너는 그 영역을 못 푼다.
   위 사유는 전부 미션 FAILED다.
 - 전이 성공 + 체인 강등 → 체인의 기존 DEGRADED 의미론 그대로.
