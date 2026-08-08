@@ -152,6 +152,12 @@ public:
   };
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
                                const std::vector<PhaseSpan> &spans) const;
+  // [S13] The span list of the LAST stored flight (recorded just before
+  // the whole-flight evaluation) — audit/harness observability for the
+  // phase semantics; empty when the last plan stored nothing.
+  const std::vector<PhaseSpan> &lastPhaseSpans() const {
+    return last_spans_;
+  }
 
   // [S13] Start-state regime classifier (enum, never string-matched): the
   // single entry gate plan() dispatches on. TRANSITION_REQUIRED = outside
@@ -177,6 +183,13 @@ public:
   void setTransitionActive(bool on) { transition_active_ = on; }
 
 private:
+  // [AUTO-N] chain/segments option interpretation — ONE shared step, run
+  // right after resetPlanState() so EVERY mission shape (plain chain and
+  // the transition coordinator alike) sees the same N policy. Leaving it
+  // inside planImpl let the transition branch run on the reset defaults:
+  // the live smoke chained 2 segments with no cruise span while the
+  // config said auto-sized (review find).
+  void readSegmentsOption();
   // [S13] The ONE coordinator function owning the section-13 sequence:
   // commit -> snapshot -> entry screening -> generate -> cut -> chain with
   // the transition prefix. transition_active_ is asserted for its whole
@@ -429,6 +442,7 @@ private:
   // [PHASE-DEP] screened handoff candidates (route vertex indices, first =
   // the authored one) + the physics the edge-retry ladder reuses.
   mutable std::vector<int> dep_candidates_, arr_candidates_;
+  std::vector<PhaseSpan> last_spans_;
   mutable double phase_tan_grade_{1e9};
   mutable double phase_turn_radius_u_{0.0};
 };

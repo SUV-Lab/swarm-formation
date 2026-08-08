@@ -169,6 +169,25 @@ SegmentChainPlanner::SegmentChainPlanner(rclcpp::Node::SharedPtr node,
       segments_requested_(std::max(2, segments)),
       inherit_route_(inherit_route) {}
 
+void SegmentChainPlanner::readSegmentsOption()
+{
+  // [AUTO-N] chain/segments == 0 sizes the split from the mission itself
+  // once its piece count is known (route mode: after the front-end;
+  // baseline mode: after the baseline solve): N = round(pieces / target),
+  // target = chain/auto_pieces_per_segment (default 70 — the 105-run
+  // 6-point sweep's operating point: same mean quality as 55 with the
+  // worst case at +1.8% instead of +2.5%, one reject instead of several).
+  // Missions under ~1.5 targets do not split at all. A positive
+  // chain/segments keeps today's fixed-N behavior; the parameter is read
+  // per plan, so it is live-tunable between missions.
+  if (!node_->has_parameter("chain/segments"))
+    node_->declare_parameter("chain/segments", segments_);
+  int req = segments_;
+  node_->get_parameter("chain/segments", req);
+  auto_segments_ = (req <= 0);
+  if (!auto_segments_) segments_ = std::min(16, std::max(2, req));
+}
+
 void SegmentChainPlanner::resetPlanState()
 {
   // [PLAN-STATE] Every member below is per-plan. The merge ladder decrements
@@ -180,6 +199,7 @@ void SegmentChainPlanner::resetPlanState()
   auto_segments_ = false;
   phase_applied_ = false;
   phase_note_.clear();
+  last_spans_.clear();
   dep_candidates_.clear();
   arr_candidates_.clear();
   phase_tan_grade_ = 1e9;
@@ -251,6 +271,11 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   // carry a previous mission's value into this one. The envelope rejection
   // below returns early, so the reset has to precede it.
   resetPlanState();
+  // [AUTO-N] the segment-count option is interpreted HERE, before any
+  // mission-shape branch, so the transition coordinator and the plain
+  // chain see the same N policy (review find: the transition branch ran
+  // on the reset defaults — 2 segments, no cruise span).
+  readSegmentsOption();
   // [ENVELOPE] Contract 1 (2026-08-08): an EXPLICITLY commanded initial
   // velocity outside the cruise model's validity region never reaches the
   // cruise pipeline. No clamp — rewriting an operator's stated launch
@@ -367,23 +392,8 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     return r;
   }
 
-  // [AUTO-N] chain/segments == 0 sizes the split from the mission itself
-  // once its piece count is known (route mode: after the front-end;
-  // baseline mode: after the baseline solve): N = round(pieces / target),
-  // target = chain/auto_pieces_per_segment (default 70 — the 105-run
-  // 6-point sweep's operating point: same mean quality as 55 with the
-  // worst case at +1.8% instead of +2.5%, one reject instead of several).
-  // Missions under ~1.5 targets do not split at all. A positive
-  // chain/segments keeps today's fixed-N behavior; the parameter is read
-  // per plan, so it is live-tunable between missions.
-  {
-    if (!node_->has_parameter("chain/segments"))
-      node_->declare_parameter("chain/segments", segments_);
-    int req = segments_;
-    node_->get_parameter("chain/segments", req);
-    auto_segments_ = (req <= 0);
-    if (!auto_segments_) segments_ = std::min(16, std::max(2, req));
-  }
+  // [AUTO-N] chain/segments interpretation moved to readSegmentsOption()
+  // (shared with the transition coordinator, run at plan() entry).
 
   // [CHAIN-PAR] route-parallel mode replaces the whole baseline flow.
   {
@@ -2573,6 +2583,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // setLocalTraj and the viz publish: a refused flight left in traj_ is a
   // trajectory the next state transition can pick up, and one already drawn
   // in RViz tells the operator it was accepted. FAILED leaves both untouched.
+  last_spans_ = spans;
   const FlightVerdict stitched_fv =
       evaluateFlight(chained, spans);
   if (!stitched_fv.evaluated || stitched_fv.unflyable())

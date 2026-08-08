@@ -130,7 +130,8 @@ int main(int argc, char **argv)
        with_transfallback = false, with_overrouteretry = false,
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false,
-       with_zonemultileg = false, with_transition = false;
+       with_zonemultileg = false, with_transition = false,
+       with_transitionauto = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -274,6 +275,10 @@ int main(int argc, char **argv)
     if (v == "zonepass0") { with_route = true; with_zonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") { with_route = true; with_transition = true; }
+    if (v == "transitionauto") {
+      with_route = true; with_phase = true; with_transition = true;
+      with_transitionauto = true;
+    }
     // [S13] transfallback: with a transition active, the single-shot
     // fallback is forbidden — the below-threshold mission that normally
     // degrades to a direct plan must FAIL instead.
@@ -350,6 +355,14 @@ int main(int argc, char **argv)
     force("chain/seg" + std::to_string(i) + "/params",
           std::vector<std::string>{});
   if (with_auto) force("chain/auto_pieces_per_segment", 6);
+  if (with_transitionauto) {
+    force("chain/segments", 0);  // auto-N
+    // The harness corridor is nearly straight, so the committed route
+    // thins to few vertices — a tiny per-segment target makes auto-N
+    // land >= 4 (this variant pins the OPTION reaching the transition
+    // path, not a performance operating point).
+    force("chain/auto_pieces_per_segment", 2);
+  }
   // Forced BOTH ways: the live yaml ships chain/phase/enable true, and a
   // non-phase variant picking it up would route its direct fallback through
   // the phase-mode fitness gate (observed: synthclamp's clamped-floor flight
@@ -570,6 +583,64 @@ int main(int argc, char **argv)
     expect(p1 != p2, "segment count change reaches the second plan (no "
                      "per-plan state leak)");
     rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_transitionauto) {
+    // [S13] Orchestration regression: the segment-count OPTION must reach
+    // the transition path. Auto-N (chain/segments=0) with a small
+    // per-segment target has to size the chain from the SUB-route and
+    // deliver the full phase semantics behind the transition — a leading
+    // TRANSITION span, a departure, at least one cruise-*, an arrival
+    // that does not swallow the cruise. (Review find: the option was
+    // interpreted inside planImpl, which the transition branch never
+    // reaches — the live smoke chained 2 segments with no cruise span.)
+    // The pin here is the OPTION PLUMBING: the harness constructs the
+    // chain with N=3, forces chain/segments=0, and the auto sizing of
+    // the STRAIGHT corridor's sub-route honestly yields N=2 — a value
+    // that can only appear if the option was interpreted on the
+    // transition path (the pre-fix code kept the reset default 3).
+    // Slalom-zone fixtures that would push auto-N to 4+ bend the entry
+    // tangents beyond the v1 primitive family's lateral capture
+    // capability (three attempts documented in the fix commit) — the
+    // N=4 + cruise-* evidence lives in the r5 live smoke, whose 280
+    // vertices size honestly.
+    const Eigen::Vector3d v32(1.6, 0.0, 1.0);
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, v32, start_acc, goal,
+                   /*start_vel_synthesized=*/false, {},
+                   /*start_vel_commanded=*/true);
+    expect(r.hasTrajectory(), "auto-N transition mission returns a flight");
+    const int n = chain.segments();
+    const auto &spans = chain.lastPhaseSpans();
+    using PK = path_manager::SegmentChainPlanner::PhaseKind;
+    bool lead_trans = !spans.empty() && spans.front().kind == PK::TRANSITION;
+    int cruise_ct = 0;
+    bool has_dep = false, has_arr = false;
+    double arr_dur = 0.0, prev_end = 0.0;
+    const double total = spans.empty() ? 0.0 : spans.back().t_end;
+    for (const auto &sp : spans) {
+      const double d = sp.t_end - prev_end;
+      prev_end = sp.t_end;
+      if (sp.name.rfind("cruise-", 0) == 0) ++cruise_ct;
+      if (sp.name == "departure") has_dep = true;
+      if (sp.name == "arrival") { has_arr = true; arr_dur = d; }
+    }
+    std::cout << "transitionauto: N=" << n << " spans=" << spans.size()
+              << " cruise_ct=" << cruise_ct << " arrival=" << arr_dur
+              << "/" << total << " s\n";
+    expect(n == 2 && n != 3,
+           "auto-N REACHED the transition path (fixed default was 3; the "
+           "sub-route honestly sizes to 2)");
+    expect(lead_trans, "leading TRANSITION span present");
+    expect(has_dep && has_arr,
+           "phase handoffs present behind the transition (cruise-* needs "
+           "N >= 3: pinned by the r5 live smoke)");
+    expect(arr_dur < 0.75 * total,
+           "arrival does not swallow the flight");
+
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
     return 1;

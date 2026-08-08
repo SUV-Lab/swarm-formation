@@ -109,6 +109,18 @@
 - γ=32° 수용 시나리오: 165 m/s 회복(포획 t_go 5.1 s, 횡 9.7 m, 전이
   33.0 s), 125 m/s는 실속 게이트로 거부. 140 m/s는 점-추적 구법칙에서
   거부되었으나 선-추적은 정직 회복 — 경계 이동은 감사 카운터로 추적.
+- 오케스트레이션 결함(검토 발견, 2026-08-08): chain/segments 해석이
+  planImpl 안에 있어 전이 분기가 리셋 기본값(N=2, cruise 없음)으로
+  체인됨 — `readSegmentsOption()`으로 추출해 plan() 진입부(모든 미션
+  분기 앞)에서 한 번 해석. 수정 후 r5 재스모크: auto 276 pieces →
+  N=4, 위상 transition 37.4 / departure 17.2 / cruise-1 109.3 /
+  cruise-2 928.8 / arrival 21.6 s (이전엔 arrival이 1051.5 s를 흡수),
+  CLEAN. 회귀 transitionauto가 옵션 배관을 고정(`lastPhaseSpans()`
+  관측 창 추가); cruise-* 존재의 하니스 고정은 코리도 정점 예산과 v1
+  패밀리의 횡 포획 한계로 불가(슬라럼 픽스처 3회 시도 기록) — 라이브
+  증거가 담당.
+- 처방 가속 성공 스모크 (r5, −4·v̂ = [0, 3.392, −2.120]): winner 16,
+  repro err 4.44e-16 m/s², N=4, 접합 dA 2.4e-15, CLEAN.
 - 라이브 스모크 (r5, 2026-08-08, transition/enable=true): 성공 —
   winner 9, dwell 31.9 s, 적합 p/v/a 0.001/0.011/0.25, 접합 dP 9e-13 /
   dV·dA 2e-16 u, 선행 TRANSITION 37.4 s 포함 전체 1114.7 s 343조각,
