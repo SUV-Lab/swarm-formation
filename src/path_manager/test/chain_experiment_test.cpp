@@ -131,7 +131,7 @@ int main(int argc, char **argv)
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false,
        with_zonemultileg = false, with_transition = false,
-       with_transitionauto = false;
+       with_transitionauto = false, with_s8bounds = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -277,6 +277,7 @@ int main(int argc, char **argv)
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
     }
+    if (v == "s8bounds") { with_route = true; with_s8bounds = true; }
     if (v == "transitionauto") {
       with_route = true; with_phase = true; with_transition = true;
       with_transitionauto = true;
@@ -592,6 +593,76 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_s8bounds) {
+    // [S8] Classifier band boundaries, below/at/above. The band is a
+    // MODEL hard limit computed from the injected Parameters
+    // (model_activation_speed_mps .. speed_max_mps); boundary semantics
+    // are inclusive (V == edge is inside). gamma = 32 deg keeps the
+    // envelope problem non-empty so the classifier actually reaches the
+    // band check.
+    using SR = path_manager::SegmentChainPlanner::StartRegime;
+    const double g32 = 32.0 * M_PI / 180.0;
+    const auto classify = [&](double v_mps) {
+      const Eigen::Vector3d vel_u =
+          (v_mps / 100.0) *
+          Eigen::Vector3d(std::cos(g32), 0.0, std::sin(g32));
+      std::string why;
+      return chain.classifyStartState(start_pos, vel_u, Eigen::Vector3d::Zero(),
+                                      false, &why);
+    };
+    expect(classify(39.99) == SR::UNSUPPORTED,
+           "below the activation floor -> UNSUPPORTED");
+    expect(classify(40.0) == SR::TRANSITION_REQUIRED,
+           "AT the activation floor -> inside the band (inclusive)");
+    expect(classify(40.01) == SR::TRANSITION_REQUIRED,
+           "above the activation floor -> inside the band");
+    expect(classify(229.99) == SR::TRANSITION_REQUIRED,
+           "below the model ceiling -> inside the band");
+    expect(classify(230.0) == SR::TRANSITION_REQUIRED,
+           "AT the model ceiling -> inside the band (inclusive)");
+    expect(classify(230.01) == SR::UNSUPPORTED,
+           "above the model ceiling -> UNSUPPORTED");
+
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_s8bounds) {
+    // [S8] Classifier band boundaries, below/at/above. The band is a
+    // MODEL hard limit computed from the injected Parameters
+    // (model_activation_speed_mps .. speed_max_mps); boundary semantics
+    // are inclusive (V == edge is inside). gamma = 32 deg keeps the
+    // envelope problem non-empty so the classifier actually reaches the
+    // band check.
+    using SR = path_manager::SegmentChainPlanner::StartRegime;
+    const double g32 = 32.0 * M_PI / 180.0;
+    const auto classify = [&](double v_mps) {
+      const Eigen::Vector3d vel_u =
+          (v_mps / 100.0) *
+          Eigen::Vector3d(std::cos(g32), 0.0, std::sin(g32));
+      std::string why;
+      return chain.classifyStartState(start_pos, vel_u, Eigen::Vector3d::Zero(),
+                                      false, &why);
+    };
+    expect(classify(39.99) == SR::UNSUPPORTED,
+           "below the activation floor -> UNSUPPORTED");
+    expect(classify(40.0) == SR::TRANSITION_REQUIRED,
+           "AT the activation floor -> inside the band (inclusive)");
+    expect(classify(40.01) == SR::TRANSITION_REQUIRED,
+           "above the activation floor -> inside the band");
+    expect(classify(229.99) == SR::TRANSITION_REQUIRED,
+           "below the model ceiling -> inside the band");
+    expect(classify(230.0) == SR::TRANSITION_REQUIRED,
+           "AT the model ceiling -> inside the band (inclusive)");
+    expect(classify(230.01) == SR::UNSUPPORTED,
+           "above the model ceiling -> UNSUPPORTED");
+
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_transitionauto) {
     // [S13] Orchestration regression: the segment-count OPTION must reach
     // the transition path. Auto-N (chain/segments=0) with a small
@@ -705,10 +776,14 @@ int main(int argc, char **argv)
       std::string joined;
       for (const auto &nm : names) joined += nm + " ";
       std::cout << "transition: spans = " << joined << "\n";
-      expect(spans.size() >= 4 && spans[0].kind == PK::TRANSITION &&
-                 names[1] == "departure" && names[2] == "cruise-1" &&
-                 names[3] == "arrival",
-             "span order TRANSITION -> departure -> cruise-1 -> arrival");
+      expect(spans.size() == 4 && spans[0].kind == PK::TRANSITION &&
+                 spans[1].kind == PK::CRUISE &&
+                 spans[2].kind == PK::CRUISE &&
+                 spans[3].kind == PK::CRUISE &&
+                 names[0] == "transition" && names[1] == "departure" &&
+                 names[2] == "cruise-1" && names[3] == "arrival",
+             "EXACT span structure: [TRANSITION, CRUISE x3] named "
+             "transition/departure/cruise-1/arrival");
     }
 
     // A commanded acceleration the model cannot fly (50 g class) with

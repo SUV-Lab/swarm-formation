@@ -663,6 +663,162 @@ int main(int argc, char **argv)
            "speed above the model ceiling dies at the limit gate");
   }
 
+  if (run("s8limits")) {
+    // [S8] Hard-limit boundaries on the FLOWN polynomial, below/at/above
+    // per limit, all through the public validator with synthetic
+    // single-piece trajectories whose (V, q, load, CL, thrust) are exact
+    // closed forms — no propagation noise. Boundary semantics are
+    // inclusive within the validator's stated epsilons, so the AT point
+    // is deterministic. Every limit is COMPUTED from the one Parameters
+    // set, never a literal.
+    vd::Parameters p = baseParams();
+    const double ux = 100.0, uz = 100.0, z0 = 800.0;
+    const double rho = vd::airDensity(p, z0);
+    const double W = p.mass_kg * p.gravity_mps2;
+    const auto onePiece = [&](double vx, double az, double ax,
+                              double T) {
+      // p(t) = p0 + v t + a t^2/2 in UNIT space, level +x flight.
+      poly_traj::CoefficientMat cm = poly_traj::CoefficientMat::Zero();
+      cm.col(5) = Eigen::Vector3d(0.0, 0.0, z0 / uz);
+      cm.col(4) = Eigen::Vector3d(vx / ux, 0.0, 0.0);
+      cm.col(3) = Eigen::Vector3d(0.5 * ax / ux, 0.0, 0.5 * az / uz);
+      poly_traj::Trajectory t;
+      t.emplace_back(T, cm);
+      return t;
+    };
+    tp::TransitionRequest req;   // permissive closures; limits carry dyn
+    req.limits.dyn = p;
+    req.limits.unit_xy_m = ux;
+    req.limits.unit_z_m = uz;
+    req.limits.min_agl_m = 5.0;
+    req.limits.end_speed_min_mps = p.speed_min_mps;
+    req.limits.end_speed_max_mps = p.speed_max_mps;
+    req.zone_probe = [](const Eigen::Vector3d &) {
+      return tp::ZoneProbe::CLEAR;
+    };
+    req.terrain_z = [](double, double, double *e) { *e = 0.0; return true; };
+    req.pva_problem = [](const Eigen::Vector3d &, const Eigen::Vector3d &,
+                         const Eigen::Vector3d &) { return std::string(); };
+    double rm = 0.0, ri = 0.0;
+    const auto verdict = [&](poly_traj::Trajectory t) {
+      return tp::validateTransitionTrajectory(t, req, &rm, &ri);
+    };
+    const auto OK = tp::TrajectoryVerdict::OK;
+    const auto FAIL = tp::TrajectoryVerdict::FAIL;
+
+    // Speed floor (model activation): ballistic piece (zero lift, CL=0)
+    // so the CL limit cannot mask the speed gate at low V.
+    const double v_act = p.model_activation_speed_mps;
+    expect(verdict(onePiece(v_act - 0.01, -p.gravity_mps2, 0.0, 0.2)) ==
+               FAIL,
+           "V below the activation floor refused");
+    expect(verdict(onePiece(v_act, -p.gravity_mps2, 0.0, 0.2)) == OK,
+           "V AT the activation floor accepted (inclusive)");
+    expect(verdict(onePiece(v_act + 0.01, -p.gravity_mps2, 0.0, 0.2)) ==
+               OK,
+           "V above the activation floor accepted");
+
+    // Speed ceiling: level flight (CL small, q well under its own cap).
+    const double v_max = p.speed_max_mps;
+    expect(verdict(onePiece(v_max - 0.01, 0.0, 0.0, 0.5)) == OK,
+           "V below the model ceiling accepted");
+    expect(verdict(onePiece(v_max, 0.0, 0.0, 0.5)) == OK,
+           "V AT the model ceiling accepted (inclusive)");
+    expect(verdict(onePiece(v_max + 0.01, 0.0, 0.0, 0.5)) == FAIL,
+           "V above the model ceiling refused");
+
+    // Dynamic pressure: the cap moves around the piece's exact q.
+    {
+      const double v_q = 200.0;
+      const double q0 = 0.5 * rho * v_q * v_q;
+      vd::Parameters pq = p;
+      pq.dynamic_pressure_max_pa = q0 - 1.0;
+      req.limits.dyn = pq;
+      expect(verdict(onePiece(v_q, 0.0, 0.0, 0.5)) == FAIL,
+             "q above the pressure cap refused");
+      pq.dynamic_pressure_max_pa = q0;   // gate is strictly greater-than
+      req.limits.dyn = pq;
+      expect(verdict(onePiece(v_q, 0.0, 0.0, 0.5)) == OK,
+             "q AT the pressure cap accepted (inclusive)");
+      pq.dynamic_pressure_max_pa = q0 + 1.0;
+      req.limits.dyn = pq;
+      expect(verdict(onePiece(v_q, 0.0, 0.0, 0.5)) == OK,
+             "q below the pressure cap accepted");
+      req.limits.dyn = p;
+    }
+
+    // Load factor: vertical acceleration a_z gives n = 1 + a_z/g
+    // exactly. At n ~ 2.5 a SUSTAINED level pull exceeds either CL (low
+    // V) or thrust (induced drag at high V), so each point carries an
+    // along-track deceleration that pins the thrust demand at an
+    // interior 2 kN — the LOAD limit is then the only quantity crossing
+    // its boundary.
+    {
+      const double v_n = 229.0;
+      const double qs_n = 0.5 * rho * v_n * v_n * p.wing_area_m2;
+      const auto loadPiece = [&](double az) {
+        const double cl = p.mass_kg * (p.gravity_mps2 + az) / qs_n;
+        const double cd = p.zero_lift_drag_coefficient +
+                          p.induced_drag_factor * cl * cl;
+        const double ax = (2000.0 - qs_n * cd) / p.mass_kg;
+        return onePiece(v_n, az, ax, 0.2);
+      };
+      // A curving path rotates the lift frame, so n drifts (+1.1e-3
+      // measured over this piece: the ax*sin(gamma) coupling) — an
+      // EXACT-equality hold is not constructible for a dynamic
+      // quantity. The inclusive side is witnessed at n_max - 5e-3
+      // (inside the drift), the exclusive side at n_max + 0.01.
+      const double g0 = p.gravity_mps2;
+      expect(verdict(loadPiece((p.load_factor_max - 1.02) * g0)) == OK,
+             "load below the limit accepted");
+      expect(verdict(loadPiece((p.load_factor_max - 1.0 - 5e-3) * g0)) ==
+                 OK,
+             "load AT the boundary (within drift) accepted");
+      expect(verdict(loadPiece((p.load_factor_max - 0.99) * g0)) == FAIL,
+             "load above the limit refused");
+    }
+
+    // CL via the stall speed: level flight (n = 1) at V around
+    // sqrt(2 W / (rho S CLmax)) crosses the CL limit exactly.
+    {
+      const double v_s = std::sqrt(
+          2.0 * W / (rho * p.wing_area_m2 * p.lift_coefficient_max));
+      expect(verdict(onePiece(v_s * 1.001, 0.0, 0.0, 0.2)) == OK,
+             "CL below the limit (just above stall speed) accepted");
+      expect(verdict(onePiece(v_s, 0.0, 0.0, 0.2)) == OK,
+             "CL AT the limit accepted (inclusive)");
+      expect(verdict(onePiece(v_s * 0.999, 0.0, 0.0, 0.2)) == FAIL,
+             "CL above the limit (below stall speed) refused");
+    }
+
+    // Thrust ceiling/floor: along-track acceleration a_x demands
+    // T = D + m a_x at level flight; D is the model's own drag at the
+    // piece's exact CL.
+    {
+      const double v_t = 180.0;
+      const double q = 0.5 * rho * v_t * v_t;
+      const double qs = q * p.wing_area_m2;
+      const double cl = W / qs;   // level lift
+      const double cd = p.zero_lift_drag_coefficient +
+                        p.induced_drag_factor * cl * cl;
+      const double D = qs * cd;
+      const double ax_hi = (p.thrust_max_n - D) / p.mass_kg;
+      expect(verdict(onePiece(v_t, 0.0, ax_hi - 0.001, 0.2)) == OK,
+             "thrust below the ceiling accepted");
+      expect(verdict(onePiece(v_t, 0.0, ax_hi, 0.2)) == OK,
+             "thrust AT the ceiling accepted (inclusive)");
+      expect(verdict(onePiece(v_t, 0.0, ax_hi + 0.001, 0.2)) == FAIL,
+             "thrust above the ceiling refused");
+      const double ax_lo = (p.thrust_min_n - D) / p.mass_kg;
+      expect(verdict(onePiece(v_t, 0.0, ax_lo + 0.001, 0.2)) == OK,
+             "thrust above the floor accepted");
+      expect(verdict(onePiece(v_t, 0.0, ax_lo, 0.2)) == OK,
+             "thrust AT the floor accepted (inclusive)");
+      expect(verdict(onePiece(v_t, 0.0, ax_lo - 0.001, 0.2)) == FAIL,
+             "thrust below the floor (harder than idle drag) refused");
+    }
+  }
+
   if (run("determinism")) {
     auto req = makeRequest(baseParams());
     const auto a = tp::generate(req);
