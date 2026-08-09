@@ -519,6 +519,54 @@ double nearestOnSource(const SourcePath &src, const Eigen::Vector3d &p,
 
 }  // namespace
 
+WindowStats windowStats(const SourcePath &src, const RolloutResult &flown,
+                        double t_lo_s, double t_hi_s, double t_centre_s)
+{
+  WindowStats w;
+  if (src.empty() || flown.samples.size() < 2 || !flown.completed) return w;
+  // Flown arc, so source and flown are compared at the same progress
+  // fraction — the same matching the whole-flight metric uses.
+  std::vector<double> f_s(flown.samples.size(), 0.0);
+  for (size_t i = 1; i < flown.samples.size(); ++i)
+    f_s[i] = f_s[i - 1] +
+             (flown.samples[i].pos_m - flown.samples[i - 1].pos_m).norm();
+  const double flown_len = f_s.back();
+  if (!(flown_len > 0.0) || !(src.total_len_m > 0.0)) return w;
+
+  const auto flownAtFrac = [&](double f) {
+    const auto it = std::lower_bound(f_s.begin(), f_s.end(), f * flown_len);
+    size_t i = static_cast<size_t>(std::distance(f_s.begin(), it));
+    if (i >= flown.samples.size()) i = flown.samples.size() - 1;
+    return i;
+  };
+  const auto fracAtTime = [&](double t) {
+    const auto it = std::lower_bound(src.t_s.begin(), src.t_s.end(), t);
+    size_t i = static_cast<size_t>(std::distance(src.t_s.begin(), it));
+    if (i >= src.s_m.size()) i = src.s_m.size() - 1;
+    return std::make_pair(i, src.s_m[i] / src.total_len_m);
+  };
+
+  double sum_sq = 0.0;
+  int n = 0;
+  for (size_t i = 0; i < src.t_s.size(); ++i) {
+    if (src.t_s[i] < t_lo_s || src.t_s[i] > t_hi_s) continue;
+    const size_t fi = flownAtFrac(src.s_m[i] / src.total_len_m);
+    const double d = (flown.samples[fi].pos_m - src.pos_m[i]).norm();
+    w.max_xtrack_m = std::max(w.max_xtrack_m, d);
+    sum_sq += d * d;
+    ++n;
+  }
+  if (n == 0) return w;
+  w.rms_xtrack_m = std::sqrt(sum_sq / n);
+  const auto c = fracAtTime(t_centre_s);
+  const size_t fc = flownAtFrac(c.second);
+  w.pos_err_at_t_m = (flown.samples[fc].pos_m - src.pos_m[c.first]).norm();
+  w.speed_err_at_t_mps = std::abs(flown.samples[fc].vel_mps.norm() -
+                                  src.vel_mps[c.first].norm());
+  w.measured = true;
+  return w;
+}
+
 ReproductionMetrics evaluateReproduction(
     const SourcePath &src, const RolloutResult &flown,
     const md::Parameters &dyn, const SafetyHooks &hooks,

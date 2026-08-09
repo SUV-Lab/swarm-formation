@@ -194,16 +194,22 @@ RolloutResult flyWaypoints3Dof(const std::vector<Waypoint> &wps,
                                const FollowerStart &start,
                                const FollowerParams &prm);
 
-// The TRUE follower floor: fly the CONTINUOUS trajectory — aim at the
-// source point a lead time ahead along the path, command the source speed
-// there — with no waypoint geometry involved at all. This is the law's
-// intrinsic tracking ability; any waypoint set is bounded below by it.
+// CONTINUOUS-REFERENCE BASELINE: fly the continuous trajectory — aim at
+// the source point a lead time ahead along the path, command the source
+// speed there — with no waypoint geometry involved.
 //
-// The dense-waypoint rollout is NOT this: adding waypoints also changes
-// where the follower aims and when it switches legs, so a 64-waypoint run
-// measures a different aiming regime rather than a floor (review find: a
-// 64-waypoint rollout scored WORSE than an 8-waypoint one, which a floor
-// cannot do).
+// It is a BASELINE, not a floor. A waypoint rollout can beat it, and does
+// (measured: continuous 298.8 m vs an 8-waypoint list at 261.4 m on the
+// synthetic curve), because the two aim differently — the waypoint
+// follower steers at a point on the CURRENT LEG LINE while this one
+// steers at a point on the CURVE, and on a bending path the leg line can
+// be the better guide. Two consequences, both mandatory when quoting it:
+//   - it does not bound anything, so no row is "at the floor";
+//   - a comparison is only meaningful at the SAME lead time, since the
+//     lead dominates both (review find: a best-over-lead baseline was
+//     quoted against fixed-lead waypoint rows).
+// A dense-waypoint rollout is likewise NOT a floor: changing the count
+// changes the aiming regime too.
 RolloutResult flyReferenceTrack(const SourcePath &src,
                                 const FollowerStart &start,
                                 const FollowerParams &prm);
@@ -325,6 +331,19 @@ struct EvalParams {
   // a missing source refuses rather than guesses.
   bool terrain_lookup_required{true};
 };
+
+// Deviation restricted to a source TIME window, matched by arc fraction
+// like the main metric. Used to ask whether a specific stretch — a phase
+// junction, say — reproduces as well as the flight as a whole.
+struct WindowStats {
+  bool measured{false};
+  double max_xtrack_m{0.0};
+  double rms_xtrack_m{0.0};
+  double pos_err_at_t_m{0.0};      // at the window's centre time
+  double speed_err_at_t_mps{0.0};
+};
+WindowStats windowStats(const SourcePath &src, const RolloutResult &flown,
+                        double t_lo_s, double t_hi_s, double t_centre_s);
 
 ReproductionMetrics evaluateReproduction(
     const SourcePath &src, const RolloutResult &flown,

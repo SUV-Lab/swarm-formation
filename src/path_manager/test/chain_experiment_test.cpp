@@ -606,6 +606,29 @@ int main(int argc, char **argv)
     // The synthetic harness pins the machinery; this one asks whether the
     // launch-transition flight survives being encoded as waypoints.
     namespace we = path_manager::waypoint_eval;
+    // Zones must actually EXIST or "zero hard-zone contacts" is a check on
+    // an empty list (review find: the first table reported zoneH=0 with no
+    // zones installed). Two avoidable zones flanking the corridor: the
+    // committed route goes around them, and a flown path that cuts corners
+    // would touch them.
+    {
+      std::vector<path_manager::RiskZone> zs;
+      path_manager::RiskZone z;
+      // Placed DOWNSTREAM of the transition's entry region (entry
+      // candidates sit near arc 50-115 u): zones that bend the route
+      // there rotate the entry tangents past what the v1 primitive
+      // family can capture, and the mission fails for a reason that has
+      // nothing to do with waypoints.
+      z.center = Eigen::Vector3d(225.0, 139.0, 2.0);
+      z.reach = 11.0;
+      z.peak = 0.7;
+      zs.push_back(z);
+      z.center = Eigen::Vector3d(285.0, 161.0, 2.0);
+      z.reach = 11.0;
+      z.peak = 0.7;
+      zs.push_back(z);
+      pm->setRiskZonesRuntime(zs);
+    }
     const Eigen::Vector3d v32(1.6, 0.0, 1.0);   // 32 deg, out of cruise cone
     const path_manager::PlanResult r =
         chain.plan(start_pos, v32, start_acc, goal,
@@ -640,6 +663,9 @@ int main(int argc, char **argv)
     // snapshot. A lookup that fails voids the evaluation rather than
     // assuming sea level.
     const auto snap = pm->zonePolicySnapshot();
+    expect(snap.valid && snap.zones.size() >= 2,
+           "zone policy snapshot is valid and NON-EMPTY (a zero-contact "
+           "result on an empty list would prove nothing)");
     we::SafetyHooks hooks;
     hooks.min_agl_m = pm->minGoalAgl() * uz;
     hooks.terrain_z = [&](double x_m, double y_m, double *e) {
@@ -680,21 +706,32 @@ int main(int argc, char **argv)
     // execution layer.
     ep.max_xtrack_gate_m = we::derivedAcceptRadius(fprm);
 
-    // The law's own floor on THIS flight, minimized over its aiming
-    // parameter — the reference every row is read against.
-    double floor_m = 1e18, best_lead = 0.0;
+    // Continuous-reference baseline. Reported TWICE and labeled, because
+    // the lead time dominates both followers: matched-lead is the only
+    // apples-to-apples comparison against the waypoint rows (which use the
+    // default lead), while best-over-lead says what the law can do when
+    // its own aiming is tuned. Quoting the tuned number against fixed-lead
+    // rows was the review's finding.
+    double base_matched = -1.0, base_best = 1e18, best_lead = 0.0;
+    {
+      const auto rt = we::flyReferenceTrack(src, fstart, fprm);
+      const auto mt = we::evaluateReproduction(src, rt, *dynp, hooks, ep);
+      if (mt.measured) base_matched = mt.max_xtrack_m;
+    }
     for (double lead : {0.5, 1.0, 2.0, 4.0}) {
       auto p2 = fprm;
       p2.lead_time_s = lead;
       const auto rt = we::flyReferenceTrack(src, fstart, p2);
       const auto mt = we::evaluateReproduction(src, rt, *dynp, hooks, ep);
-      if (mt.measured && mt.max_xtrack_m < floor_m) {
-        floor_m = mt.max_xtrack_m;
+      if (mt.measured && mt.max_xtrack_m < base_best) {
+        base_best = mt.max_xtrack_m;
         best_lead = lead;
       }
     }
-    const bool floor_ok = floor_m < 1e17;
+    const bool floor_ok = base_best < 1e17;
     std::printf("[WPE] %s\n", we::scopeLabel());
+    std::printf("[WPE] source: production planner output on SYNTHETIC "
+                "harness terrain (makeHillsMap) — not a full-map mission\n");
     std::printf("[WPE] planned flight: %.1f s, %d pieces, %.0f m, %zu "
                 "phase span(s)\n",
                 flight.getTotalDuration(), flight.getPieceNum(),
@@ -703,10 +740,13 @@ int main(int argc, char **argv)
       std::printf("[WPE]   span %-10s t_end %.1f s\n", sp.name.c_str(),
                   sp.t_end);
     if (floor_ok)
-      std::printf("[WPE] tracking floor (continuous reference, best lead "
-                  "%.1f s): %.1f m\n", best_lead, floor_m);
+      std::printf("[WPE] continuous-reference baseline: %.1f m at the SAME "
+                  "lead as the rows (%.1f s), %.1f m at its own best lead "
+                  "(%.1f s). A BASELINE, not a bound — a waypoint list can "
+                  "beat it.\n",
+                  base_matched, fprm.lead_time_s, base_best, best_lead);
     else
-      std::printf("[WPE] tracking floor: UNMEASURED (no lead completed)\n");
+      std::printf("[WPE] continuous-reference baseline: UNMEASURED\n");
 
     std::printf("\nstrategy    N   maxXT[m]  rmsXT[m]  lenR   endErr[m] "
                 "minAGL[m] zoneH  verdict\n");
@@ -726,36 +766,122 @@ int main(int argc, char **argv)
                   m.verdictName());
       return m;
     };
-    int completed = 0, agl_ok = 0, zone_ok = 0;
+    int completed = 0, full_pass = 0, zone_fail_rows = 0;
     double best_dev = 1e18;
+    std::vector<we::Waypoint> best_set;
     for (int n : {8, 16, 32, 64}) {
-      const auto mu = row("uniform", we::extractUniformArc(src, n));
-      const auto ma = row("adaptive", we::extractCurvatureAdaptive(src, n));
-      for (const auto *m : {&mu, &ma}) {
-        if (!m->measured) continue;
+      const auto wu = we::extractUniformArc(src, n);
+      const auto wa = we::extractCurvatureAdaptive(src, n);
+      const auto mu = row("uniform", wu);
+      const auto ma = row("adaptive", wa);
+      const std::pair<const we::ReproductionMetrics *,
+                      const std::vector<we::Waypoint> *>
+          rows[] = {{&mu, &wu}, {&ma, &wa}};
+      for (const auto &e : rows) {
+        if (!e.first->measured) continue;
         ++completed;
-        best_dev = std::min(best_dev, m->max_xtrack_m);
-        if (m->gate_agl_pass) ++agl_ok;
-        if (m->gate_zone_pass) ++zone_ok;
+        // ONE row must satisfy terrain AND zone AND deviation together —
+        // counting them separately let different rows cover different
+        // gates (review find).
+        if (e.first->verdict() ==
+            we::ReproductionMetrics::Verdict::kPass)
+          ++full_pass;
+        if (e.first->zone_measured && e.first->zone_hard_contacts > 0)
+          ++zone_fail_rows;
+        if (e.first->max_xtrack_m < best_dev) {
+          best_dev = e.first->max_xtrack_m;
+          best_set = *e.second;
+        }
       }
     }
     std::printf("[WPE] best deviation %.1f m on a %.0f m flight (%.2f%%), "
-                "floor %.1f m, deviation gate %.1f m (experiment "
-                "parameter, not a validated requirement)\n",
+                "matched-lead baseline %.1f m, deviation gate %.1f m "
+                "(experiment parameter, not a validated requirement)\n",
                 best_dev, src.total_len_m,
-                100.0 * best_dev / std::max(1.0, src.total_len_m), floor_m,
-                ep.max_xtrack_gate_m);
+                100.0 * best_dev / std::max(1.0, src.total_len_m),
+                base_matched, ep.max_xtrack_gate_m);
 
     expect(completed >= 6, "most waypoint sets fly the real flight");
-    expect(floor_ok, "the tracking floor is measurable on the real flight");
-    // Safety must be MEASURED here (real hooks exist) — a SKIPPED gate on
-    // a real-terrain run would mean the hooks silently did nothing.
-    expect(agl_ok >= 1 && zone_ok >= 1,
-           "at least one waypoint set keeps terrain and zone clearance on "
-           "the FLOWN path (measured, not skipped)");
-    if (floor_ok)
-      expect(best_dev <= 3.0 * floor_m,
-             "the best waypoint set is within 3x the law's own floor");
+    expect(floor_ok, "the continuous-reference baseline is measurable");
+    expect(full_pass >= 1,
+           "at least ONE waypoint set passes terrain, zone AND deviation "
+           "in the SAME row (verdict PASS, safety measured not skipped)");
+    // The zone gate has to be able to FAIL something, or a table of
+    // passes proves only that nothing was ever at risk. Rows that cut
+    // corners near the installed zones do fail it — reported, not
+    // asserted, since which row cuts depends on the route.
+    std::printf("[WPE] rows failing on hard-zone contact: %d of %d "
+                "(a live gate, not an empty list)\n",
+                zone_fail_rows, completed);
+
+    // ---- phase junction stats: does the seam reproduce as well as the
+    // flight as a whole? The whole-flight maximum can hide a local spike
+    // exactly where the transition hands over.
+    if (!best_set.empty()) {
+      const auto rb = we::flyWaypoints3Dof(best_set, fstart, fprm);
+      bool phase_named = false;
+      for (const auto &sp : spans)
+        if (sp.name == "departure") phase_named = true;
+      std::printf("\n[WPE] junction windows (best set, +/-5 s). %s\n"
+                  "junction              t[s]   maxXT[m]  rmsXT[m]  "
+                  "posErr[m] spdErr[m/s]\n",
+                  phase_named
+                      ? "Phase labels applied."
+                      : "Phase handoff screening did not apply here (zones "
+                        "narrowed the calm windows), so the chain segments "
+                        "carry generic names — the transition handoff is "
+                        "still the first junction.");
+      double worst_junction = 0.0;
+      for (size_t i = 0; i + 1 < spans.size(); ++i) {
+        const double tj = spans[i].t_end;
+        const auto ws = we::windowStats(src, rb, tj - 5.0, tj + 5.0, tj);
+        if (!ws.measured) {
+          std::printf("%-20s %6.1f  n/a\n", spans[i].name.c_str(), tj);
+          continue;
+        }
+        std::printf("%-10s->%-8s %6.1f  %8.1f %8.1f %9.1f %10.2f\n",
+                    spans[i].name.c_str(), spans[i + 1].name.c_str(), tj,
+                    ws.max_xtrack_m, ws.rms_xtrack_m, ws.pos_err_at_t_m,
+                    ws.speed_err_at_t_mps);
+        worst_junction = std::max(worst_junction, ws.max_xtrack_m);
+      }
+      std::printf("[WPE] worst junction-window deviation %.1f m vs "
+                  "whole-flight %.1f m\n", worst_junction, best_dev);
+      expect(worst_junction <= 1.5 * std::max(best_dev, 1.0),
+             "no phase junction reproduces markedly worse than the flight "
+             "as a whole (the seam is not a hidden spike)");
+
+      // ---- speed-channel ablation: does the output schema need speed?
+      std::vector<we::Waypoint> pos_only = best_set;
+      for (auto &w : pos_only) w.speed_mps = 0.0;   // follower cruises
+      const auto rp = we::flyWaypoints3Dof(pos_only, fstart, fprm);
+      const auto mp = we::evaluateReproduction(src, rp, *dynp, hooks, ep);
+      const auto mb = we::evaluateReproduction(src, rb, *dynp, hooks, ep);
+      std::printf("\n[WPE] speed-channel ablation (same waypoint "
+                  "positions)\n");
+      const auto abl = [&](const char *tag, const we::ReproductionMetrics &m) {
+        if (!m.measured) {
+          std::printf("%-16s n/a(%s)\n", tag, we::failName(m.fail));
+          return;
+        }
+        std::printf("%-16s maxXT %7.1f m  durRatio %5.3f  timeSkew %6.1f s "
+                    " endErr %6.1f m  %s\n", tag, m.max_xtrack_m,
+                    m.duration_ratio, m.max_time_skew_s,
+                    m.terminal_pos_err_m, m.verdictName());
+      };
+      abl("position+speed", mb);
+      abl("position only", mp);
+      expect(mb.measured, "position+speed set flies");
+      // Not asserted which wins on deviation — the point of the ablation
+      // is the TIMING channel, and the numbers decide the output schema
+      // rather than a prior belief deciding them.
+      if (mb.measured && mp.measured)
+        std::printf("[WPE] speed channel changes deviation by %+.1f m and "
+                    "duration ratio by %+.3f — the evidence for whether "
+                    "the output message needs a speed field\n",
+                    mp.max_xtrack_m - mb.max_xtrack_m,
+                    mp.duration_ratio - mb.duration_ratio);
+    }
 
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
