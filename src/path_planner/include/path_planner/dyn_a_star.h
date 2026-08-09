@@ -297,11 +297,45 @@ private:
     // per-cell shared_lock there cost ~60 s of rwlock traffic on a 686M-cell
     // grid). Keep in sync with checkOccupancy_esdf.
     inline bool checkOccupancyBulk_esdf(const Eigen::Vector3d &pos) {
-        if (terrain_height_) {
-            const float h = terrain_height_(pos.x(), pos.y());
-            if (std::isfinite(h) &&
-                pos.z() - static_cast<double>(h) < obstacle_margin_) return true;
-        }
+        return checkOccupancyBulkCol_esdf(pos, terrainColumn(pos.x(), pos.y()));
+    }
+
+    // Both DEM queries (terrain_height_, terrain_hgrad_) are std::function
+    // indirections into a heightmap: they depend on (x, y) only, so their
+    // results are constant down a z column. A caller that walks a whole
+    // column — fm2BuildSpeedMap, ~110 cells deep — resolves the column ONCE
+    // through terrainColumn/roughColumn and passes it to the *Col twins
+    // below. Same values in the same order, so F is bit-identical either way.
+    struct TerrainCol {
+        float occ_h = std::numeric_limits<float>::quiet_NaN();  // surface (occupancy)
+        float rough_h = 0.f;    // surface as reported by the gradient query
+        double slope = 0.0;     // |dh/dxy| at (x, y)
+        bool rough_ok = false;  // gradient query succeeded AND roughness is on
+    };
+    // Gradient query only — the A* cost path needs roughness but not the
+    // occupancy height, and must not pay for a lookup it will not read.
+    inline TerrainCol roughColumn(double x, double y) const {
+        TerrainCol c;
+        if (rough_weight_ <= 0.0 || !terrain_hgrad_) return c;
+        float h = 0.f, gx = 0.f, gy = 0.f;
+        if (!terrain_hgrad_(x, y, &h, &gx, &gy)) return c;
+        c.rough_ok = true;
+        c.rough_h = h;
+        c.slope = std::hypot(static_cast<double>(gx), static_cast<double>(gy));
+        return c;
+    }
+    inline TerrainCol terrainColumn(double x, double y) const {
+        TerrainCol c = roughColumn(x, y);
+        if (terrain_height_) c.occ_h = terrain_height_(x, y);
+        return c;
+    }
+    inline bool checkOccupancyBulkCol_esdf(const Eigen::Vector3d &pos,
+                                           const TerrainCol &col) {
+        // occ_h is NaN when no heightmap is installed, which fails the
+        // isfinite test exactly as the absent-callback branch used to.
+        if (std::isfinite(col.occ_h) &&
+            pos.z() - static_cast<double>(col.occ_h) < obstacle_margin_)
+            return true;
         if (!sdf_ || !sdf_->hasData()) return false;
         float d = sdf_->getDistanceBulk(pos);
         if (!std::isfinite(d)) return true;  // outside map = blocked
@@ -331,25 +365,26 @@ private:
     // FM2 roughness detour. AGL fade: full effect below kRoughAglNear, zero
     // above kRoughAglFar — a high transit over a ridge is not "rough", only
     // terrain-following across it is.
-    inline double getRoughCost(const Eigen::Vector3d &pos) const {
-        if (rough_weight_ <= 0.0 || !terrain_hgrad_) return 0.0;
-        constexpr double kRoughAglNear = 1.0;   // full effect below (units)
-        constexpr double kRoughAglFar  = 2.5;   // zero at/above (units)
-        // Cost cap: bends routes as hard as a mid-strength zone moat
-        // (~ alpha 30 * norm 0.33) but stays far below the barrier K, and a
-        // DEM cliff's huge |dh/dxy| cannot act like a binary wall.
-        constexpr double kRoughCostCap = 10.0;
-        float h = 0.f, gx = 0.f, gy = 0.f;
-        if (!terrain_hgrad_(pos.x(), pos.y(), &h, &gx, &gy)) return 0.0;
-        const double agl = pos.z() - static_cast<double>(h);
+    static constexpr double kRoughAglNear = 1.0;   // full effect below (units)
+    static constexpr double kRoughAglFar  = 2.5;   // zero at/above (units)
+    // Cost cap: bends routes as hard as a mid-strength zone moat
+    // (~ alpha 30 * norm 0.33) but stays far below the barrier K, and a
+    // DEM cliff's huge |dh/dxy| cannot act like a binary wall.
+    static constexpr double kRoughCostCap = 10.0;
+    // The roughness formula lives here alone; getRoughCost is the per-point
+    // entry and fm2BuildSpeedMap reuses one column down its z axis.
+    inline double getRoughCostCol(double z, const TerrainCol &col) const {
+        if (!col.rough_ok) return 0.0;
+        const double agl = z - static_cast<double>(col.rough_h);
         if (agl >= kRoughAglFar) return 0.0;
-        const double slope = std::hypot(static_cast<double>(gx),
-                                        static_cast<double>(gy));
-        if (slope <= rough_slope0_) return 0.0;
-        double r = rough_weight_ * (slope - rough_slope0_);
+        if (col.slope <= rough_slope0_) return 0.0;
+        double r = rough_weight_ * (col.slope - rough_slope0_);
         if (agl > kRoughAglNear)
             r *= (kRoughAglFar - agl) / (kRoughAglFar - kRoughAglNear);
         return std::min(r, kRoughCostCap);
+    }
+    inline double getRoughCost(const Eigen::Vector3d &pos) const {
+        return getRoughCostCol(pos.z(), roughColumn(pos.x(), pos.y()));
     }
 
     // [GNRON] Per-zone endpoint taper factor in [0, 1]: 0 at a contained

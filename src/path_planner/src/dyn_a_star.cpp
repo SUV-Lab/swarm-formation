@@ -1592,17 +1592,37 @@ void PathSearcher::fm2BuildSpeedMap()
     // callbacks) simply wait out the build (~seconds), which is the correct
     // semantic anyway: a mid-build obstacle change would tear the speed map.
     const auto sdf_bulk_guard = sdf_ ? sdf_->bulkReadGuard() : nullptr;
+
+    // COLUMN HOIST: the two DEM queries are std::function indirections that
+    // read the heightmap at (x, y), so their answers are constant down a z
+    // column — and this grid is ~110 cells deep, so resolving them per cell
+    // issued 36.4M lookups where only fcnx_*fcny_ distinct columns exist.
+    // Resolve the columns once here. The cell loop below keeps its i-fastest
+    // order (fm2Flat = i + fcnx_*(j + fcny_*k)) so the write stream stays
+    // sequential; hoisting by restructuring to a k-innermost loop instead
+    // would stride 1.3 MB per step and give the cache back what the DEM
+    // saved. The column table is fcnx_*fcny_ entries, a rounding error
+    // against fm2_F_ itself.
+    std::vector<TerrainCol> cols((size_t)fcnx_ * (size_t)fcny_);
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int j = 0; j < fcny_; ++j)
+      for (int i = 0; i < fcnx_; ++i)
+        cols[(size_t)j * fcnx_ + i] =
+            terrainColumn(map_origin_.x() + (i + 0.5) * cres,
+                          map_origin_.y() + (j + 0.5) * cres);
+
     long hard_blocked = 0;
     #pragma omp parallel for collapse(2) schedule(static) reduction(+:hard_blocked)
     for (int k = 0; k < fcnz_; ++k)
       for (int j = 0; j < fcny_; ++j)
         for (int i = 0; i < fcnx_; ++i) {
+            const TerrainCol &col = cols[(size_t)j * fcnx_ + i];
             const Eigen::Vector3d w = map_origin_ + Eigen::Vector3d(
                 (i + 0.5) * cres, (j + 0.5) * cres, (k + 0.5) * cres_z);
             bool blocked = false;
             if (ground_height_ > -0.5 && w.z() < ground_height_) blocked = true;
             else if (virtual_ceil_height_ > -0.5 && w.z() > virtual_ceil_height_) blocked = true;
-            else if (checkOccupancyBulk_esdf(w)) blocked = true;
+            else if (checkOccupancyBulkCol_esdf(w, col)) blocked = true;
             if (blocked) {
                 // kFMin porosity on purpose — in BOTH modes. It models
                 // low-clearance terrain-following seam corridors (terrain-to-shadow
@@ -1628,7 +1648,7 @@ void PathSearcher::fm2BuildSpeedMap()
                 // inside non-exempt zones), modulated by obstacle distance.
                 // Terrain roughness adds in its own currency ([ROUGH]).
                 const double r = getRiskNorm(w);
-                double risk_cost = risk_alpha_ * r + getRoughCost(w);
+                double risk_cost = risk_alpha_ * r + getRoughCostCol(w.z(), col);
                 if (insideBarrierZone(w)) risk_cost += risk_barrier_;
                 // Altitude-band penalty (see altBandCost): keeps the
                 // geodesic at mission altitude over open water; it leaves the
