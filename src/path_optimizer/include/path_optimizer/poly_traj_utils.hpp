@@ -322,7 +322,10 @@ namespace poly_traj
             }
             while (fabs(RootFinder::polyVal(eq, r)) < DBL_EPSILON)
             {
-                r = 0.5 * (duration + 1.0);
+                // Converge toward duration from above (cf. getMaxVelRate);
+                // the old constant re-assignment could loop forever and, for
+                // duration > 1, even land INSIDE the search interval.
+                r = 0.5 * (r + duration);
             }
             std::set<double> roots =
                 RootFinder::solvePolynomial(eq, l, r, 1e-6);
@@ -350,7 +353,9 @@ namespace poly_traj
                     pro_pt = p;
                 }
             }
-            return min_dist > 0;
+            // >= 0: a query point exactly ON the trajectory is a valid
+            // projection (distance 0), not a failure.
+            return min_dist >= 0;
         }
 
         inline bool intersection_plane(const Eigen::Vector3d p,
@@ -369,7 +374,8 @@ namespace poly_traj
             }
             while (fabs(RootFinder::polyVal(eq, r)) < DBL_EPSILON)
             {
-                r = 0.5 * (duration + 1.0);
+                // Same converging bracket fix as project_pt above.
+                r = 0.5 * (r + duration);
             }
             std::set<double> roots =
                 RootFinder::solvePolynomial(eq, l, r, 1e-6);
@@ -1017,112 +1023,6 @@ namespace poly_traj
             return;
         }
 
-        template <typename EIGENVEC>
-        inline void addTimeIntPenalty(const Eigen::VectorXi cons,
-                                      const Eigen::VectorXi &idxHs,
-                                      const std::vector<Eigen::MatrixXd> &cfgHs,
-                                      const double vmax,
-                                      const double amax,
-                                      const Eigen::Vector3d ci,
-                                      double &cost,
-                                      EIGENVEC &gdT,
-                                      Eigen::MatrixXd &gdC) const
-        {
-            double pena = 0.0;
-            const double vmaxSqr = vmax * vmax;
-            const double amaxSqr = amax * amax;
-
-            Eigen::Vector3d pos, vel, acc, jer;
-            double step, alpha;
-            double s1, s2, s3, s4, s5;
-            Eigen::Matrix<double, 6, 1> beta0, beta1, beta2, beta3;
-            Eigen::Vector3d outerNormal;
-            int K;
-            double violaPos, violaVel, violaAcc;
-            double violaPosPenaD, violaVelPenaD, violaAccPenaD;
-            double violaPosPena, violaVelPena, violaAccPena;
-            Eigen::Matrix<double, 6, 3> gradViolaVc, gradViolaAc;
-            double gradViolaVt, gradViolaAt;
-            double omg;
-
-            int innerLoop, idx;
-            for (int i = 0; i < N; i++)
-            {
-                const auto &c = b.block<6, 3>(i * 6, 0);
-                step = T1(i) / cons(i);
-                s1 = 0.0;
-                innerLoop = cons(i) + 1;
-                for (int j = 0; j < innerLoop; j++)
-                {
-                    s2 = s1 * s1;
-                    s3 = s2 * s1;
-                    s4 = s2 * s2;
-                    s5 = s4 * s1;
-                    beta0 << 1.0, s1, s2, s3, s4, s5;
-                    beta1 << 0.0, 1.0, 2.0 * s1, 3.0 * s2, 4.0 * s3, 5.0 * s4;
-                    beta2 << 0.0, 0.0, 2.0, 6.0 * s1, 12.0 * s2, 20.0 * s3;
-                    beta3 << 0.0, 0.0, 0.0, 6.0, 24.0 * s1, 60.0 * s2;
-                    alpha = 1.0 / cons(i) * j;
-                    pos = c.transpose() * beta0;
-                    vel = c.transpose() * beta1;
-                    acc = c.transpose() * beta2;
-                    jer = c.transpose() * beta3;
-                    violaVel = vel.squaredNorm() - vmaxSqr;
-                    violaAcc = acc.squaredNorm() - amaxSqr;
-
-                    omg = (j == 0 || j == innerLoop - 1) ? 0.5 : 1.0;
-
-                    idx = idxHs(i);
-                    K = cfgHs[idx].cols();
-                    for (int k = 0; k < K; k++)
-                    {
-                        outerNormal = cfgHs[idx].col(k).head<3>();
-                        violaPos = outerNormal.dot(pos - cfgHs[idx].col(k).tail<3>());
-                        if (violaPos > 0.0)
-                        {
-                            violaPosPenaD = violaPos * violaPos;
-                            violaPosPena = violaPosPenaD * violaPos;
-                            violaPosPenaD *= 3.0;
-                            gdC.block<6, 3>(i * 6, 0) += omg * step * ci(0) * violaPosPenaD * beta0 * outerNormal.transpose();
-                            gdT(i) += omg * (ci(0) * violaPosPenaD * alpha * outerNormal.dot(vel) * step +
-                                             ci(0) * violaPosPena / cons(i));
-                            pena += omg * step * ci(0) * violaPosPena;
-                        }
-                    }
-
-                    if (violaVel > 0.0)
-                    {
-                        violaVelPenaD = violaVel * violaVel;
-                        violaVelPena = violaVelPenaD * violaVel;
-                        violaVelPenaD *= 3.0;
-                        gradViolaVc = 2.0 * beta1 * vel.transpose();
-                        gradViolaVt = 2.0 * alpha * vel.transpose() * acc;
-                        gdC.block<6, 3>(i * 6, 0) += omg * step * ci(1) * violaVelPenaD * gradViolaVc;
-                        gdT(i) += omg * (ci(1) * violaVelPenaD * gradViolaVt * step +
-                                         ci(1) * violaVelPena / cons(i));
-                        pena += omg * step * ci(1) * violaVelPena;
-                    }
-
-                    if (violaAcc > 0.0)
-                    {
-                        violaAccPenaD = violaAcc * violaAcc;
-                        violaAccPena = violaAccPenaD * violaAcc;
-                        violaAccPenaD *= 3.0;
-                        gradViolaAc = 2.0 * beta2 * acc.transpose();
-                        gradViolaAt = 2.0 * alpha * acc.transpose() * jer;
-                        gdC.block<6, 3>(i * 6, 0) += omg * step * ci(2) * violaAccPenaD * gradViolaAc;
-                        gdT(i) += omg * (ci(2) * violaAccPenaD * gradViolaAt * step +
-                                         ci(2) * violaAccPena / cons(i));
-                        pena += omg * step * ci(2) * violaAccPena;
-                    }
-
-                    s1 += step;
-                }
-            }
-
-            cost += pena;
-            return;
-        }
 
     public:
         inline void reset(const Eigen::Matrix3d &headState,
@@ -1147,6 +1047,13 @@ namespace poly_traj
             {
 
                 T1(0) = ts(0);
+                // Keep the T2..T5 powers valid for the single-piece branch
+                // too: getTrajJerkCost/addGradJbyT read them for every N, and
+                // they were left unsized (empty VectorXd) on this path.
+                T2 = T1.cwiseProduct(T1);
+                T3 = T2.cwiseProduct(T1);
+                T4 = T2.cwiseProduct(T2);
+                T5 = T4.cwiseProduct(T1);
                 double t1_inv = 1.0 / T1(0);
                 double t2_inv = t1_inv * t1_inv;
                 double t3_inv = t2_inv * t1_inv;
@@ -1360,31 +1267,6 @@ namespace poly_traj
             addGradJbyC(gdC);
         }
 
-        template <typename EIGENVEC, typename EIGENMAT>
-        inline void evalTrajCostGrad(const Eigen::VectorXi &cons,
-                                     const Eigen::VectorXi &idxHs,
-                                     const std::vector<Eigen::MatrixXd> &cfgHs,
-                                     const double &vmax,
-                                     const double &amax,
-                                     const Eigen::Vector3d &ci,
-                                     double &cost,
-                                     EIGENVEC &gdT,
-                                     EIGENMAT &gdInPs)
-        {
-            gdT.setZero();
-            gdInPs.setZero();
-            gdC.setZero();
-
-            cost = getTrajJerkCost();
-            addGradJbyT(gdT);
-            addGradJbyC(gdC);
-
-            addTimeIntPenalty(cons, idxHs, cfgHs, vmax, amax, ci, cost, gdT, gdC);
-
-            solveAdjGradC(gdC);
-            addPropCtoT(gdC, gdT);
-            addPropCtoP(gdC, gdInPs);
-        }
 
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     };

@@ -6,6 +6,15 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 14)
 endif()
 
+# Set build type to Release if not specified
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release")
+endif()
+
+# Set optimization flags  
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g -DNDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -Wall -g")
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()

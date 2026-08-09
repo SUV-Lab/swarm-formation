@@ -8,10 +8,36 @@ bool SwarmGraph::updateGraph(const std::vector<Eigen::Vector3d> &swarm) {
 
     nodes = swarm;
     
+    // If desired formation is not set yet, just return false without error
+    if (!have_desired) {
+        RCLCPP_DEBUG(rclcpp::get_logger("SwarmGraph"), "Desired formation not set yet, skipping update");
+        return false;
+    }
+    
     if (nodes.size() != nodes_des.size()) {
         std::cout << "swarm size : " << nodes.size() << std::endl;
-        RCLCPP_WARN(rclcpp::get_logger("SwarmGraph"), "Size of swarm formation vector is incorrect.");
-        return false;
+        RCLCPP_WARN(rclcpp::get_logger("SwarmGraph"), 
+                    "Size of swarm formation vector is incorrect. Current: %zu, Desired: %zu", 
+                    nodes.size(), nodes_des.size());
+        
+        // If sizes don't match, resize nodes_des to match current swarm size
+        if (nodes.size() > 0) {
+            RCLCPP_WARN(rclcpp::get_logger("SwarmGraph"), 
+                        "Resizing desired formation from %zu to %zu to match current swarm", 
+                        nodes_des.size(), nodes.size());
+            
+            // Keep existing desired positions and pad with zeros or repeat last position
+            std::vector<Eigen::Vector3d> new_nodes_des = nodes_des;
+            new_nodes_des.resize(nodes.size(), Eigen::Vector3d::Zero());
+            nodes_des = new_nodes_des;
+            
+            // Also resize initial desired formation
+            if (!nodes_des_init.empty()) {
+                nodes_des_init.resize(nodes.size(), Eigen::Vector3d::Zero());
+            }
+        } else {
+            return false;
+        }
     }
 
     calcMatrices(nodes, A, D, Lhat);
@@ -51,12 +77,23 @@ bool SwarmGraph::calcMatrices(const std::vector<Eigen::Vector3d> &swarm,
     Deg = Eigen::VectorXd::Zero(swarm.size());
     SNL = Eigen::MatrixXd::Zero(swarm.size(), swarm.size());
 
-
+    // Optimized distance calculation - only calculate upper triangle and mirror it
     for (int i = 0; i < swarm.size(); i++) {
-        for (int j = 0; j < swarm.size(); j++) {
-            Adj(i, j) = calcDist2(swarm[i], swarm[j]);
-            Deg(i) += Adj(i, j);
+        for (int j = i; j < swarm.size(); j++) {
+            double dist2 = calcDist2(swarm[i], swarm[j]);
+            Adj(i, j) = dist2;
+            Adj(j, i) = dist2;  // Mirror the matrix
+            Deg(i) += dist2;
+            if (i != j) {
+                Deg(j) += dist2;
+            }
         }
+    }
+
+    // Pre-calculate square roots to avoid repeated calculations
+    std::vector<double> sqrt_deg(swarm.size());
+    for (int i = 0; i < swarm.size(); i++) {
+        sqrt_deg[i] = std::sqrt(Deg(i));
     }
 
     for (int i = 0; i < swarm.size(); i++) {
@@ -64,7 +101,7 @@ bool SwarmGraph::calcMatrices(const std::vector<Eigen::Vector3d> &swarm,
             if (i == j) {
                 SNL(i, j) = 1;
             } else {
-                SNL(i, j) = -Adj(i, j) * std::pow(Deg(i), -0.5) * std::pow(Deg(j), -0.5);
+                SNL(i, j) = -Adj(i, j) / (sqrt_deg[i] * sqrt_deg[j]);
             }
         }
     }

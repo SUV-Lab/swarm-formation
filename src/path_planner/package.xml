@@ -1,14 +1,15 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>path_planner</name>
-  <version>0.0.1</version>
-  <description>A standalone package for A* path planning and grid map utilities</description>
-  <maintainer email="your@email.com">Your Name</maintainer>
+  <version>1.0.0</version>
+  <description>Path planner utilities: self-contained RRT*, CPU ESDF (FH + OpenMP), flat binary map save/load</description>
+  <maintainer email="mywww5371@naver.com">limgyeonghun</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
-  <depend>Eigen3</depend>
+  <depend>eigen3_cmake_module</depend>
+  <depend>eigen</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

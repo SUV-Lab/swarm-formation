@@ -1,16 +1,18 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>path_optimizer</name>
-  <version>0.0.1</version>
+  <version>1.0.0</version>
   <description>Path optimization package</description>
-  <maintainer email="your@email.com">Your Name</maintainer>
+  <maintainer email="mywww5371@naver.com">limgyeonghun</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
-  <depend>Eigen3</depend>
+  <depend>eigen3_cmake_module</depend>
+  <depend>eigen</depend>
   <depend>swarm_graph</depend>
   <depend>path_planner</depend>
+  <depend>mmp_vehicle_dynamics</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

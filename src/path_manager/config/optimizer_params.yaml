@@ -1,24 +1,524 @@
 /**:
   ros__parameters:
-    optimization/constrain_points_perPiece: 3  
-    optimization/weight_obstacle: 80000.0  
-    optimization/weight_swarm: 50000.0        
-    optimization/weight_feasibility: 10000.0 
-    optimization/weight_sqrvariance: 10000.0  
-    optimization/weight_time: 80.0      
-    optimization/weight_formation: 15000.0    
-    optimization/obstacle_clearance: 0.8 
-    optimization/swarm_clearance: 0.5 
-    optimization/formation_type: 1
-    optimization/max_vel: 1.0
-    optimization/max_acc: 8.0
+    # ================= Pipeline: FM2 -> shortcut -> MINCO -> L-BFGS =================
 
-    manager/max_vel: 1.5
-    manager/max_acc: 8.0
-    manager/polyTraj_piece_length: 2.0
-    manager/planning_horizon: 7.5
-    
-    fsm/thresh_replan_time: 1.0
-    fsm/thresh_no_replan_meter: 1.0
-    fsm/replan_trajectory_time: 0.1
-    
+    # ---- [CHAIN] 단계별 궤적 분할 실험 (stage 1) ----
+    # 미션 1회를 baseline으로 계획한 뒤, 그 궤적에서 등시간 분할점의 PVA를
+    # 접합 계약으로 뽑아 동일 파이프라인을 N회 체이닝. run N의 tail BC와
+    # run N+1의 head BC가 같은 계약값(하드 등식)이라 이음매는 C2가 구조적으로
+    # 보장된다. off면 기존 단일 계획 그대로.
+    chain/enable: true
+    # segments: 양수 = 고정 분할 수. 0 = 자동 — 미션 조각 수 ÷ 목표치(아래,
+    # 105런 스윕 운용점 70)로 N을 산정하고, 토막 1~2개 분량의 작은 미션은
+    # 아예 나누지 않고 단일 계획으로 돈다. 미션마다 손대지 않으려면 0 권장.
+    chain/segments: 0
+    # chain/auto_pieces_per_segment: 70   # 자동 모드의 토막당 목표 조각 수
+
+    # ---- [PHASE] 3단계(출발 전이-순항-도착 전이) 확장 ----
+    chain/phase/enable: true            # 첫/끝 접합을 단계 핸드오프 규칙으로 선정
+    # chain/phase/depart_min_arc_u: 30.0  # 출발 핸드오프 최소 호장 (상승·가속 여유)
+    # chain/phase/arrive_min_arc_u: 30.0  # 도착 핸드오프가 목표 앞에 남길 호장
+    # chain/phase/min_cruise_arc_u: 60.0  # 순항 최소 길이 (미달 시 균형 접합+강등)
+    # chain/phase/calm_window_u: 40.0     # 안정 판정 호장 창 (곡률·경사·존 술어 유지)
+    # chain/phase/kappa_calm: 0.01        # 안정 곡률 임계 (rad/u; 순항 2u/s에서 |a|<=0.04)
+    # chain/phase/grade_frac: 0.5         # 등판 원뿔 대비 허용 경사 비율
+    # 단계별 가중 프로파일 (route 모드, 화이트리스트 키만; seg<i>가 우선):
+    # chain/phase/departure/params: ["optimization/weight_time=500.0"]
+    # chain/phase/cruise/params: []
+    # chain/phase/arrival/params: ["optimization/max_vel=1.8"]
+    # 미션 최종 상태(msg use_final_*)가 실속 이하 등 무효일 때 완화 허용(기본 거부):
+    # planning/allow_final_boundary_relaxation: false
+    # 인계 계약 속도 상한(m/s). 0 = 계획 상한(optimization/max_vel) 추종.
+    # 물리 상한(dynamics_speed_max)·계획 선호 상한과 의미가 다르다(ADR-0002).
+    # planning/handoff_max_vel_mps: 0.0
+    # (스윕 실측: 잘게(25~40)는 험지 기각·품질 최악 +2.8%, 70이 평균 +0.8%/
+    #  최악 +1.8%로 최선 절충. 험지 회랑은 90~120이 더 안전.)
+    # inherit_route (기본 on): 체인 run이 자기 구간의 FM2를 다시 돌리지 않고
+    # baseline이 커밋한 전단 경로의 해당 구간을 그대로 상속. sub-run의 자체
+    # eikonal은 같은 구간에서 다른 경로 위상을 고를 수 있고(r3 실측: baseline은
+    # 존 사이 동쪽 안부, 재실행은 서쪽 1,080 m 산악 → 지형 충돌로 기각), 그건
+    # "같은 조건, 분할만"이라는 전제 위반이다. off = 구간별 전단 재실행 —
+    # 분할 자체 외의 변수가 하나 더 들어가는 실험 모드. 아래 seg<i>/params
+    # 와는 직교(그쪽은 inherit 여부와 무관하게 optimization/*만 구간별 반영).
+    chain/inherit_route: true
+    # [CHAIN-PAR] baseline 없는 경로 저작 모드: 전단(FM2) 1회만 돌려 커밋
+    # 경로 위에서 접합 계약을 저작(존 밖·저곡률·등판 원뿔·호장 균형)하고
+    # 구간을 순차/병렬로 푼다. 실측(r4 337 km): 단일 16 s → 병렬 N=10 3.7 s
+    # (4.35×), 품질 +0.1%. 실패 구간은 단일 계획으로 자동 강등. 병렬은
+    # 워커별 옵티마이저 인스턴스 + 내부 OpenMP 코어 분배(코어수/N).
+    chain/author_from_route: true   # 경로 저작 모드 (baseline 생략)
+    chain/parallel: true            # 구간 스레드 병렬 (author 필요)
+    # difficulty_balance: 실험. 난이도 가중 균형이 안정 후보를 고갈시켜
+    # r4에서 구간 기각을 유발(28.7%>25%) — 접합 이동 재시도와 함께 재도전.
+    #   chain/difficulty_balance: false
+    # [STAGE-2] 구간별 요구조건 차등: chain/seg<i>/params 에 "이름=값" 문자열
+    # 배열. 구간 실행 직전 옵티마이저를 강제 재초기화해 optimization/* 전체를
+    # 다시 읽으므로 그 계열만 구간별로 실제 반영된다(manager/*는 기동 시 1회
+    # 로드 — 지정하면 경고). 값 타입은 선언된 파라미터 타입을 따르고, 미션이
+    # 끝나면(실패·폴백 포함) 전역값이 자동 복원된다. 예:
+    #   chain/seg1/params: ["optimization/weight_time=1000.0"]
+    #   chain/seg3/params: ["optimization/max_vel=1.8"]
+    # [STAGE-3] 처방형 터미널 단계(기본 off): 체인의 핸드오프 상태(도착 계약:
+    # 수평·순항·a=0)에서 곡률 램프로 진입하는 등속 하강 헬릭스를 해석 기하로
+    # 생성해 C²로 이어붙인다. 최적화·충돌감사 없음(4단계에서 전체 평가).
+    #   chain/terminal/enable: false
+    #   chain/terminal/radius: 58.0    # u; 순항 200 m/s에서 뱅크 ~35도
+    #   chain/terminal/turns: 1.0
+    #   chain/terminal/final_agl: 0.15 # u; 출구 지점의 지형 상공 고도
+    #   chain/terminal/right: true
+
+    # ---- Front-end (FM2 / A*) ----
+    manager/front_end: fm2              # fm2 | astar(ablation baseline)
+    manager/fm2_coarse_k: 3             # eikonal grid downsample; lower = finer/slower
+    manager/fm2_max_cells: 1640000000   # OOM guard; over this -> straight-line fallback
+    manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
+    manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
+    manager/risk_goal_taper_radius: 30.0 # [GNRON] 종단점을 품은 존의 moat를 그 종단점 반경
+                                        # 안에서 C1 smoothstep으로 0까지 감쇠 (Ge & Cui 2000의
+                                        # 도달불능-목표 처방을 eikonal 장에 이식). 반드시 들어가야
+                                        # 하는 지점으로의 접근을 벌주면 비용최적 진입이 "높이
+                                        # 떠서 수직 낙하"로 퇴화하고(r3 goal-in-zone -1004 루프)
+                                        # 고정익 백엔드가 그 시드를 풀 수 없다. 반경 30 u = 3 km
+                                        # ≈ 순항 선회반경(~1.8 km)의 1.7배 + 최대강하각으로
+                                        # 250 m 고도차를 소화하는 활공거리 여유. 전단·백엔드
+                                        # 양쪽에 동일 적용; 패널/TRAJ-RISK 표시 위험은 원본 유지.
+                                        # <=0 = off.
+    # [ZONE-AVOID] 사전식 존 회피(2026-07-24): 우회로가 존재하면 비용 비교 없이
+    # 무조건 회피(패스1: 비면제 존의 가시영역을 F=0으로 단절 후 도달성 검사).
+    # 도달 불가(존 벽이 임무를 실제로 막음)일 때만 소프트 K 필드로 최소체류·
+    # 최저노출 심으로 결단 횡단, 패스3가 불필요 존을 재차단. false = 기존
+    # 소프트 정책(싸면 진입). K 스윕(100~1000) 실측: 소프트 정책에선 어떤
+    # K로도 "싸면 진입"이 사라지지 않아 정책 자체를 바꾼 것.
+    manager/zone_avoid_lexicographic: true
+    # [ROUGH] H2 terrain-roughness routing (2026-07-22): additive slope cost in
+    # the FE shared field (FM2 speed map, A* edges, coarse heuristic, shortcut
+    # acceptance, guard) — own currency, deliberately NOT risk_weight-scaled
+    # (the coupled form devalued the zone moat: complex-field stress-case
+    # risk_cost 4x). Faded
+    # to zero between 1.0 and 2.5 u AGL, so high transits are untouched.
+    # w=1.5 measured: ridge terrain-following iter -34%, zone-case clearance
+    # 2x / risk -24%, coastal surface-obstacle risk -17% + alt_cost -57%,
+    # complex-field stress-case risk -64% with
+    # max_risk 100 -> 0.8 (the reshaped wave avoids the forced barrier
+    # crossing), clearance 2.4x, dynamics -75%, durations ~flat. Full
+    # sc_suite A/B: 6 cases identical; only cost = kwaypt clearance
+    # 0.560 -> 0.404 (returns the WA1600 bonus toward the historical 0.420,
+    # iter -51%). 0 = off.
+    manager/fm2_rough_weight: 1.5
+    manager/fm2_rough_slope0: 0.20      # slope deadband (tan, ~11 deg): plains/valleys free
+    # DEM radial-horizon/viewshed mask. center.z of each risk zone is the
+    # source altitude; risk is removed below the highest intervening terrain
+    # LOS and reappears if the vehicle climbs above that horizon.
+    manager/risk_terrain_mask_enable: true
+    # Zone center.z semantics: true = AGL source height (effective source z =
+    # DEM terrain at (x,y) + center.z; z=0 sits ON the ground — author x,y and
+    # the zone can never end up underground/floating). Scenario yamls were
+    # bulk-converted 2026-07-16 (legacy absolute z=25 -> mast 0.1 = 10 m).
+    manager/risk_zone_agl: true
+                                        # altitude. Set true only when every zone z is an
+                                        # actual source height above its local DEM.
+    manager/risk_vertical_ratio: 0.35   # vertical/horizontal semi-axis ratio of the
+                                        # risk ellipsoid (Rv = ratio * Rh)
+    manager/risk_mask_radial_step: 0.0  # <=0: use DEM resolution
+    manager/risk_mask_softness: 0.10    # smooth LOS edge in z-units (0.10 = 10 m)
+    manager/risk_grounded: true         # visibility evaluated at smoothmax(z, terrain+band):
+                                        # no legal terrain-occluded state below the clearance band.
+                                        # Root fix for below-horizon terrain clearance violation (the
+                                        # sigmoid's z-pull out-gunned the terrain cubic 48x and
+                                        # settled the equilibrium 35 m BELOW a ridge; also the
+                                        # cause of the 2x loiter-loop paths). 2026-07-20
+                                        # complex-field stress-case E-matrix: fixes clearance
+                                        # violation AND loop; 9/10 scenarios
+                                        # byte-identical (band-high flight -> clamp inert);
+                                        # risk_scenarios_test 154/0 both on and off.
+    manager/risk_mask_viz_step: 0.0     # <=0: auto; RViz cell size
+    manager/risk_mask_viz_slice_offset: 0.0  # planar mode only: slice z offset
+    manager/risk_mask_viz_threshold: 0.50    # visible side of horizon boundary
+    manager/risk_mask_viz_mode: heatmap # heatmap | heatmap3d | volume | fixed_agl | fixed_msl
+                                        # heatmap: 지형 드레이프 2D — 빨강=바닥까지 피탐(위험),
+                                        # 초록=밴드 전체 은폐(안전). 안전/위험 구간이 한눈에 나뉘는 뷰.
+                                        # (2026-07-20 heatmap3d로 기본이 바뀌었다가 07-24 사용자 요청으로 복귀)
+                                        # heatmap3d: 가시성 경계면을 실제 3D 표면으로 렌더 — 표면고도 =
+                                        # 지형 + 가시성 기준고도 AGL ("이 지붕 아래는 지형 차폐"). 색 램프는
+                                        # heatmap과 동일(빨강=바닥까지 가시, 초록/파랑=agl_max 캡 지붕).
+                                        # 궤적이 지붕을 뚫으면 그 지점부터 가시 상태 — 2D 히트맵의 직관을
+                                        # 그대로 3D로 확장한 뷰(2026-07-20).
+    manager/risk_heatmap_agl_max: 2.0   # heatmap ramp saturates at this visibility-boundary AGL (frame units)
+    manager/risk_heatmap_max_dim: 768   # heatmap grid cells along the longer AABB side
+    manager/risk_heatmap_offset: 1.0   # drape height above DEM in frame units (1.0 = 100 m; must clear the rendered mesh on slopes)
+    manager/risk_heatmap_preview_lift: 20.0  # [PREVIEW] extra lift BEFORE any DEM arrives (2 km): the
+                                        # pre-plan ideal field would otherwise sit at sea level and be
+                                        # buried inside the rendered terrain. Drops to 0 the moment the
+                                        # corridor map loads, so the before/after comparison is visible.
+    manager/risk_heatmap_safe_transparent: false # false: floor >= agl_max cells paint GREEN ("safe in band"); true: transparent (imagery only). Shadow stays blue either way
+    manager/risk_mask_viz_contours: 5   # clipped altitude contours in volume mode
+    manager/risk_mask_viz_volume_alpha: 0.54
+    manager/risk_mask_viz_agl: 0.15     # fixed_agl diagnostic height (15 m)
+    manager/risk_smha_w: 2.0            # SMHA* suboptimality bound (astar front-end only)
+    # [VEL-ALIGN] Re-aim the SYNTHESIZED default start velocity (initial_speed
+    # x first-leg chord, made before any route exists) onto the front-end
+    # route's actual initial direction, so the head boundary condition agrees
+    # with the path being followed (no cruise-speed S-bend off the chord on
+    # terrain-curved routes). Explicit use_initial_velocity vectors and
+    # trajectory-derived (replan) states are never re-aimed. false = legacy chord.
+    manager/align_start_vel_to_route: true
+    manager/dyn_yaw_seed: -1                    # dynamic-obstacle (ship) spawn-orientation RNG seed.
+                                        # (seed 60978556 reproduces the 2026-07-10 start-hump case
+                                        # that led to the arc-varying cap — kept for regression.)
+                                        # <0 = RANDOM each run (operational default: varied headings).
+                                        # Any fixed int = reproducible layout — the debugging tool that
+                                        # cracked the "same mission, different result" hunt: if a run
+                                        # ever misbehaves, note the yaws from the 'Dynamic box added'
+                                        # log lines, pin a seed here, and the failure replays exactly.
+
+    # Altitude band: wave slowed outside [min,max](start_z,goal_z); 0 = off.
+    manager/fm2_alt_penalty: 2.0
+    manager/fm2_alt_zscale: 4.0         # up ramp, ~400 m/w (was 10 in 43.7 m z-units = 437 m; below
+                                        # ~half of this the extraction deadlocks at terrain walls)
+    manager/fm2_alt_zscale_down: 0.9    # down ramp ~90 m/w (stiff: never dive below mission alt)
+
+    # ---- Clearances (ISOTROPIC frame: 1 unit = 100 m on every axis since the
+    # publisher z-scale fix; SDF distances are finally physical) ----
+    manager/obstacle_clearance: 0.60    # front-end blocked threshold = 60 m in ANY direction.
+                                        # MUST stay > optimization/obstacle_clearance (0.50) so the
+                                        # front-end delivers routes with room above the penalty onset.
+                                        # Raised 0.38->0.60 (2026-07-20): the 0.30 band left the
+                                        # soft-penalty equilibrium grazing terrain to ~3.7 m on the
+                                        # low-altitude complex-field stress case; 0.50/0.60 lifts
+                                        # real clearance to ~37 m on
+                                        # low-altitude missions with NO change to normal (band-high)
+                                        # missions. Zone-saturated extremes may exit -1004 (genuine
+                                        # cost conflict, never overlapping terrain; reject net catches
+                                        # any clearance violation).
+    manager/dyn_obstacle_margin: 10.0   # 1 km berth around RUNTIME obstacles (ships); <= clearance disables
+    obstacle_viz_scale: 100.0           # RViz MESH magnification ONLY (SDF collision, geometry companion
+                                        # marker and altitude-panel overlay stay exact). Since the scenario
+                                        # unit fix ships render true-size — 160 m is sub-pixel at peninsula
+                                        # zoom, which read as "ships disappeared". 1.0 = true size.
+    obstacle_viz_scale_ship: 130.0      # per-model overrides; <= 0 (or absent) inherits the global above
+    obstacle_viz_scale_car: 100.0
+    obstacle_viz_scale_building: 80.0
+    optimization/obstacle_clearance: 0.50 # optimizer penalty onset (50 m); MUST be < manager/obstacle_clearance
+                                          # (equal -> path sits on the penalty edge and can't be smoothed).
+                                          # SIZED TO THE SOFT-PENALTY EQUILIBRIUM: under opposing costs the
+                                          # cubic settles ~0.21 units into the band at sharp (sub-piece-
+                                          # wavelength) ridge knobs — measured invariant across cap weights
+                                          # (200 vs 2400) and g_epsilon (0.05 vs 0.005). A 0.12 band was
+                                          # thinner than that equilibrium, so the graze reached ~9 m INTO
+                                          # terrain; 0.30 keeps the same equilibrium inside the band
+                                          # (~+9 m real clearance). NB: 0.18/0.30 attempts in the pre-
+                                          # consistency era blew up (-1005/-1008) — those roots (frozen gate
+                                          # gradients, SDF terrain double-count, smoothed-slope mismatch)
+                                          # are fixed. Panel TERRAIN_GRAZE_MARGIN_M mirrors this (30 m).
+
+    # ---- Shortcut / MINCO input ----
+    manager/astar_bypass_shortcut: false  # true = raw front-end path straight to MINCO (debug)
+    manager/length_per_piece: 6.25     # piece scale; segments subdivided to max 4x this (=max_seg).
+                                       # THE wave-wavelength knob: a quintic piece cannot express any
+                                       # z-feature narrower than itself. 12.5 (5 km pieces) forced every
+                                       # 200-400 m islet hop to start climbing 2.5-5 km early and spread
+                                       # a wide dome; 6.25 (2.5 km pieces) localizes climbs near the
+                                       # terrain that demands them. Piece count roughly doubles
+                                       # (~85 -> ~170 on the 230-unit routes; iter budget scales with it).
+                                       # NB: an earlier 6.25 attempt exploded (altitude_cost ~200k,
+                                       # -1005/-1008) — that was the pre-consistency era (SDF terrain
+                                       # double-count, frozen gate gradients, mismatched slopes), all
+                                       # since fixed; if those signatures return, revert to 12.5.
+    manager/astar_step_size: 1.0        # A* raw path spacing, frame units (astar front-end)
+
+    # ---- Optimizer weights ----
+    optimization/risk_parallel_threads: 0  # [RISK-PAR]/[PIECE-PAR] cost-loop threads.
+                                       # 0 = auto (half the HW threads, max 16 — measured on a
+                                       # 32-thread host: complex-field stress case 26.7s -> 6.2s
+                                       # at 16, 7.3s at 8;
+                                       # ALL 32 threads PATHOLOGICAL >2x slower, HT starvation).
+                                       # 1 = serial inline (the original loop). Results are
+                                       # BIT-IDENTICAL for every setting (10-scenario suite
+                                       # verified): each piece is owned by one thread accumulating
+                                       # in the serial order; cross-piece costs sums are replayed
+                                       # serially. Falls back to two-phase precompute+serial when
+                                       # swarm/formation terms can fire.
+    optimization/constrain_points_perPiece: 30   # penalty-integral samples per piece. 100->30
+                                       # (2026-07-21 sweep, K in {100..20} x 6 scenarios x seeds +
+                                       # complex-field stress case): 100 was ~3x oversampled. The
+                                       # risk term is ~62% of
+                                       # the per-iteration cost and scales LINEARLY with this count;
+                                       # K=30 cut optimizer time 57-65% (complex-field stress case
+                                       # 23.7s->8.3s) with solutions unchanged (dense-zone/
+                                       # complex-field clearance bit-identical, terrain-following
+                                       # variants -0.3 m, waypoint case -5.3 m still 42 m, all
+                                       # converged, zero terrain overlap). Seed-invariant
+                                       # (43/44 identical to <1 mm), so
+                                       # the K-to-K clearance wobble is the sampling picking a nearby
+                                       # local optimum, not noise. Below ~25 the terrain-following
+                                       # clearance starts
+                                       # to wander (K=50 dipped to 0.212 once); 30 is the safe floor.
+                                       # Was 100 to keep ~25 m sample spacing; that spacing was finer
+                                       # than the penalty fields (30 m DEM, coarse risk LUT) resolve.
+                                       # resolution the 200-at-50-units setup had. Denser just burns CPU
+                                       # (resolves nothing below the ~2.2-unit DEM cell).
+    optimization/weight_smoothness: 10000.0  # explicit jerk-energy weight. The jerk integral scales
+                                       # ~1/T^5, so at mission scale (km routes, 50-100 s pieces) the
+                                       # implicit weight 1 collapses it 6-7 orders below time_cost and
+                                       # z-ringing through noisy front-end pins never gets ironed out.
+                                       # CEILING: weighted smoothness must stay << time_cost/5, or it
+                                       # inflates durations (jerk decreases with T). At 1e4 it lands
+                                       # ~1e3-5e3 vs time ~1e6 — shaping force without duration creep.
+    optimization/weight_obstacle: 10000.0
+    optimization/collision_reject: true # ancestor safety net restored (Swarm-Formation had it;
+                                        # MMP had demoted it to logs-only): a trajectory that
+                                        # fails the final collision audit (terrain/obstacle
+                                        # terrain overlap) is DISCARDED — optimize returns false,
+                                        # nothing is published, FSM keeps the previous plan.
+                                        # Selective by design: a -1004 WITHOUT terrain overlap
+                                        # (e.g. rest-start dynamics) still publishes. false =
+                                        # old behavior (audit logs only).
+    optimization/audit_envelope_reject: true # [CONV-REJECT] 미수렴 게시 차단: L-BFGS가 실패
+                                        # 코드로 끝났고 envelope 감사 위반율이 임계를 넘으면
+                                        # 궤적을 폐기(충돌 감사와 동급). 지형 충돌만 보던 감사
+                                        # 구멍으로 r3 goal-in-zone의 -1004 프레첼 루프가 40 m
+                                        # 여유로 통과·게시됐던 것의 안전망. 실패 코드 단독으론
+                                        # 거부하지 않는다(거의 수렴한 max-iter 해는 통과).
+    optimization/audit_envelope_violation_max: 0.25 # 실패계열(음수 코드/-1004 경유)
+                                        # 임계. 코퍼스 보정(순항 진입 후 실속 이하 체류
+                                        # 포함 집계): 정상 <1%, 수렴한 goal-in-zone 해
+                                        # 13~22%(거칠지만 비행 가능 — 게시하고 패널이
+                                        # 보여줌), 미수렴 교착 반복해 33%+ — 0.25가 가른다.
+                                        # 순항에 한 번도 못 오르는 궤적은 위반율 1.0.
+    optimization/audit_envelope_violation_hard_max: 0.30 # 종료 코드 무관 경성 상한.
+                                        # 48런 강건성 스윕에서 -1004 없이 Success로
+                                        # "수렴"한 45~50% 위반 루프 궤적이 실재 확인됨
+                                        # (goal-in-zone 200~800 m 대역) — 실패계열
+                                        # 조건만으로는 못 본다. 수용 계열 최대 22% 대비
+                                        # 여유를 두고 0.30.
+    optimization/weight_ground_barrier: 4000000.0  # crash-plane half-space below
+                                       # manager/ground_height. BARRIER class, not a
+                                       # preference: the equilibrium dip below the
+                                       # plane is sqrt(F_opposing/(81 W)). The
+                                       # sub-stall recovery dive of a (0,0,+50 m/s)
+                                       # stress start pushes F ~ 30k/sample (measured
+                                       # bottoms: -0.093 at W=10k, -0.029 at 250k,
+                                       # +0.002 at 1e6, +0.010 at 4e6); with the 0.02
+                                       # plane offset, 4e6 stays dry up to ~4x that
+                                       # pressure (F ~ 130k). Line search verified
+                                       # stable at 4e6 (no -1005/-1008; weirdvz50/100
+                                       # + pin005 regression all clean)
+    optimization/weight_swarm: 0.0
+    optimization/weight_feasibility: 10000.0
+    optimization/weight_sqrvariance: 10000.0  # even HORIZONTAL progression (xy-scoped since the
+                                       # start-hump fix: the 3D version bought "equal spacing" by
+                                       # bulging short over-water head pieces 68 m upward — z is
+                                       # penalty-free between the alt floor and cap. xy scoping keeps
+                                       # the anti-loitering force, closes the vertical loophole.
+    optimization/weight_time: 250.0     # too low -> duration blow-up (loops/loitering knots);
+                                       # too HIGH -> time-cost overpowers the constraint terms and
+                                       # hard instances stall at -1004 (2026-07-19 sweep, 219 runs:
+                                       # 500 failed kwaypt AND timed out the h3_zig holdout; 250
+                                       # converges both, is robust across 125-250 and mission
+                                       # perturbation, duration cost <= +0.3%. Combo bumps of
+                                       # wobs/lpp/wsmo on top of 250 re-broke kwaypt at the tested
+                                       # values (knife-edge basins) — change this TOGETHER with
+                                       # those only after a fresh robustness probe.)
+    optimization/weight_formation: 0.0
+    optimization/weight_Risk: 10000.0  # arc-length integral of the FM2-shared OR-moat field:
+                                       # wei * ∫ r(p)*||v|| dt, same r as manager/risk_weight consumes.
+                                       # Layer-agreement scale: ~ risk_weight * weight_time / cruise
+                                       # speed (30*250/2 = 3750 since weight_time 250); 10000 keeps
+                                       # risk noticeably stiffer than agreement — deliberately kept at
+                                       # 1e4 (safety-conservative), validated by the 2026-07-19 sweep
+                                       # (all 219 runs used this value; zone scenarios unchanged).
+    optimization/weight_Risk_barrier: 25000.0  # smoothed front-end barrier K on NON-exempt zones
+                                       # (start/goal-inside zones stay moat-only, same rule as FM2).
+                                       # Derivation: K * weight_time / cruise = 100*500/2. Without it
+                                       # MINCO re-litigates the rim standoff: the moat's zero contact
+                                       # slope makes skirt-cutting profitable ~tens of metres deep.
+    optimization/weight_altitude: 1600.0 # z-band tracking weight (quadratic); keep << weight_obstacle
+                                         # or it presses into terrain. 1600 + alt_cap_zone_relax 0.6
+                                         # (adopted together, 2026-07-22): ridge terrain-following
+                                         # altitude_cost -81%
+                                         # (k2), opt time -85%, clr +5 m, while the zone relax below
+                                         # buys back the zone-crossing headroom the tight band squeezes
+                                         # (zone-case 0.848 -> 0.970, complex-field stress-case
+                                         # clr 0.041 -> 0.054). The old evaluation verdict
+                                         # "WA400/800 fail the complex-field stress case (-1004)" was an
+                                         # iteration-budget artifact (fixed at 100/piece); the axis is
+                                         # smooth. k1 over-water probe: water z profile unchanged
+                                         # (mean 1.267 -> 1.277), ship-zone crossing ducks 13 m LESS
+                                         # (clr 0.71 -> 0.84 u) at the cost of risk_cost 53 -> 160
+                                         # (lower visibility traded for clearance,
+                                         # converged, FE risk 0).
+                                         # Was bumped to 2400 to squash z-spikes in the pre-consistency
+                                         # era; those had a root cause (frozen gate gradient /
+                                         # smoothed-slope mismatch) since fixed.
+    optimization/alt_cap_zone_relax: 0.6 # [ZONE-RELAX] extra per-piece cap headroom near risk zones
+                                         # (z-units, scaled by a linear fade: 1 inside the rim -> 0 at
+                                         # 1.5x reach). Grants the zone-crossing arch the vertical
+                                         # freedom a tight band-tracking weight removes, and nothing
+                                         # else: zone-free missions are untouched by construction.
+                                         # 0.6 is the sweet spot (1.0 over-relaxes: kzone 0.876 < 0.970).
+    optimization/alt_cap_headroom: 0.4   # z-cap slack above the front-end geodesic max. Must leave the
+                                         # sparse-piece quintic a workable corridor above the obstacle
+                                         # clearance floor: +1 over a sea-level route made a ~4 m band and
+                                         # L-BFGS bought z-compliance with duration until -1005. ~ one FM2
+                                         # coarse cell (the front-end's own alt band tolerance).
+                                         # 0.4 = 40 m above the GEODESIC max. 2.0 (200 m) let the
+                                         # optimizer legally balloon a 250 m dome over islet fields the
+                                         # front-end threads at 47 m: sparse pieces cut the lateral
+                                         # weave's corners, the obstacle term lifts those cut corners
+                                         # OVER the islets, and smoothness spreads the lift to the cap.
+                                         # A snug cap forces the back-end to weave in xy like the
+                                         # front-end instead of escaping upward.
+    optimization/alt_cap_slope: 0.10     # ARC-VARYING cap cone slope [z-units per xy-unit]. The per-piece
+                                         # ceiling = slope-cone envelope over the FE committed z profile
+                                         # + alt_cap_headroom: high values bleed sideways at this grade,
+                                         # licensing climb/descent anticipation ahead of committed ramps.
+                                         # Sized above observed FE ramp grades (~0.08 on the tall map).
+                                         # Restores the z trust-region the SFC corridor's bounded
+                                         # inflation used to provide (removed with SFC): over open water
+                                         # z was ungoverned between floor and GLOBAL-max cap (~100 m dead
+                                         # band) and optimization slosh left 60-80 m humps there that
+                                         # T^5-starved smoothness never cleared.
+    optimization/alt_floor_headroom: 0.2 # z-floor slack below min(start,goal) z. The missing lower half of
+                                         # the FM2 alt band: without it z is only bounded below by the 0.5
+                                         # collision clearance, so min-jerk pieces sag in long smooth waves
+                                         # and bounce off the water/valley floor instead of holding the
+                                         # mission altitude.
+    manager/min_goal_agl: 0.15           # waypoints get z >= terrain elevation + 15 m.
+                                         # Fixed-z mission sources (yaml / RViz panel) can put a goal
+                                         # INSIDE the DEM -> infeasible pinned tail -> L-BFGS -1005 with
+                                         # frozen obstacle cost. xy is kept; only z is lifted (warned).
+    optimization/swarm_clearance: 0.5
+    optimization/formation_type: 2
+
+    # ---- Dynamics (units/s, units/s^2; isotropic frame: 1 unit = 100 m) ----
+    # Corner radius ~ v^2/a: with 2.0/5.0 turns are tight; lower max_acc for wider arcs.
+    optimization/max_vel: 2.0
+    optimization/max_acc: 5.0
+    optimization/min_vel: 0.0   # Legacy frame-unit floor; keep off. The physical
+                                # minimum-speed envelope is enforced below by the
+                                # shared dynamics model and handles rest starts with
+                                # a finite smooth penalty.
+    manager/max_vel: 2.0
+    manager/max_acc: 5.0
+    manager/initial_speed_unit_m: 100.0  # TrajectoryCommand m/s -> frame units/s
+                                # (1 u = 100 m). Zero is not "unset": it made
+                                # the FSM warn and fall back to this value on
+                                # every startup.
+
+    # ---- Subsonic fixed-wing inverse dynamics ----
+    # The MINCO position polynomial is converted to physical r/v/a and checked
+    # against lift, load factor, drag/thrust, dynamic pressure, bank angle,
+    # flight-path angle, and speed limits. Gravity is part of the required
+    # specific force, so straight level flight correctly requires L ~= m*g.
+    optimization/dynamics_enable: true
+    optimization/weight_dynamics: 10000.0
+    optimization/dynamics_unit_xy_m: 100.0
+    optimization/dynamics_unit_z_m: 100.0
+
+    # Publicly reproducible representative high-subsonic fixed-wing baseline.
+    # These are explicit assumptions, not a claim of an exact proprietary
+    # coefficient/thrust data set. See mmp_vehicle_dynamics/README.md (모델 절).
+    # NOTE: reference-model work is governed by docs/adr/ (0001 rejected,
+    # 0002 defines the neutral benchmark). Experiments must NOT change
+    # these production defaults.
+    optimization/dynamics_mass_kg: 1300.0
+    optimization/dynamics_wing_area_m2: 1.0
+    optimization/dynamics_g: 9.80665
+    optimization/dynamics_rho0_kgpm3: 1.225
+    optimization/dynamics_density_scale_height_m: 8500.0
+    optimization/dynamics_altitude_reference_m: 0.0
+    optimization/dynamics_cd0: 0.035
+    optimization/dynamics_induced_drag_factor: 0.080
+    optimization/dynamics_cl_min: -0.40
+    optimization/dynamics_cl_max: 1.40
+    optimization/dynamics_load_factor_max: 2.50
+    optimization/dynamics_thrust_min_n: 0.0
+    optimization/dynamics_thrust_max_n: 3200.0
+    optimization/dynamics_speed_min_mps: 122.0  # >= aero stall from CL_max 1.40
+                                        # (v_stall = 121.9 m/s @ 1300 kg): the old
+                                        # 120 declared an envelope with NO feasible
+                                        # level-flight state at its own minimum —
+                                        # every 120-122 m/s crossing logged
+                                        # unavoidable CL violations + a permanent
+                                        # startup consistency warning.
+    optimization/dynamics_speed_max_mps: 230.0    # margined 211.6 m/s; SHADOWED by
+                                        # the frame feasibility cap (max_vel 2.0 u/s
+                                        # = 200 m/s) unless max_vel is raised — cruise
+                                        # settles ~201 m/s, so this ceiling does not
+                                        # bind today. See max_vel note above.
+    optimization/dynamics_activation_speed_mps: 40.0  # REPORTING/BUCKETING ONLY,
+                                        # vestigial after the q-floor fix: it no
+                                        # longer gates any penalty (the old sigma
+                                        # speed-gate is gone). Now used only to split
+                                        # the audit/panel sub-stall vs cruise buckets
+                                        # and as the envelopeUtilization low-speed
+                                        # guard. Changing it has no trajectory effect.
+    optimization/dynamics_dynamic_pressure_max_pa: 45000.0  # DEAD in the live config:
+                                        # needs >= 260 m/s at sea level to reach the
+                                        # margined 41.4 kPa, but cruise is pinned ~201
+                                        # m/s. A dominated structural backstop, not a
+                                        # binding limit — kept for completeness.
+    optimization/dynamics_bank_max_deg: 65.0
+    optimization/dynamics_flight_path_max_deg: 30.0
+    optimization/dynamics_margin: 0.08  # penalty onset backoff. 0.02 put the
+                                        # soft-penalty EQUILIBRIUM slightly ABOVE the
+                                        # hard limit (measured: zone-slalom converged at
+                                        # peak 105.7%, 336 violations); 0.08 moves the
+                                        # onset to 92% and the same mission lands at
+                                        # 98.0% / 0 violations (same lesson as the 0.30
+                                        # terrain band vs its ~0.21 equilibrium)
+
+    # Relative weights within optimization/weight_dynamics.
+    optimization/dynamics_penalty_speed: 5.0
+    optimization/dynamics_penalty_lift: 2.0
+    optimization/dynamics_penalty_load: 2.0
+    optimization/dynamics_penalty_thrust: 2.0
+    optimization/dynamics_penalty_dynamic_pressure: 1.0
+    optimization/dynamics_penalty_bank: 1.0
+    optimization/dynamics_penalty_flight_path: 1.0
+
+    # 3DOF tracking simulator (same atmosphere/aero/propulsion parameters).
+    simulation/integration_step_s: 0.02
+    simulation/position_gain: 0.04
+    simulation/velocity_gain: 0.80
+    simulation/max_commanded_acceleration_mps2: 30.0
+
+    # Initial-velocity lead-in horizon (seconds). On an in-flight replan, plant a
+    # short path point along start_vel so the min-jerk head piece coasts out in the
+    # direction the drone is already moving instead of overshooting toward a far
+    # first waypoint. d_lead = |start_vel| * this. 0.0 = legacy (no lead-in).
+    # Toggle/tune here for A/B without rebuild.
+    optimization/lead_in_time: 0.0   # dormant on main: enable after lead-in validation
+
+    # Post-convergence per-term VERTICAL-force attribution sweep (one-shot,
+    # verbose). Diagnoses "trajectory climbs over open water" humps: logs
+    # [VDIAG]/[VDIAG-HUMP] naming the lifting cost term, or proving the hump is
+    # intrinsic min-jerk overshoot (no spatial cause). Leave false in normal use.
+    optimization/diag_vertical: false
+
+    # ---- Map / SDF ----
+    # Anisotropic ESDF/FM2 voxels. xy matches the DEM cell (finer only burns
+    # memory, the data has no more detail); z is ~10 m real so terrain heights
+    # and climbs resolve at platform scale instead of quantizing to one
+    # xy-sized (tens of metres) step — the cause of huge hops over tiny
+    # islets. Legacy v1 .esdf caches mismatch this and are auto-rebuilt.
+    manager/sdf_voxel_size: 0.0   # xy voxel; <=0 = auto (DEM cell size, per world)
+    manager/sdf_voxel_z: 0.1      # z voxel = 10 m real (isotropic frame /100)
+    manager/ground_height: 0.02         # crash-plane onset 2 m ABOVE the sea
+                                        # (= the FSM water_pin_floor, so pinned
+                                        # endpoints never sit inside it). The C²
+                                        # cubic barrier has ZERO gradient at its
+                                        # plane, so under opposing pressure F the
+                                        # equilibrium sits sqrt(F/(81 W)) BELOW it —
+                                        # a plane at 0.0 therefore ALWAYS submerges
+                                        # slightly (measured -0.029 at W=250k under
+                                        # a sub-stall recovery dive). The offset puts
+                                        # that dip inside the margin, above the true
+                                        # surface. <= -0.5 disables
+    manager/virtual_ceil_height: -1.0   # <= -0.5 disables
+    manager/world: "small_island"       # fallback; RViz MapSelector overrides
+
+    # ---- Logging ----
+    enable_obstacles: true
+    enable_debug_logs: true
+    enable_lbfgs_detail_logs: true

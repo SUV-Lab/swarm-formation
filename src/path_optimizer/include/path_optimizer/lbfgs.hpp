@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cfloat>
 #include <cmath>
 
 namespace lbfgs
@@ -179,6 +180,13 @@ namespace lbfgs
          *  and smaller than 1.0.
          */
         double s_curv_coeff;
+
+        /**
+         * A parameter to determine which curvature condition to use.
+         *  The default value is 1, implying a strong Wolfe condition.
+         *  If the value is 0, then a weak Wolfe condition is used.
+         */
+        int abs_curv_cond;
 
         /**
          * The machine precision for floating-point values.
@@ -356,7 +364,7 @@ namespace lbfgs
     {                                                                \
         (cm) = (v)-r * d;                                            \
     }                                                                \
-    else if (a < 0)                                                  \
+    else if (d > 0)                                                  \
     {                                                                \
         (cm) = (xmax);                                               \
     }                                                                \
@@ -708,8 +716,27 @@ namespace lbfgs
             }
         }
 
+        /*
+        Redefine the new trial value if it is close to the lower bound
+        of the interval.
+        */
+        if (*brackt)
+        {
+            if (*x < *y)
+            {
+                mq = *x + 0.01 * (*y - *x);
+            }
+            else
+            {
+                mq = *y + 0.01 * (*x - *y);
+            }
+            if (newt < mq)
+                newt = mq;
+        }
+
         /* Return the new trial value. */
         *t = newt;
+
         return 0;
     }
 
@@ -812,7 +839,7 @@ namespace lbfgs
             If an unusual termination is to occur then let
             stp be the lowest point obtained so far.
             */
-            if ((brackt && ((*stp <= stmin || stmax <= *stp) || param->max_linesearch <= count + 1 || uinfo != 0)) || (brackt && (stmax - stmin <= param->xtol * stmax)))
+            if (brackt && (*stp <= stmin || stmax <= *stp || uinfo != 0 || stmax - stmin <= param->xtol * stmax))
             {
                 *stp = stx;
             }
@@ -832,7 +859,7 @@ namespace lbfgs
             ++count;
 
             /* Test for errors and convergence. */
-            if (brackt && ((*stp <= stmin || stmax <= *stp) || uinfo != 0))
+            if ((std::isinf(*f) || std::isnan(*f)) || (brackt && (*stp <= stmin || stmax <= *stp || uinfo != 0)))
             {
                 /* Rounding errors prevent further progress. */
                 return LBFGSERR_ROUNDING_ERROR;
@@ -857,9 +884,10 @@ namespace lbfgs
                 /* Maximum number of iteration. */
                 return LBFGSERR_MAXIMUMLINESEARCH;
             }
-            if (*f <= ftest1 && fabs(dg) <= param->s_curv_coeff * (-dginit))
+            if (*f <= ftest1 && ((!param->abs_curv_cond && -dg <= param->s_curv_coeff * (-dginit)) ||
+                                 (param->abs_curv_cond && fabs(dg) <= param->s_curv_coeff * (-dginit))))
             {
-                /* The sufficient decrease condition and the strong curvature condition hold. */
+                /* The sufficient decrease condition and the curvature condition hold. */
                 return count;
             }
 
@@ -945,11 +973,12 @@ namespace lbfgs
         0,
         1e-5,
         0,
-        20,
+        40,
         1e-20,
         1e20,
         1e-4,
         0.9,
+        1,
         1.0e-16,
     };
 
@@ -1275,44 +1304,48 @@ namespace lbfgs
                 vecdot(&yy, it->y, it->y, n);
                 it->ys = ys;
 
-                /*
-                Recursive formula to compute dir = -(H \cdot g).
-                This is described in page 779 of:
-                Jorge Nocedal.
-                Updating Quasi-Newton Matrices with Limited Storage.
-                Mathematics of Computation, Vol. 35, No. 151,
-                pp. 773--782, 1980.
-                */
-                bound = (m <= k) ? m : k;
-                ++k;
-                end = (end + 1) % m;
-
                 /* Compute the negative of gradients. */
                 vecncpy(d, g, n);
 
-                j = end;
-                for (i = 0; i < bound; ++i)
+                /* Skip L-BFGS update when ys is too small as proposed in Ceres Solver */
+                if (ys > DBL_EPSILON)
                 {
-                    j = (j + m - 1) % m; /* if (--j == -1) j = m-1; */
-                    it = &lm[j];
-                    /* \alpha_{j} = \rho_{j} s^{t}_{j} \cdot q_{k+1}. */
-                    vecdot(&it->alpha, it->s, d, n);
-                    it->alpha /= it->ys;
-                    /* q_{i} = q_{i+1} - \alpha_{i} y_{i}. */
-                    vecadd(d, it->y, -it->alpha, n);
-                }
+                    /*
+                    Recursive formula to compute dir = -(H \cdot g).
+                    This is described in page 779 of:
+                    Jorge Nocedal.
+                    Updating Quasi-Newton Matrices with Limited Storage.
+                    Mathematics of Computation, Vol. 35, No. 151,
+                    pp. 773--782, 1980.
+                    */
+                    bound = (m <= k) ? m : k;
+                    ++k;
+                    end = (end + 1) % m;
 
-                vecscale(d, ys / yy, n);
+                    j = end;
+                    for (i = 0; i < bound; ++i)
+                    {
+                        j = (j + m - 1) % m; /* if (--j == -1) j = m-1; */
+                        it = &lm[j];
+                        /* \alpha_{j} = \rho_{j} s^{t}_{j} \cdot q_{k+1}. */
+                        vecdot(&it->alpha, it->s, d, n);
+                        it->alpha /= it->ys;
+                        /* q_{i} = q_{i+1} - \alpha_{i} y_{i}. */
+                        vecadd(d, it->y, -it->alpha, n);
+                    }
 
-                for (i = 0; i < bound; ++i)
-                {
-                    it = &lm[j];
-                    /* \beta_{j} = \rho_{j} y^t_{j} \cdot \gamm_{i}. */
-                    vecdot(&beta, it->y, d, n);
-                    beta /= it->ys;
-                    /* \gamm_{i+1} = \gamm_{i} + (\alpha_{j} - \beta_{j}) s_{j}. */
-                    vecadd(d, it->s, it->alpha - beta, n);
-                    j = (j + 1) % m; /* if (++j == m) j = 0; */
+                    vecscale(d, ys / yy, n);
+
+                    for (i = 0; i < bound; ++i)
+                    {
+                        it = &lm[j];
+                        /* \beta_{j} = \rho_{j} y^t_{j} \cdot \gamm_{i}. */
+                        vecdot(&beta, it->y, d, n);
+                        beta /= it->ys;
+                        /* \gamm_{i+1} = \gamm_{i} + (\alpha_{j} - \beta_{j}) s_{j}. */
+                        vecadd(d, it->s, it->alpha - beta, n);
+                        j = (j + 1) % m; /* if (++j == m) j = 0; */
+                    }
                 }
 
                 /*

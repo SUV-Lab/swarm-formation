@@ -1,0 +1,359 @@
+#include <algorithm>
+#include <cmath>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+
+#include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
+
+#include "path_manager/path_manager.h"
+
+namespace {
+
+int failures = 0;
+
+void expect(bool condition, const std::string &label)
+{
+  std::cout << (condition ? "[OK]   " : "[FAIL] ") << label << '\n';
+  if (!condition) ++failures;
+}
+
+grid_map_msgs::msg::GridMap::SharedPtr makeRidgeMap()
+{
+  auto msg = std::make_shared<grid_map_msgs::msg::GridMap>();
+  constexpr int kCols = 20;
+  constexpr int kRows = 20;
+  msg->info.resolution = 1.0;
+  msg->info.length_x = 20.0;
+  msg->info.length_y = 20.0;
+  msg->info.pose.position.x = 0.0;
+  msg->info.pose.position.y = 0.0;
+  msg->layers.push_back("elevation");
+  msg->data.resize(1);
+  auto &layer = msg->data.front();
+  layer.layout.dim.resize(2);
+  layer.layout.dim[0].label = "column_index";
+  layer.layout.dim[0].size = kCols;
+  layer.layout.dim[0].stride = kCols * kRows;
+  layer.layout.dim[1].label = "row_index";
+  layer.layout.dim[1].size = kRows;
+  layer.layout.dim[1].stride = kRows;
+  layer.data.assign(kCols * kRows, 0.0f);
+
+  // terrainToWorld(row=6) -> x=3.5. A north-south ridge at x=3.5
+  // therefore blocks eastbound LOS from the source at x=0.5.
+  for (int col = 0; col < kCols; ++col) {
+    layer.data[col * kRows + 6] = 4.0f;
+  }
+  return msg;
+}
+
+}  // namespace
+
+int main(int argc, char **argv)
+{
+  rclcpp::init(argc, argv);
+  rclcpp::NodeOptions options;
+  // This fixture deliberately exercises the opt-in AGL authoring mode; the
+  // production default is absolute z for backward-compatible scenarios.
+  options.append_parameter_override("manager/risk_zone_agl", true);
+  options.append_parameter_override("manager/risk_mask_viz_mode",
+                                    std::string("volume"));
+  auto node = std::make_shared<rclcpp::Node>("terrain_risk_mask_test",
+                                             options);
+  // Launch defaults to drone_id=1; risk-field publication and masking must
+  // not depend on a drone_0 instance being present.
+  node->declare_parameter("drone_id", 1);
+
+  visualization_msgs::msg::Marker last_floor;
+  bool got_floor = false;
+  bool got_wire = false;
+  std_msgs::msg::Float64MultiArray last_profile;
+  int profile_messages = 0;
+  // One latched MarkerArray carries the whole field (element 0 is DELETEALL).
+  auto marker_sub =
+      node->create_subscription<visualization_msgs::msg::MarkerArray>(
+          "/viz/risk_field", rclcpp::QoS(1).reliable().transient_local(),
+          [&](visualization_msgs::msg::MarkerArray::SharedPtr array) {
+            for (const auto &marker : array->markers) {
+              if (marker.ns == "effective_risk_floor" && marker.id == 0 &&
+                  marker.type ==
+                      visualization_msgs::msg::Marker::TRIANGLE_LIST) {
+                last_floor = marker;
+                got_floor = true;
+              }
+              if (marker.ns == "effective_risk_volume" && marker.id == 0 &&
+                  marker.type == visualization_msgs::msg::Marker::LINE_LIST)
+                got_wire = true;
+            }
+          });
+  auto profile_sub =
+      node->create_subscription<std_msgs::msg::Float64MultiArray>(
+          "/viz/risk_profile",
+          rclcpp::QoS(8).reliable().transient_local(),
+          [&](std_msgs::msg::Float64MultiArray::SharedPtr profile) {
+            last_profile = *profile;
+            ++profile_messages;
+          });
+
+  path_manager::PathManager manager(node);
+  path_manager::RiskZone zone;
+  zone.center = Eigen::Vector3d(0.5, 0.5, 2.0);  // flat ground: AGL == abs
+  zone.reach = 10.0;
+  zone.peak = 0.8;
+  // Second zone ON the ridge crest with a 0.5-unit mast. With AGL grounding
+  // its source is 4.0 + 0.5 = 4.5, which sees over its own crest: the
+  // east-side low query below is visible. Left ungrounded (z=0.5, below the
+  // crest) the same query sits deep in shadow (ceiling z≈3.5) — the
+  // assertion fails, so it pins the grounding, not just the viewshed.
+  path_manager::RiskZone ridge_zone;
+  ridge_zone.center = Eigen::Vector3d(3.5, 0.5, 0.5);
+  ridge_zone.reach = 10.0;
+  ridge_zone.peak = 0.8;
+  manager.setRiskZonesRuntime({zone, ridge_zone});
+
+  // Without a DEM the callback must preserve the legacy ideal field.
+  expect(manager.getRiskVisibility(0, Eigen::Vector3d(6.5, 0.5, 2.0)) > 0.999,
+         "no DEM -> full visibility fallback");
+  const double risk_horizontal_half = manager.getEffectiveRisk(
+      0, Eigen::Vector3d(5.5, 0.5, 2.0));
+  const double risk_vertical_half = manager.getEffectiveRisk(
+      0, Eigen::Vector3d(0.5, 0.5, 3.75));  // Rv=0.35*10, dz=Rv/2
+  expect(std::abs(risk_horizontal_half - 0.2) < 1e-6 &&
+             std::abs(risk_vertical_half - risk_horizontal_half) < 1e-6,
+         "horizontal/vertical q=0.5 points share the ellipsoid moat value");
+  expect(manager.getEffectiveRisk(0, Eigen::Vector3d(0.5, 0.5, 5.6)) == 0.0,
+         "risk is zero above the vertical ellipsoid support");
+
+  manager.setTerrainData(makeRidgeMap());
+  const Eigen::Vector3d behind_low(6.5, 0.5, 2.0);
+  const double ceiling = manager.getRiskShadowCeiling(0, behind_low);
+  expect(std::isfinite(ceiling) && ceiling > 4.5,
+         "near ridge raises the far-side shadow ceiling");
+  expect(manager.getRiskVisibility(0, behind_low) < 0.01,
+         "aircraft below horizon is terrain-shadowed");
+  expect(manager.getRiskVisibility(0, Eigen::Vector3d(6.5, 0.5, 8.0)) > 0.99,
+         "aircraft above horizon regains risk visibility");
+  expect(manager.getRiskVisibility(0, Eigen::Vector3d(-6.5, 0.5, 2.0)) > 0.99,
+         "unblocked azimuth remains visible");
+  expect(manager.getRiskVisibility(0, zone.center) > 0.999,
+         "risk source is visible at zero range");
+  expect(manager.getRiskVisibility(1, Eigen::Vector3d(6.5, 0.5, 1.0)) > 0.9,
+         "AGL-grounded ridge-top source sees past its own crest");
+
+  // A query inside the physical half-cell border must retain the outer DEM
+  // cell height. Treating the missing bilinear stencil corner as z=0 creates
+  // a false downhill at cropped land edges. A genuinely off-map query remains
+  // unavailable.
+  auto edge_map = makeRidgeMap();
+  std::fill(edge_map->data.front().data.begin(),
+            edge_map->data.front().data.end(), 7.0f);
+  manager.setTerrainData(edge_map);
+  double edge_elevation = 0.0;
+  expect(manager.terrainElevation(9.9, 0.0, &edge_elevation) &&
+             std::abs(edge_elevation - 7.0) < 1e-6,
+         "DEM half-cell border clamps to the nearest terrain cell");
+  expect(!manager.terrainElevation(10.1, 0.0, &edge_elevation),
+         "query beyond the physical DEM boundary remains off-map");
+  manager.setTerrainData(makeRidgeMap());
+
+  // Verify that the same field reaches RViz for the launch-default nonzero
+  // drone id. The floor mesh should rise to the horizon behind the ridge;
+  // unlike a 2-D clipped carpet, it preserves the fact that risk reappears
+  // above the terrain shadow.
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  expect(got_floor && !last_floor.points.empty(),
+         "effective-risk TRIANGLE_LIST floor is published for RViz");
+  expect(got_wire, "clipped ellipsoid wire volume is published for RViz");
+  bool has_west_cell = false;
+  bool has_far_east_cell = false;
+  bool far_east_floor_is_raised = false;
+  for (const auto &p : last_floor.points) {
+    if (p.x < -4.5) has_west_cell = true;
+    if (p.x > 4.0) {
+      has_far_east_cell = true;
+      if (p.z > 4.5) far_east_floor_is_raised = true;
+    }
+  }
+  expect(has_west_cell && has_far_east_cell && far_east_floor_is_raised,
+         "RViz volume raises its far-side floor to the terrain horizon");
+
+  // === Versioned altitude risk-profile channel ===
+  // EmergencyStop supplies a valid stationary polynomial without invoking the
+  // global planner; the subsequent zone refresh must immediately publish the
+  // current trajectory against the rebuilt risk field.
+  manager.EmergencyStop(behind_low);
+  manager.setRiskZonesRuntime({zone, ridge_zone});
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  constexpr size_t kZoneCount = 2;
+  // v4 record: [s, x, y, z, combined, (lower_i, floor_i, top_i) x N]
+  constexpr size_t kRecordWidth = 5 + 3 * kZoneCount;
+  const bool valid_v4 =
+      last_profile.data.size() >= 2 + kRecordWidth &&
+      last_profile.data[0] == 4.0 &&
+      last_profile.data[1] == static_cast<double>(kZoneCount) &&
+      (last_profile.data.size() - 2) % kRecordWidth == 0;
+  expect(valid_v4,
+         "risk profile publishes self-describing v4 fixed-width records");
+  if (valid_v4) {
+    const size_t b = 2;
+    const double x = last_profile.data[b + 1];
+    const double y = last_profile.data[b + 2];
+    const double z = last_profile.data[b + 3];
+    const Eigen::Vector3d sample(x, y, behind_low.z());
+    const double r0 = manager.getEffectiveRisk(0, sample);
+    const double r1 = manager.getEffectiveRisk(1, sample);
+    const double expected_combined = 1.0 - (1.0 - r0) * (1.0 - r1);
+    expect(std::abs(z - behind_low.z()) < 1e-12,
+           "profile record binds risk data to the source trajectory altitude");
+    expect(std::abs(last_profile.data[b + 4] - expected_combined) < 1e-12,
+           "profile combined risk exactly matches OR-combined effective risk");
+
+    const double lower0 = last_profile.data[b + 5];
+    const double floor0 = last_profile.data[b + 6];
+    const double top0 = last_profile.data[b + 7];
+    const double expected_top0 =
+        2.0 + 3.5 * std::sqrt(1.0 - 36.0 / 100.0);
+    expect(std::isfinite(floor0) && std::isfinite(top0) && floor0 < top0 &&
+               std::abs(top0 - expected_top0) < 1e-6,
+           "zone record preserves its own ellipsoid visible interval");
+    expect(std::isfinite(lower0) && lower0 <= floor0,
+           "v4 triplet keeps geometric lower below the detection floor");
+    expect(std::abs(manager.getRiskVisibility(
+                        0, Eigen::Vector3d(x, y, floor0)) -
+                    0.5) < 1e-6,
+           "grounded visibility floor is inverted into raw trajectory z");
+  }
+
+  const int before_terrain_refresh = profile_messages;
+  manager.setTerrainData(makeRidgeMap());
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  expect(profile_messages > before_terrain_refresh,
+         "terrain replacement refreshes the current trajectory risk profile");
+
+  const int before_world_clear = profile_messages;
+  auto empty_world = std::make_shared<grid_map_msgs::msg::GridMap>();
+  manager.setTerrainData(empty_world);
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  expect(std::abs(manager.getRiskVisibility(0, behind_low) - 1.0) < 1e-12,
+         "world=none clears the planner DEM and restores no-terrain visibility");
+  expect(profile_messages > before_world_clear,
+         "world=none refreshes the current trajectory risk profile");
+  expect(manager.addDynamicSphere(Eigen::Vector3d(8.0, 8.0, 0.0), 0.5) == -2,
+         "world=none invalidates the old SDF so new obstacles defer to the next map");
+
+  manager.setRiskZonesRuntime({});
+  for (int i = 0; i < 30; ++i) {
+    rclcpp::spin_some(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  expect(last_profile.data.empty(),
+         "empty runtime zone set clears the latched risk profile");
+
+  // === Draped heatmap channel (mode "heatmap", the launch default) ===
+  // A second manager runs the heatmap mode; the fixture above stays on
+  // "volume" so both marker paths remain pinned.
+  grid_map_msgs::msg::GridMap heatmap;
+  bool got_heatmap = false;
+  auto heatmap_sub = node->create_subscription<grid_map_msgs::msg::GridMap>(
+      "/viz/risk_heatmap", rclcpp::QoS(16).reliable().transient_local(),
+      [&](grid_map_msgs::msg::GridMap::SharedPtr m) {
+        // Non-heatmap managers latch a 1x1 NaN stub; keep real maps only.
+        // Same-publisher reliable delivery is ordered, so the last kept map
+        // is the post-DEM one.
+        if (!m->data.empty() && m->data[0].data.size() > 1) {
+          heatmap = *m;
+          got_heatmap = true;
+        }
+      });
+
+  rclcpp::NodeOptions hm_options;
+  hm_options.append_parameter_override("manager/risk_zone_agl", true);
+  hm_options.append_parameter_override("manager/risk_mask_viz_mode",
+                                       std::string("heatmap"));
+  auto hm_node = std::make_shared<rclcpp::Node>("terrain_risk_heatmap_test",
+                                                hm_options);
+  hm_node->declare_parameter("drone_id", 1);
+  path_manager::PathManager hm_manager(hm_node);
+  hm_manager.setRiskZonesRuntime({zone, ridge_zone});
+  hm_manager.setTerrainData(makeRidgeMap());
+  for (int i = 0; i < 100; ++i) {
+    rclcpp::spin_some(node);
+    rclcpp::spin_some(hm_node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (got_heatmap && i > 20) break;  // extra spins drain queued updates
+  }
+  expect(got_heatmap, "draped risk heatmap is published");
+  if (got_heatmap) {
+    const auto &info = heatmap.info;
+    const int rows = static_cast<int>(heatmap.data[0].layout.dim[1].size);
+    const int cols = static_cast<int>(heatmap.data[0].layout.dim[0].size);
+    const double res = info.resolution;
+    const double ox = info.pose.position.x - 0.5 * info.length_x;
+    const double oy = info.pose.position.y - 0.5 * info.length_y;
+    // Inverse of the [TERRAIN-FRAME] cell mapping used by the publisher.
+    auto cellAt = [&](double wx, double wy, size_t layer) -> float {
+      const int row = static_cast<int>(
+          std::lround((ox + info.length_x - wx) / res - 0.5));
+      const int col = static_cast<int>(
+          std::lround((oy + info.length_y - wy) / res - 0.5));
+      if (row < 0 || row >= rows || col < 0 || col >= cols)
+        return std::numeric_limits<float>::quiet_NaN();
+      return heatmap.data[layer].data[static_cast<size_t>(col) * rows + row];
+    };
+    auto rgbAt = [&](double wx, double wy, int *r, int *g, int *b) {
+      const float packed = cellAt(wx, wy, 1);
+      uint32_t rgb = 0;
+      std::memcpy(&rgb, &packed, sizeof(rgb));
+      *r = (rgb >> 16) & 0xFF;
+      *g = (rgb >> 8) & 0xFF;
+      *b = rgb & 0xFF;
+    };
+    expect(std::isnan(cellAt(ox + info.length_x - 0.5 * res,
+                             oy + info.length_y - 0.5 * res, 0)),
+           "heatmap corner outside every footprint is transparent");
+    expect(std::isfinite(cellAt(-6.5, 0.5, 0)),
+           "west heatmap cell is painted");
+    int wr = 0, wg = 0, wb = 0;
+    rgbAt(-6.5, 0.5, &wr, &wg, &wb);
+    expect(wr > wg && wr > wb, "west cell (visible at ground level) is red");
+    // East of the ridge only the crest-top source sees the column, and only
+    // above its ellipsoid lower shell (~1.16 u AGL) -> mid warm ramp, much
+    // yellower than the ground-visible west cell.
+    int er = 0, eg = 0, eb = 0;
+    rgbAt(6.5, 0.5, &er, &eg, &eb);
+    expect(er > eb && eg > wg + 60,
+           "east cell behind the ridge ramps toward yellow (raised floor)");
+    // Far-east rim: the crest source's ellipsoid lower shell there is
+    // ~2.96 u AGL >= agl_max (2.0) -> explicit safe green, not transparent.
+    int sr = 0, sg = 0, sb = 0;
+    rgbAt(12.5, 0.5, &sr, &sg, &sb);
+    expect(sg > sr && sg > sb,
+           "far-east rim cell (floor above agl_max) is safe green");
+  }
+  (void)heatmap_sub;
+  (void)marker_sub;
+  (void)profile_sub;
+
+  rclcpp::shutdown();
+  std::cout << (failures == 0 ? "PASS" : "FAIL") << ": " << failures
+            << " failed check(s)\n";
+  return failures == 0 ? 0 : 1;
+}
