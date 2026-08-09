@@ -39,6 +39,7 @@
 
 #include "path_manager/segment_chain_planner.h"
 #include "path_manager/transition_phase.h"
+#include "path_manager/waypoint_eval.h"
 
 namespace {
 
@@ -132,7 +133,8 @@ int main(int argc, char **argv)
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false,
        with_zonemultileg = false, with_transition = false,
-       with_transitionauto = false, with_s8bounds = false;
+       with_transitionauto = false, with_s8bounds = false,
+       with_waypoints = false;
   for (int a = 3; a < argc; ++a) {
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
@@ -279,6 +281,9 @@ int main(int argc, char **argv)
       with_route = true; with_phase = true; with_transition = true;
     }
     if (v == "s8bounds") { with_route = true; with_s8bounds = true; }
+    if (v == "waypoints") {
+      with_route = true; with_phase = true; with_waypoints = true;
+    }
     if (v == "transitionauto") {
       with_route = true; with_phase = true; with_transition = true;
       with_transitionauto = true;
@@ -323,7 +328,7 @@ int main(int argc, char **argv)
     // zonewall: block the OVER-THE-TOP escape (default vertical ratio
     // 0.35 leaves a ~12 u ceiling the front end can climb past) so the
     // wall is genuinely unavoidable and the soft passes must run.
-    if (with_transition)
+    if (with_transition || with_waypoints)
       ovr.emplace_back("transition/enable", true);
     if (with_zonewall) {
       ovr.emplace_back("manager/risk_vertical_ratio", 3.0);
@@ -588,6 +593,170 @@ int main(int argc, char **argv)
     // Equality is the leak signature (the second plan re-used stale N).
     expect(p1 != p2, "segment count change reaches the second plan (no "
                      "per-plan state leak)");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_waypoints) {
+    // [WPE] The measurement that matters: waypoints extracted from a REAL
+    // planned flight — transition + departure + cruise + arrival — flown
+    // by the benchmark follower against the REAL terrain and zone hooks.
+    // The synthetic harness pins the machinery; this one asks whether the
+    // launch-transition flight survives being encoded as waypoints.
+    namespace we = path_manager::waypoint_eval;
+    const Eigen::Vector3d v32(1.6, 0.0, 1.0);   // 32 deg, out of cruise cone
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, v32, start_acc, goal,
+                   /*start_vel_synthesized=*/false, {},
+                   /*start_vel_commanded=*/true);
+    expect(r.hasTrajectory(), "transition mission planned");
+    if (!r.hasTrajectory()) {
+      std::cout << "FAIL: " << failures << " failed check(s)\n";
+      return 1;
+    }
+    const poly_traj::Trajectory &flight = pm->traj_.local_traj.traj;
+    const auto &spans = chain.lastPhaseSpans();
+    double um = 100.0, uz = 100.0;
+    node->get_parameter("optimization/dynamics_unit_xy_m", um);
+    node->get_parameter("optimization/dynamics_unit_z_m", uz);
+    we::FrameScale fscale;
+    fscale.unit_xy_m = um;
+    fscale.unit_z_m = uz;
+    const we::SourcePath src = we::buildSourcePath(flight, fscale);
+    expect(!src.empty(), "source path built from the planned flight");
+
+    const auto *dynp = pm->dynamicsParams();
+    expect(dynp != nullptr, "assumption parameter set available");
+    if (!dynp || src.empty()) {
+      std::cout << "FAIL: " << failures << " failed check(s)\n";
+      return 1;
+    }
+    we::FollowerParams fprm;
+    fprm.dyn = *dynp;
+
+    // REAL hooks: terrain from the DEM, zones from the committed policy
+    // snapshot. A lookup that fails voids the evaluation rather than
+    // assuming sea level.
+    const auto snap = pm->zonePolicySnapshot();
+    we::SafetyHooks hooks;
+    hooks.min_agl_m = pm->minGoalAgl() * uz;
+    hooks.terrain_z = [&](double x_m, double y_m, double *e) {
+      double elev_u = 0.0;
+      if (!pm->terrainElevation(x_m / um, y_m / um, &elev_u)) return false;
+      if (e) *e = elev_u * uz;
+      return true;
+    };
+    hooks.zone_probe = [&](const Eigen::Vector3d &p_m) {
+      const Eigen::Vector3d p_u(p_m.x() / um, p_m.y() / um, p_m.z() / uz);
+      for (size_t i = 0; i < snap.zones.size(); ++i) {
+        switch (pm->zoneContact(snap, i, p_u)) {
+          case path_manager::PathManager::ZoneContactResult::CLEAR: break;
+          case path_manager::PathManager::ZoneContactResult::CONTACT:
+            if (snap.zones[i].disposition ==
+                path_manager::PathManager::ZoneDisposition::HARD_AVOID)
+              return path_manager::transition_phase::ZoneProbe::CONTACT_HARD;
+            break;
+          default:
+            return path_manager::transition_phase::ZoneProbe::
+                STALE_OR_INVALID;
+        }
+      }
+      return path_manager::transition_phase::ZoneProbe::CLEAR;
+    };
+
+    we::FollowerStart fstart;
+    fstart.pos_m = src.pos_m.front();
+    fstart.vel_mps = src.vel_mps.front();
+    we::EvalParams ep;
+    ep.terminal_pos_gate_m = 1.5 * we::derivedAcceptRadius(fprm);
+    // A deviation tolerance so PASS means the path was REPRODUCED, not
+    // merely that the flight ended near the last waypoint with a
+    // plausible length (review find). No external requirement exists yet,
+    // so this is an EXPERIMENT PARAMETER at the follower's own capture
+    // scale — it gets replaced by a real corridor width when one is
+    // specified, the same way the section-8 jerk cap waits for the
+    // execution layer.
+    ep.max_xtrack_gate_m = we::derivedAcceptRadius(fprm);
+
+    // The law's own floor on THIS flight, minimized over its aiming
+    // parameter — the reference every row is read against.
+    double floor_m = 1e18, best_lead = 0.0;
+    for (double lead : {0.5, 1.0, 2.0, 4.0}) {
+      auto p2 = fprm;
+      p2.lead_time_s = lead;
+      const auto rt = we::flyReferenceTrack(src, fstart, p2);
+      const auto mt = we::evaluateReproduction(src, rt, *dynp, hooks, ep);
+      if (mt.measured && mt.max_xtrack_m < floor_m) {
+        floor_m = mt.max_xtrack_m;
+        best_lead = lead;
+      }
+    }
+    const bool floor_ok = floor_m < 1e17;
+    std::printf("[WPE] %s\n", we::scopeLabel());
+    std::printf("[WPE] planned flight: %.1f s, %d pieces, %.0f m, %zu "
+                "phase span(s)\n",
+                flight.getTotalDuration(), flight.getPieceNum(),
+                src.total_len_m, spans.size());
+    for (const auto &sp : spans)
+      std::printf("[WPE]   span %-10s t_end %.1f s\n", sp.name.c_str(),
+                  sp.t_end);
+    if (floor_ok)
+      std::printf("[WPE] tracking floor (continuous reference, best lead "
+                  "%.1f s): %.1f m\n", best_lead, floor_m);
+    else
+      std::printf("[WPE] tracking floor: UNMEASURED (no lead completed)\n");
+
+    std::printf("\nstrategy    N   maxXT[m]  rmsXT[m]  lenR   endErr[m] "
+                "minAGL[m] zoneH  verdict\n");
+    const auto row = [&](const char *name, const std::vector<we::Waypoint> &w) {
+      const auto ro = we::flyWaypoints3Dof(w, fstart, fprm);
+      const auto m = we::evaluateReproduction(src, ro, *dynp, hooks, ep);
+      if (!m.measured) {
+        std::printf("%-9s %3zu  n/a(%s)\n", name, w.size(),
+                    we::failName(m.fail));
+        return m;
+      }
+      std::printf("%-9s %3zu  %8.1f %8.1f  %5.3f %9.1f %9.1f %5d  %s\n",
+                  name, w.size(), m.max_xtrack_m, m.rms_xtrack_m,
+                  m.len_ratio, m.terminal_pos_err_m,
+                  m.agl_measured ? m.min_agl_m : -1.0,
+                  m.zone_measured ? m.zone_hard_contacts : -1,
+                  m.verdictName());
+      return m;
+    };
+    int completed = 0, agl_ok = 0, zone_ok = 0;
+    double best_dev = 1e18;
+    for (int n : {8, 16, 32, 64}) {
+      const auto mu = row("uniform", we::extractUniformArc(src, n));
+      const auto ma = row("adaptive", we::extractCurvatureAdaptive(src, n));
+      for (const auto *m : {&mu, &ma}) {
+        if (!m->measured) continue;
+        ++completed;
+        best_dev = std::min(best_dev, m->max_xtrack_m);
+        if (m->gate_agl_pass) ++agl_ok;
+        if (m->gate_zone_pass) ++zone_ok;
+      }
+    }
+    std::printf("[WPE] best deviation %.1f m on a %.0f m flight (%.2f%%), "
+                "floor %.1f m, deviation gate %.1f m (experiment "
+                "parameter, not a validated requirement)\n",
+                best_dev, src.total_len_m,
+                100.0 * best_dev / std::max(1.0, src.total_len_m), floor_m,
+                ep.max_xtrack_gate_m);
+
+    expect(completed >= 6, "most waypoint sets fly the real flight");
+    expect(floor_ok, "the tracking floor is measurable on the real flight");
+    // Safety must be MEASURED here (real hooks exist) — a SKIPPED gate on
+    // a real-terrain run would mean the hooks silently did nothing.
+    expect(agl_ok >= 1 && zone_ok >= 1,
+           "at least one waypoint set keeps terrain and zone clearance on "
+           "the FLOWN path (measured, not skipped)");
+    if (floor_ok)
+      expect(best_dev <= 3.0 * floor_m,
+             "the best waypoint set is within 3x the law's own floor");
+
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

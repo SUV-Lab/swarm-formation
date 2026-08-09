@@ -98,12 +98,12 @@ static void printRow(const char *strategy, int n, const we::RolloutResult &r,
     return;
   }
   const char *lim = (floor_m > 0.0 && m.max_xtrack_m <= 1.15 * floor_m)
-                        ? " follower-limited"
+                        ? " at-follower-floor"
                         : "";
-  std::printf("%-9s %3d  %8.1f %8.1f %8.1f  %5.3f %7.1f %7.1f  %s%s\n",
+  std::printf("%-9s %3d  %8.1f %8.1f %8.1f  %5.3f %7.1f %7.1f  %-10s%s\n",
               strategy, n, m.max_xtrack_m, m.rms_xtrack_m, m.max_arcmatch_m,
               m.len_ratio, m.max_wp_miss_m, m.terminal_pos_err_m,
-              m.allGatesOk() ? "gates:PASS" : "gates:FAIL", lim);
+              m.verdictName(), lim);
   std::printf("WPE_CSV,%s,%d,1,%.3f,%.3f,%.3f,%.4f,%.3f,%.3f,%.4f,%d,%.4f\n",
               strategy, n, m.max_xtrack_m, m.rms_xtrack_m, m.max_arcmatch_m,
               m.len_ratio, m.max_wp_miss_m, m.terminal_pos_err_m,
@@ -292,8 +292,9 @@ int main(int argc, char **argv)
       expect(!m_cut.gate_len,
              "hairpin shortcut REFUSED by the length-ratio gate (a small "
              "deviation did not buy it a pass)");
-      expect(!m_cut.allGatesOk(),
-             "hairpin shortcut does not pass overall gates");
+      expect(m_cut.verdict() ==
+                 we::ReproductionMetrics::Verdict::kFail,
+             "hairpin shortcut verdict is FAIL");
     }
     // (c2) On the gently curving source, a shortcut is nearly the same
     // LENGTH — there the deviation metric is what must catch it.
@@ -332,30 +333,74 @@ int main(int argc, char **argv)
   }
 
   // ---------------- follower floor ----------------
-  // The follower's own tracking error puts a floor under every strategy;
-  // without measuring it, a plateau in the table reads as "extraction
-  // stopped helping" when it actually means "the follower ran out".
-  double floor_m = 0.0;
+  // The TRUE floor is what the law achieves tracking the CONTINUOUS
+  // trajectory: no waypoint geometry, so nothing about aiming or leg
+  // switching varies. A dense-waypoint rollout is NOT a floor — changing
+  // the count changes the aiming regime too, and the 64-waypoint run
+  // measured WORSE than the 8-waypoint one, which a floor cannot do
+  // (review find). It is kept as a dense-waypoint BASELINE for contrast.
+  double floor_m = 0.0, dense_m = 0.0;
   if (run("floor") || run("table") || run("sensitivity")) {
-    const auto prm = makeFollower(dyn);
-    const auto dense = we::extractUniformArc(src, 64);
-    const auto r = we::flyWaypoints3Dof(dense, startOf(src), prm);
     we::SafetyHooks hooks;
-    const auto m = we::evaluateReproduction(src, r, dyn, hooks);
-    floor_m = m.measured ? m.max_xtrack_m : 0.0;
+    // The floor is the law's BEST continuous tracking, so it is minimized
+    // over the law's own aiming parameter: a single lead time is not a
+    // floor, it is one tuning (measured: lead 4 s tracks WORSE than a
+    // dense waypoint list because the carrot cuts corners; that says the
+    // lead was wrong, not that waypoints beat continuous tracking).
+    bool any_track = false;
+    double best_lead = 0.0;
+    floor_m = 1e18;
+    for (double lead : {0.5, 1.0, 2.0, 4.0, 8.0}) {
+      auto p2 = makeFollower(dyn);
+      p2.lead_time_s = lead;
+      const auto r2 = we::flyReferenceTrack(src, startOf(src), p2);
+      const auto m2 = we::evaluateReproduction(src, r2, dyn, hooks);
+      if (run("floor"))
+        std::printf("floor: lead %.1f s -> %s\n", lead,
+                    m2.measured
+                        ? (std::to_string(m2.max_xtrack_m) + " m").c_str()
+                        : "n/a");
+      if (m2.measured && m2.max_xtrack_m < floor_m) {
+        floor_m = m2.max_xtrack_m;
+        best_lead = lead;
+        any_track = true;
+      }
+    }
+    if (!any_track) floor_m = 0.0;
+    const auto prm = makeFollower(dyn);
+    const auto mt = we::evaluateReproduction(
+        src, we::flyReferenceTrack(src, startOf(src), prm), dyn, hooks);
+    (void)mt;
+    const auto dense = we::extractUniformArc(src, 64);
+    const auto rd = we::flyWaypoints3Dof(dense, startOf(src), prm);
+    const auto md_ = we::evaluateReproduction(src, rd, dyn, hooks);
+    dense_m = md_.measured ? md_.max_xtrack_m : 0.0;
     if (run("floor")) {
-      std::cout << "floor: N=64 max_xtrack " << floor_m << " m\n";
-      expect(m.measured, "dense-waypoint rollout completes");
-      expect(floor_m > 0.0, "follower has a measurable tracking floor");
+      std::printf("floor: best continuous tracking %.1f m at lead %.1f s "
+                  "(the law's own limit) | dense-waypoint N=64 baseline "
+                  "%.1f m, ratio %.2f\n",
+                  floor_m, best_lead, dense_m,
+                  dense_m / std::max(1.0, floor_m));
+      expect(any_track, "reference-tracking rollout completes");
+      expect(floor_m > 0.0, "the tracking law has a measurable floor");
+      expect(md_.measured, "dense-waypoint baseline completes");
+      // The separation earns its keep here: no waypoint list should beat
+      // the law's best continuous tracking by a wide margin — if one did,
+      // the floor would be mis-measured rather than the placement being
+      // brilliant.
+      expect(dense_m >= 0.75 * floor_m,
+             "no waypoint list beats the law's best continuous tracking by "
+             "more than the matching tolerance");
     }
   }
 
   // ---------------- the comparison table ----------------
   if (run("table")) {
-    std::printf("\n[WPE] follower tracking floor (N=64): %.1f m — rows at "
-                "or under 1.15x this are follower-limited, not\n[WPE] "
-                "placement-limited: denser waypoints cannot help there.\n",
-                floor_m);
+    std::printf("\n[WPE] tracking floor (continuous-reference follow): "
+                "%.1f m — the law's own limit, independent of waypoint\n"
+                "[WPE] geometry. Dense-waypoint N=64 baseline: %.1f m. Rows "
+                "at or under 1.15x the floor are at the law's limit.\n",
+                floor_m, dense_m);
     std::cout << "\nstrategy    N   maxXT[m]  rmsXT[m]  arcMt[m]  lenR  "
                  "wpMiss[m]  endErr[m]\n";
     const auto prm = makeFollower(dyn);
@@ -520,10 +565,17 @@ int main(int argc, char **argv)
     std::printf("sensitivity: %d clear rank inversion(s) across %zu "
                 "followers (tie band %.0f%%)\n", inversions, errs.size(),
                 kTie * 100.0);
+    // Scope, stated so the result is not read as more than it is: ONE
+    // synthetic curve, THREE configurations of the SAME 3DOF law, and a
+    // tie band chosen after observing a 3% near-tie swap. What this
+    // supports is "no ordering inversion beyond 10% appeared under these
+    // perturbations" — evidence for transferability, not a proof of it.
+    // A different law (the adopted higher-fidelity follower, when it
+    // lands) is the test that would actually settle it.
     expect(inversions == 0,
-           "no clear rank inversion under follower perturbation — the "
-           "ordering stage 3 would act on transfers, even though the "
-           "absolute metres do not");
+           "no clear rank inversion across these three follower "
+           "configurations on this curve (evidence for the ordering "
+           "transferring; NOT a proof across follower families)");
   }
 
   if (failures == 0) {

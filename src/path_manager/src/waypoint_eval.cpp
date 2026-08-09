@@ -382,6 +382,111 @@ RolloutResult flyWaypoints3Dof(const std::vector<Waypoint> &wps,
   return out;
 }
 
+RolloutResult flyReferenceTrack(const SourcePath &src,
+                                const FollowerStart &start,
+                                const FollowerParams &prm)
+{
+  RolloutResult out;
+  out.follower_id = "pointmass_reftrack_v1";
+  if (src.empty()) {
+    out.fail = FailReason::kNoWaypoints;
+    return out;
+  }
+  const md::Parameters &dyn = prm.dyn;
+  const double bank_level = derivedBankLevel(prm);
+
+  md::PointMassState s;
+  s.position_m = start.pos_m;
+  const double v0 = start.vel_mps.norm();
+  s.speed_mps = v0;
+  s.flight_path_angle_rad =
+      v0 > 1e-9
+          ? std::asin(std::min(1.0, std::max(-1.0, start.vel_mps.z() / v0)))
+          : 0.0;
+  s.heading_rad = std::atan2(start.vel_mps.y(), start.vel_mps.x());
+
+  const double t_max =
+      std::max(30.0, prm.timeout_factor * src.total_time_s);
+  const int max_steps = static_cast<int>(std::ceil(t_max / prm.dt_s));
+  double gamma_cmd = s.flight_path_angle_rad;
+  size_t cursor = 0;
+
+  for (int k = 0; k <= max_steps; ++k) {
+    const double t = k * prm.dt_s;
+    if (!s.position_m.allFinite() || !std::isfinite(s.speed_mps)) {
+      out.fail = FailReason::kNonFinite;
+      return out;
+    }
+    out.samples.push_back(RolloutSample{
+        t, s.position_m, md::pointMassVelocity(s), Eigen::Vector3d::Zero()});
+
+    // Closest point on the source AHEAD of the carried cursor, then a
+    // carrot lead_time seconds further along the path.
+    double best = std::numeric_limits<double>::infinity();
+    size_t near = cursor;
+    const double win = std::max(2000.0, 0.05 * src.total_len_m);
+    for (size_t i = cursor; i < src.pos_m.size(); ++i) {
+      if (src.s_m[i] > src.s_m[cursor] + win) break;
+      const double d = (src.pos_m[i] - s.position_m).norm();
+      if (d < best) {
+        best = d;
+        near = i;
+      }
+    }
+    cursor = near;
+    const double s_aim =
+        src.s_m[near] + std::max(1.0, s.speed_mps) * prm.lead_time_s;
+    if (s_aim >= src.total_len_m &&
+        (src.pos_m.back() - s.position_m).norm() <=
+            derivedAcceptRadius(prm)) {
+      out.completed = true;
+      out.total_steps = k + 1;
+      return out;
+    }
+    const size_t ai = arcIndex(src, std::min(s_aim, src.total_len_m));
+    const Eigen::Vector3d aim = src.pos_m[ai];
+    const double v_cmd =
+        std::min(std::max(src.vel_mps[ai].norm(), dyn.speed_min_mps),
+                 dyn.speed_max_mps);
+
+    const Eigen::Vector3d to_aim = aim - s.position_m;
+    const double cone = dyn.flight_path_angle_max_rad * (1.0 - 1e-3);
+    const double los =
+        std::atan2(to_aim.z(), std::max(1e-6, to_aim.head<2>().norm()));
+    const double g_los = std::min(std::max(los, -cone), cone);
+    const double step = prm.gamma_ramp_rad_per_s * prm.dt_s;
+    const double dg = g_los - gamma_cmd;
+    gamma_cmd += std::min(std::max(dg, -step), step);
+
+    tp::TransitionLimits lim;
+    lim.dyn = dyn;
+    lim.end_speed_min_mps = v_cmd / 1.02;
+    lim.end_speed_max_mps = v_cmd / 0.98;
+    tp::Commands cmd =
+        tp::synthesizeCommands(dyn, s, aim, gamma_cmd, bank_level, lim);
+    gamma_cmd = cmd.gamma_cmd_applied;
+
+    const auto closed =
+        md::pointMassForces(dyn, s, cmd.cl, cmd.thrust_n, cmd.bank_rad);
+    out.samples.back().acc_mps2 =
+        tp::pointMassAcceleration(dyn, s, closed.inputs);
+    if (closed.saturated() || !cmd.demand_interior) ++out.saturated_steps;
+
+    tp::StepFlags fl;
+    const md::PointMassState next = tp::rk4Step(
+        dyn, s, prm.dt_s, cmd.cl, cmd.thrust_n, cmd.bank_rad, &fl);
+    if (!fl.representable) {
+      out.fail = FailReason::kUnrepresentable;
+      out.total_steps = k + 1;
+      return out;
+    }
+    s = next;
+    out.total_steps = k + 1;
+  }
+  out.fail = FailReason::kTimeout;
+  return out;
+}
+
 // ===================== metrics =====================
 
 namespace {
@@ -473,6 +578,10 @@ ReproductionMetrics evaluateReproduction(
   m.terminal_speed_err_mps = std::abs(flown.samples.back().vel_mps.norm() -
                                       src.vel_mps.back().norm());
   m.gate_terminal = m.terminal_pos_err_m <= ep.terminal_pos_gate_m;
+  // <=0 disables the deviation gate (the printer reports it as skipped);
+  // with a tolerance set, PASS means the path was actually reproduced.
+  m.gate_xtrack =
+      ep.max_xtrack_gate_m <= 0.0 || m.max_xtrack_m <= ep.max_xtrack_gate_m;
 
   for (const auto &a : flown.arrivals)
     m.max_wp_miss_m = std::max(m.max_wp_miss_m, a.miss_m);
@@ -500,7 +609,16 @@ ReproductionMetrics evaluateReproduction(
     m.min_agl_m = std::numeric_limits<double>::infinity();
     for (const auto &fs : flown.samples) {
       double elev = 0.0;
-      if (!hooks.terrain_z(fs.pos_m.x(), fs.pos_m.y(), &elev)) elev = 0.0;
+      if (!hooks.terrain_z(fs.pos_m.x(), fs.pos_m.y(), &elev)) {
+        if (ep.terrain_lookup_required) {
+          // A failed lookup is NOT sea level. Assuming an elevation here
+          // would let a flight over unmapped ground pass an AGL gate it
+          // was never checked against (review find: fail-open).
+          m.measured = false;
+          return m;
+        }
+        elev = 0.0;
+      }
       m.min_agl_m = std::min(m.min_agl_m, fs.pos_m.z() - elev);
     }
     m.gate_agl_pass = m.min_agl_m >= hooks.min_agl_m;

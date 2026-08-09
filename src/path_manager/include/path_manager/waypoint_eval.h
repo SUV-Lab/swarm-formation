@@ -15,10 +15,13 @@
 // a point mass). It has no attitude dynamics, no actuator lag, no wind, no
 // estimation error. Reproduction figures characterize THIS law on THIS
 // model — structure validation, not real-platform physics validation, and a
-// LOWER BOUND on what a real vehicle would show. What is meant to transfer
-// is structure: how error trends with waypoint count, and which placement
-// strategy beats which. That transfer is itself a claim, so the harness
-// measures it (the follower-sensitivity variant) instead of asserting it.
+// LOWER BOUND on what a real vehicle would show. What is HOPED to transfer
+// is structure — how error trends with waypoint count, which placement
+// beats which — and that hope is itself a claim, so the harness perturbs
+// the follower and looks for ordering inversions instead of assuming it.
+// Even that is bounded evidence: same law, a few configurations, the
+// fixtures in the harness. Settling transferability needs a follower from
+// a different family, which is what the seam below is for.
 //
 // The follower is a std::function seam: when a higher-fidelity model is
 // adopted, it binds to the same FlyFn and every extraction/metric here is
@@ -191,6 +194,20 @@ RolloutResult flyWaypoints3Dof(const std::vector<Waypoint> &wps,
                                const FollowerStart &start,
                                const FollowerParams &prm);
 
+// The TRUE follower floor: fly the CONTINUOUS trajectory — aim at the
+// source point a lead time ahead along the path, command the source speed
+// there — with no waypoint geometry involved at all. This is the law's
+// intrinsic tracking ability; any waypoint set is bounded below by it.
+//
+// The dense-waypoint rollout is NOT this: adding waypoints also changes
+// where the follower aims and when it switches legs, so a 64-waypoint run
+// measures a different aiming regime rather than a floor (review find: a
+// 64-waypoint rollout scored WORSE than an 8-waypoint one, which a floor
+// cannot do).
+RolloutResult flyReferenceTrack(const SourcePath &src,
+                                const FollowerStart &start,
+                                const FollowerParams &prm);
+
 // S3 — error-driven refinement. Follower-in-the-loop by design: it places
 // waypoints where THIS follower deviates, so its output is optimal for the
 // follower it was given. Keeps the best completed set; a failed rollout's
@@ -257,17 +274,36 @@ struct ReproductionMetrics {
   bool zone_measured{false};
   int zone_hard_contacts{0};
 
-  // Gate verdicts (tri-state at the printer: PASS / FAIL / SKIPPED).
+  // Gate verdicts. A SKIPPED safety gate is NOT a pass: an evaluation
+  // that never looked at terrain or zones cannot certify a flight, so
+  // the verdict is INCOMPLETE and the printer says so (review find: the
+  // whole first table read gates:PASS while measuring neither).
   bool gate_complete{false};
   bool gate_len{false};
   bool gate_terminal{false};
+  bool gate_xtrack{false};   // deviation within the caller's tolerance
   bool gate_agl_pass{false}, gate_agl_skipped{true};
   bool gate_zone_pass{false}, gate_zone_skipped{true};
-  bool allGatesOk() const
+
+  enum class Verdict { kFail, kIncomplete, kPass };
+  Verdict verdict() const
   {
-    return measured && gate_complete && gate_len && gate_terminal &&
-           (gate_agl_skipped || gate_agl_pass) &&
-           (gate_zone_skipped || gate_zone_pass);
+    if (!measured) return Verdict::kFail;
+    if (!gate_complete || !gate_len || !gate_terminal || !gate_xtrack)
+      return Verdict::kFail;
+    if (!gate_agl_skipped && !gate_agl_pass) return Verdict::kFail;
+    if (!gate_zone_skipped && !gate_zone_pass) return Verdict::kFail;
+    // Everything that WAS measured passed, but safety was not measured.
+    if (gate_agl_skipped || gate_zone_skipped) return Verdict::kIncomplete;
+    return Verdict::kPass;
+  }
+  const char *verdictName() const
+  {
+    switch (verdict()) {
+      case Verdict::kPass: return "PASS";
+      case Verdict::kIncomplete: return "INCOMPLETE";
+      default: return "FAIL";
+    }
   }
 };
 
@@ -278,6 +314,16 @@ struct EvalParams {
   // (1.5 x accept radius is the harness convention).
   double terminal_pos_gate_m{150.0};
   double len_ratio_lo{0.95}, len_ratio_hi{1.25};
+  // Deviation tolerance. Without it a "PASS" says only that the flight
+  // finished near the last waypoint with a plausible length — it would
+  // not mean the trajectory was reproduced (review find). <=0 disables
+  // the gate, which the printer then reports as a skipped gate.
+  double max_xtrack_gate_m{0.0};
+  // Terrain lookup that FAILS (off-DEM / no data) is not sea level: with
+  // this true, a failed lookup voids the evaluation instead of assuming
+  // an elevation. The transition generator's own rule is the precedent —
+  // a missing source refuses rather than guesses.
+  bool terrain_lookup_required{true};
 };
 
 ReproductionMetrics evaluateReproduction(
