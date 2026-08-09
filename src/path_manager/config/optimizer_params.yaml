@@ -8,11 +8,20 @@
     # run N+1의 head BC가 같은 계약값(하드 등식)이라 이음매는 C2가 구조적으로
     # 보장된다. off면 기존 단일 계획 그대로.
     chain/enable: true
-    # segments: 양수 = 고정 분할 수. 0 = 자동 — 미션 조각 수 ÷ 목표치(아래,
-    # 105런 스윕 운용점 70)로 N을 산정하고, 토막 1~2개 분량의 작은 미션은
+    # segments: 양수 = 고정 분할 수. 0 = 자동 — 미션 조각 수 ÷ 목표치(바로
+    # 아래 auto_pieces_per_segment)로 N을 산정하고, 토막 1~2개 분량의 작은 미션은
     # 아예 나누지 않고 단일 계획으로 돈다. 미션마다 손대지 않으려면 0 권장.
     chain/segments: 0
-    # chain/auto_pieces_per_segment: 70   # 자동 모드의 토막당 목표 조각 수
+    # auto_pieces_per_segment: 자동 모드의 토막당 목표 조각 수. 작을수록 N이
+    # 커지고 병렬 폭이 넓어진다. 벽시계는 항상 "가장 느린 한 구간"이 정하므로
+    # 이득은 N에 단조가 아니다 — 어려운 구간이 쪼개지느냐에 달렸다.
+    # 실측(full_map, 접합 선정 수정 후, difficulty_balance on):
+    #   r5(276조각)  70→N=4  963 ms | 35→N=8   780 ms | 17→N=16  686 ms
+    #   r4(486조각)  70→N=7 3554 ms | 35→N=14 1934 ms | 17→N=16 2323 ms
+    # 17은 r5에서 가장 빠르지만 r4에서 되레 느려지고 비행시간도 +0.22%
+    # 밀린다. 35는 양쪽에서 최선이거나 최선에 근접해 이 값을 기본으로 둔다.
+    # 세 값 모두 판정 CLEAN, 조각 수·AGL 동일.
+    chain/auto_pieces_per_segment: 35
 
     # ---- [PHASE] 3단계(출발 전이-순항-도착 전이) 확장 ----
     chain/phase/enable: true            # 첫/끝 접합을 단계 핸드오프 규칙으로 선정
@@ -48,9 +57,15 @@
     # 워커별 옵티마이저 인스턴스 + 내부 OpenMP 코어 분배(코어수/N).
     chain/author_from_route: true   # 경로 저작 모드 (baseline 생략)
     chain/parallel: true            # 구간 스레드 병렬 (author 필요)
-    # difficulty_balance: 실험. 난이도 가중 균형이 안정 후보를 고갈시켜
-    # r4에서 구간 기각을 유발(28.7%>25%) — 접합 이동 재시도와 함께 재도전.
-    #   chain/difficulty_balance: false
+    # difficulty_balance: 접합을 호장이 아니라 난이도 가중으로 균형시킨다.
+    # 계산량은 호장에 비례하지 않는다 — r5 실측에서 1044 u 구간 91 ms,
+    # 1060 u 구간 843 ms로 같은 길이에 9배. 지형·위험 밀도가 비용을
+    # 정하므로 균형도 그 기준이어야 한다.
+    # 한때 off였던 이유는 r4 구간 기각(28.7%>25%)이었는데, 그건 접합
+    # 선정 루프가 창 하단 첫 정점에서 멈추던 결함 상태에서 난 결과다
+    # (→ docs/planning_perf_notes.md). 결함을 고친 뒤 재측정하면 r4에서
+    # 기각·재시도 0건, 판정·이음매 지표 동일, 3792→3554 ms.
+    chain/difficulty_balance: true
     # [STAGE-2] 구간별 요구조건 차등: chain/seg<i>/params 에 "이름=값" 문자열
     # 배열. 구간 실행 직전 옵티마이저를 강제 재초기화해 optimization/* 전체를
     # 다시 읽으므로 그 계열만 구간별로 실제 반영된다(manager/*는 기동 시 1회
@@ -516,9 +531,20 @@
                                         # that dip inside the margin, above the true
                                         # surface. <= -0.5 disables
     manager/virtual_ceil_height: -1.0   # <= -0.5 disables
+    # 계획 bbox 천장을 "경로가 지나는 최고 지형(그리고 미션 경유점) + 이 값"
+    # 으로 잡는다. FM2 격자의 z 범위를 그대로 정하므로 전단 비용의 지배항이다.
+    # 실측(full_map): 비행이 쓰는 고도대는 6 u 남짓인데 상자는 32~37 u고,
+    # 그중 이 여유가 약 60%다(r5 z 109셀, r4 125셀).
+    # 줄이면 전단이 비례해 빨라지지만 그만큼 넘어갈 수 있는 공역이 준다.
+    # 구역 위를 넘어가야 하는 미션이면 그 구역 상단까지 덮는 값이어야 한다
+    # (bbox z는 구역 높이를 따로 반영하지 않는다). 기본은 기존 하드코딩값.
+    manager/map_ceiling_headroom: 20.0  # frame units (1 u = 100 m)
     manager/world: "small_island"       # fallback; RViz MapSelector overrides
 
     # ---- Logging ----
     enable_obstacles: true
     enable_debug_logs: true
-    enable_lbfgs_detail_logs: true
+    # 반복 10회마다 항별 비용 11줄. 프로파일러의 cb 구간 밖에서 찍혀
+    # [PROF]의 lbfgs 잔차로 계상된다(분할 전 한 구간 2496반복에서 187 ms).
+    # 진단할 때만 켠다.
+    enable_lbfgs_detail_logs: false

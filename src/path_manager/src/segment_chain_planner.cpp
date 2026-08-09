@@ -1241,7 +1241,18 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     int best = forced, best_any = -1;
     double best_score = std::numeric_limits<double>::infinity();
     double best_any_score = best_score;
-    for (int i = 1; best < 0 && i + 1 < M; ++i) {
+    // A FORCED junction (the phase departure/arrival handoff) is not up
+    // for selection — the screening already chose it. Only free
+    // junctions are searched, and they are searched across the WHOLE
+    // window: the loop used to carry `best < 0` in its condition, so it
+    // stopped at the first admissible vertex and the scoring below —
+    // calmness first, balance breaking ties — never ran. The effect was
+    // systematic, every free junction landing on the window's lower
+    // edge. Measured on the live mission: junction 2 sat at arc 253.1 u
+    // where the window opened at 244.1 and the balance target was 1085,
+    // leaving one segment carrying 78% of the route and 1017 ms of the
+    // 1428 ms plan while its siblings took 1-8 ms.
+    for (int i = 1; forced < 0 && i + 1 < M; ++i) {
       if (w[static_cast<size_t>(i)] < lo || w[static_cast<size_t>(i)] > hi)
         continue;
       // Calmness dominates, balance breaks ties: kappa is rad/u (a gentle

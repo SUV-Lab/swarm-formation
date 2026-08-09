@@ -86,6 +86,7 @@ namespace path_manager
         node_->declare_parameter("manager/sdf_voxel_z", 0.0);
         node_->declare_parameter("manager/ground_height", -0.1);
         node_->declare_parameter("manager/virtual_ceil_height", -0.1);
+        node_->declare_parameter("manager/map_ceiling_headroom", 20.0);
         node_->declare_parameter("manager/obstacle_clearance", 0.3);
         node_->declare_parameter("manager/dyn_obstacle_margin", 3.0);
         node_->declare_parameter("optimization/obstacle_clearance", 0.7);
@@ -177,6 +178,16 @@ namespace path_manager
         if (sdf_voxel_z_ <= 0.0) sdf_voxel_z_ = 0.1;  // 10 m real (frame /100)
         node_->get_parameter("manager/ground_height", ground_height_);
         node_->get_parameter("manager/virtual_ceil_height", virtual_ceil_height_);
+        node_->get_parameter("manager/map_ceiling_headroom", map_ceiling_headroom_);
+        // A non-positive headroom would put the ceiling at the terrain peak
+        // itself, leaving the wave no room to cross it. Fail back to the
+        // shipped value rather than plan in a box the route cannot fit.
+        if (!(map_ceiling_headroom_ > 0.0)) {
+            log_manager_->warnf(
+                "[BBOX] manager/map_ceiling_headroom %.2f is not positive — "
+                "using 20.0", map_ceiling_headroom_);
+            map_ceiling_headroom_ = 20.0;
+        }
         node_->get_parameter("manager/obstacle_clearance", obstacle_clearance_);
         node_->get_parameter("manager/dyn_obstacle_margin", dyn_obstacle_margin_);
         node_->get_parameter("optimization/obstacle_clearance", opt_obstacle_clearance_);
@@ -910,7 +921,10 @@ std::string PathManager::stateEnvelopeProblem(
         }
         // Upper bound: max(terrain peak, flight altitude) + headroom. The max()
         // keeps the flight altitude inside the box even over low terrain.
-        map_upper_bound_.z() = std::max(max_terrain_z, map_upper_bound_.z()) + 20.0;
+        // The headroom sets the FM2 grid's z extent and so its cell count
+        // (see manager/map_ceiling_headroom).
+        map_upper_bound_.z() =
+            std::max(max_terrain_z, map_upper_bound_.z()) + map_ceiling_headroom_;
 
         log_manager_->infof("Map bounds: lower=(%.2f,%.2f,%.2f), upper=(%.2f,%.2f,%.2f)",
             map_lower_bound_.x(), map_lower_bound_.y(), map_lower_bound_.z(),

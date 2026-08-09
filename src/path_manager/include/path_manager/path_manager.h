@@ -732,6 +732,12 @@ namespace path_manager
     // which is non-physical.
     double ground_height_ = -0.1;    // frame units (absolute world z; 1 u = 100 m)
     double virtual_ceil_height_ = -0.1;  // frame units (absolute world z)
+    // Airspace kept above the highest terrain the route crosses (and above
+    // the mission's own waypoints) when sizing the planning bbox. It sets
+    // the FM2 grid's z extent directly, so it is the dominant cost term in
+    // the front end: on the measured full-map missions the flight occupies
+    // ~6 u of a 32-37 u box and this headroom is ~60% of the rest.
+    double map_ceiling_headroom_ = 20.0;  // frame units
     TerrainData terrain_data_;
 
     // ESDF map for SDF-based RRT* queries (phase 3).
