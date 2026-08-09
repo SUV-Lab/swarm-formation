@@ -90,14 +90,14 @@ static we::FollowerStart startOf(const we::SourcePath &src)
 // render as a PASS, and an unmeasured row prints n/a(reason) instead of
 // numbers a complete flight would fill.
 static void printRow(const char *strategy, int n, const we::RolloutResult &r,
-                     const we::ReproductionMetrics &m, double floor_m)
+                     const we::ReproductionMetrics &m, double baseline_m)
 {
   if (!m.measured) {
     std::printf("%-9s %3d  n/a(%s)\n", strategy, n, we::failName(m.fail));
     std::printf("WPE_CSV,%s,%d,0,,,,,,,,,\n", strategy, n);
     return;
   }
-  const char *lim = (floor_m > 0.0 && m.max_xtrack_m <= floor_m)
+  const char *lim = (baseline_m > 0.0 && m.max_xtrack_m <= baseline_m)
                         ? " beats-baseline"
                         : "";
   std::printf("%-9s %3d  %8.1f %8.1f %8.1f  %5.3f %7.1f %7.1f  %-10s%s\n",
@@ -339,7 +339,7 @@ int main(int argc, char **argv)
   // measured here, where an 8-waypoint list beats continuous tracking.
   // The number is a reference point for reading the table, never a bound,
   // and it is only comparable at the SAME lead time.
-  double floor_m = 0.0, dense_m = 0.0;
+  double base_tuned = 0.0, base_matched = 0.0, dense_m = 0.0;
   if (run("floor") || run("table") || run("sensitivity")) {
     we::SafetyHooks hooks;
     // The floor is the law's BEST continuous tracking, so it is minimized
@@ -349,7 +349,13 @@ int main(int argc, char **argv)
     // lead was wrong, not that waypoints beat continuous tracking).
     bool any_track = false;
     double best_lead = 0.0;
-    floor_m = 1e18;
+    base_tuned = 1e18;
+    {   // matched lead: the only apples-to-apples number against the rows
+      const auto rm = we::flyReferenceTrack(src, startOf(src),
+                                            makeFollower(dyn));
+      const auto mm = we::evaluateReproduction(src, rm, dyn, hooks);
+      base_matched = mm.measured ? mm.max_xtrack_m : 0.0;
+    }
     for (double lead : {0.5, 1.0, 2.0, 4.0, 8.0}) {
       auto p2 = makeFollower(dyn);
       p2.lead_time_s = lead;
@@ -360,13 +366,13 @@ int main(int argc, char **argv)
                     m2.measured
                         ? (std::to_string(m2.max_xtrack_m) + " m").c_str()
                         : "n/a");
-      if (m2.measured && m2.max_xtrack_m < floor_m) {
-        floor_m = m2.max_xtrack_m;
+      if (m2.measured && m2.max_xtrack_m < base_tuned) {
+        base_tuned = m2.max_xtrack_m;
         best_lead = lead;
         any_track = true;
       }
     }
-    if (!any_track) floor_m = 0.0;
+    if (!any_track) base_tuned = 0.0;
     const auto prm = makeFollower(dyn);
     const auto mt = we::evaluateReproduction(
         src, we::flyReferenceTrack(src, startOf(src), prm), dyn, hooks);
@@ -376,12 +382,14 @@ int main(int argc, char **argv)
     const auto md_ = we::evaluateReproduction(src, rd, dyn, hooks);
     dense_m = md_.measured ? md_.max_xtrack_m : 0.0;
     if (run("floor")) {
-      std::printf("baseline: continuous-reference %.1f m at its best lead "
-                  "%.1f s | dense-waypoint N=64 %.1f m | ratio %.2f\n",
-                  floor_m, best_lead, dense_m,
-                  dense_m / std::max(1.0, floor_m));
+      std::printf("baseline: continuous-reference %.1f m at the SAME lead "
+                  "as the rows (%.1f s), %.1f m at its own best lead "
+                  "(%.1f s) | dense-waypoint N=64 %.1f m\n",
+                  base_matched, we::FollowerParams{}.lead_time_s,
+                  base_tuned, best_lead, dense_m);
       expect(any_track, "continuous-reference rollout completes");
-      expect(floor_m > 0.0, "the baseline is measurable");
+      expect(base_tuned > 0.0 && base_matched > 0.0,
+             "both baselines are measurable");
       expect(md_.measured, "dense-waypoint rollout completes");
       // Deliberately NOT asserted: that no waypoint list beats the
       // baseline. It does, and asserting otherwise would re-introduce
@@ -391,11 +399,13 @@ int main(int argc, char **argv)
 
   // ---------------- the comparison table ----------------
   if (run("table")) {
-    std::printf("\n[WPE] continuous-reference baseline: %.1f m (best lead) "
-                "| dense-waypoint N=64: %.1f m.\n[WPE] A reference point, "
-                "NOT a bound — rows marked beats-baseline do exactly that, "
-                "because\n[WPE] leg-line aiming and curve aiming differ.\n",
-                floor_m, dense_m);
+    std::printf("\n[WPE] continuous-reference baseline: %.1f m at the "
+                "rows' own lead, %.1f m tuned | dense N=64: %.1f m.\n"
+                "[WPE] A reference point, NOT a bound — beats-baseline rows "
+                "do exactly that, because leg-line\n[WPE] and curve aiming "
+                "differ. Only the matched-lead number compares to the "
+                "rows.\n",
+                base_matched, base_tuned, dense_m);
     std::cout << "\nstrategy    N   maxXT[m]  rmsXT[m]  arcMt[m]  lenR  "
                  "wpMiss[m]  endErr[m]\n";
     const auto prm = makeFollower(dyn);
@@ -418,7 +428,7 @@ int main(int argc, char **argv)
                                   : we::extractCurvatureAdaptive(src, n);
         const auto r = we::flyWaypoints3Dof(w, st, prm);
         const auto m = we::evaluateReproduction(src, r, dyn, hooks, ep);
-        printRow(strat == 0 ? "uniform" : "adaptive", n, r, m, floor_m);
+        printRow(strat == 0 ? "uniform" : "adaptive", n, r, m, base_matched);
         if (m.measured) {
           ++completed_rows;
           if (strat == 0) {
@@ -431,15 +441,17 @@ int main(int argc, char **argv)
     // S3: refinement is follower-in-the-loop by construction.
     we::RefineParams rp;
     rp.max_waypoints = 16;
-    // Tolerance ABOVE the measured follower floor: asking for less than
-    // the follower can track would guarantee non-convergence and say
-    // nothing about placement.
-    rp.xtrack_tol_m = std::max(50.0, 1.2 * floor_m);
+    // A demanding tolerance so refinement spends its whole budget: tying
+    // it to the baseline made it stop early (the baseline is not a bound,
+    // so it is not a target either) and the "equal budget" comparison
+    // below then compared different budgets.
+    rp.xtrack_tol_m = 50.0;
     const auto rr =
         we::refineByError(src, fly, st, rp, we::derivedAcceptRadius(prm));
     const auto r3 = we::flyWaypoints3Dof(rr.best, st, prm);
     const auto m3 = we::evaluateReproduction(src, r3, dyn, hooks, ep);
-    printRow("refine", static_cast<int>(rr.best.size()), r3, m3, floor_m);
+    printRow("refine", static_cast<int>(rr.best.size()), r3, m3,
+             base_matched);
     if (m3.measured) ref_at_16 = m3.max_xtrack_m;
     std::cout << "refine: converged=" << rr.converged << " iters="
               << rr.trace.size() << " waypoints=" << rr.best.size() << "\n";
@@ -453,20 +465,30 @@ int main(int argc, char **argv)
     // is not the binding constraint.
     double best_row = 1e18;
     for (double e : uni_err) best_row = std::min(best_row, e);
-    std::printf("table: best uniform row %.1f m vs continuous-reference "
-                "baseline %.1f m (ratio %.2f)\n",
-                best_row, floor_m, best_row / std::max(1.0, floor_m));
+    std::printf("table: best uniform row %.1f m vs matched-lead baseline "
+                "%.1f m (ratio %.2f)\n",
+                best_row, base_matched,
+                best_row / std::max(1.0, base_matched));
     // The comparison is reported, not gated: the baseline is not a bound,
     // so "within Nx the baseline" would assert a relationship the two
     // aiming geometries do not have.
     expect(best_row > 0.0, "the best row is measurable");
-    if (uni_at_16 > 0.0 && ref_at_16 > 0.0) {
-      std::cout << "refine vs uniform@16: " << ref_at_16 << " vs "
-                << uni_at_16 << " m\n";
-      expect(ref_at_16 <= uni_at_16 * 1.10,
-             "error-driven refinement is not worse than uniform at equal "
-             "budget");
+    // Equal budget means the SAME waypoint count, so uniform is re-run at
+    // whatever count refinement actually ended with.
+    if (ref_at_16 > 0.0 && !rr.best.empty()) {
+      const int nref = static_cast<int>(rr.best.size());
+      const auto ru = we::flyWaypoints3Dof(we::extractUniformArc(src, nref),
+                                           st, prm);
+      const auto mu = we::evaluateReproduction(src, ru, dyn, hooks);
+      if (mu.measured) {
+        std::printf("refine vs uniform at the SAME count (%d): %.1f vs "
+                    "%.1f m\n", nref, ref_at_16, mu.max_xtrack_m);
+        expect(ref_at_16 <= mu.max_xtrack_m * 1.10,
+               "error-driven refinement is not worse than uniform at the "
+               "same waypoint count");
+      }
     }
+    (void)uni_at_16;
   }
 
   // ---------------- follower sensitivity ----------------

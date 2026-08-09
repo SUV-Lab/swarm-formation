@@ -122,13 +122,66 @@ Waypoint endpointWaypoint(const SourcePath &src)
 
 }  // namespace
 
+Waypoint waypointAtTime(const poly_traj::Trajectory &traj,
+                        const FrameScale &fs, const SourcePath &src,
+                        double t_s)
+{
+  Waypoint w;
+  if (src.empty()) return w;
+  const double t = std::min(std::max(t_s, 0.0), src.total_time_s);
+  // Exact from the polynomial — a dense-sample lookup would land up to a
+  // sample spacing away from the junction it is meant to pin.
+  w.pos_m = fs.toSi(traj.getPos(t));
+  w.speed_mps = fs.toSi(traj.getVel(t)).norm();
+  w.src_time_s = t;
+  const auto it = std::lower_bound(src.t_s.begin(), src.t_s.end(), t);
+  size_t i = static_cast<size_t>(std::distance(src.t_s.begin(), it));
+  if (i == 0) {
+    w.src_arc_m = src.s_m.front();
+  } else if (i >= src.t_s.size()) {
+    w.src_arc_m = src.s_m.back();
+  } else {
+    const double t0 = src.t_s[i - 1], t1 = src.t_s[i];
+    const double u = (t1 > t0) ? (t - t0) / (t1 - t0) : 0.0;
+    w.src_arc_m = src.s_m[i - 1] + u * (src.s_m[i] - src.s_m[i - 1]);
+  }
+  return w;
+}
+
+namespace {
+
+// Merge mandatory anchors into a strategy's output: kept verbatim (they
+// carry exact polynomial state), dropped when the follower could not
+// resolve them against an existing waypoint.
+void mergeAnchors(std::vector<Waypoint> *out, const SourcePath &src,
+                  const std::vector<Waypoint> &anchors, double min_sep_m)
+{
+  if (!out || anchors.empty()) return;
+  for (const auto &a : anchors) {
+    if (!(a.src_arc_m > 0.0) || a.src_arc_m >= src.total_len_m) continue;
+    bool blocked = false;
+    for (const auto &w : *out)
+      if (std::abs(w.src_arc_m - a.src_arc_m) < min_sep_m) blocked = true;
+    if (blocked) continue;
+    out->push_back(a);
+  }
+  std::sort(out->begin(), out->end(),
+            [](const Waypoint &x, const Waypoint &y) {
+              return x.src_arc_m < y.src_arc_m;
+            });
+}
+
+}  // namespace
+
 // ===================== extraction =====================
 
-std::vector<Waypoint> extractUniformArc(const SourcePath &src, int n)
+std::vector<Waypoint> extractUniformArc(const SourcePath &src, int n,
+                                        const std::vector<Waypoint> &anchors,
+                                        double min_sep_m)
 {
   std::vector<Waypoint> out;
   if (src.empty() || n < 1) return out;
-  out.reserve(static_cast<size_t>(n));
+  out.reserve(static_cast<size_t>(n) + anchors.size());
   for (int i = 1; i <= n; ++i) {
     if (i == n) {
       out.push_back(endpointWaypoint(src));   // endpoint EXACT
@@ -136,16 +189,18 @@ std::vector<Waypoint> extractUniformArc(const SourcePath &src, int n)
       out.push_back(sampleAtArc(src, i * src.total_len_m / n));
     }
   }
+  mergeAnchors(&out, src, anchors, min_sep_m);
   return out;
 }
 
-std::vector<Waypoint> extractCurvatureAdaptive(const SourcePath &src, int n,
-                                               double lambda,
-                                               double eps_straight)
+std::vector<Waypoint> extractCurvatureAdaptive(
+    const SourcePath &src, int n, double lambda, double eps_straight,
+    const std::vector<Waypoint> &anchors, double min_sep_m)
 {
   std::vector<Waypoint> out;
   if (src.empty() || n < 1) return out;
-  if (!(lambda > 0.0)) return extractUniformArc(src, n);
+  if (!(lambda > 0.0))
+    return extractUniformArc(src, n, anchors, min_sep_m);
 
   // Cumulative weight W(s) = integral of (eps + lambda * kappa) ds.
   std::vector<double> W(src.s_m.size(), 0.0);
@@ -156,7 +211,7 @@ std::vector<Waypoint> extractCurvatureAdaptive(const SourcePath &src, int n,
     W[k] = W[k - 1] + w * ds;
   }
   const double W_total = W.back();
-  if (!(W_total > 0.0)) return extractUniformArc(src, n);
+  if (!(W_total > 0.0)) return extractUniformArc(src, n, anchors, min_sep_m);
 
   out.reserve(static_cast<size_t>(n));
   for (int i = 1; i <= n; ++i) {
@@ -174,6 +229,7 @@ std::vector<Waypoint> extractCurvatureAdaptive(const SourcePath &src, int n,
     const double s_at = src.s_m[k - 1] + u * (src.s_m[k] - src.s_m[k - 1]);
     out.push_back(sampleAtArc(src, s_at));
   }
+  mergeAnchors(&out, src, anchors, min_sep_m);
   return out;
 }
 

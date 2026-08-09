@@ -766,6 +766,15 @@ int main(int argc, char **argv)
                   m.verdictName());
       return m;
     };
+    // Mandatory anchors: the exact state at every phase junction, taken
+    // from the polynomial rather than the nearest dense sample. The
+    // extractor merges them; the experiment below shows what they buy.
+    std::vector<we::Waypoint> anchors;
+    for (size_t i = 0; i + 1 < spans.size(); ++i)
+      anchors.push_back(
+          we::waypointAtTime(flight, fscale, src, spans[i].t_end));
+    const double anchor_sep = 2.0 * we::derivedAcceptRadius(fprm);
+
     int completed = 0, full_pass = 0, zone_fail_rows = 0;
     double best_dev = 1e18;
     std::vector<we::Waypoint> best_set;
@@ -890,8 +899,12 @@ int main(int argc, char **argv)
       // the window statistic is arc-matched too. The headline 66.9 m is
       // NEAREST-POINT deviation and the two are different measurements —
       // comparing them was apples to oranges (review find).
-      const auto mb0 = we::evaluateReproduction(src, rb, *dynp, hooks, ep);
-      const double whole_arc = mb0.measured ? mb0.max_arcmatch_m : 0.0;
+      // Same implementation as the windows (dense sampling), so the two
+      // numbers are the same measurement — max_arcmatch_m samples only
+      // 101 fractions and would not be comparable (review find).
+      const auto w_all = we::windowStats(src, rb, 0.0, src.total_time_s,
+                                         0.5 * src.total_time_s);
+      const double whole_arc = w_all.measured ? w_all.max_xtrack_m : 0.0;
       std::printf("[WPE] worst junction window %.1f m vs whole-flight "
                   "arc-matched %.1f m (both arc-matched; the 66.9 m "
                   "headline is nearest-point and NOT comparable here)\n",
@@ -909,37 +922,49 @@ int main(int argc, char **argv)
       // two: force a waypoint exactly AT the junction arc and see whether
       // the error follows the waypoint (reproduction artifact) or stays
       // (something in the handoff itself).
-      if (spans.size() >= 2) {
-        const double tj = spans[0].t_end;
-        const auto it =
-            std::lower_bound(src.t_s.begin(), src.t_s.end(), tj);
-        size_t ji = static_cast<size_t>(
-            std::distance(src.t_s.begin(), it));
-        if (ji >= src.s_m.size()) ji = src.s_m.size() - 1;
+      if (!anchors.empty()) {
+        // Same base set, anchors merged by the EXTRACTOR (not by hand):
+        // the anchored variant is what a caller would actually get.
         std::vector<we::Waypoint> forced = best_set;
-        we::Waypoint jw;
-        jw.pos_m = src.pos_m[ji];
-        jw.speed_mps = src.vel_mps[ji].norm();
-        jw.src_arc_m = src.s_m[ji];
-        jw.src_time_s = src.t_s[ji];
-        forced.push_back(jw);
-        std::sort(forced.begin(), forced.end(),
-                  [](const we::Waypoint &a, const we::Waypoint &b) {
-                    return a.src_arc_m < b.src_arc_m;
-                  });
+        we::SourcePath src_ref = src;
+        {
+          std::vector<we::Waypoint> merged = best_set;
+          for (const auto &a : anchors) {
+            bool blocked = false;
+            for (const auto &w : merged)
+              if (std::abs(w.src_arc_m - a.src_arc_m) < anchor_sep)
+                blocked = true;
+            if (!blocked) merged.push_back(a);
+          }
+          std::sort(merged.begin(), merged.end(),
+                    [](const we::Waypoint &x, const we::Waypoint &y) {
+                      return x.src_arc_m < y.src_arc_m;
+                    });
+          forced = merged;
+        }
         const auto rf = we::flyWaypoints3Dof(forced, fstart, fprm);
+        const auto mf = we::evaluateReproduction(src, rf, *dynp, hooks, ep);
+        const double tj = spans[0].t_end;
         const auto wf = we::windowStats(src, rf, tj - 5.0, tj + 5.0, tj);
         const auto w0 = we::windowStats(src, rb, tj - 5.0, tj + 5.0, tj);
         if (wf.measured && w0.measured)
-          std::printf("[WPE] transition junction with a FORCED waypoint on "
-                      "it: maxXT %.1f -> %.1f m, spdErr %.2f -> %.2f m/s "
-                      "(%zu -> %zu waypoints)\n",
-                      w0.max_xtrack_m, wf.max_xtrack_m,
-                      w0.speed_err_at_t_mps, wf.speed_err_at_t_mps,
-                      best_set.size(), forced.size());
-        expect(wf.measured,
-               "the forced-junction-waypoint set flies (the experiment "
-               "that separates reproduction error from handoff quality)");
+          std::printf("[WPE] phase anchors merged (%zu -> %zu waypoints): "
+                      "transition junction maxXT %.1f -> %.1f m, spdErr "
+                      "%.2f -> %.2f m/s | whole flight %s\n",
+                      best_set.size(), forced.size(), w0.max_xtrack_m,
+                      wf.max_xtrack_m, w0.speed_err_at_t_mps,
+                      wf.speed_err_at_t_mps, mf.verdictName());
+        expect(wf.measured && w0.measured,
+               "the anchored set flies and both junction windows measure");
+        expect(mf.verdict() == we::ReproductionMetrics::Verdict::kPass,
+               "the anchored set passes terrain, zone AND deviation "
+               "(anchors do not buy accuracy at the cost of safety)");
+        expect(mf.zone_hard_contacts == 0 && mf.gate_agl_pass,
+               "the anchored set keeps zone and terrain clearance");
+        if (wf.measured && w0.measured)
+          expect(wf.speed_err_at_t_mps < 0.5 * w0.speed_err_at_t_mps,
+                 "a junction anchor materially reduces the junction speed "
+                 "error (the encoding was the gap, not the handoff)");
       }
 
       // ---- speed-channel ablation: does the output schema need speed?

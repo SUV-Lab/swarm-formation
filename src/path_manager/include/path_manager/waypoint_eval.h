@@ -100,17 +100,36 @@ SourcePath buildSourcePath(const poly_traj::Trajectory &traj,
 // ---------------------------------------------------------------------
 // (b) Extraction strategies — S1/S2 are pure geometry (no vehicle model)
 // ---------------------------------------------------------------------
+// A waypoint at an EXACT trajectory time, position and speed read from
+// the polynomial itself (not from the nearest dense sample) with the arc
+// interpolated from the table. Used to build phase-junction anchors.
+Waypoint waypointAtTime(const poly_traj::Trajectory &traj,
+                        const FrameScale &fs, const SourcePath &src,
+                        double t_s);
+
+// MANDATORY ANCHORS. Arc positions every strategy must include verbatim.
+// Phase junctions are the motivating case and the reason this is part of
+// the extractor rather than a caller trick: with no waypoint near the
+// transition handoff the follower's speed drifted 9.2 m/s there, and one
+// anchor on the junction cut it to 0.8 m/s at unchanged deviation. An
+// anchor closer than min-separation to an existing waypoint is dropped
+// (the follower cannot resolve it), never duplicated.
+//
 // Convention: n waypoints INCLUDING the exact trajectory endpoint, all
 // strictly after the start (the follower begins AT the start state, so a
-// waypoint there is degenerate). Deterministic; no RNG, no clock.
-std::vector<Waypoint> extractUniformArc(const SourcePath &src, int n);
+// waypoint there is degenerate); anchors add to that count. Deterministic;
+// no RNG, no clock.
+std::vector<Waypoint> extractUniformArc(
+    const SourcePath &src, int n,
+    const std::vector<Waypoint> &anchors = {}, double min_sep_m = 0.0);
 
 // Density weight w = eps_straight + kappa: curvature attracts waypoints,
 // eps keeps straight stretches from starving. lambda scales the curvature
 // term; lambda = 0 reproduces uniform arc exactly.
-std::vector<Waypoint> extractCurvatureAdaptive(const SourcePath &src, int n,
-                                               double lambda = 4.0,
-                                               double eps_straight = 1e-4);
+std::vector<Waypoint> extractCurvatureAdaptive(
+    const SourcePath &src, int n, double lambda = 4.0,
+    double eps_straight = 1e-4, const std::vector<Waypoint> &anchors = {},
+    double min_sep_m = 0.0);
 
 // ---------------------------------------------------------------------
 // (c) The follower seam
@@ -342,6 +361,10 @@ struct WindowStats {
   double pos_err_at_t_m{0.0};      // at the window's centre time
   double speed_err_at_t_mps{0.0};
 };
+// Passing the full time range gives the whole-flight arc-matched figure
+// from the SAME implementation the junction windows use — comparing a
+// window against a differently-sampled whole-flight number would compare
+// two metrics (review find).
 WindowStats windowStats(const SourcePath &src, const RolloutResult &flown,
                         double t_lo_s, double t_hi_s, double t_centre_s);
 
