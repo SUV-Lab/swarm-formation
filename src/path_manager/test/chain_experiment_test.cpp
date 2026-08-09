@@ -788,7 +788,11 @@ int main(int argc, char **argv)
           ++full_pass;
         if (e.first->zone_measured && e.first->zone_hard_contacts > 0)
           ++zone_fail_rows;
-        if (e.first->max_xtrack_m < best_dev) {
+        // Best = lowest deviation among rows that actually PASSED. A
+        // row that violates a zone is not a candidate for the follow-up
+        // experiments no matter how small its deviation (review find).
+        if (e.first->verdict() == we::ReproductionMetrics::Verdict::kPass &&
+            e.first->max_xtrack_m < best_dev) {
           best_dev = e.first->max_xtrack_m;
           best_set = *e.second;
         }
@@ -810,9 +814,46 @@ int main(int argc, char **argv)
     // passes proves only that nothing was ever at risk. Rows that cut
     // corners near the installed zones do fail it — reported, not
     // asserted, since which row cuts depends on the route.
-    std::printf("[WPE] rows failing on hard-zone contact: %d of %d "
-                "(a live gate, not an empty list)\n",
+    std::printf("[WPE] rows failing on hard-zone contact: %d of %d\n",
                 zone_fail_rows, completed);
+    // The zone gate has to be provably capable of failing, or a table of
+    // passes only proves nothing was ever at risk. Three pins:
+    //  1. the SOURCE trajectory is clean (the planner did its job);
+    //  2. a rollout deliberately driven through a zone centre is caught
+    //     (deterministic — does not depend on which row cuts a corner);
+    //  3. the incidental row failures are reported for context.
+    {
+      int src_contacts = 0;
+      for (const auto &p_m : src.pos_m)
+        if (hooks.zone_probe(p_m) ==
+            path_manager::transition_phase::ZoneProbe::CONTACT_HARD)
+          ++src_contacts;
+      expect(src_contacts == 0,
+             "the PLANNED trajectory itself never contacts a hard zone");
+
+      // A synthetic rollout straight through the first zone's centre.
+      we::RolloutResult probe;
+      probe.completed = true;
+      const Eigen::Vector3d zc(snap.zones[0].zone.center.x() * um,
+                               snap.zones[0].zone.center.y() * um,
+                               snap.zones[0].zone.center.z() * uz);
+      const int np = 200;
+      for (int i = 0; i <= np; ++i) {
+        const double u = static_cast<double>(i) / np;
+        probe.samples.push_back(we::RolloutSample{
+            u * src.total_time_s,
+            src.pos_m.front() + u * (zc - src.pos_m.front()),
+            Eigen::Vector3d(170.0, 0.0, 0.0), Eigen::Vector3d::Zero()});
+      }
+      probe.total_steps = np + 1;
+      const auto mprobe =
+          we::evaluateReproduction(src, probe, *dynp, hooks, ep);
+      expect(mprobe.zone_measured && mprobe.zone_hard_contacts > 0,
+             "a rollout driven through a zone centre IS caught by the "
+             "zone gate (the gate can fail, deterministically)");
+      expect(mprobe.verdict() != we::ReproductionMetrics::Verdict::kPass,
+             "a zone-contacting rollout never reads PASS");
+    }
 
     // ---- phase junction stats: does the seam reproduce as well as the
     // flight as a whole? The whole-flight maximum can hide a local spike
@@ -845,11 +886,61 @@ int main(int argc, char **argv)
                     ws.speed_err_at_t_mps);
         worst_junction = std::max(worst_junction, ws.max_xtrack_m);
       }
-      std::printf("[WPE] worst junction-window deviation %.1f m vs "
-                  "whole-flight %.1f m\n", worst_junction, best_dev);
-      expect(worst_junction <= 1.5 * std::max(best_dev, 1.0),
-             "no phase junction reproduces markedly worse than the flight "
-             "as a whole (the seam is not a hidden spike)");
+      // Compared against the whole-flight ARC-MATCHED figure, because
+      // the window statistic is arc-matched too. The headline 66.9 m is
+      // NEAREST-POINT deviation and the two are different measurements —
+      // comparing them was apples to oranges (review find).
+      const auto mb0 = we::evaluateReproduction(src, rb, *dynp, hooks, ep);
+      const double whole_arc = mb0.measured ? mb0.max_arcmatch_m : 0.0;
+      std::printf("[WPE] worst junction window %.1f m vs whole-flight "
+                  "arc-matched %.1f m (both arc-matched; the 66.9 m "
+                  "headline is nearest-point and NOT comparable here)\n",
+                  worst_junction, whole_arc);
+      expect(whole_arc > 0.0, "whole-flight arc-matched figure measurable");
+      expect(worst_junction <= 1.5 * std::max(whole_arc, 1.0),
+             "no junction window reproduces markedly worse than the flight "
+             "as a whole, on the SAME metric");
+
+      // The transition handoff showed a larger speed error than the other
+      // junctions. That is NOT evidence that the planner's handoff is
+      // loose — the source junction is C2 to 1e-13 by construction, and
+      // this number is a speed difference at matched PROGRESS, produced
+      // by the waypoint reproduction. The experiment that separates the
+      // two: force a waypoint exactly AT the junction arc and see whether
+      // the error follows the waypoint (reproduction artifact) or stays
+      // (something in the handoff itself).
+      if (spans.size() >= 2) {
+        const double tj = spans[0].t_end;
+        const auto it =
+            std::lower_bound(src.t_s.begin(), src.t_s.end(), tj);
+        size_t ji = static_cast<size_t>(
+            std::distance(src.t_s.begin(), it));
+        if (ji >= src.s_m.size()) ji = src.s_m.size() - 1;
+        std::vector<we::Waypoint> forced = best_set;
+        we::Waypoint jw;
+        jw.pos_m = src.pos_m[ji];
+        jw.speed_mps = src.vel_mps[ji].norm();
+        jw.src_arc_m = src.s_m[ji];
+        jw.src_time_s = src.t_s[ji];
+        forced.push_back(jw);
+        std::sort(forced.begin(), forced.end(),
+                  [](const we::Waypoint &a, const we::Waypoint &b) {
+                    return a.src_arc_m < b.src_arc_m;
+                  });
+        const auto rf = we::flyWaypoints3Dof(forced, fstart, fprm);
+        const auto wf = we::windowStats(src, rf, tj - 5.0, tj + 5.0, tj);
+        const auto w0 = we::windowStats(src, rb, tj - 5.0, tj + 5.0, tj);
+        if (wf.measured && w0.measured)
+          std::printf("[WPE] transition junction with a FORCED waypoint on "
+                      "it: maxXT %.1f -> %.1f m, spdErr %.2f -> %.2f m/s "
+                      "(%zu -> %zu waypoints)\n",
+                      w0.max_xtrack_m, wf.max_xtrack_m,
+                      w0.speed_err_at_t_mps, wf.speed_err_at_t_mps,
+                      best_set.size(), forced.size());
+        expect(wf.measured,
+               "the forced-junction-waypoint set flies (the experiment "
+               "that separates reproduction error from handoff quality)");
+      }
 
       // ---- speed-channel ablation: does the output schema need speed?
       std::vector<we::Waypoint> pos_only = best_set;
@@ -872,15 +963,23 @@ int main(int argc, char **argv)
       abl("position+speed", mb);
       abl("position only", mp);
       expect(mb.measured, "position+speed set flies");
-      // Not asserted which wins on deviation — the point of the ablation
-      // is the TIMING channel, and the numbers decide the output schema
-      // rather than a prior belief deciding them.
+      expect(mp.measured, "position-only set flies (both arms measured, or "
+                          "the comparison is one-sided)");
+      // Not asserted which wins on deviation — the ablation is about the
+      // TIMING channel, and the numbers decide the schema rather than a
+      // prior belief deciding them. Note what the result does and does
+      // NOT say: it shows timing information is needed, not that SPEED
+      // specifically is. A per-waypoint arrival time would carry the same
+      // information; which encoding the consumer accepts is the open
+      // question.
       if (mb.measured && mp.measured)
-        std::printf("[WPE] speed channel changes deviation by %+.1f m and "
-                    "duration ratio by %+.3f — the evidence for whether "
-                    "the output message needs a speed field\n",
+        std::printf("[WPE] dropping the speed channel: deviation %+.1f m, "
+                    "duration ratio %+.3f, time skew %+.1f s. Position is "
+                    "required; TIMING must be carried somehow (leg speed "
+                    "or arrival time) if schedule matters.\n",
                     mp.max_xtrack_m - mb.max_xtrack_m,
-                    mp.duration_ratio - mb.duration_ratio);
+                    mp.duration_ratio - mb.duration_ratio,
+                    mp.max_time_skew_s - mb.max_time_skew_s);
     }
 
     rclcpp::shutdown();

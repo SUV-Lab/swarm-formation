@@ -97,8 +97,8 @@ static void printRow(const char *strategy, int n, const we::RolloutResult &r,
     std::printf("WPE_CSV,%s,%d,0,,,,,,,,,\n", strategy, n);
     return;
   }
-  const char *lim = (floor_m > 0.0 && m.max_xtrack_m <= 1.15 * floor_m)
-                        ? " at-follower-floor"
+  const char *lim = (floor_m > 0.0 && m.max_xtrack_m <= floor_m)
+                        ? " beats-baseline"
                         : "";
   std::printf("%-9s %3d  %8.1f %8.1f %8.1f  %5.3f %7.1f %7.1f  %-10s%s\n",
               strategy, n, m.max_xtrack_m, m.rms_xtrack_m, m.max_arcmatch_m,
@@ -332,13 +332,13 @@ int main(int argc, char **argv)
            "absent terrain hook reads SKIPPED, not PASS");
   }
 
-  // ---------------- follower floor ----------------
-  // The TRUE floor is what the law achieves tracking the CONTINUOUS
-  // trajectory: no waypoint geometry, so nothing about aiming or leg
-  // switching varies. A dense-waypoint rollout is NOT a floor — changing
-  // the count changes the aiming regime too, and the 64-waypoint run
-  // measured WORSE than the 8-waypoint one, which a floor cannot do
-  // (review find). It is kept as a dense-waypoint BASELINE for contrast.
+  // ---------------- continuous-reference baseline ----------------
+  // NOT a floor. Tracking the continuous trajectory aims at a point on
+  // the CURVE; a waypoint follower aims at a point on the current LEG
+  // LINE, and on a bending path the leg line can be the better guide —
+  // measured here, where an 8-waypoint list beats continuous tracking.
+  // The number is a reference point for reading the table, never a bound,
+  // and it is only comparable at the SAME lead time.
   double floor_m = 0.0, dense_m = 0.0;
   if (run("floor") || run("table") || run("sensitivity")) {
     we::SafetyHooks hooks;
@@ -376,30 +376,25 @@ int main(int argc, char **argv)
     const auto md_ = we::evaluateReproduction(src, rd, dyn, hooks);
     dense_m = md_.measured ? md_.max_xtrack_m : 0.0;
     if (run("floor")) {
-      std::printf("floor: best continuous tracking %.1f m at lead %.1f s "
-                  "(the law's own limit) | dense-waypoint N=64 baseline "
-                  "%.1f m, ratio %.2f\n",
+      std::printf("baseline: continuous-reference %.1f m at its best lead "
+                  "%.1f s | dense-waypoint N=64 %.1f m | ratio %.2f\n",
                   floor_m, best_lead, dense_m,
                   dense_m / std::max(1.0, floor_m));
-      expect(any_track, "reference-tracking rollout completes");
-      expect(floor_m > 0.0, "the tracking law has a measurable floor");
-      expect(md_.measured, "dense-waypoint baseline completes");
-      // The separation earns its keep here: no waypoint list should beat
-      // the law's best continuous tracking by a wide margin — if one did,
-      // the floor would be mis-measured rather than the placement being
-      // brilliant.
-      expect(dense_m >= 0.75 * floor_m,
-             "no waypoint list beats the law's best continuous tracking by "
-             "more than the matching tolerance");
+      expect(any_track, "continuous-reference rollout completes");
+      expect(floor_m > 0.0, "the baseline is measurable");
+      expect(md_.measured, "dense-waypoint rollout completes");
+      // Deliberately NOT asserted: that no waypoint list beats the
+      // baseline. It does, and asserting otherwise would re-introduce
+      // the floor claim the measurement refutes.
     }
   }
 
   // ---------------- the comparison table ----------------
   if (run("table")) {
-    std::printf("\n[WPE] tracking floor (continuous-reference follow): "
-                "%.1f m — the law's own limit, independent of waypoint\n"
-                "[WPE] geometry. Dense-waypoint N=64 baseline: %.1f m. Rows "
-                "at or under 1.15x the floor are at the law's limit.\n",
+    std::printf("\n[WPE] continuous-reference baseline: %.1f m (best lead) "
+                "| dense-waypoint N=64: %.1f m.\n[WPE] A reference point, "
+                "NOT a bound — rows marked beats-baseline do exactly that, "
+                "because\n[WPE] leg-line aiming and curve aiming differ.\n",
                 floor_m, dense_m);
     std::cout << "\nstrategy    N   maxXT[m]  rmsXT[m]  arcMt[m]  lenR  "
                  "wpMiss[m]  endErr[m]\n";
@@ -458,11 +453,13 @@ int main(int argc, char **argv)
     // is not the binding constraint.
     double best_row = 1e18;
     for (double e : uni_err) best_row = std::min(best_row, e);
-    std::printf("table: best uniform row %.1f m vs floor %.1f m (ratio "
-                "%.2f)\n", best_row, floor_m, best_row / std::max(1.0, floor_m));
-    expect(best_row <= 1.5 * floor_m,
-           "some waypoint set reaches within 1.5x the follower floor "
-           "(placement is not the bottleneck)");
+    std::printf("table: best uniform row %.1f m vs continuous-reference "
+                "baseline %.1f m (ratio %.2f)\n",
+                best_row, floor_m, best_row / std::max(1.0, floor_m));
+    // The comparison is reported, not gated: the baseline is not a bound,
+    // so "within Nx the baseline" would assert a relationship the two
+    // aiming geometries do not have.
+    expect(best_row > 0.0, "the best row is measurable");
     if (uni_at_16 > 0.0 && ref_at_16 > 0.0) {
       std::cout << "refine vs uniform@16: " << ref_at_16 << " vs "
                 << uni_at_16 << " m\n";
