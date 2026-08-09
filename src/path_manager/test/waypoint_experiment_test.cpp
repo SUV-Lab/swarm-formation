@@ -157,7 +157,7 @@ int main(int argc, char **argv)
 
   // ---------------- extraction ----------------
   if (run("extract")) {
-    const auto u = we::extractUniformArc(src, 8);
+    const auto u = we::extractUniformArc(src, 8).waypoints;
     expect(u.size() == 8, "uniform: requested count");
     expect((u.back().pos_m - src.pos_m.back()).norm() < 1e-9,
            "uniform: last waypoint is the exact trajectory endpoint");
@@ -170,19 +170,19 @@ int main(int argc, char **argv)
            "uniform: arc spacing even within 2% of a slot");
     // lambda = 0 must reproduce uniform EXACTLY (the strategies share a
     // substrate; a silent divergence would make the comparison a lie).
-    const auto a0 = we::extractCurvatureAdaptive(src, 8, 0.0);
+    const auto a0 = we::extractCurvatureAdaptive(src, 8, 0.0).waypoints;
     double d0 = 0.0;
     for (size_t i = 0; i < u.size(); ++i)
       d0 = std::max(d0, (a0[i].pos_m - u[i].pos_m).norm());
     expect(d0 < 1e-9, "adaptive(lambda=0) reproduces uniform exactly");
     // Curvature attracts: on this S-curve the bends must draw more
     // waypoints than the straight halves.
-    const auto a4 = we::extractCurvatureAdaptive(src, 12, 4.0);
+    const auto a4 = we::extractCurvatureAdaptive(src, 12, 4.0).waypoints;
     int in_bend = 0;
     const double q1 = 0.25 * src.total_len_m, q3 = 0.75 * src.total_len_m;
     for (const auto &w : a4)
       if (w.src_arc_m > q1 && w.src_arc_m < q3) ++in_bend;
-    const auto u12 = we::extractUniformArc(src, 12);
+    const auto u12 = we::extractUniformArc(src, 12).waypoints;
     int in_bend_u = 0;
     for (const auto &w : u12)
       if (w.src_arc_m > q1 && w.src_arc_m < q3) ++in_bend_u;
@@ -195,103 +195,133 @@ int main(int argc, char **argv)
   if (run("anchors")) {
     // Every claim in the header, pinned against the REAL API.
     const double sep = 500.0;
-    const double s_mid = 0.5 * src.total_len_m;
-    we::Waypoint a;
-    a.pos_m = src.pos_m[src.s_m.size() / 2];
-    a.speed_mps = 170.0;
-    a.src_arc_m = s_mid;
-    a.src_time_s = src.t_s[src.t_s.size() / 2];
 
-    // (1) An anchor survives even when an automatic waypoint lands right
-    // next to it — the automatic one is the one removed. This is the case
-    // the anchor exists for, and the old direction failed exactly here.
+    // (1) A REAL collision. The anchor is taken from the n-1 = 7 layout,
+    // which is exactly where the automatic points land once one slot is
+    // spent on an anchor — so the anchor genuinely collides with a point
+    // the strategy WOULD have produced. (Using the n=8 layout tested a
+    // collision that never happens, since anchoring re-spaces the autos.)
+    const auto seven = we::extractUniformArc(src, 7);
+    expect(seven.ok(), "reference layout extracts");
+    const double s_hit = seven.waypoints[3].src_arc_m;
+    we::Waypoint a;
+    a.pos_m = seven.waypoints[3].pos_m;
+    a.speed_mps = 171.5;                    // distinct, to prove pass-through
+    a.src_arc_m = s_hit;
+    a.src_time_s = seven.waypoints[3].src_time_s;
     {
-      const auto u = we::extractUniformArc(src, 8);
-      double nearest = 1e18;
-      for (const auto &w : u)
-        nearest = std::min(nearest, std::abs(w.src_arc_m - s_mid));
       const auto k = we::extractUniformArc(src, 8, {a}, sep);
+      expect(k.ok(), "anchored extraction succeeds");
       bool kept = false;
       int within = 0;
-      for (const auto &w : k) {
-        if (std::abs(w.src_arc_m - s_mid) <= 1e-9) kept = true;
-        if (std::abs(w.src_arc_m - s_mid) < sep &&
-            std::abs(w.src_arc_m - s_mid) > 1e-9 &&
-            std::abs(w.src_arc_m - src.total_len_m) > 1e-6)
-          ++within;
+      for (const auto &w : k.waypoints) {
+        if (std::abs(w.src_arc_m - s_hit) <= 1e-9) kept = true;
+        else if (std::abs(w.src_arc_m - s_hit) < sep) ++within;
       }
-      std::printf("anchors: nearest auto point was %.1f m away; anchor "
-                  "kept=%d, other points inside %.0f m: %d\n",
-                  nearest, kept ? 1 : 0, sep, within);
-      expect(kept, "the anchor survives verbatim (MANDATORY)");
+      std::printf("anchors: collision at arc %.1f m -> kept=%d, other "
+                  "points inside %.0f m: %d, total=%zu\n",
+                  s_hit, kept ? 1 : 0, sep, within, k.waypoints.size());
+      expect(kept, "the anchor survives the collision verbatim (MANDATORY)");
       expect(within == 0,
-             "automatic waypoints inside the separation are removed, not "
-             "the anchor");
+             "the colliding automatic waypoint is the one removed");
+      // n is the FINAL total: removal must be compensated, not absorbed.
+      expect(k.waypoints.size() == 8,
+             "n is the final total (removed points are replaced)");
+      bool exact = false;
+      for (const auto &w : k.waypoints)
+        if (std::abs(w.src_arc_m - s_hit) <= 1e-9 &&
+            std::abs(w.speed_mps - 171.5) < 1e-9 &&
+            (w.pos_m - a.pos_m).norm() < 1e-9)
+          exact = true;
+      expect(exact, "the anchor's position and speed pass through untouched");
     }
-    // (2) Anchors consume the budget: totals match at equal n.
+    // (2) Duplicates collapse; order is irrelevant; totals hold.
     {
-      const auto plain = we::extractUniformArc(src, 8);
-      const auto anch = we::extractUniformArc(src, 8, {a}, sep);
-      std::printf("anchors: budget plain=%zu anchored=%zu\n", plain.size(),
-                  anch.size());
-      expect(anch.size() <= plain.size(),
-             "anchors consume the count instead of adding to it");
-    }
-    // (3) Duplicates collapse; order does not matter.
-    {
-      we::Waypoint b = a;
-      const auto one = we::extractUniformArc(src, 8, {a}, sep);
-      const auto two = we::extractUniformArc(src, 8, {a, b}, sep);
-      expect(one.size() == two.size(), "duplicate anchors collapse");
       we::Waypoint c = a;
       c.src_arc_m = 0.25 * src.total_len_m;
       c.pos_m = src.pos_m[src.s_m.size() / 4];
+      const auto one = we::extractUniformArc(src, 8, {a, a}, sep);
+      expect(one.ok() && one.waypoints.size() == 8,
+             "duplicate anchors collapse and the total still holds");
       const auto ab = we::extractUniformArc(src, 8, {a, c}, sep);
       const auto ba = we::extractUniformArc(src, 8, {c, a}, sep);
-      bool same = ab.size() == ba.size();
+      bool same = ab.ok() && ba.ok() &&
+                  ab.waypoints.size() == ba.waypoints.size();
       if (same)
-        for (size_t i = 0; i < ab.size(); ++i)
-          if (std::abs(ab[i].src_arc_m - ba[i].src_arc_m) > 1e-9)
+        for (size_t i = 0; i < ab.waypoints.size(); ++i)
+          if (std::abs(ab.waypoints[i].src_arc_m -
+                       ba.waypoints[i].src_arc_m) > 1e-9)
             same = false;
       expect(same, "anchor order does not change the result");
     }
-    // (4) Invalid anchors are rejected explicitly.
+    // (3) Malformed input is REPORTED, not silently dropped — a caller
+    // must not receive a plausible list with its mandatory anchor gone.
     {
-      we::Waypoint bad = a;
-      bad.src_arc_m = std::numeric_limits<double>::quiet_NaN();
-      we::Waypoint off = a;
-      off.src_arc_m = src.total_len_m * 2.0;
-      we::Waypoint zero = a;
-      zero.src_arc_m = 0.0;
-      const auto plain = we::extractUniformArc(src, 8);
-      const auto k = we::extractUniformArc(src, 8, {bad, off, zero}, sep);
-      expect(k.size() == plain.size(),
-             "non-finite / out-of-range / at-endpoint anchors are rejected");
-      for (const auto &w : k)
-        expect(std::isfinite(w.src_arc_m) && w.pos_m.allFinite(),
-               "no non-finite waypoint reaches the output");
+      const auto bad = [&](we::Waypoint w, const char *what) {
+        const auto k = we::extractUniformArc(src, 8, {w}, sep);
+        std::printf("anchors: %s -> %s (%s)\n", what,
+                    we::extractStatusName(k.status), k.reason.c_str());
+        expect(k.status == we::ExtractStatus::kInvalidAnchor,
+               std::string("rejected explicitly: ") + what);
+      };
+      we::Waypoint nan_arc = a;
+      nan_arc.src_arc_m = std::numeric_limits<double>::quiet_NaN();
+      bad(nan_arc, "non-finite arc");
+      we::Waypoint nan_t = a;
+      nan_t.src_time_s = std::numeric_limits<double>::quiet_NaN();
+      bad(nan_t, "non-finite time");
+      we::Waypoint past_end = a;
+      past_end.src_arc_m = src.total_len_m;      // the endpoint itself
+      bad(past_end, "at the trajectory endpoint");
+      we::Waypoint beyond = a;
+      beyond.src_arc_m = src.total_len_m * 1.5;
+      bad(beyond, "beyond the endpoint");
+      we::Waypoint at_zero = a;
+      at_zero.src_arc_m = 0.0;
+      bad(at_zero, "at the start");
+      // Same arc, different state: a conflict the caller must resolve —
+      // picking one by argument order would hide it.
+      we::Waypoint conflict = a;
+      conflict.speed_mps = a.speed_mps + 10.0;
+      const auto k = we::extractUniformArc(src, 8, {a, conflict}, sep);
+      expect(k.status == we::ExtractStatus::kInvalidAnchor,
+             "conflicting anchors at the same arc are rejected");
     }
-    // (5) The anchor's own state is preserved verbatim, not resampled.
+    // (4) Budget and parameter guards.
     {
-      we::Waypoint odd = a;
-      odd.speed_mps = 123.456;
-      const auto k = we::extractUniformArc(src, 8, {odd}, sep);
-      bool exact = false;
-      for (const auto &w : k)
-        if (std::abs(w.src_arc_m - s_mid) <= 1e-9 &&
-            std::abs(w.speed_mps - 123.456) < 1e-9 &&
-            (w.pos_m - odd.pos_m).norm() < 1e-9)
-          exact = true;
-      expect(exact,
-             "the anchor's position and speed pass through untouched");
+      std::vector<we::Waypoint> many;
+      for (int i = 1; i <= 8; ++i) {
+        we::Waypoint w = a;
+        w.src_arc_m = i * src.total_len_m / 10.0;
+        w.pos_m = src.pos_m[(src.s_m.size() * i) / 10];
+        many.push_back(w);
+      }
+      const auto over = we::extractUniformArc(src, 8, many, sep);
+      std::printf("anchors: 8 anchors into n=8 -> %s\n",
+                  we::extractStatusName(over.status));
+      expect(over.status == we::ExtractStatus::kAnchorsExceedBudget,
+             "anchors that would fill the budget are refused, not squeezed "
+             "in past n");
+      const auto neg = we::extractUniformArc(src, 8, {a}, -1.0);
+      expect(neg.status == we::ExtractStatus::kBadParams,
+             "a negative separation is refused");
+      const auto nanp = we::extractUniformArc(
+          src, 8, {a}, std::numeric_limits<double>::quiet_NaN());
+      expect(nanp.status == we::ExtractStatus::kBadParams,
+             "a non-finite separation is refused");
+      const auto zero_n = we::extractUniformArc(src, 0);
+      expect(zero_n.status == we::ExtractStatus::kBadParams,
+             "n < 1 is refused");
     }
-    // (6) The adaptive strategy honours the same contract.
+    // (5) The adaptive strategy honours the same contract.
     {
       const auto k = we::extractCurvatureAdaptive(src, 8, 4.0, 1e-4, {a},
                                                   sep);
+      expect(k.ok() && k.waypoints.size() == 8,
+             "curvature-adaptive: anchored, total holds");
       bool kept = false;
-      for (const auto &w : k)
-        if (std::abs(w.src_arc_m - s_mid) <= 1e-9) kept = true;
+      for (const auto &w : k.waypoints)
+        if (std::abs(w.src_arc_m - s_hit) <= 1e-9) kept = true;
       expect(kept, "curvature-adaptive honours anchors too");
     }
   }
@@ -299,7 +329,7 @@ int main(int argc, char **argv)
   // ---------------- follower ----------------
   if (run("follower")) {
     const auto prm = makeFollower(dyn);
-    const auto wps = we::extractUniformArc(src, 8);
+    const auto wps = we::extractUniformArc(src, 8).waypoints;
     const auto r = we::flyWaypoints3Dof(wps, startOf(src), prm);
     std::cout << "follower: completed=" << r.completed << " fail="
               << we::failName(r.fail) << " steps=" << r.total_steps
@@ -483,7 +513,7 @@ int main(int argc, char **argv)
     const auto mt = we::evaluateReproduction(
         src, we::flyReferenceTrack(src, startOf(src), prm), dyn, hooks);
     (void)mt;
-    const auto dense = we::extractUniformArc(src, 64);
+    const auto dense = we::extractUniformArc(src, 64).waypoints;
     const auto rd = we::flyWaypoints3Dof(dense, startOf(src), prm);
     const auto md_ = we::evaluateReproduction(src, rd, dyn, hooks);
     dense_m = md_.measured ? md_.max_xtrack_m : 0.0;
@@ -530,8 +560,12 @@ int main(int argc, char **argv)
     std::vector<double> uni_err;
     for (int n : {4, 8, 16, 32}) {
       for (int strat = 0; strat < 2; ++strat) {
-        const auto w = strat == 0 ? we::extractUniformArc(src, n)
-                                  : we::extractCurvatureAdaptive(src, n);
+        const auto ex = strat == 0
+                            ? we::extractUniformArc(src, n)
+                            : we::extractCurvatureAdaptive(src, n);
+        expect(ex.ok(), std::string("extraction ok (") +
+                            we::extractStatusName(ex.status) + ")");
+        const auto &w = ex.waypoints;
         const auto r = we::flyWaypoints3Dof(w, st, prm);
         const auto m = we::evaluateReproduction(src, r, dyn, hooks, ep);
         printRow(strat == 0 ? "uniform" : "adaptive", n, r, m, base_matched);
@@ -583,7 +617,7 @@ int main(int argc, char **argv)
     // whatever count refinement actually ended with.
     if (ref_at_16 > 0.0 && !rr.best.empty()) {
       const int nref = static_cast<int>(rr.best.size());
-      const auto ru = we::flyWaypoints3Dof(we::extractUniformArc(src, nref),
+      const auto ru = we::flyWaypoints3Dof(we::extractUniformArc(src, nref).waypoints,
                                            st, prm);
       const auto mu = we::evaluateReproduction(src, ru, dyn, hooks);
       if (mu.measured) {
@@ -631,7 +665,7 @@ int main(int argc, char **argv)
       std::vector<std::pair<double, int>> err;
       std::printf("sensitivity[%-12s]", c.name);
       for (int n : grid) {
-        const auto w = we::extractUniformArc(src, n);
+        const auto w = we::extractUniformArc(src, n).waypoints;
         const auto r = we::flyWaypoints3Dof(w, st, prm);
         const auto m = we::evaluateReproduction(src, r, dyn, hooks, ep);
         const double e = m.measured ? m.max_xtrack_m : -1.0;

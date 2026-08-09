@@ -148,97 +148,179 @@ Waypoint waypointAtTime(const poly_traj::Trajectory &traj,
   return w;
 }
 
+const char *extractStatusName(ExtractStatus st)
+{
+  switch (st) {
+    case ExtractStatus::kOk: return "ok";
+    case ExtractStatus::kEmptySource: return "empty-source";
+    case ExtractStatus::kBadParams: return "bad-params";
+    case ExtractStatus::kInvalidAnchor: return "invalid-anchor";
+    case ExtractStatus::kAnchorsExceedBudget: return "anchors-exceed-budget";
+    case ExtractStatus::kUnderfilled: return "underfilled";
+  }
+  return "unknown";
+}
+
 namespace {
 
-// Valid, de-duplicated, arc-sorted anchors. Invalid input (non-finite, at
-// or beyond the endpoints) is REJECTED here rather than silently carried:
-// the endpoints are already produced by every strategy, and a non-finite
-// anchor is a caller bug that must not reach the follower.
-std::vector<Waypoint> validAnchors(const SourcePath &src,
-                                   const std::vector<Waypoint> &in)
+bool byArc(const Waypoint &x, const Waypoint &y)
 {
-  std::vector<Waypoint> out;
+  return x.src_arc_m < y.src_arc_m;
+}
+
+// Validate anchors and collapse exact duplicates. Anything malformed is
+// an ERROR, not a quiet skip: a caller that asked for a mandatory anchor
+// must not receive a plausible list with that anchor missing.
+ExtractStatus validAnchors(const SourcePath &src,
+                           const std::vector<Waypoint> &in,
+                           std::vector<Waypoint> *out, std::string *why)
+{
+  out->clear();
   for (const auto &a : in) {
     if (!a.pos_m.allFinite() || !std::isfinite(a.src_arc_m) ||
-        !std::isfinite(a.speed_mps))
-      continue;
-    if (!(a.src_arc_m > 0.0) || a.src_arc_m >= src.total_len_m) continue;
+        !std::isfinite(a.speed_mps) || !std::isfinite(a.src_time_s)) {
+      *why = "anchor has a non-finite field";
+      return ExtractStatus::kInvalidAnchor;
+    }
+    if (!(a.src_arc_m > 0.0) || a.src_arc_m >= src.total_len_m) {
+      *why = "anchor is at or beyond a trajectory endpoint (both are "
+             "produced by every strategy already)";
+      return ExtractStatus::kInvalidAnchor;
+    }
     bool dup = false;
-    for (const auto &b : out)
-      if (std::abs(b.src_arc_m - a.src_arc_m) <= 1e-6) dup = true;
-    if (!dup) out.push_back(a);
+    for (const auto &b : *out) {
+      if (std::abs(b.src_arc_m - a.src_arc_m) > 1e-6) continue;
+      // Same arc: identical is a duplicate, different is a conflict the
+      // caller has to resolve — picking one by input order would make
+      // the result depend on argument order.
+      if ((b.pos_m - a.pos_m).norm() < 1e-9 &&
+          std::abs(b.speed_mps - a.speed_mps) < 1e-9) {
+        dup = true;
+      } else {
+        *why = "two anchors at the same arc with different state";
+        return ExtractStatus::kInvalidAnchor;
+      }
+    }
+    if (!dup) out->push_back(a);
   }
-  std::sort(out.begin(), out.end(),
-            [](const Waypoint &x, const Waypoint &y) {
-              return x.src_arc_m < y.src_arc_m;
-            });
-  return out;
+  std::sort(out->begin(), out->end(), byArc);
+  return ExtractStatus::kOk;
 }
 
 // MANDATORY means mandatory: the anchor survives and the AUTOMATIC
-// waypoint too close to it is the one removed. The previous direction
-// (drop the anchor when an automatic point was nearby) silently defeated
-// the contract exactly when the strategy happened to place a point near
-// the junction — the case the anchor exists for (review find).
-// The trajectory endpoint is never removed: it is the follower's terminal
-// target, not a discretionary sample.
-void applyAnchors(std::vector<Waypoint> *out, const SourcePath &src,
-                  const std::vector<Waypoint> &anchors, double min_sep_m)
+// waypoint too close to it is the one removed (the trajectory endpoint
+// is the one exception — it is the follower's terminal target). Then the
+// list is topped back up to n at the widest admissible gaps, so n stays
+// the FINAL total rather than an upper bound that removal quietly eats.
+ExtractStatus applyAnchorsAndFill(std::vector<Waypoint> *out,
+                                  const SourcePath &src,
+                                  const std::vector<Waypoint> &anchors,
+                                  double min_sep_m, int n)
 {
-  if (!out || anchors.empty()) return;
   const double s_end = src.total_len_m;
-  out->erase(std::remove_if(out->begin(), out->end(),
-                            [&](const Waypoint &w) {
-                              if (std::abs(w.src_arc_m - s_end) <= 1e-6)
-                                return false;   // endpoint stays
-                              for (const auto &a : anchors)
-                                if (std::abs(w.src_arc_m - a.src_arc_m) <
-                                    min_sep_m)
-                                  return true;
-                              return false;
-                            }),
-             out->end());
-  out->insert(out->end(), anchors.begin(), anchors.end());
-  std::sort(out->begin(), out->end(),
-            [](const Waypoint &x, const Waypoint &y) {
-              return x.src_arc_m < y.src_arc_m;
-            });
+  if (!anchors.empty()) {
+    out->erase(std::remove_if(out->begin(), out->end(),
+                              [&](const Waypoint &w) {
+                                if (std::abs(w.src_arc_m - s_end) <= 1e-6)
+                                  return false;
+                                for (const auto &a : anchors)
+                                  if (std::abs(w.src_arc_m - a.src_arc_m) <
+                                      min_sep_m)
+                                    return true;
+                                return false;
+                              }),
+               out->end());
+    out->insert(out->end(), anchors.begin(), anchors.end());
+    std::sort(out->begin(), out->end(), byArc);
+  }
+  // Top up to exactly n at the widest gaps that respect the separation.
+  int guard = 4 * n + 16;
+  while (static_cast<int>(out->size()) < n && guard-- > 0) {
+    double best_gap = -1.0, best_s = -1.0;
+    double prev = 0.0;
+    for (size_t i = 0; i <= out->size(); ++i) {
+      const double next = i < out->size() ? (*out)[i].src_arc_m : s_end;
+      const double mid = 0.5 * (prev + next);
+      const double gap = next - prev;
+      if (gap > best_gap && mid > 0.0 && mid < s_end) {
+        bool ok = true;
+        for (const auto &w : *out)
+          if (std::abs(w.src_arc_m - mid) < min_sep_m) ok = false;
+        if (ok) {
+          best_gap = gap;
+          best_s = mid;
+        }
+      }
+      prev = next;
+    }
+    if (!(best_s > 0.0)) break;   // no admissible slot left
+    out->push_back(sampleAtArc(src, best_s));
+    std::sort(out->begin(), out->end(), byArc);
+  }
+  return static_cast<int>(out->size()) == n ? ExtractStatus::kOk
+                                            : ExtractStatus::kUnderfilled;
+}
+
+// Shared front-end validation for both strategies.
+ExtractStatus prepare(const SourcePath &src, int n,
+                      const std::vector<Waypoint> &anchors, double min_sep_m,
+                      std::vector<Waypoint> *anc, std::string *why)
+{
+  if (src.empty()) {
+    *why = "source path has fewer than two samples";
+    return ExtractStatus::kEmptySource;
+  }
+  if (n < 1 || !std::isfinite(min_sep_m) || min_sep_m < 0.0) {
+    *why = "n must be >= 1 and the separation finite and non-negative";
+    return ExtractStatus::kBadParams;
+  }
+  const ExtractStatus st = validAnchors(src, anchors, anc, why);
+  if (st != ExtractStatus::kOk) return st;
+  if (static_cast<int>(anc->size()) > n - 1) {
+    *why = "anchors alone fill the budget — no room for the endpoint";
+    return ExtractStatus::kAnchorsExceedBudget;
+  }
+  return ExtractStatus::kOk;
 }
 
 }  // namespace
 
 // ===================== extraction =====================
 
-std::vector<Waypoint> extractUniformArc(const SourcePath &src, int n,
-                                        const std::vector<Waypoint> &anchors,
-                                        double min_sep_m)
+ExtractionResult extractUniformArc(const SourcePath &src, int n,
+                                   const std::vector<Waypoint> &anchors,
+                                   double min_sep_m)
 {
-  std::vector<Waypoint> out;
-  if (src.empty() || n < 1) return out;
-  // Anchors CONSUME the budget: n is the total, so an anchored set is
-  // comparable to an unanchored one of the same size. Adding anchors on
-  // top would mix "exact placement" with "more waypoints" (review find).
-  const std::vector<Waypoint> anc = validAnchors(src, anchors);
-  const int n_auto =
-      std::max(1, n - static_cast<int>(anc.size()));
-  out.reserve(static_cast<size_t>(n_auto) + anc.size());
+  ExtractionResult r;
+  std::vector<Waypoint> anc;
+  r.status = prepare(src, n, anchors, min_sep_m, &anc, &r.reason);
+  if (r.status != ExtractStatus::kOk) return r;
+  const int n_auto = n - static_cast<int>(anc.size());
+  r.waypoints.reserve(static_cast<size_t>(n));
   for (int i = 1; i <= n_auto; ++i) {
     if (i == n_auto) {
-      out.push_back(endpointWaypoint(src));   // endpoint EXACT
+      r.waypoints.push_back(endpointWaypoint(src));   // endpoint EXACT
     } else {
-      out.push_back(sampleAtArc(src, i * src.total_len_m / n_auto));
+      r.waypoints.push_back(sampleAtArc(src, i * src.total_len_m / n_auto));
     }
   }
-  applyAnchors(&out, src, anc, min_sep_m);
-  return out;
+  r.status = applyAnchorsAndFill(&r.waypoints, src, anc, min_sep_m, n);
+  if (r.status == ExtractStatus::kUnderfilled)
+    r.reason = "separation left no admissible slot to reach the requested "
+               "count";
+  return r;
 }
 
-std::vector<Waypoint> extractCurvatureAdaptive(
-    const SourcePath &src, int n, double lambda, double eps_straight,
-    const std::vector<Waypoint> &anchors, double min_sep_m)
+ExtractionResult extractCurvatureAdaptive(const SourcePath &src, int n,
+                                          double lambda,
+                                          double eps_straight,
+                                          const std::vector<Waypoint> &anchors,
+                                          double min_sep_m)
 {
-  std::vector<Waypoint> out;
-  if (src.empty() || n < 1) return out;
+  ExtractionResult r;
+  std::vector<Waypoint> anc;
+  r.status = prepare(src, n, anchors, min_sep_m, &anc, &r.reason);
+  if (r.status != ExtractStatus::kOk) return r;
   if (!(lambda > 0.0))
     return extractUniformArc(src, n, anchors, min_sep_m);
 
@@ -253,12 +335,11 @@ std::vector<Waypoint> extractCurvatureAdaptive(
   const double W_total = W.back();
   if (!(W_total > 0.0)) return extractUniformArc(src, n, anchors, min_sep_m);
 
-  const std::vector<Waypoint> anc = validAnchors(src, anchors);
-  const int n_auto = std::max(1, n - static_cast<int>(anc.size()));
-  out.reserve(static_cast<size_t>(n_auto) + anc.size());
+  const int n_auto = n - static_cast<int>(anc.size());
+  r.waypoints.reserve(static_cast<size_t>(n));
   for (int i = 1; i <= n_auto; ++i) {
     if (i == n_auto) {
-      out.push_back(endpointWaypoint(src));
+      r.waypoints.push_back(endpointWaypoint(src));
       break;
     }
     const double target = i * W_total / n_auto;
@@ -269,10 +350,13 @@ std::vector<Waypoint> extractCurvatureAdaptive(
     const double w0 = W[k - 1], w1 = W[k];
     const double u = (w1 > w0) ? (target - w0) / (w1 - w0) : 0.0;
     const double s_at = src.s_m[k - 1] + u * (src.s_m[k] - src.s_m[k - 1]);
-    out.push_back(sampleAtArc(src, s_at));
+    r.waypoints.push_back(sampleAtArc(src, s_at));
   }
-  applyAnchors(&out, src, anc, min_sep_m);
-  return out;
+  r.status = applyAnchorsAndFill(&r.waypoints, src, anc, min_sep_m, n);
+  if (r.status == ExtractStatus::kUnderfilled)
+    r.reason = "separation left no admissible slot to reach the requested "
+               "count";
+  return r;
 }
 
 // ===================== follower =====================

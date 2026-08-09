@@ -780,8 +780,8 @@ int main(int argc, char **argv)
     double best_dev = 1e18;
     std::vector<we::Waypoint> best_set;
     for (int n : {8, 16, 32, 64}) {
-      const auto wu = we::extractUniformArc(src, n);
-      const auto wa = we::extractCurvatureAdaptive(src, n);
+      const auto wu = we::extractUniformArc(src, n).waypoints;
+      const auto wa = we::extractCurvatureAdaptive(src, n).waypoints;
       const auto mu = row("uniform", wu);
       const auto ma = row("adaptive", wa);
       const std::pair<const we::ReproductionMetrics *,
@@ -938,10 +938,15 @@ int main(int argc, char **argv)
         //   raised : n + anchors, so the automatic set is untouched —
         //            what a caller would actually ship.
         const auto extract = [&](int n, const std::vector<we::Waypoint> &a) {
-          return best_uniform
-                     ? we::extractUniformArc(src, n, a, anchor_sep)
-                     : we::extractCurvatureAdaptive(src, n, 4.0, 1e-4, a,
-                                                    anchor_sep);
+          const auto e =
+              best_uniform
+                  ? we::extractUniformArc(src, n, a, anchor_sep)
+                  : we::extractCurvatureAdaptive(src, n, 4.0, 1e-4, a,
+                                                 anchor_sep);
+          expect(e.ok(), std::string("anchored extraction ok (") +
+                             we::extractStatusName(e.status) + " " +
+                             e.reason + ")");
+          return e.waypoints;
         };
         const std::vector<we::Waypoint> forced = extract(best_n, anchors);
         const std::vector<we::Waypoint> raised =

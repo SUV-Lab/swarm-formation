@@ -130,20 +130,43 @@ Waypoint waypointAtTime(const poly_traj::Trajectory &traj,
 // are collapsed; the result is arc-sorted, so anchor order does not change
 // the output.
 //
-// Anchors CONSUME the count: n is the total, so an anchored set compares
-// like-for-like against an unanchored one of the same size.
+// Anchors CONSUME the count and n is the FINAL total: automatic points
+// removed to make room are replaced elsewhere, so an anchored set
+// compares like-for-like against an unanchored one of the same size. If
+// the separation leaves no admissible slot the result says so
+// (kUnderfilled) rather than quietly returning fewer.
 //
 // Convention: n waypoints INCLUDING the exact trajectory endpoint, all
 // strictly after the start (the follower begins AT the start state, so a
 // waypoint there is degenerate). Deterministic; no RNG, no clock.
-std::vector<Waypoint> extractUniformArc(
+// Extraction is fail-closed: a dropped mandatory anchor, a budget the
+// anchors cannot fit in, or a malformed input is REPORTED, never
+// silently absorbed into a plausible-looking list (the caller cannot see
+// a missing anchor by looking at the output).
+enum class ExtractStatus {
+  kOk = 0,
+  kEmptySource,
+  kBadParams,          // n < 1, non-finite or negative separation
+  kInvalidAnchor,      // non-finite, out of range, or conflicting
+  kAnchorsExceedBudget,// anchors alone would fill n (no room for the end)
+  kUnderfilled,        // separation left no admissible slot to reach n
+};
+const char *extractStatusName(ExtractStatus s);
+struct ExtractionResult {
+  std::vector<Waypoint> waypoints;
+  ExtractStatus status{ExtractStatus::kOk};
+  std::string reason;
+  bool ok() const { return status == ExtractStatus::kOk; }
+};
+
+ExtractionResult extractUniformArc(
     const SourcePath &src, int n,
     const std::vector<Waypoint> &anchors = {}, double min_sep_m = 0.0);
 
 // Density weight w = eps_straight + kappa: curvature attracts waypoints,
 // eps keeps straight stretches from starving. lambda scales the curvature
 // term; lambda = 0 reproduces uniform arc exactly.
-std::vector<Waypoint> extractCurvatureAdaptive(
+ExtractionResult extractCurvatureAdaptive(
     const SourcePath &src, int n, double lambda = 4.0,
     double eps_straight = 1e-4, const std::vector<Waypoint> &anchors = {},
     double min_sep_m = 0.0);
