@@ -46,6 +46,7 @@ add_library(${PROJECT_NAME}_lib
   src/segment_chain_planner.cpp
   src/terminal_phase.cpp
   src/transition_phase.cpp
+  src/waypoint_eval.cpp
   ../common/log_manager.cpp
 )
 
@@ -138,6 +139,13 @@ ament_target_dependencies(chain_experiment_test
 # RK4 convergence, roundtrip consistency, Hermite representation) are pure
 # functions and run in milliseconds; the gate/feasibility variants drive
 # transition_phase::generate with synthetic closures. No node, no params.
+# Waypoint extraction + reproduction harness: pure math + a benchmark
+# follower, no node and no solver — fast and hermetic.
+add_executable(waypoint_experiment_test test/waypoint_experiment_test.cpp)
+target_link_libraries(waypoint_experiment_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(waypoint_experiment_test
+  ${PATH_MANAGER_DEPENDENCIES})
+
 add_executable(transition_experiment_test test/transition_experiment_test.cpp)
 target_link_libraries(transition_experiment_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(transition_experiment_test
@@ -166,6 +174,10 @@ if(BUILD_TESTING)
     TIMEOUT 300)
   # Pure math + synthetic-closure gates: fast and hermetic, so it IS
   # ctest-registered (unlike the solver-driving chain harness).
+  ament_add_test(waypoint_experiment_test
+    COMMAND $<TARGET_FILE:waypoint_experiment_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 300)
   ament_add_test(transition_experiment_test
     COMMAND $<TARGET_FILE:transition_experiment_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
@@ -200,6 +212,10 @@ install(TARGETS chain_experiment_test
 )
 
 install(TARGETS transition_experiment_test
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS waypoint_experiment_test
   DESTINATION lib/${PROJECT_NAME}
 )
 

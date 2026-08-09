@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+#include "path_manager/traj_sampling.h"
 #include "path_manager/transition_phase.h"
 
 #include <algorithm>
@@ -118,45 +119,13 @@ class ScopedMissionParams {
 
 namespace {
 
-// Dense (t, cumulative arc) table. Baseline and chain have different total
-// durations, so the deviation sweep compares them at matched ARC fractions —
-// matching normalized time would skew everything after the first seam.
-struct ArcTable {
-  std::vector<double> t, s;
-  double total{0.0};
-};
-
-ArcTable buildArcTable(const poly_traj::Trajectory &traj, int samples)
-{
-  ArcTable a;
-  const double T = traj.getTotalDuration();
-  a.t.reserve(samples + 1);
-  a.s.reserve(samples + 1);
-  Eigen::Vector3d prev = traj.getPos(0.0);
-  double s = 0.0;
-  for (int k = 0; k <= samples; ++k) {
-    const double tt = std::min(T, k * T / samples);
-    const Eigen::Vector3d p = traj.getPos(tt);
-    s += (p - prev).norm();
-    prev = p;
-    a.t.push_back(tt);
-    a.s.push_back(s);
-  }
-  a.total = s;
-  return a;
-}
-
-double timeAtArcFrac(const ArcTable &a, double frac)
-{
-  const double target = frac * a.total;
-  const auto it = std::lower_bound(a.s.begin(), a.s.end(), target);
-  const size_t i = static_cast<size_t>(std::distance(a.s.begin(), it));
-  if (i == 0) return a.t.front();
-  if (i >= a.s.size()) return a.t.back();
-  const double s0 = a.s[i - 1], s1 = a.s[i];
-  const double w = (s1 > s0) ? (target - s0) / (s1 - s0) : 0.0;
-  return a.t[i - 1] + w * (a.t[i] - a.t[i - 1]);
-}
+// Dense (t, cumulative arc) table + arc->time lookup now live in
+// traj_sampling.h: baseline/chain deviation sweeps and the waypoint
+// machinery must share ONE arc convention or their reports stop being
+// comparable (quintic_hermite.h precedent).
+using traj_sampling::ArcTable;
+using traj_sampling::buildArcTable;
+using traj_sampling::timeAtArcFrac;
 
 }  // namespace
 

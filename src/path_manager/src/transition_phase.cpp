@@ -98,13 +98,6 @@ PointMassState advance(const PointMassState &s, const PointMassDerivative &d,
   return out;
 }
 
-double wrapPi(double a)
-{
-  while (a > M_PI) a -= 2.0 * M_PI;
-  while (a < -M_PI) a += 2.0 * M_PI;
-  return a;
-}
-
 bool finiteState(const PointMassState &s)
 {
   return s.position_m.allFinite() && std::isfinite(s.speed_mps) &&
@@ -112,16 +105,17 @@ bool finiteState(const PointMassState &s)
          std::isfinite(s.heading_rad);
 }
 
-// Command set for one step, synthesized from the step-start state by the
-// fixed laws. demand_interior reports whether every raw demand sat
-// strictly inside the envelope (kCmdInteriorFrac margin) BEFORE closing.
-struct Commands {
-  double cl{0.0};
-  double thrust_n{0.0};
-  double bank_rad{0.0};
-  double gamma_cmd_applied{0.0};  // authority-bounded (anti-windup)
-  bool demand_interior{true};
-};
+}  // namespace
+
+// Commands / synthesizeCommands / wrapPi are declared in the header: the
+// waypoint-evaluation follower flies the SAME law. The law constants above
+// stay file-local and remain visible to these definitions.
+double wrapPi(double a)
+{
+  while (a > M_PI) a -= 2.0 * M_PI;
+  while (a < -M_PI) a += 2.0 * M_PI;
+  return a;
+}
 
 Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
                             const Eigen::Vector3d &aim_m, double gamma_cmd,
@@ -236,9 +230,6 @@ Commands synthesizeCommands(const Parameters &dyn, const PointMassState &s,
       dyn.thrust_max_n * (1.0 - kCmdInteriorFrac));
   return c;
 }
-
-
-}  // namespace
 
 Eigen::Vector3d pointMassAcceleration(const Parameters &dyn,
                                       const PointMassState &s,

@@ -197,6 +197,28 @@ mmp_vehicle_dynamics::PointMassState rk4Step(
     double cl_cmd, double thrust_cmd_n, double bank_cmd_rad,
     StepFlags *flags);
 
+// [WPE] The pursuit/thrust command law, exposed for the waypoint-evaluation
+// follower. Declarations only — the definitions and the law constants stay
+// file-local in transition_phase.cpp, so the generator's behavior is
+// untouched and there is exactly ONE law: a waypoint follower that
+// re-implemented steering would measure a different vehicle than the one
+// the planner reasoned about.
+struct Commands {
+  double cl{0.0};
+  double thrust_n{0.0};
+  double bank_rad{0.0};
+  double gamma_cmd_applied{0.0};  // authority-bounded (anti-windup)
+  bool demand_interior{true};     // every raw demand strictly inside limits
+};
+// aim_m: the point to steer at (SI). gamma_cmd: carried command for the
+// rate limit. bank_level: authority for this candidate. lim: the limit set
+// whose speed window the thrust servo tracks.
+Commands synthesizeCommands(const mmp_vehicle_dynamics::Parameters &dyn,
+                            const mmp_vehicle_dynamics::PointMassState &s,
+                            const Eigen::Vector3d &aim_m, double gamma_cmd,
+                            double bank_level, const TransitionLimits &lim);
+double wrapPi(double a);
+
 // Signed inverse of the point-mass closure at one state: the command set
 // (CL, thrust, bank) whose CLOSED forces reproduce a commanded inertial
 // acceleration — bank from atan2 in the wind triad, so the turn DIRECTION
