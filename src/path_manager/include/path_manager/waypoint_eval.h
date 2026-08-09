@@ -14,8 +14,11 @@
 // 3DOF benchmark law (the transition generator's own pursuit/thrust law on
 // a point mass). It has no attitude dynamics, no actuator lag, no wind, no
 // estimation error. Reproduction figures characterize THIS law on THIS
-// model — structure validation, not real-platform physics validation, and a
-// LOWER BOUND on what a real vehicle would show. What is HOPED to transfer
+// model — structure validation, not real-platform physics validation.
+// These are benchmark numbers: NOT a bound on a real vehicle in either
+// direction (a better controller on a higher-fidelity model could track
+// closer; unmodelled effects could make it worse). What is HOPED to
+// transfer
 // is structure — how error trends with waypoint count, which placement
 // beats which — and that hope is itself a claim, so the harness perturbs
 // the follower and looks for ordering inversions instead of assuming it.
@@ -100,25 +103,39 @@ SourcePath buildSourcePath(const poly_traj::Trajectory &traj,
 // ---------------------------------------------------------------------
 // (b) Extraction strategies — S1/S2 are pure geometry (no vehicle model)
 // ---------------------------------------------------------------------
-// A waypoint at an EXACT trajectory time, position and speed read from
-// the polynomial itself (not from the nearest dense sample) with the arc
-// interpolated from the table. Used to build phase-junction anchors.
+// A waypoint at an exact trajectory time: POSITION, TIME and SPEED
+// MAGNITUDE read from the polynomial itself (not from the nearest dense
+// sample), with the arc interpolated from the table. Used to build
+// phase-junction anchors.
+//
+// Note what a Waypoint does NOT carry: a velocity VECTOR or acceleration.
+// So an anchor pins where and how fast, not the full PVA — the source
+// trajectory's C2 junction continuity is a property of the POLYNOMIAL and
+// is not preserved by the waypoint encoding. That is precisely why the
+// reproduction has to be measured rather than assumed.
 Waypoint waypointAtTime(const poly_traj::Trajectory &traj,
                         const FrameScale &fs, const SourcePath &src,
                         double t_s);
 
-// MANDATORY ANCHORS. Arc positions every strategy must include verbatim.
-// Phase junctions are the motivating case and the reason this is part of
-// the extractor rather than a caller trick: with no waypoint near the
-// transition handoff the follower's speed drifted 9.2 m/s there, and one
-// anchor on the junction cut it to 0.8 m/s at unchanged deviation. An
-// anchor closer than min-separation to an existing waypoint is dropped
-// (the follower cannot resolve it), never duplicated.
+// MANDATORY ANCHORS. Waypoints every strategy must include VERBATIM.
+// Phase junctions are the motivating case and the reason this belongs in
+// the extractor rather than in a caller: with no waypoint near the
+// transition handoff the follower's speed drifted 9.2 m/s there, and an
+// anchor on the junction cut it to under 1 m/s at unchanged deviation.
+//
+// Mandatory means mandatory: an automatic waypoint within min_sep of an
+// anchor is REMOVED, the anchor stays (the trajectory endpoint is the one
+// exception — it is the follower's terminal target). Invalid anchors
+// (non-finite, at or beyond the endpoints) are rejected; exact duplicates
+// are collapsed; the result is arc-sorted, so anchor order does not change
+// the output.
+//
+// Anchors CONSUME the count: n is the total, so an anchored set compares
+// like-for-like against an unanchored one of the same size.
 //
 // Convention: n waypoints INCLUDING the exact trajectory endpoint, all
 // strictly after the start (the follower begins AT the start state, so a
-// waypoint there is degenerate); anchors add to that count. Deterministic;
-// no RNG, no clock.
+// waypoint there is degenerate). Deterministic; no RNG, no clock.
 std::vector<Waypoint> extractUniformArc(
     const SourcePath &src, int n,
     const std::vector<Waypoint> &anchors = {}, double min_sep_m = 0.0);

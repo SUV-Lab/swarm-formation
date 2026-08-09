@@ -775,7 +775,8 @@ int main(int argc, char **argv)
           we::waypointAtTime(flight, fscale, src, spans[i].t_end));
     const double anchor_sep = 2.0 * we::derivedAcceptRadius(fprm);
 
-    int completed = 0, full_pass = 0, zone_fail_rows = 0;
+    int completed = 0, full_pass = 0, zone_fail_rows = 0, best_n = 0;
+    bool best_uniform = true;
     double best_dev = 1e18;
     std::vector<we::Waypoint> best_set;
     for (int n : {8, 16, 32, 64}) {
@@ -804,6 +805,8 @@ int main(int argc, char **argv)
             e.first->max_xtrack_m < best_dev) {
           best_dev = e.first->max_xtrack_m;
           best_set = *e.second;
+          best_uniform = (e.first == &mu);
+          best_n = n;
         }
       }
     }
@@ -925,46 +928,97 @@ int main(int argc, char **argv)
       if (!anchors.empty()) {
         // Same base set, anchors merged by the EXTRACTOR (not by hand):
         // the anchored variant is what a caller would actually get.
-        std::vector<we::Waypoint> forced = best_set;
-        we::SourcePath src_ref = src;
-        {
-          std::vector<we::Waypoint> merged = best_set;
-          for (const auto &a : anchors) {
-            bool blocked = false;
-            for (const auto &w : merged)
-              if (std::abs(w.src_arc_m - a.src_arc_m) < anchor_sep)
-                blocked = true;
-            if (!blocked) merged.push_back(a);
-          }
-          std::sort(merged.begin(), merged.end(),
-                    [](const we::Waypoint &x, const we::Waypoint &y) {
-                      return x.src_arc_m < y.src_arc_m;
-                    });
-          forced = merged;
-        }
+        // Through the REAL extractor API — a broken mergeAnchors must
+        // fail this regression, not be masked by a test-local
+        // reimplementation (review find: the loop used to live here).
+        // TWO budgets, because they answer different questions:
+        //   equal  : n unchanged, so anchors DISPLACE automatic points —
+        //            isolates placement, and exposes what the
+        //            displacement costs;
+        //   raised : n + anchors, so the automatic set is untouched —
+        //            what a caller would actually ship.
+        const auto extract = [&](int n, const std::vector<we::Waypoint> &a) {
+          return best_uniform
+                     ? we::extractUniformArc(src, n, a, anchor_sep)
+                     : we::extractCurvatureAdaptive(src, n, 4.0, 1e-4, a,
+                                                    anchor_sep);
+        };
+        const std::vector<we::Waypoint> forced = extract(best_n, anchors);
+        const std::vector<we::Waypoint> raised =
+            extract(best_n + static_cast<int>(anchors.size()), anchors);
         const auto rf = we::flyWaypoints3Dof(forced, fstart, fprm);
         const auto mf = we::evaluateReproduction(src, rf, *dynp, hooks, ep);
         const double tj = spans[0].t_end;
         const auto wf = we::windowStats(src, rf, tj - 5.0, tj + 5.0, tj);
         const auto w0 = we::windowStats(src, rb, tj - 5.0, tj + 5.0, tj);
         if (wf.measured && w0.measured)
-          std::printf("[WPE] phase anchors merged (%zu -> %zu waypoints): "
-                      "transition junction maxXT %.1f -> %.1f m, spdErr "
-                      "%.2f -> %.2f m/s | whole flight %s\n",
-                      best_set.size(), forced.size(), w0.max_xtrack_m,
-                      wf.max_xtrack_m, w0.speed_err_at_t_mps,
-                      wf.speed_err_at_t_mps, mf.verdictName());
+          std::printf("[WPE] phase anchors via the extractor at the SAME "
+                      "budget (%zu -> %zu waypoints, n=%d): transition "
+                      "junction maxXT %.1f -> %.1f m, spdErr %.2f -> %.2f "
+                      "m/s | whole flight %s\n",
+                      best_set.size(), forced.size(), best_n,
+                      w0.max_xtrack_m, wf.max_xtrack_m,
+                      w0.speed_err_at_t_mps, wf.speed_err_at_t_mps,
+                      mf.verdictName());
         expect(wf.measured && w0.measured,
                "the anchored set flies and both junction windows measure");
-        expect(mf.verdict() == we::ReproductionMetrics::Verdict::kPass,
-               "the anchored set passes terrain, zone AND deviation "
-               "(anchors do not buy accuracy at the cost of safety)");
-        expect(mf.zone_hard_contacts == 0 && mf.gate_agl_pass,
-               "the anchored set keeps zone and terrain clearance");
+        const auto rr2 = we::flyWaypoints3Dof(raised, fstart, fprm);
+        const auto mr = we::evaluateReproduction(src, rr2, *dynp, hooks, ep);
+        const auto wr = we::windowStats(src, rr2, tj - 5.0, tj + 5.0, tj);
+        std::printf("[WPE]   equal budget  (%zu wp): %s, maxXT %.1f m, "
+                    "minAGL %.1f m, zoneH %d\n"
+                    "[WPE]   raised budget (%zu wp): %s, maxXT %.1f m, "
+                    "minAGL %.1f m, zoneH %d\n",
+                    forced.size(), mf.verdictName(),
+                    mf.measured ? mf.max_xtrack_m : -1.0,
+                    mf.agl_measured ? mf.min_agl_m : -1.0,
+                    mf.zone_measured ? mf.zone_hard_contacts : -1,
+                    raised.size(), mr.verdictName(),
+                    mr.measured ? mr.max_xtrack_m : -1.0,
+                    mr.agl_measured ? mr.min_agl_m : -1.0,
+                    mr.zone_measured ? mr.zone_hard_contacts : -1);
+        // NOT asserted: that the equal-budget anchored set passes. It may
+        // not, and the measurement says why — anchors displace automatic
+        // waypoints, and the sparser remainder can lose safety margin
+        // elsewhere. Anchors are not free at fixed count; a caller raises
+        // the budget instead of displacing. That IS asserted:
+        expect(mr.verdict() == we::ReproductionMetrics::Verdict::kPass,
+               "with the budget raised by the anchor count, the anchored "
+               "set passes terrain, zone AND deviation");
+        expect(mr.zone_hard_contacts == 0 && mr.gate_agl_pass,
+               "the raised-budget anchored set keeps zone and terrain "
+               "clearance");
+        if (wr.measured && w0.measured)
+          expect(wr.speed_err_at_t_mps < 0.5 * w0.speed_err_at_t_mps,
+                 "the junction anchor works at the raised budget too");
+        expect(forced.size() <= best_set.size(),
+               "anchors consumed the budget (equal-count comparison, not "
+               "extra waypoints)");
+        // Every junction must literally be in the delivered list.
+        int found = 0;
+        for (const auto &a : anchors)
+          for (const auto &w : forced)
+            if (std::abs(w.src_arc_m - a.src_arc_m) <= 1e-9 &&
+                (w.pos_m - a.pos_m).norm() < 1e-9) {
+              ++found;
+              break;
+            }
+        expect(found == static_cast<int>(anchors.size()),
+               "every phase junction survives into the delivered waypoint "
+               "list, verbatim");
         if (wf.measured && w0.measured)
           expect(wf.speed_err_at_t_mps < 0.5 * w0.speed_err_at_t_mps,
                  "a junction anchor materially reduces the junction speed "
                  "error (the encoding was the gap, not the handoff)");
+        int found_r = 0;
+        for (const auto &a : anchors)
+          for (const auto &w : raised)
+            if (std::abs(w.src_arc_m - a.src_arc_m) <= 1e-9) {
+              ++found_r;
+              break;
+            }
+        expect(found_r == static_cast<int>(anchors.size()),
+               "the raised-budget set carries every junction too");
       }
 
       // ---- speed-channel ablation: does the output schema need speed?

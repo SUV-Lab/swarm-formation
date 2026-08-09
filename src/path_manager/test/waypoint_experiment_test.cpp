@@ -8,11 +8,12 @@
 // result to reproduce the planned trajectory? These variants extract
 // candidate lists, fly them, and measure the difference — including
 // measurements aimed at the measurement itself (does the metric catch a
-// flight that cheats? does the follower's own tracking floor masquerade as
-// extraction error? do strategy rankings survive a worse follower?).
+// flight that cheats? does the follower's own tracking limit masquerade
+// as extraction error? do strategy rankings survive a worse follower?).
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -51,7 +52,8 @@ static poly_traj::Trajectory makeSCurve(double unit = 100.0)
   };
   // Turn magnitude chosen to sit INSIDE the follower's own minimum turn
   // radius. The first fixture asked for a 62 deg heading change in 4 km
-  // (radius ~3.7 km) while the follower's floor at 170 m/s is ~4.3 km —
+  // (radius ~3.7 km) while the follower's minimum turn radius at 170 m/s
+  // is ~4.3 km —
   // so it measured "the reference is unflyable", not "the waypoints are
   // badly placed". A reference the vehicle cannot fly makes every
   // extraction strategy look equally bad.
@@ -187,6 +189,111 @@ int main(int argc, char **argv)
     std::cout << "extract: bend waypoints adaptive=" << in_bend
               << " uniform=" << in_bend_u << "\n";
     expect(in_bend >= in_bend_u, "adaptive concentrates on curvature");
+  }
+
+  // ---------------- anchors (the extractor contract) ----------------
+  if (run("anchors")) {
+    // Every claim in the header, pinned against the REAL API.
+    const double sep = 500.0;
+    const double s_mid = 0.5 * src.total_len_m;
+    we::Waypoint a;
+    a.pos_m = src.pos_m[src.s_m.size() / 2];
+    a.speed_mps = 170.0;
+    a.src_arc_m = s_mid;
+    a.src_time_s = src.t_s[src.t_s.size() / 2];
+
+    // (1) An anchor survives even when an automatic waypoint lands right
+    // next to it — the automatic one is the one removed. This is the case
+    // the anchor exists for, and the old direction failed exactly here.
+    {
+      const auto u = we::extractUniformArc(src, 8);
+      double nearest = 1e18;
+      for (const auto &w : u)
+        nearest = std::min(nearest, std::abs(w.src_arc_m - s_mid));
+      const auto k = we::extractUniformArc(src, 8, {a}, sep);
+      bool kept = false;
+      int within = 0;
+      for (const auto &w : k) {
+        if (std::abs(w.src_arc_m - s_mid) <= 1e-9) kept = true;
+        if (std::abs(w.src_arc_m - s_mid) < sep &&
+            std::abs(w.src_arc_m - s_mid) > 1e-9 &&
+            std::abs(w.src_arc_m - src.total_len_m) > 1e-6)
+          ++within;
+      }
+      std::printf("anchors: nearest auto point was %.1f m away; anchor "
+                  "kept=%d, other points inside %.0f m: %d\n",
+                  nearest, kept ? 1 : 0, sep, within);
+      expect(kept, "the anchor survives verbatim (MANDATORY)");
+      expect(within == 0,
+             "automatic waypoints inside the separation are removed, not "
+             "the anchor");
+    }
+    // (2) Anchors consume the budget: totals match at equal n.
+    {
+      const auto plain = we::extractUniformArc(src, 8);
+      const auto anch = we::extractUniformArc(src, 8, {a}, sep);
+      std::printf("anchors: budget plain=%zu anchored=%zu\n", plain.size(),
+                  anch.size());
+      expect(anch.size() <= plain.size(),
+             "anchors consume the count instead of adding to it");
+    }
+    // (3) Duplicates collapse; order does not matter.
+    {
+      we::Waypoint b = a;
+      const auto one = we::extractUniformArc(src, 8, {a}, sep);
+      const auto two = we::extractUniformArc(src, 8, {a, b}, sep);
+      expect(one.size() == two.size(), "duplicate anchors collapse");
+      we::Waypoint c = a;
+      c.src_arc_m = 0.25 * src.total_len_m;
+      c.pos_m = src.pos_m[src.s_m.size() / 4];
+      const auto ab = we::extractUniformArc(src, 8, {a, c}, sep);
+      const auto ba = we::extractUniformArc(src, 8, {c, a}, sep);
+      bool same = ab.size() == ba.size();
+      if (same)
+        for (size_t i = 0; i < ab.size(); ++i)
+          if (std::abs(ab[i].src_arc_m - ba[i].src_arc_m) > 1e-9)
+            same = false;
+      expect(same, "anchor order does not change the result");
+    }
+    // (4) Invalid anchors are rejected explicitly.
+    {
+      we::Waypoint bad = a;
+      bad.src_arc_m = std::numeric_limits<double>::quiet_NaN();
+      we::Waypoint off = a;
+      off.src_arc_m = src.total_len_m * 2.0;
+      we::Waypoint zero = a;
+      zero.src_arc_m = 0.0;
+      const auto plain = we::extractUniformArc(src, 8);
+      const auto k = we::extractUniformArc(src, 8, {bad, off, zero}, sep);
+      expect(k.size() == plain.size(),
+             "non-finite / out-of-range / at-endpoint anchors are rejected");
+      for (const auto &w : k)
+        expect(std::isfinite(w.src_arc_m) && w.pos_m.allFinite(),
+               "no non-finite waypoint reaches the output");
+    }
+    // (5) The anchor's own state is preserved verbatim, not resampled.
+    {
+      we::Waypoint odd = a;
+      odd.speed_mps = 123.456;
+      const auto k = we::extractUniformArc(src, 8, {odd}, sep);
+      bool exact = false;
+      for (const auto &w : k)
+        if (std::abs(w.src_arc_m - s_mid) <= 1e-9 &&
+            std::abs(w.speed_mps - 123.456) < 1e-9 &&
+            (w.pos_m - odd.pos_m).norm() < 1e-9)
+          exact = true;
+      expect(exact,
+             "the anchor's position and speed pass through untouched");
+    }
+    // (6) The adaptive strategy honours the same contract.
+    {
+      const auto k = we::extractCurvatureAdaptive(src, 8, 4.0, 1e-4, {a},
+                                                  sep);
+      bool kept = false;
+      for (const auto &w : k)
+        if (std::abs(w.src_arc_m - s_mid) <= 1e-9) kept = true;
+      expect(kept, "curvature-adaptive honours anchors too");
+    }
   }
 
   // ---------------- follower ----------------
@@ -333,20 +440,19 @@ int main(int argc, char **argv)
   }
 
   // ---------------- continuous-reference baseline ----------------
-  // NOT a floor. Tracking the continuous trajectory aims at a point on
+  // NOT a bound. Tracking the continuous trajectory aims at a point on
   // the CURVE; a waypoint follower aims at a point on the current LEG
   // LINE, and on a bending path the leg line can be the better guide —
   // measured here, where an 8-waypoint list beats continuous tracking.
   // The number is a reference point for reading the table, never a bound,
   // and it is only comparable at the SAME lead time.
   double base_tuned = 0.0, base_matched = 0.0, dense_m = 0.0;
-  if (run("floor") || run("table") || run("sensitivity")) {
+  if (run("baseline") || run("table") || run("sensitivity")) {
     we::SafetyHooks hooks;
-    // The floor is the law's BEST continuous tracking, so it is minimized
-    // over the law's own aiming parameter: a single lead time is not a
-    // floor, it is one tuning (measured: lead 4 s tracks WORSE than a
-    // dense waypoint list because the carrot cuts corners; that says the
-    // lead was wrong, not that waypoints beat continuous tracking).
+    // Reported at two leads: the rows' own lead (comparable) and the
+    // law's best (what tuning buys). A single lead is one tuning, not a
+    // property of the law — at lead 4 s the carrot cuts corners and
+    // tracks worse than a dense waypoint list.
     bool any_track = false;
     double best_lead = 0.0;
     base_tuned = 1e18;
@@ -361,8 +467,8 @@ int main(int argc, char **argv)
       p2.lead_time_s = lead;
       const auto r2 = we::flyReferenceTrack(src, startOf(src), p2);
       const auto m2 = we::evaluateReproduction(src, r2, dyn, hooks);
-      if (run("floor"))
-        std::printf("floor: lead %.1f s -> %s\n", lead,
+      if (run("baseline"))
+        std::printf("baseline: lead %.1f s -> %s\n", lead,
                     m2.measured
                         ? (std::to_string(m2.max_xtrack_m) + " m").c_str()
                         : "n/a");
@@ -381,7 +487,7 @@ int main(int argc, char **argv)
     const auto rd = we::flyWaypoints3Dof(dense, startOf(src), prm);
     const auto md_ = we::evaluateReproduction(src, rd, dyn, hooks);
     dense_m = md_.measured ? md_.max_xtrack_m : 0.0;
-    if (run("floor")) {
+    if (run("baseline")) {
       std::printf("baseline: continuous-reference %.1f m at the SAME lead "
                   "as the rows (%.1f s), %.1f m at its own best lead "
                   "(%.1f s) | dense-waypoint N=64 %.1f m\n",
@@ -393,7 +499,7 @@ int main(int argc, char **argv)
       expect(md_.measured, "dense-waypoint rollout completes");
       // Deliberately NOT asserted: that no waypoint list beats the
       // baseline. It does, and asserting otherwise would re-introduce
-      // the floor claim the measurement refutes.
+      // the bound claim the measurement refutes.
     }
   }
 
@@ -458,11 +564,11 @@ int main(int argc, char **argv)
 
     expect(completed_rows >= 6, "most strategy/count rows complete");
     // NOT asserted: that error falls monotonically with waypoint count.
-    // It does not for this follower — beyond the floor the tracking law,
+    // It does not for this follower — past a point the tracking law,
     // not the placement, sets the error, and asserting a trend the data
     // refutes would make this harness a rubber stamp. What IS asserted:
-    // some candidate set gets within reach of the floor, i.e. placement
-    // is not the binding constraint.
+    // some candidate set reaches the baseline's neighbourhood, i.e.
+    // placement is not the binding constraint.
     double best_row = 1e18;
     for (double e : uni_err) best_row = std::min(best_row, e);
     std::printf("table: best uniform row %.1f m vs matched-lead baseline "
@@ -499,8 +605,8 @@ int main(int argc, char **argv)
   // the ordering of the candidate sets survives.
   //
   // Note what is NOT assumed here: that denser is better. On this
-  // reference the nominal follower is already at its tracking floor by
-  // N=4, so more waypoints do not help and can mildly hurt (once the
+  // reference the nominal follower is already tracking-limited by N=4,
+  // so more waypoints do not help and can mildly hurt (once the
   // pursuit carrot outruns the spacing, the follower chases points
   // instead of the leg line). Encoding "denser is better" as the
   // invariant would have asserted a preference the data refutes; what
