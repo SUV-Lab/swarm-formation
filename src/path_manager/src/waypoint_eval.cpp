@@ -194,8 +194,9 @@ ExtractStatus validAnchors(const SourcePath &src,
       // caller has to resolve — picking one by input order would make
       // the result depend on argument order.
       if ((b.pos_m - a.pos_m).norm() < 1e-9 &&
-          std::abs(b.speed_mps - a.speed_mps) < 1e-9) {
-        dup = true;
+          std::abs(b.speed_mps - a.speed_mps) < 1e-9 &&
+          std::abs(b.src_time_s - a.src_time_s) < 1e-9) {
+        dup = true;      // identical in EVERY field
       } else {
         *why = "two anchors at the same arc with different state";
         return ExtractStatus::kInvalidAnchor;
@@ -212,10 +213,40 @@ ExtractStatus validAnchors(const SourcePath &src,
 // is the one exception — it is the follower's terminal target). Then the
 // list is topped back up to n at the widest admissible gaps, so n stays
 // the FINAL total rather than an upper bound that removal quietly eats.
+// Cumulative density weight at an arc position (linear between samples).
+// Null W means uniform-in-arc, which is the uniform strategy's own law.
+double weightAtArc(const SourcePath &src, const std::vector<double> *W,
+                   double s_arc)
+{
+  if (!W || W->size() != src.s_m.size()) return s_arc;
+  const auto it = std::lower_bound(src.s_m.begin(), src.s_m.end(), s_arc);
+  size_t i = static_cast<size_t>(std::distance(src.s_m.begin(), it));
+  if (i == 0) return W->front();
+  if (i >= W->size()) return W->back();
+  const double s0 = src.s_m[i - 1], s1 = src.s_m[i];
+  const double u = (s1 > s0) ? (s_arc - s0) / (s1 - s0) : 0.0;
+  return (*W)[i - 1] + u * ((*W)[i] - (*W)[i - 1]);
+}
+
+// Inverse of the above: the arc where the cumulative weight reaches w.
+double arcAtWeight(const SourcePath &src, const std::vector<double> *W,
+                   double w)
+{
+  if (!W || W->size() != src.s_m.size()) return w;
+  const auto it = std::lower_bound(W->begin(), W->end(), w);
+  size_t i = static_cast<size_t>(std::distance(W->begin(), it));
+  if (i == 0) return src.s_m.front();
+  if (i >= W->size()) return src.s_m.back();
+  const double w0 = (*W)[i - 1], w1 = (*W)[i];
+  const double u = (w1 > w0) ? (w - w0) / (w1 - w0) : 0.0;
+  return src.s_m[i - 1] + u * (src.s_m[i] - src.s_m[i - 1]);
+}
+
 ExtractStatus applyAnchorsAndFill(std::vector<Waypoint> *out,
                                   const SourcePath &src,
                                   const std::vector<Waypoint> &anchors,
-                                  double min_sep_m, int n)
+                                  double min_sep_m, int n,
+                                  const std::vector<double> *W = nullptr)
 {
   const double s_end = src.total_len_m;
   if (!anchors.empty()) {
@@ -233,25 +264,31 @@ ExtractStatus applyAnchorsAndFill(std::vector<Waypoint> *out,
     out->insert(out->end(), anchors.begin(), anchors.end());
     std::sort(out->begin(), out->end(), byArc);
   }
-  // Top up to exactly n at the widest gaps that respect the separation.
+  // Top up to exactly n at the widest gaps IN THE STRATEGY'S OWN SPACING
+  // (weighted for the adaptive law, arc for uniform) — filling by raw arc
+  // would quietly turn a curvature-adaptive set into a partly uniform one.
   int guard = 4 * n + 16;
   while (static_cast<int>(out->size()) < n && guard-- > 0) {
     double best_gap = -1.0, best_s = -1.0;
-    double prev = 0.0;
+    double prev_w = weightAtArc(src, W, 0.0);
+    double prev_s = 0.0;
     for (size_t i = 0; i <= out->size(); ++i) {
-      const double next = i < out->size() ? (*out)[i].src_arc_m : s_end;
-      const double mid = 0.5 * (prev + next);
-      const double gap = next - prev;
-      if (gap > best_gap && mid > 0.0 && mid < s_end) {
+      const double next_s = i < out->size() ? (*out)[i].src_arc_m : s_end;
+      const double next_w = weightAtArc(src, W, next_s);
+      const double mid_s = arcAtWeight(src, W, 0.5 * (prev_w + next_w));
+      const double gap = next_w - prev_w;
+      if (gap > best_gap && mid_s > 0.0 && mid_s < s_end) {
         bool ok = true;
         for (const auto &w : *out)
-          if (std::abs(w.src_arc_m - mid) < min_sep_m) ok = false;
+          if (std::abs(w.src_arc_m - mid_s) < min_sep_m) ok = false;
         if (ok) {
           best_gap = gap;
-          best_s = mid;
+          best_s = mid_s;
         }
       }
-      prev = next;
+      prev_w = next_w;
+      prev_s = next_s;
+      (void)prev_s;
     }
     if (!(best_s > 0.0)) break;   // no admissible slot left
     out->push_back(sampleAtArc(src, best_s));
@@ -305,9 +342,12 @@ ExtractionResult extractUniformArc(const SourcePath &src, int n,
     }
   }
   r.status = applyAnchorsAndFill(&r.waypoints, src, anc, min_sep_m, n);
-  if (r.status == ExtractStatus::kUnderfilled)
+  if (r.status != ExtractStatus::kOk) {
     r.reason = "separation left no admissible slot to reach the requested "
                "count";
+    r.partial_count = static_cast<int>(r.waypoints.size());
+    r.waypoints.clear();   // never hand back a short list as a product
+  }
   return r;
 }
 
@@ -319,9 +359,20 @@ ExtractionResult extractCurvatureAdaptive(const SourcePath &src, int n,
 {
   ExtractionResult r;
   std::vector<Waypoint> anc;
+  // Parameter validation BEFORE any fall-back: lambda = 0 is the
+  // documented uniform mode, but a negative or non-finite lambda (or
+  // eps) is a caller error and must be named, not quietly redirected
+  // into a different strategy (review find).
+  if (!std::isfinite(lambda) || lambda < 0.0 ||
+      !std::isfinite(eps_straight) || eps_straight < 0.0) {
+    r.status = ExtractStatus::kBadParams;
+    r.reason = "lambda and eps_straight must be finite and non-negative "
+               "(lambda = 0 is the uniform mode)";
+    return r;
+  }
   r.status = prepare(src, n, anchors, min_sep_m, &anc, &r.reason);
   if (r.status != ExtractStatus::kOk) return r;
-  if (!(lambda > 0.0))
+  if (lambda == 0.0)
     return extractUniformArc(src, n, anchors, min_sep_m);
 
   // Cumulative weight W(s) = integral of (eps + lambda * kappa) ds.
@@ -333,7 +384,14 @@ ExtractionResult extractCurvatureAdaptive(const SourcePath &src, int n,
     W[k] = W[k - 1] + w * ds;
   }
   const double W_total = W.back();
-  if (!(W_total > 0.0)) return extractUniformArc(src, n, anchors, min_sep_m);
+  if (!std::isfinite(W_total) || !(W_total > 0.0)) {
+    // A degenerate weight field (a perfectly straight path with eps 0)
+    // has no adaptive meaning; say so instead of silently becoming
+    // uniform under a different name.
+    r.status = ExtractStatus::kBadParams;
+    r.reason = "curvature weight field is degenerate (raise eps_straight)";
+    return r;
+  }
 
   const int n_auto = n - static_cast<int>(anc.size());
   r.waypoints.reserve(static_cast<size_t>(n));
@@ -352,10 +410,13 @@ ExtractionResult extractCurvatureAdaptive(const SourcePath &src, int n,
     const double s_at = src.s_m[k - 1] + u * (src.s_m[k] - src.s_m[k - 1]);
     r.waypoints.push_back(sampleAtArc(src, s_at));
   }
-  r.status = applyAnchorsAndFill(&r.waypoints, src, anc, min_sep_m, n);
-  if (r.status == ExtractStatus::kUnderfilled)
+  r.status = applyAnchorsAndFill(&r.waypoints, src, anc, min_sep_m, n, &W);
+  if (r.status != ExtractStatus::kOk) {
     r.reason = "separation left no admissible slot to reach the requested "
                "count";
+    r.partial_count = static_cast<int>(r.waypoints.size());
+    r.waypoints.clear();
+  }
   return r;
 }
 

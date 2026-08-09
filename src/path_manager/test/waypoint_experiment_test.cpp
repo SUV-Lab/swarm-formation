@@ -248,11 +248,18 @@ int main(int argc, char **argv)
       bool same = ab.ok() && ba.ok() &&
                   ab.waypoints.size() == ba.waypoints.size();
       if (same)
-        for (size_t i = 0; i < ab.waypoints.size(); ++i)
-          if (std::abs(ab.waypoints[i].src_arc_m -
-                       ba.waypoints[i].src_arc_m) > 1e-9)
+        for (size_t i = 0; i < ab.waypoints.size(); ++i) {
+          const auto &x = ab.waypoints[i];
+          const auto &y = ba.waypoints[i];
+          if (std::abs(x.src_arc_m - y.src_arc_m) > 1e-9 ||
+              std::abs(x.src_time_s - y.src_time_s) > 1e-9 ||
+              std::abs(x.speed_mps - y.speed_mps) > 1e-9 ||
+              (x.pos_m - y.pos_m).norm() > 1e-9)
             same = false;
-      expect(same, "anchor order does not change the result");
+        }
+      expect(same,
+             "anchor order does not change the result — every field, not "
+             "just the arc");
     }
     // (3) Malformed input is REPORTED, not silently dropped — a caller
     // must not receive a plausible list with its mandatory anchor gone.
@@ -313,7 +320,64 @@ int main(int argc, char **argv)
       expect(zero_n.status == we::ExtractStatus::kBadParams,
              "n < 1 is refused");
     }
-    // (5) The adaptive strategy honours the same contract.
+    // (5) kUnderfilled: a separation so large no admissible slot exists.
+    // The result must SAY so and hand back nothing usable — a short list
+    // silently consumed would be the same class of defect as a dropped
+    // anchor.
+    {
+      // Needs BOTH: an anchor (so removal happens) and a separation wide
+      // enough that the top-up has nowhere admissible to put the
+      // replacements. A wide separation alone removes nothing.
+      const auto k =
+          we::extractUniformArc(src, 8, {a}, 0.4 * src.total_len_m);
+      std::printf("anchors: separation 0.4L with an anchor -> %s "
+                  "(reached %d of 8)\n",
+                  we::extractStatusName(k.status), k.partial_count);
+      expect(k.status == we::ExtractStatus::kUnderfilled,
+             "an unsatisfiable separation reports kUnderfilled");
+      expect(k.waypoints.empty(),
+             "a failed extraction hands back NO waypoints (the partial "
+             "count is diagnostic only)");
+      expect(k.partial_count > 0 && k.partial_count < 8,
+             "the diagnostic count says how far it got");
+    }
+    // (6) Adaptive parameter validation: lambda = 0 is the documented
+    // uniform mode, but garbage is named, not redirected.
+    {
+      const auto zero = we::extractCurvatureAdaptive(src, 8, 0.0);
+      const auto uni = we::extractUniformArc(src, 8);
+      bool same = zero.ok() && uni.ok() &&
+                  zero.waypoints.size() == uni.waypoints.size();
+      if (same)
+        for (size_t i = 0; i < uni.waypoints.size(); ++i)
+          if (std::abs(zero.waypoints[i].src_arc_m -
+                       uni.waypoints[i].src_arc_m) > 1e-9)
+            same = false;
+      expect(same, "lambda = 0 is exactly the uniform mode");
+      const double nan_v = std::numeric_limits<double>::quiet_NaN();
+      expect(we::extractCurvatureAdaptive(src, 8, nan_v).status ==
+                 we::ExtractStatus::kBadParams,
+             "non-finite lambda is refused, not silently uniform");
+      expect(we::extractCurvatureAdaptive(src, 8, -1.0).status ==
+                 we::ExtractStatus::kBadParams,
+             "negative lambda is refused");
+      expect(we::extractCurvatureAdaptive(src, 8, 4.0, nan_v).status ==
+                 we::ExtractStatus::kBadParams,
+             "non-finite eps_straight is refused");
+      expect(we::extractCurvatureAdaptive(src, 8, 4.0, -1.0).status ==
+                 we::ExtractStatus::kBadParams,
+             "negative eps_straight is refused");
+    }
+    // (7) Duplicate identity includes TIME: same arc/position/speed with
+    // a different time is a conflict, not a first-wins pick.
+    {
+      we::Waypoint t2 = a;
+      t2.src_time_s = a.src_time_s + 1.0;
+      expect(we::extractUniformArc(src, 8, {a, t2}, sep).status ==
+                 we::ExtractStatus::kInvalidAnchor,
+             "same arc with a different TIME is a conflict too");
+    }
+    // (8) The adaptive strategy honours the same contract.
     {
       const auto k = we::extractCurvatureAdaptive(src, 8, 4.0, 1e-4, {a},
                                                   sep);

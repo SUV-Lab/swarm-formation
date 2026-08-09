@@ -153,9 +153,14 @@ enum class ExtractStatus {
 };
 const char *extractStatusName(ExtractStatus s);
 struct ExtractionResult {
+  // EMPTY unless status is kOk: a caller that ignores the status gets
+  // nothing rather than a plausible-looking list missing its mandatory
+  // anchors or short of the requested count. partial_count keeps the
+  // diagnostic ("it reached 6 of 8") without offering a usable product.
   std::vector<Waypoint> waypoints;
   ExtractStatus status{ExtractStatus::kOk};
   std::string reason;
+  int partial_count{0};
   bool ok() const { return status == ExtractStatus::kOk; }
 };
 
@@ -163,9 +168,13 @@ ExtractionResult extractUniformArc(
     const SourcePath &src, int n,
     const std::vector<Waypoint> &anchors = {}, double min_sep_m = 0.0);
 
-// Density weight w = eps_straight + kappa: curvature attracts waypoints,
-// eps keeps straight stretches from starving. lambda scales the curvature
-// term; lambda = 0 reproduces uniform arc exactly.
+// Density weight w = eps_straight + lambda * kappa: curvature attracts
+// waypoints, eps keeps straight stretches from starving. lambda = 0 is
+// the documented uniform mode; a NEGATIVE or non-finite lambda (or
+// eps_straight) is kBadParams, not a quiet fall-back to uniform — a
+// caller who passed garbage should hear about it.
+// Anchor top-up uses the SAME weighted spacing, so replacing a displaced
+// automatic point does not quietly turn the strategy into uniform.
 ExtractionResult extractCurvatureAdaptive(
     const SourcePath &src, int n, double lambda = 4.0,
     double eps_straight = 1e-4, const std::vector<Waypoint> &anchors = {},
