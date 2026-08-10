@@ -569,6 +569,7 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_acc_ = theoretical_acc;
         start_vel_synthesized_ = false;  // trajectory-derived: real motion state
         start_vel_commanded_ = false;    // not an operator input
+        start_state_stated_ = true;      // read off our own trajectory
 
         double pos_error = (current_pos_ - theoretical_pos).norm();
         log_manager_->infof("Formation change - using TRAJECTORY position/vel/acc (error from actual: %.2fm)",
@@ -581,12 +582,17 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_vel_.setZero();
         start_vel_synthesized_ = false;
         start_vel_commanded_ = false;
+        // Set by whichever branch below actually reads a stated initial
+        // state out of the mission. If none does, the mission described no
+        // beginning and triggerGlobalPlan refuses it.
+        start_state_stated_ = false;
         // Provenance tag for the log below: the derived first-leg velocity
         // was repeatedly misread as an applied use_initial_velocity vector.
         const char *vel_src = "rest (zero)";
         if (use_commanded_initial_velocity_) {
             start_vel_ = commanded_initial_velocity_;
             start_vel_commanded_ = true;
+            start_state_stated_ = true;
             vel_src = "commanded vector (use_initial_velocity)";
         } else if (commanded_initial_speed_ > 0.0) {
             // Aim the initial velocity along the FIRST ROUTE LEG, not the
@@ -619,6 +625,7 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
             // does not exist yet) — mark it so planGlobalTraj can re-aim onto
             // the front-end route's real initial direction ([VEL-ALIGN]).
             start_vel_synthesized_ = true;
+            start_state_stated_ = true;
         }
         start_acc_ = use_commanded_initial_acceleration_
             ? commanded_initial_acceleration_
@@ -645,6 +652,7 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_acc_ = inject_init_acc_;
         start_vel_synthesized_ = false;  // injected = explicit, never re-aim
         start_vel_commanded_ = true;     // explicit input: envelope-validated
+        start_state_stated_ = true;
         log_manager_->infof("[TEST] Injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
                    start_vel_(0), start_vel_(1), start_vel_(2),
                    start_acc_(0), start_acc_(1), start_acc_(2));
@@ -762,6 +770,30 @@ void ReplanFSM::resolveCommandedStartAgl()
 
 void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints) {
     last_plan_succeeded_ = false;
+    // This planner covers the initial phase, not just the midcourse one, so
+    // how the flight BEGINS is mission input — not something to invent. A
+    // mission that states neither an initial velocity vector nor an initial
+    // speed used to be completed on its behalf: the derived rest state fell
+    // below the platform stall floor and [STALL-FLOOR] / [CHAIN-PAR] raised
+    // it to ~132 m/s along the first leg, logging "commanded start speed
+    // 0.000" for a speed nothing had commanded. The published flight then
+    // began at cruise for a mission that never said so.
+    if (!start_state_stated_) {
+        const std::string why =
+            "mission stated no initial state (neither use_initial_velocity "
+            "with initial_velocity_mps, nor initial_speed_mps) — the initial "
+            "phase is planned, not assumed, so the planner will not invent "
+            "one";
+        FSM_LOG_ERROR("[ENVELOPE] %s (INITIAL_STATE_UNSPECIFIED)",
+                      why.c_str());
+        // Same bookkeeping the planning tail does for a FAILED result;
+        // last_plan_succeeded_ is already false, so the caller's
+        // [PLAN REJECTED] rollback runs and a corrected resend retries.
+        last_plan_outcome_ = PlanOutcome::FAILED;
+        last_plan_reason_ = PlanReason::INITIAL_STATE_UNSPECIFIED;
+        FSM_LOG_ERROR("[PLAN] FAILED: %s", why.c_str());
+        return;
+    }
     resolveCommandedStartAgl();
     // Use formation pattern received via TrajectoryCommand
     auto formation_setup_start = std::chrono::high_resolution_clock::now();

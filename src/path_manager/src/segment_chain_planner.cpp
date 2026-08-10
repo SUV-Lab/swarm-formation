@@ -284,6 +284,35 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
                 " (transition disabled)");
       }
     }
+  } else if (start_vel_synthesized) {
+    // A synthesized head is the mission's initial_speed aimed level along
+    // the first leg — a STATED magnitude, even though the direction is
+    // ours. [VEL-ALIGN] may re-aim it; nothing may rewrite how fast it is.
+    // Below the stall floor there is no flyable interpretation, and the
+    // [STALL-FLOOR]/[CHAIN-PAR] clamps downstream would otherwise raise it
+    // and publish a flight that starts faster than the mission asked for.
+    if (const auto *dyn = pm_->dynamicsParams()) {
+      double um = 100.0;
+      if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+        um = node_->get_parameter("optimization/dynamics_unit_xy_m")
+                 .as_double();
+      const double floor =
+          um <= 1e-9 ? 0.0
+                     : dyn->speed_min_mps * (1.0 + dyn->constraint_margin) / um;
+      if (floor > 0.0 && start_vel.norm() < floor) {
+        const std::string why =
+            "stated initial speed " +
+            std::to_string(start_vel.norm() * um) + " m/s is below the " +
+            "platform stall floor " + std::to_string(floor * um) +
+            " m/s — the mission's own initial state is not flyable, and the "
+            "planner does not raise a stated one";
+        log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s "
+                     "(INITIAL_MODE_UNSUPPORTED)", why.c_str());
+        return PlanResult::failedBecause(
+            PlanReason::INITIAL_MODE_UNSUPPORTED,
+            "initial state unsupported: " + why);
+      }
+    }
   }
   // [PHASE] Final-boundary validation happens ONCE, here — every exit of
   // planImpl (workers, merge retry, fallbacks, baseline restore) receives

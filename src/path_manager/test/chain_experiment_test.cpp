@@ -1920,18 +1920,39 @@ int main(int argc, char **argv)
   }
 
   if (with_synthclamp) {
-    // Synthesized 50 m/s start (floor ≈ 130 m/s): the [STALL-FLOOR] clamp
-    // repairs it and the too-small mission flies single-shot as SUCCESS —
-    // proving the envelope gate never fires on non-commanded starts.
+    // "Synthesized" means the DIRECTION is ours — level, along the first
+    // leg — while the SPEED is the mission's own initial_speed_mps. So the
+    // two halves get opposite treatment, and this variant pins both.
+    //
+    // Until the planner owned the initial phase, a sub-floor synthesized
+    // start was repaired by the [STALL-FLOOR] clamp and flown, on the
+    // reasoning that a synthesized state is our invention to fix. That
+    // reasoning only ever covered the direction: raising the speed
+    // publishes a flight that begins faster than the mission asked for,
+    // which is the same fabrication as inventing a start for a mission
+    // that stated none.
+    //
+    // Half 1: 50 m/s stated, floor ~132 m/s -> refused, not repaired.
     const path_manager::PlanResult r =
         chain.plan(start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc,
                    goal, /*start_vel_synthesized=*/true, {});
-    expect(r.hasTrajectory(),
-           "synthesized sub-floor start still plans (clamped, not rejected)");
-    expect(r.outcome == path_manager::PlanOutcome::SUCCESS,
+    expect(!r.hasTrajectory(),
+           "synthesized sub-floor start is REFUSED, not clamped and flown");
+    expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "reason is INITIAL_MODE_UNSUPPORTED (the mission's own stated "
+           "speed is unflyable)");
+    // Half 2: a flyable stated speed still plans, and is still not
+    // misread as a launch-regime state — the original coverage, kept.
+    const path_manager::PlanResult r2 =
+        chain.plan(start_pos, Eigen::Vector3d(2.0, 0.0, 0.0), start_acc,
+                   goal, /*start_vel_synthesized=*/true, {});
+    expect(r2.hasTrajectory(),
+           "synthesized start above the floor plans normally");
+    expect(r2.outcome == path_manager::PlanOutcome::SUCCESS,
            "single-shot on a below-threshold mission stays SUCCESS");
-    expect(r.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
-           "no INITIAL_MODE_UNSUPPORTED misclassification");
+    expect(r2.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "no INITIAL_MODE_UNSUPPORTED misclassification on a flyable "
+           "synthesized start");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

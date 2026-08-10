@@ -161,6 +161,14 @@ private:
     // synthesized and trajectory-derived starts are not inputs and keep the
     // [STALL-FLOOR] clamp doctrine.
     bool start_vel_commanded_{false};
+    // True when the START STATE HAS A STATED ORIGIN — the mission gave a
+    // velocity vector or an initial speed, or the state was read off a
+    // trajectory this stack itself authored (replan / formation change).
+    // False means the mission said nothing about how the flight begins,
+    // which this planner treats as an incomplete mission rather than a
+    // request to start at cruise: the initial phase is part of the product,
+    // so an initial state is part of the input.
+    bool start_state_stated_{false};
     Eigen::Vector3d commanded_initial_velocity_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d commanded_initial_acceleration_{Eigen::Vector3d::Zero()};
 

@@ -64,6 +64,14 @@ enum class PlanReason {
   TRANSITION_GENERATION_FAILED,
   TRANSITION_ADAPTER_UNSOUND,
   TRANSITION_JUNCTION_UNSOUND,
+  // The mission stated no initial state at all — neither an initial
+  // velocity vector nor an initial speed. This planner covers the initial
+  // phase as well as the midcourse one, so "nothing was said" is an
+  // incomplete mission, not a request to begin at cruise. It used to be
+  // silently completed: the derived rest state fell below the stall floor
+  // and was rewritten to it (~132 m/s) with only a WARN, so a flight the
+  // operator never described was published as if they had.
+  INITIAL_STATE_UNSPECIFIED,
 };
 
 struct PlanResult {
