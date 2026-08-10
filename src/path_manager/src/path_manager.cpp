@@ -949,6 +949,7 @@ std::string PathManager::stateEnvelopeProblem(
         map_upper_bound_.z() =
             std::max(max_terrain_z, map_upper_bound_.z()) + map_ceiling_headroom_;
 
+        log_manager_->infof("[BBOX] headroom=%.2f terrain_peak=%.2f", map_ceiling_headroom_, max_terrain_z);
         log_manager_->infof("Map bounds: lower=(%.2f,%.2f,%.2f), upper=(%.2f,%.2f,%.2f)",
             map_lower_bound_.x(), map_lower_bound_.y(), map_lower_bound_.z(),
             map_upper_bound_.x(), map_upper_bound_.y(), map_upper_bound_.z());
