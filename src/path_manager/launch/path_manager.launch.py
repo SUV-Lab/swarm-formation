@@ -54,6 +54,20 @@ def create_drone_nodes(context, *args, **kwargs):
     if debug_mode:
         print('DEBUG MODE: /debug/pipeline + verbose logs enabled')
 
+    # Launch-to-cruise transition generator. Rides the environment for the
+    # same reason debug does — the RViz Start button forks this launch with
+    # no arguments — and stays OFF unless asked for, matching the shipped
+    # optimizer_params.yaml. Without it a mission whose commanded initial
+    # state leaves the +/-30 deg validity cone (the r5 transition probes ask
+    # for 32 deg) is refused in 1 ms with INITIAL_MODE_UNSUPPORTED, and the
+    # GUI had no way at all to turn it on.
+    transition_str = context.perform_substitution(
+        LaunchConfiguration('transition'))
+    transition_mode = transition_str.lower() in ('1', 'true')
+    if transition_mode:
+        print('TRANSITION: launch-to-cruise generator ENABLED '
+              '(experimental; steep commanded initial states accepted)')
+
     # Target drone ID
     drone_id_str = context.perform_substitution(LaunchConfiguration('drone_id'))
     target_drone_id = int(drone_id_str)
@@ -118,6 +132,10 @@ def create_drone_nodes(context, *args, **kwargs):
         if debug_mode:
             params['manager/debug_pipeline_viz'] = True
             params['enable_debug_logs'] = True
+        # Injected only when asked for, so the yaml (absent = off) stays the
+        # authority in every other run.
+        if transition_mode:
+            params['transition/enable'] = True
         # Note: start_point will be received from TrajectoryCommand message
 
         # `params` goes LAST so launch-time overrides (e.g. manager/world from
@@ -186,6 +204,17 @@ def generate_launch_description():
             description='Debug mode: publish /debug/pipeline stage geometry '
                         'and enable verbose logs (inherited from MMP_DEBUG '
                         'when launched via the RViz Start button)'
+        ),
+        DeclareLaunchArgument(
+            'transition',
+            default_value=EnvironmentVariable('MMP_TRANSITION',
+                                              default_value='0'),
+            description='Enable the launch-to-cruise transition generator '
+                        '(transition/enable). Needed by missions whose '
+                        'commanded initial state leaves the +/-30 deg cone, '
+                        'e.g. the r5 transition probes. Inherited from '
+                        'MMP_TRANSITION when launched via the RViz Start '
+                        'button. Experimental: off unless asked for.'
         ),
         DeclareLaunchArgument(
             'drone_id',
