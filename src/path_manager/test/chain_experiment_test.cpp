@@ -229,9 +229,12 @@ int main(int argc, char **argv)
     // FAIL(INITIAL_MODE_UNSUPPORTED) at plan entry with NO front-end or
     // optimizer work (proven by the armed fault injection staying armed).
     // initok: same shape at γ = 7° — proceeds normally through the phase
-    // machinery. synthclamp: SYNTHESIZED sub-floor start keeps the
-    // [STALL-FLOOR] clamp (no envelope reject — the floor repairs OUR proxy
-    // states, never operator inputs). unsafedirect: the phase-mode direct
+    // machinery. synthclamp: where the [STALL-FLOOR] clamp may and may not
+    // reach — a SYNTHESIZED sub-floor start is REFUSED (its speed is the
+    // mission's own initial_speed; only the direction was ours), a flyable
+    // synthesized start plans, and a TRAJECTORY-DERIVED sub-floor head is
+    // still clamped and flies (that state this stack authored itself).
+    // unsafedirect: the phase-mode direct
     // fallback vs the flight fitness gate — passes under the default budget
     // (DEGRADED), FAILS(DIRECT_FALLBACK_UNSAFE) under an impossible one.
     if (v == "initfail") { with_route = true; with_phase = true; with_initfail = true; }
@@ -1953,6 +1956,22 @@ int main(int argc, char **argv)
     expect(r2.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "no INITIAL_MODE_UNSUPPORTED misclassification on a flyable "
            "synthesized start");
+    // Half 3: the [STALL-FLOOR] clamp is still LIVE and still correct for a
+    // head this stack authored itself — an in-flight replan reads its start
+    // off the current trajectory (neither commanded nor synthesized), and a
+    // converged flight may legitimately dip below the margin-backed floor.
+    // Refusing that would strand a flying vehicle over a rounding error.
+    // This half is here because the reversal above removed the only variant
+    // that reached the clamp at all; without it the clamp ships untested.
+    const path_manager::PlanResult r3 =
+        chain.plan(start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc,
+                   goal, /*start_vel_synthesized=*/false, {},
+                   /*start_vel_commanded=*/false);
+    expect(r3.hasTrajectory(),
+           "a trajectory-derived sub-floor head is still clamped and flies "
+           "(the planner may repair a state it authored itself)");
+    expect(r3.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+           "and is not refused as a stated initial state");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

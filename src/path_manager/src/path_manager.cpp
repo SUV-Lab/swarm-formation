@@ -701,6 +701,29 @@ std::string PathManager::stateEnvelopeProblem(
         return {};
     }
 
+    std::string PathManager::statedStartSpeedProblem(
+        const Eigen::Vector3d &vel_units) const
+    {
+        if (!vel_units.allFinite()) return "non-finite initial speed";
+        // The same accessor the [STALL-FLOOR] guard reads, so the gate and
+        // the clamp can never disagree about where the floor is.
+        const double floor = stallFloorUnits();
+        if (!(floor > 0.0)) return {};  // model off, or degenerate unit
+        if (vel_units.norm() >= floor) return {};
+        const double um = node_->has_parameter("optimization/dynamics_unit_xy_m")
+                              ? node_->get_parameter(
+                                    "optimization/dynamics_unit_xy_m").as_double()
+                              : 100.0;
+        char buf[224];
+        std::snprintf(buf, sizeof(buf),
+                      "stated initial speed %.1f m/s is below the platform "
+                      "stall floor %.1f m/s — the mission's own initial state "
+                      "is not flyable, and the planner does not raise a "
+                      "stated one",
+                      vel_units.norm() * um, floor * um);
+        return buf;
+    }
+
     std::string PathManager::pvaEnvelopeProblem(
         const Eigen::Vector3d &pos_units, const Eigen::Vector3d &vel_units,
         const Eigen::Vector3d &acc_units) const

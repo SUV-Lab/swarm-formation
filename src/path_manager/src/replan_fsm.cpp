@@ -820,9 +820,21 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         bool head_rejected = false;
         bool tail_rejected = false, relaxed = false;
         std::string relax_why;
-        if (start_vel_commanded_) {
-            const std::string prob = path_manager_->pvaEnvelopeProblem(
-                start_pt_, start_vel_, start_acc_);
+        // Same two head rules the chain planner applies at its entry, so
+        // "the planner does not rewrite a stated initial state" holds in
+        // BOTH modes. It previously held only in chain mode: a synthesized
+        // sub-floor head fell through here untouched and [STALL-FLOOR]
+        // raised it downstream, which is the rewrite the whole gate exists
+        // to prevent.
+        const std::string head_prob =
+            start_vel_commanded_
+                ? path_manager_->pvaEnvelopeProblem(start_pt_, start_vel_,
+                                                    start_acc_)
+                : (start_vel_synthesized_
+                       ? path_manager_->statedStartSpeedProblem(start_vel_)
+                       : std::string{});
+        {
+            const std::string &prob = head_prob;
             if (!prob.empty()) {
                 FSM_LOG_ERROR("[ENVELOPE] commanded initial state REJECTED: "
                               "%s (INITIAL_MODE_UNSUPPORTED)", prob.c_str());
@@ -1160,21 +1172,50 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
         // (LoadMap replying only proves the map was PUBLISHED). Latched
         // [resolution_u, origin_x_u, origin_y_u, length_x_u, length_y_u] of
         // what was actually ingested — the panel matches it against the
-        // LoadMap response before it releases the mission command. Guarded
-        // by the SAME validity test setTerrainData applies (it early-returns
-        // on malformed maps, keeping the old DEM — a receipt for a rejected
-        // map would certify terrain the planner never took; review find).
-        // Extent is included so two corridors sharing a corner cannot alias
-        // (review find).
-        if (terrain_ready_pub_ && msg->info.resolution > 0.0 &&
-            !msg->data.empty()) {
+        // LoadMap response before it releases the mission command. Extent is
+        // included so two corridors sharing a corner cannot alias (review
+        // find).
+        //
+        // EVERY terrain state transition emits one, because the receipt is
+        // the panel's only view of what the planner holds. There are three
+        // outcomes inside setTerrainData and they are not interchangeable:
+        // a good map (ingested -> full receipt), a malformed one (early
+        // return, the old DEM stands -> the previous receipt is still
+        // accurate, so re-publishing it changes nothing), and an EMPTY one
+        // (world=none: the explicit clear verb, which wipes the DEM, the
+        // SDF and the dynamic obstacles). The clear is why the resolution-0
+        // receipt below exists — see there.
+        const bool ingested =
+            msg->info.resolution > 0.0 && !msg->data.empty();
+        // setTerrainData's own clear test, verbatim — a malformed map is
+        // neither ingested nor a clear, and must emit nothing at all: the
+        // old DEM stands, so the previous receipt is still the truth.
+        const bool cleared = msg->layers.empty() && msg->data.empty();
+        if (terrain_ready_pub_ && (ingested || cleared)) {
             std_msgs::msg::Float64MultiArray ready;
-            ready.data = {msg->info.resolution,
-                          msg->info.pose.position.x -
-                              0.5 * msg->info.length_x,
-                          msg->info.pose.position.y -
-                              0.5 * msg->info.length_y,
-                          msg->info.length_x, msg->info.length_y};
+            if (ingested) {
+                ready.data = {msg->info.resolution,
+                              msg->info.pose.position.x -
+                                  0.5 * msg->info.length_x,
+                              msg->info.pose.position.y -
+                                  0.5 * msg->info.length_y,
+                              msg->info.length_x, msg->info.length_y};
+            } else {
+                // An EMPTY map is not a malformed one setTerrainData
+                // ignores — it is the explicit clear verb (world=none), and
+                // PathManager wipes the DEM, the SDF and the dynamic
+                // obstacles for it. Publishing nothing here used to be
+                // harmless only because the panel discarded its cached
+                // receipt whenever it armed the gate. It no longer does, so
+                // silence would leave the last good corridor's receipt
+                // standing as a certificate for a map the planner has
+                // thrown away — and a re-run of that same mission would
+                // match it on the first tick and plan with no terrain at
+                // all. A resolution of 0 fails the panel's `res > 0` match
+                // by construction, so the gate goes back to waiting for a
+                // real ingestion instead of trusting a stale one.
+                ready.data = {0.0, 0.0, 0.0, 0.0, 0.0};
+            }
             terrain_ready_pub_->publish(ready);
         }
     }
