@@ -56,17 +56,19 @@ def create_drone_nodes(context, *args, **kwargs):
 
     # Launch-to-cruise transition generator. Rides the environment for the
     # same reason debug does — the RViz Start button forks this launch with
-    # no arguments — and stays OFF unless asked for, matching the shipped
-    # optimizer_params.yaml. Without it a mission whose commanded initial
-    # state leaves the +/-30 deg validity cone (the r5 transition probes ask
-    # for 32 deg) is refused in 1 ms with INITIAL_MODE_UNSUPPORTED, and the
-    # GUI had no way at all to turn it on.
+    # no arguments. Tri-state like `world`: empty leaves optimizer_params.yaml
+    # in charge (it ships on), '1' forces it on, '0' forces it off for this
+    # session without editing config. With it off, a mission whose commanded
+    # initial state leaves the +/-30 deg validity cone (the r5 transition
+    # probes ask for 32 deg) is refused in 1 ms as INITIAL_MODE_UNSUPPORTED.
     transition_str = context.perform_substitution(
-        LaunchConfiguration('transition'))
-    transition_mode = transition_str.lower() in ('1', 'true')
-    if transition_mode:
-        print('TRANSITION: launch-to-cruise generator ENABLED '
-              '(experimental; steep commanded initial states accepted)')
+        LaunchConfiguration('transition')).strip()
+    transition_override = None
+    if transition_str:
+        transition_override = transition_str.lower() in ('1', 'true')
+        print(f'TRANSITION: launch-to-cruise generator forced '
+              f'{"ON" if transition_override else "OFF"} '
+              f'(overrides optimizer_params.yaml)')
 
     # Target drone ID
     drone_id_str = context.perform_substitution(LaunchConfiguration('drone_id'))
@@ -132,10 +134,10 @@ def create_drone_nodes(context, *args, **kwargs):
         if debug_mode:
             params['manager/debug_pipeline_viz'] = True
             params['enable_debug_logs'] = True
-        # Injected only when asked for, so the yaml (absent = off) stays the
-        # authority in every other run.
-        if transition_mode:
-            params['transition/enable'] = True
+        # Injected only when the launch argument actually said something, so
+        # the yaml stays the authority in every other run.
+        if transition_override is not None:
+            params['transition/enable'] = transition_override
         # Note: start_point will be received from TrajectoryCommand message
 
         # `params` goes LAST so launch-time overrides (e.g. manager/world from
@@ -208,13 +210,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'transition',
             default_value=EnvironmentVariable('MMP_TRANSITION',
-                                              default_value='0'),
-            description='Enable the launch-to-cruise transition generator '
-                        '(transition/enable). Needed by missions whose '
+                                              default_value=''),
+            description='Override transition/enable for this session: 1 on, '
+                        '0 off, empty (default) leaves optimizer_params.yaml '
+                        'in charge, where it ships ON. Governs missions whose '
                         'commanded initial state leaves the +/-30 deg cone, '
                         'e.g. the r5 transition probes. Inherited from '
                         'MMP_TRANSITION when launched via the RViz Start '
-                        'button. Experimental: off unless asked for.'
+                        'button.'
         ),
         DeclareLaunchArgument(
             'drone_id',

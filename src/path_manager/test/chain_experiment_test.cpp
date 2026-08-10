@@ -330,6 +330,20 @@ int main(int argc, char **argv)
     // wall is genuinely unavoidable and the soft passes must run.
     if (with_transition || with_waypoints)
       ovr.emplace_back("transition/enable", true);
+    // These four pin the flag OFF because that is the contract they test:
+    // with no transition planner behind it, a commanded start outside the
+    // cruise envelope is refused at plan entry, with reason
+    // INITIAL_MODE_UNSUPPORTED and with nothing downstream of validation
+    // having run. optimizer_params.yaml now ships the flag ON, and with it
+    // on the planner legitimately behaves differently — it ATTEMPTS the
+    // transition, so the refusal (when the generator finds no flyable
+    // candidate) arrives later and as TRANSITION_GENERATION_FAILED, which
+    // is the more accurate statement. Both behaviours are wanted; each is
+    // pinned by the variants that mean to test it, so neither depends on
+    // what the shipped default happens to be.
+    if (with_initfail || with_initaccfail || with_initceiling ||
+        with_pvaprobe)
+      ovr.emplace_back("transition/enable", false);
     if (with_zonewall) {
       ovr.emplace_back("manager/risk_vertical_ratio", 3.0);
       // ... and the terrain-shadow escape: with LOS masking on, ridge
