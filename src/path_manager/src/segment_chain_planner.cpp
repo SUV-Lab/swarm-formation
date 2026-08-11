@@ -2662,12 +2662,12 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
   if (fv.unflyable()) {
     char why[176];
     snprintf(why, sizeof why,
-             "stitched flight is unflyable (%s%s) — whole-flight evaluation, "
-             "which no per-solve audit performs",
-             fv.underground ? "terrain overlap" : "",
-             fv.no_cruise ? (fv.underground ? ", never reaches cruise"
-                                            : "never reaches cruise")
-                          : "");
+             "stitched flight is unflyable (%s%s%s%s) — whole-flight "
+             "evaluation, which no per-solve audit performs",
+             fv.underground ? "terrain overlap; " : "",
+             fv.no_cruise ? "never reaches cruise; " : "",
+             fv.zone_hard_n > 0 ? "hard-zone contact; " : "",
+             !fv.policy_measurable ? "zone policy unevaluated" : "");
     log_->errorf("[STITCH-GATE] %s", why);
     // Nothing stored on this path today, but the guarantee has to hold for
     // every caller — an earlier stage (baseline solve, direct fallback) may
@@ -2755,14 +2755,19 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     mmp_vehicle_dynamics::EnvelopeLimit peak_limit{
         mmp_vehicle_dynamics::EnvelopeLimit::None};
     double risk_max{0.0}, risk_int{0.0};
-    // Hard-zone CONTACT of the delivered flight, judged by the same
-    // primitive the hard passes keep routes out of (1.05x ellipsoid +
-    // visibility>0.35 standoff). risk_max/risk_int are field statistics and
-    // do not answer this: a trajectory can carry low mean risk and still
-    // clip a hard volume. Reported so "did the flight enter a zone it was
-    // forbidden to enter" is answerable from the log rather than inferred.
-    int zone_contact_n{0};
-    double zone_contact_s{0.0};
+    // Zone contact of the delivered flight. Containment alone is NOT the
+    // question — policy lives in the per-zone DISPOSITION, exactly as the
+    // transition candidate filter reads it: only HARD_AVOID contact is a
+    // violation, while SOFT_UNAVOIDABLE / SOFT_ENDPOINT / SOFT_FALLBACK are
+    // crossings the 3-pass policy deliberately allowed. Counting every
+    // containment as "hard" reported 3 hard contacts on an r5 flight whose
+    // final field was pass-2 all-soft — a permitted crossing dressed up as a
+    // safety breach. The two are kept apart and both are reported.
+    // Sampled at the dt below (0.1 s), so these are SAMPLE counts.
+    int zone_hard_n{0};
+    double zone_hard_s{0.0};
+    int zone_soft_n{0};
+    double zone_soft_s{0.0};
     bool zone_contact_measurable{true};
   };
   std::vector<PhaseStat> st(spans.size());
@@ -2823,27 +2828,30 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       s.risk_max = std::max(s.risk_max, r);
       s.risk_int += r * dt;
 
-      bool contact = false;
-      for (size_t zi = 0; zi < nz && !contact; ++zi) {
+      bool hard = false, soft = false;
+      for (size_t zi = 0; zi < nz; ++zi) {
         switch (pm_->zoneContact(eval_snap, zi, p)) {
           case PathManager::ZoneContactResult::CONTACT:
-            contact = true;
+            if (zi < eval_snap.zones.size() &&
+                eval_snap.zones[zi].disposition ==
+                    PathManager::ZoneDisposition::HARD_AVOID)
+              hard = true;
+            else
+              soft = true;
             break;
           case PathManager::ZoneContactResult::STALE:
           case PathManager::ZoneContactResult::INVALID:
             // A snapshot that cannot be judged must not read as "clear" —
             // that is how a zero contact count becomes a claim nobody
-            // checked. Mark the span unmeasurable and say so in the log.
+            // checked. The verdict below refuses CLEAN on this.
             s.zone_contact_measurable = false;
             break;
           case PathManager::ZoneContactResult::CLEAR:
             break;
         }
       }
-      if (contact) {
-        ++s.zone_contact_n;
-        s.zone_contact_s += dt;
-      }
+      if (hard) { ++s.zone_hard_n; s.zone_hard_s += dt; }
+      if (soft) { ++s.zone_soft_n; s.zone_soft_s += dt; }
     }
   }
 
@@ -2873,11 +2881,12 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       log_->infof(
           "[FINAL-EVAL] %-9s %6.1f s | AGL min %7.3f@%.0fs mean %6.2f u, "
           "<band %4.1f%%, underground %s | %s | risk max %.3f, "
-          "exposure %.1f s, hard-zone contact %d samples (%.1f s)%s",
+          "exposure %.1f s, zone contact hard %d (%.1f s) soft %d (%.1f s) "
+          "@0.1s sampling%s",
           spans[ph].name.c_str(), spans[ph].t_end - t0, s.min_agl,
           s.min_agl_t, s.agl_sum / s.n, 100.0 * s.n_below_band / s.n,
           s.n_below_ground ? "YES" : "no", env, s.risk_max, s.risk_int,
-          s.zone_contact_n, s.zone_contact_s,
+          s.zone_hard_n, s.zone_hard_s, s.zone_soft_n, s.zone_soft_s,
           s.zone_contact_measurable ? "" : " [UNMEASURABLE: stale/invalid "
                                            "zone snapshot]");
     }
@@ -2893,8 +2902,10 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     tot.env_viol += s.env_viol;
     tot.risk_max = std::max(tot.risk_max, s.risk_max);
     tot.risk_int += s.risk_int;
-    tot.zone_contact_n += s.zone_contact_n;
-    tot.zone_contact_s += s.zone_contact_s;
+    tot.zone_hard_n += s.zone_hard_n;
+    tot.zone_hard_s += s.zone_hard_s;
+    tot.zone_soft_n += s.zone_soft_n;
+    tot.zone_soft_s += s.zone_soft_s;
     tot.zone_contact_measurable &= s.zone_contact_measurable;
     if (s.util_peak > tot.util_peak) {
       tot.util_peak = s.util_peak;
@@ -2916,22 +2927,30 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   const double peak_chk =
       param_or("optimization/audit_envelope_peak_max", 1.30);
   const bool peak_bad = tot.util_peak > peak_chk;
+  // A flight that entered a HARD_AVOID volume, or one whose zone policy could
+  // not be judged at all, must not read CLEAN. Leaving these out of the
+  // condition is what let the new metric be printed beside a CLEAN verdict it
+  // had no influence over — the number was reported, not enforced. An
+  // unjudgeable snapshot is treated like a contact rather than like clear:
+  // "we could not check" is not evidence of safety.
+  const bool zone_bad = tot.zone_hard_n > 0 || !tot.zone_contact_measurable;
   const bool clean = tot.n_below_ground == 0 && !no_cruise &&
-                     viol_pct < viol_max_pct && !peak_bad;
+                     viol_pct < viol_max_pct && !peak_bad && !zone_bad;
   if (clean) {
     log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
                 "%.1f%% (peak %.1f%% %s), risk exposure %.1f s, "
-                "hard-zone contact %d samples (%.1f s)%s",
+                "zone contact hard 0 soft %d (%.1f s) @0.1s sampling",
                 tot.min_agl, viol_pct, 100.0 * tot.util_peak,
                 mmp_vehicle_dynamics::envelopeLimitName(tot.peak_limit),
-                tot.risk_int, tot.zone_contact_n, tot.zone_contact_s,
-                tot.zone_contact_measurable ? "" : " [UNMEASURABLE]");
+                tot.risk_int, tot.zone_soft_n, tot.zone_soft_s);
   } else {
-    log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s(AGL min %.3f u "
+    log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s%s%s(AGL min %.3f u "
                 "@%.0fs, env viol %.1f%%) — the stitched flight carries "
                 "hazards no per-solve audit saw",
                 tot.n_below_ground ? "TERRAIN OVERLAP " : "",
                 no_cruise ? "NEVER REACHES CRUISE " : "",
+                tot.zone_hard_n > 0 ? "HARD ZONE CONTACT " : "",
+                !tot.zone_contact_measurable ? "ZONE POLICY UNEVALUATED " : "",
                 !no_cruise && viol_pct >= viol_max_pct ? "ENVELOPE " : "",
                 tot.min_agl, tot.min_agl_t, viol_pct);
   }
@@ -2940,6 +2959,10 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   v.clean = clean;
   v.underground = tot.n_below_ground != 0;
   v.no_cruise = no_cruise;
+  v.zone_hard_n = tot.zone_hard_n;
+  v.zone_soft_n = tot.zone_soft_n;
+  v.policy_measurable = tot.zone_contact_measurable;
+  last_verdict_ = v;
   v.viol_pct = viol_pct;
   v.util_peak = tot.util_peak;
   return v;

@@ -82,6 +82,21 @@ def main():
     check(not nocontact, "하드 구역 접촉 지표 존재",
           f"{len(nocontact)}행 없음" if nocontact else "")
 
+    # Presence is not the invariant. A successful flight must have entered NO
+    # hard zone and must have had a policy that could be judged — otherwise
+    # the row is not a datapoint about a safe flight, it is a bug report.
+    hardhit = [f"{r['arm']}/{r['mission'][:18]}={r['hard_zone_contacts']}"
+               for r in ok_rows if (r.get("hard_zone_contacts") or "0") not in ("0", "")]
+    check(not hardhit, "성공 행의 하드 접촉 == 0", "; ".join(hardhit[:3]))
+
+    unmeas = [f"{r['arm']}/{r['mission'][:18]}" for r in ok_rows
+              if (r.get("zone_policy_measurable") or "true") != "true"]
+    check(not unmeas, "성공 행의 구역 정책이 판정 가능", "; ".join(unmeas[:3]))
+
+    modes = {r.get("plan_mode") for r in ok_rows}
+    check("direct" in modes, "direct 모드가 최소 1행 (공통 시간 계측 검증)",
+          f"모드: {sorted(m for m in modes if m)}")
+
     leaked = [r for r in rows if (r.get("leaked_procs") or "0") not in ("0", "")]
     check(not leaked, "프로세스 누수 0", f"{len(leaked)}행" if leaked else "")
 

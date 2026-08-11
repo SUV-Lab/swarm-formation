@@ -54,6 +54,7 @@ FIELDS = [
     "eikonal_ms", "grid", "ceiling_u", "geo_z_max_u", "pieces", "flight_s",
     "min_agl_u", "env_viol_pct", "env_peak_pct", "env_peak_limit",
     "risk_max", "risk_exposure_s", "hard_zone_contacts", "hard_zone_contact_s",
+    "soft_zone_contacts", "zone_policy_measurable",
     "obstacles_expected", "obstacles_added", "obstacles_deferred",
     "obstacles_skipped", "retry_fallback", "seam_worst",
     "zones_in_search", "leaked_procs", "log", "log_src",
@@ -91,8 +92,13 @@ RX = {
     # The actual question — did the delivered flight enter a hard zone —
     # measured by the planner against the same primitive the hard passes use.
     # risk_max/exposure are field statistics and cannot answer it.
-    "hard_zone_contacts": r"hard-zone contact (\d+) samples",
-    "hard_zone_contact_s": r"hard-zone contact \d+ samples \(([0-9.]+) s\)",
+    # Matches the CURRENT log form. The previous pattern kept matching an
+    # older one, which would have made the metric silently absent on a rerun
+    # — the same failure mode as the nonexistent zone_hard_contacts string.
+    "hard_zone_contacts": r"zone contact hard (\d+) ",
+    "hard_zone_contact_s": r"zone contact hard \d+ \(([0-9.]+) s\)",
+    "soft_zone_contacts": r"zone contact hard \d+ \([0-9.]+ s\) soft (\d+) ",
+    "zone_policy_measurable": r"(UNMEASURABLE|UNEVALUATED)",
     # Common to BOTH planning modes. The chain-only "=> TOTAL n ms" is absent
     # on the direct-fallback path, which is why 10 successful rows had no time
     # at all in the first sweep.
@@ -360,6 +366,9 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
         m = re.findall(r"loadObstacles: added=(\d+) deferred=(\d+) "
                        r"skipped=(\d+) \(total in msg=(\d+)\)", text)
         oc = tuple(int(x) for x in m[-1]) if m else None
+    # the regex captures the WARNING word; absence means it was measurable
+    row["zone_policy_measurable"] = "false" if row.get(
+        "zone_policy_measurable") else "true"
     row["obstacles_expected"] = n_obs
     row["obstacles_added"] = oc[0] if oc else ""
     row["obstacles_deferred"] = oc[1] if oc else ""

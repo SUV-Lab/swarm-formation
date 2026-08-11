@@ -30,6 +30,8 @@
 // is file-only); this binary prints the machine-checkable verdicts to stdout.
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -49,6 +51,31 @@ void expect(bool condition, const std::string &label)
 {
   std::cout << (condition ? "[OK]   " : "[FAIL] ") << label << '\n';
   if (!condition) ++failures;
+}
+
+// The FINAL-EVAL verdict is what a reader treats as the answer, and it goes
+// to the log file rather than to stdout — so a claim about it has to be
+// checked there. Returns false when no verdict line exists at all, which is
+// itself a failure for any assertion phrased as "the verdict says X".
+bool lastFinalEvalHas(const std::string &needle)
+{
+  namespace fs = std::filesystem;
+  const fs::path dir{"./logs/runtime"};
+  if (!fs::exists(dir)) return false;
+  fs::path newest;
+  fs::file_time_type best{};
+  for (const auto &e : fs::directory_iterator(dir)) {
+    const auto n = e.path().filename().string();
+    if (n.rfind("chain_experiment", 0) != 0) continue;
+    const auto t = fs::last_write_time(e);
+    if (newest.empty() || t > best) { newest = e.path(); best = t; }
+  }
+  if (newest.empty()) return false;
+  std::ifstream in(newest);
+  std::string line, last;
+  while (std::getline(in, line))
+    if (line.find("[FINAL-EVAL] verdict:") != std::string::npos) last = line;
+  return !last.empty() && last.find(needle) != std::string::npos;
 }
 
 // Rolling-hills DEM, mission scale (1 u = 100 m): 360 x 300 u at 2 u/cell,
@@ -1598,6 +1625,22 @@ int main(int argc, char **argv)
     expect(pass4 == 2, "sealed gaps force the all-soft pass 2");
     expect(p_fb == 6 && p_other == 0,
            "pass 2: every non-endpoint zone reads SOFT_FALLBACK");
+    // The whole-flight evaluation must agree with the policy it was handed.
+    // With every zone SOFT_FALLBACK the crossing is what the 3-pass DECIDED
+    // to do, so the flight may touch zone volume and still be clean — the
+    // HARD counter has to stay at zero. Counting containment instead of
+    // disposition reported 3 "hard contacts" on exactly this shape and
+    // called a permitted crossing a safety breach.
+    const auto &fvp = chain.lastFlightVerdict();
+    expect(fvp.evaluated, "the porous-ring flight was actually evaluated");
+    expect(fvp.policy_measurable,
+           "a valid pass-2 snapshot is measurable");
+    expect(fvp.zone_hard_n == 0,
+           "a pass-2 all-soft crossing counts ZERO hard contacts");
+    expect(fvp.zone_soft_n > 0,
+           "...and the crossing IS counted as soft — a zero here would mean "
+           "the check never ran, which the old log-string form could not "
+           "tell apart from success");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -1649,7 +1692,13 @@ int main(int argc, char **argv)
     pm->setRiskZonesRuntime({z});
     const path_manager::PlanResult r =
         chain.plan(start_pos, start_vel, start_acc, goal, true, {});
-    expect(r.hasTrajectory(), "plan with policy off succeeds");
+    // Contract change: an unjudgeable zone policy is now fail-closed. Before,
+    // the flight was returned and only the log said CHECK — a verdict nobody
+    // downstream consumed, so the trajectory was stored and publishable.
+    expect(!r.hasTrajectory(),
+           "zones + unjudgeable policy -> no trajectory (fail-closed)");
+    expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
+           "reason is STITCHED_FLIGHT_UNSAFE, not an envelope budget");
     std::cout << "zonepass0: zone-avoid pass " << pm->zoneAvoidPassNow()
               << "\n";
     expect(pm->zoneAvoidPassNow() == 0, "3-pass did not run (policy off)");
@@ -1657,6 +1706,15 @@ int main(int argc, char **argv)
     expect(!snap.valid, "zones + pass 0 -> INVALID snapshot");
     expect(pm->zoneContact(snap, 0, z.center) == ZC::INVALID,
            "contact on the pass-0 snapshot is INVALID, never CLEAR/CONTACT");
+    // Structured, not log text: the earlier form was
+    //   has("UNEVALUATED") || !has("verdict: CLEAN")
+    // which passes when NO log is found at all — the opposite of what it
+    // claims to check.
+    const auto &fv0 = chain.lastFlightVerdict();
+    expect(fv0.evaluated, "the flight was actually evaluated");
+    expect(!fv0.policy_measurable,
+           "zone policy reads UNMEASURABLE on a pass-0 snapshot");
+    expect(fv0.unflyable(), "an unmeasurable zone policy is unflyable");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

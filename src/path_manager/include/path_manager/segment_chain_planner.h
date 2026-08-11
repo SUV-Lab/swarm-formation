@@ -145,10 +145,26 @@ public:
     bool no_cruise{false};
     double viol_pct{0.0};
     double util_peak{0.0};
-    // The two counts above that no trajectory may ever fly with, whatever
-    // produced it. Envelope over-utilization is graded separately: it is a
-    // margin the caller may knowingly spend, terrain is not.
-    bool unflyable() const { return evaluated && (underground || no_cruise); }
+    // Zone policy of the DELIVERED flight, sampled at 0.1 s. hard counts
+    // contact with a HARD_AVOID volume only; soft counts crossings the
+    // 3-pass policy chose (SOFT_UNAVOIDABLE / _ENDPOINT / _FALLBACK) and is
+    // reported, not judged. policy_measurable is false when zones exist but
+    // the snapshot was stale or invalid — "could not check" must never read
+    // as "clear".
+    int zone_hard_n{0};
+    int zone_soft_n{0};
+    bool policy_measurable{true};
+    // The conditions no trajectory may ever fly with, whatever produced it.
+    // Envelope over-utilization is graded separately: it is a margin the
+    // caller may knowingly spend. Terrain is not, and neither is a hard
+    // zone — the whole point of HARD_AVOID is that it is not traded against
+    // distance, so it cannot be a DEGRADED reason the caller absorbs.
+    // An unjudgeable zone policy joins them for the same reason a rejected
+    // terrain map does: the flight was not checked, so it is not cleared.
+    bool unflyable() const {
+      return evaluated && (underground || no_cruise || zone_hard_n > 0 ||
+                           !policy_measurable);
+    }
   };
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
                                const std::vector<PhaseSpan> &spans) const;
@@ -158,6 +174,11 @@ public:
   const std::vector<PhaseSpan> &lastPhaseSpans() const {
     return last_spans_;
   }
+  // The whole-flight verdict of the LAST evaluation. Regressions assert on
+  // this rather than on log text: a log-string check passes when the log is
+  // missing, when the check never ran, and when an older file is read by
+  // mistake — three ways to certify a safety property nobody measured.
+  const FlightVerdict &lastFlightVerdict() const { return last_verdict_; }
 
   // [S13] Start-state regime classifier (enum, never string-matched): the
   // single entry gate plan() dispatches on. TRANSITION_REQUIRED = outside
@@ -443,6 +464,7 @@ private:
   // the authored one) + the physics the edge-retry ladder reuses.
   mutable std::vector<int> dep_candidates_, arr_candidates_;
   std::vector<PhaseSpan> last_spans_;
+  mutable FlightVerdict last_verdict_{};
   mutable double phase_tan_grade_{1e9};
   mutable double phase_turn_radius_u_{0.0};
 };
