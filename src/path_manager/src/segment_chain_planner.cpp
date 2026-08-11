@@ -2755,11 +2755,21 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     mmp_vehicle_dynamics::EnvelopeLimit peak_limit{
         mmp_vehicle_dynamics::EnvelopeLimit::None};
     double risk_max{0.0}, risk_int{0.0};
+    // Hard-zone CONTACT of the delivered flight, judged by the same
+    // primitive the hard passes keep routes out of (1.05x ellipsoid +
+    // visibility>0.35 standoff). risk_max/risk_int are field statistics and
+    // do not answer this: a trajectory can carry low mean risk and still
+    // clip a hard volume. Reported so "did the flight enter a zone it was
+    // forbidden to enter" is answerable from the log rather than inferred.
+    int zone_contact_n{0};
+    double zone_contact_s{0.0};
+    bool zone_contact_measurable{true};
   };
   std::vector<PhaseStat> st(spans.size());
 
   const double dt = 0.1;
   const size_t nz = pm_->numRiskZones();
+  const auto eval_snap = pm_->zonePolicySnapshot();
   // Same counting doctrine as the solver's [CONV-REJECT] audit, latch
   // included: the pre-cruise ramp (a rest-start mission legitimately
   // begins below stall) stays out of the statistics, but sub-min-speed
@@ -2812,6 +2822,28 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       const double r = 1.0 - keep;
       s.risk_max = std::max(s.risk_max, r);
       s.risk_int += r * dt;
+
+      bool contact = false;
+      for (size_t zi = 0; zi < nz && !contact; ++zi) {
+        switch (pm_->zoneContact(eval_snap, zi, p)) {
+          case PathManager::ZoneContactResult::CONTACT:
+            contact = true;
+            break;
+          case PathManager::ZoneContactResult::STALE:
+          case PathManager::ZoneContactResult::INVALID:
+            // A snapshot that cannot be judged must not read as "clear" —
+            // that is how a zero contact count becomes a claim nobody
+            // checked. Mark the span unmeasurable and say so in the log.
+            s.zone_contact_measurable = false;
+            break;
+          case PathManager::ZoneContactResult::CLEAR:
+            break;
+        }
+      }
+      if (contact) {
+        ++s.zone_contact_n;
+        s.zone_contact_s += dt;
+      }
     }
   }
 
@@ -2841,10 +2873,13 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       log_->infof(
           "[FINAL-EVAL] %-9s %6.1f s | AGL min %7.3f@%.0fs mean %6.2f u, "
           "<band %4.1f%%, underground %s | %s | risk max %.3f, "
-          "exposure %.1f s",
+          "exposure %.1f s, hard-zone contact %d samples (%.1f s)%s",
           spans[ph].name.c_str(), spans[ph].t_end - t0, s.min_agl,
           s.min_agl_t, s.agl_sum / s.n, 100.0 * s.n_below_band / s.n,
-          s.n_below_ground ? "YES" : "no", env, s.risk_max, s.risk_int);
+          s.n_below_ground ? "YES" : "no", env, s.risk_max, s.risk_int,
+          s.zone_contact_n, s.zone_contact_s,
+          s.zone_contact_measurable ? "" : " [UNMEASURABLE: stale/invalid "
+                                           "zone snapshot]");
     }
     t0 = spans[ph].t_end;
     if (s.min_agl < tot.min_agl) {
@@ -2858,6 +2893,9 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     tot.env_viol += s.env_viol;
     tot.risk_max = std::max(tot.risk_max, s.risk_max);
     tot.risk_int += s.risk_int;
+    tot.zone_contact_n += s.zone_contact_n;
+    tot.zone_contact_s += s.zone_contact_s;
+    tot.zone_contact_measurable &= s.zone_contact_measurable;
     if (s.util_peak > tot.util_peak) {
       tot.util_peak = s.util_peak;
       tot.peak_limit = s.peak_limit;
@@ -2882,10 +2920,12 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
                      viol_pct < viol_max_pct && !peak_bad;
   if (clean) {
     log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
-                "%.1f%% (peak %.1f%% %s), risk exposure %.1f s",
+                "%.1f%% (peak %.1f%% %s), risk exposure %.1f s, "
+                "hard-zone contact %d samples (%.1f s)%s",
                 tot.min_agl, viol_pct, 100.0 * tot.util_peak,
                 mmp_vehicle_dynamics::envelopeLimitName(tot.peak_limit),
-                tot.risk_int);
+                tot.risk_int, tot.zone_contact_n, tot.zone_contact_s,
+                tot.zone_contact_measurable ? "" : " [UNMEASURABLE]");
   } else {
     log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s(AGL min %.3f u "
                 "@%.0fs, env viol %.1f%%) — the stitched flight carries "

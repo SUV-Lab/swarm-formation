@@ -20,6 +20,7 @@ import argparse
 import collections
 import csv
 import statistics as st
+import sys
 
 SAFETY_HIGHER_BETTER = ["min_agl_u"]
 # risk_exposure_s / risk_max are what FINAL-EVAL actually reports. The first
@@ -27,10 +28,17 @@ SAFETY_HIGHER_BETTER = ["min_agl_u"]
 # this file skipped the empty column without a word — so a metric the write-up
 # listed as evaluated had in fact never been read. Missing values are now an
 # error, not a silence.
-SAFETY_LOWER_BETTER = ["env_viol_pct", "env_peak_pct",
-                       "risk_exposure_s", "risk_max"]
-REQUIRED_ON_SUCCESS = ["min_agl_u", "env_peak_pct", "total_ms", "frontend_ms"]
-TIME = ["total_ms", "max_solve_ms", "frontend_ms"]
+SAFETY_LOWER_BETTER = ["env_viol_pct", "env_peak_pct", "risk_exposure_s",
+                       "risk_max", "hard_zone_contacts"]
+# Every safety metric must be present on a successful row. A hole here is a
+# hole in the verdict, so the run EXITS NON-ZERO rather than printing a note
+# nobody has to act on.
+REQUIRED_ON_SUCCESS = ["min_agl_u", "env_peak_pct", "env_viol_pct",
+                       "risk_max", "risk_exposure_s", "hard_zone_contacts",
+                       "plan_total_ms"]
+# plan_total_ms spans both planning modes; the chain-only columns are checked
+# per mode instead of globally.
+TIME = ["plan_total_ms", "chain_total_ms", "max_solve_ms", "frontend_ms"]
 USABLE = ("CLEAN", "DEGRADED")
 
 
@@ -101,12 +109,19 @@ def main():
         for c in REQUIRED_ON_SUCCESS:
             if not (r.get(c) or "").strip():
                 holes[c] += 1
+    # chain-only columns are "not applicable" on the direct path, not missing
+    for r in rows:
+        if r["outcome"] in USABLE and (r.get("plan_mode") or "") == "direct":
+            for c in ("chain_total_ms", "frontend_ms", "max_solve_ms", "seam_worst"):
+                holes.pop(c, None)
     if holes:
-        print("!!! 성공 행인데 비어 있는 필수 지표 (측정 공백):")
+        print("!!! 성공 행인데 비어 있는 필수 지표 — 측정 공백:")
         for c, n in holes.most_common():
             print(f"      {c}: {n}행")
-        print("    -> 이 열은 비교에서 빠지므로, 해당 조합의 판정은 근거가 없다.")
         print()
+        print("이 데이터로는 판정할 수 없다. 하네스가 해당 지표를 실제로")
+        print("기록하는지 확인하고 다시 측정할 것 (종료코드 2).")
+        sys.exit(2)
 
     # --- pairwise metric comparison ----------------------------------------
     pairs = [(k, v) for k, v in by_key.items()

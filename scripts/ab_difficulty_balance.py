@@ -49,15 +49,18 @@ MISSIONS = [
 
 FIELDS = [
     "rep", "arm", "mission", "scenario", "zones_installed", "obstacles_installed",
-    "outcome", "reason", "zone_pass", "total_ms", "frontend_ms", "max_solve_ms",
+    "outcome", "reason", "plan_mode", "zone_pass", "plan_total_ms",
+    "chain_total_ms", "frontend_ms", "max_solve_ms",
     "eikonal_ms", "grid", "ceiling_u", "geo_z_max_u", "pieces", "flight_s",
     "min_agl_u", "env_viol_pct", "env_peak_pct", "env_peak_limit",
-    "risk_max", "risk_exposure_s", "retry_fallback", "seam_worst",
+    "risk_max", "risk_exposure_s", "hard_zone_contacts", "hard_zone_contact_s",
+    "obstacles_expected", "obstacles_added", "obstacles_deferred",
+    "obstacles_skipped", "retry_fallback", "seam_worst",
     "zones_in_search", "leaked_procs", "log", "log_src",
 ]
 
 RX = {
-    "total_ms": r"=> TOTAL (\d+) ms",
+    "chain_total_ms": r"=> TOTAL (\d+) ms",
     "frontend_ms": r"front-end (\d+) ms",
     "max_solve_ms": r"\(wall \d+, max (\d+)\)",
     "eikonal_ms": r"eikonal=([0-9.]+)ms",
@@ -85,6 +88,15 @@ RX = {
     # FINAL-EVAL actually reports is peak risk and time spent exposed.
     "risk_max": r"risk max ([0-9.]+)",
     "risk_exposure_s": r"risk exposure ([0-9.]+) s",
+    # The actual question — did the delivered flight enter a hard zone —
+    # measured by the planner against the same primitive the hard passes use.
+    # risk_max/exposure are field statistics and cannot answer it.
+    "hard_zone_contacts": r"hard-zone contact (\d+) samples",
+    "hard_zone_contact_s": r"hard-zone contact \d+ samples \(([0-9.]+) s\)",
+    # Common to BOTH planning modes. The chain-only "=> TOTAL n ms" is absent
+    # on the direct-fallback path, which is why 10 successful rows had no time
+    # at all in the first sweep.
+    "plan_total_ms": r"Global trajectory planning took (\d+) ms",
 }
 
 
@@ -271,12 +283,24 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
             t = open(lg2, errors="ignore").read()
             return bool(re.search(rf"loadRiskZones: replaced with {n_zones} zones", t))
 
-        def obstacles_in():
+        def obstacle_counts():
+            """(added, deferred, skipped, total) from the planner's own line."""
             lg2 = newest_log(logdir, t_start)
             if not lg2:
-                return False
+                return None
             t = open(lg2, errors="ignore").read()
-            return n_obs == 0 or bool(re.search(r"loadObstacles: added", t))
+            m = re.findall(r"loadObstacles: added=(\d+) deferred=(\d+) "
+                           r"skipped=(\d+) \(total in msg=(\d+)\)", t)
+            return tuple(int(x) for x in m[-1]) if m else None
+
+        def obstacles_in():
+            if n_obs == 0:
+                return True
+            c = obstacle_counts()
+            # "the string appeared" is not the same as "they went in": a run
+            # where 9 of 10 were rejected would pass that test.
+            return (c is not None and c[3] == n_obs and c[2] == 0
+                    and c[0] + c[1] == n_obs)
 
         installed = wait_for(zones_in, 90) and wait_for(obstacles_in, 60)
         for h in holders:
@@ -331,6 +355,18 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
         row["reason"] = ""
     archived = f"{arm}_{mission}_{scenario or 'nozone'}_r{rep}.log"
     shutil.copy(lg, os.path.join(out, "logs", archived))
+    oc = None
+    if scenario and n_obs:
+        m = re.findall(r"loadObstacles: added=(\d+) deferred=(\d+) "
+                       r"skipped=(\d+) \(total in msg=(\d+)\)", text)
+        oc = tuple(int(x) for x in m[-1]) if m else None
+    row["obstacles_expected"] = n_obs
+    row["obstacles_added"] = oc[0] if oc else ""
+    row["obstacles_deferred"] = oc[1] if oc else ""
+    row["obstacles_skipped"] = oc[2] if oc else ""
+    # Which planning path ran: frontend/chain columns are undefined on the
+    # direct-fallback path and must read as "not applicable", not "missing".
+    row["plan_mode"] = "chain" if row.get("chain_total_ms") else "direct"
     row["log_src"] = os.path.basename(lg)   # planner's own timestamped name
     row["log"] = archived                   # what is actually in the archive
     for h in launched:
