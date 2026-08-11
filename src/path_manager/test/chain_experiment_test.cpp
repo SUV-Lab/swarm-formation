@@ -159,6 +159,7 @@ int main(int argc, char **argv)
        with_transfallback = false, with_overrouteretry = false,
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false, with_hardpen = false,
+       with_standoffpen = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -312,6 +313,7 @@ int main(int argc, char **argv)
     // flight is SYNTHESISED and handed to the evaluator directly. Without
     // it, "a hard contact refuses the flight" is a branch nothing executes.
     if (v == "hardpen") { with_route = true; with_hardpen = true; }
+    if (v == "standoffpen") { with_route = true; with_standoffpen = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -1764,6 +1766,95 @@ int main(int argc, char **argv)
     expect(pm->traj_.local_traj.duration == 0.0 &&
                pm->traj_.local_traj.start_time == 0.0,
            "...and the stored trajectory stops being executable");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_standoffpen) {
+    using ZC = path_manager::PathManager::ZoneContactResult;
+    using ZD = path_manager::PathManager::ZoneDisposition;
+    // The COMPLEMENT of hardpen, and the reason the refusal surface moved.
+    // hardpen flies through the authored volume and must be REFUSED.
+    // This flies through the 1.05x routing standoff shell OUTSIDE that
+    // volume and must be DEGRADED, not refused — a flight half a kilometre
+    // clear of anything the mission declared is not an unsafe flight, and
+    // refusing it on that surface flipped identical missions between CLEAN
+    // and FAILED because the optimizer's zone force is identically zero
+    // exactly there (docs/design/zone_gate_surface.md).
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(180.0, 120.0, 3.0);
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+    const path_manager::PlanResult r0 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r0.hasTrajectory(), "the avoiding plan itself succeeds");
+    const auto snap = pm->zonePolicySnapshot();
+    expect(snap.valid, "snapshot is VALID (the policy really ran)");
+    expect(!snap.zones.empty() &&
+               snap.zones[0].disposition == ZD::HARD_AVOID,
+           "an unneeded zone stays HARD_AVOID");
+
+    // Tangent at 20.5 u from the centre: reach is 20.0, so q = 1.025 there —
+    // inside the 1.05 shell, OUTSIDE the authored volume. The geometry is
+    // asserted below rather than assumed, because a test that silently
+    // measures zero contacts would pass every assertion about refusal.
+    const double kOffset = 20.5;
+    const Eigen::Vector3d tangent(z.center.x(), z.center.y() + kOffset,
+                                  z.center.z());
+    expect(pm->zoneContact(snap, 0, tangent) == ZC::CONTACT,
+           "the tangent point reads CONTACT (it IS in the standoff shell)");
+    expect(!pm->zoneContactAuthored(snap, 0, tangent),
+           "...but it is NOT inside the volume the mission authored");
+    expect(pm->zoneContactAuthored(snap, 0, z.center),
+           "...while the centre IS — the two tests are not the same test");
+
+    // 120 u in 80 s = 1.5 u/s = 150 m/s, inside the cruise band, same as
+    // hardpen: no_cruise must not be what decides this.
+    const Eigen::Vector3d a(z.center.x() - 60.0, z.center.y() + kOffset,
+                            z.center.z());
+    const Eigen::Vector3d b(z.center.x() + 60.0, z.center.y() + kOffset,
+                            z.center.z());
+    const auto seg = [&](double f0, double f1) {
+      Eigen::Matrix<double, 3, 6> c = Eigen::Matrix<double, 3, 6>::Zero();
+      const Eigen::Vector3d p0 = a + f0 * (b - a);
+      const Eigen::Vector3d p1 = a + f1 * (b - a);
+      c.col(5) = p0;
+      c.col(4) = (p1 - p0) / 40.0;
+      return c;
+    };
+    const poly_traj::Trajectory grazing(
+        std::vector<double>{40.0, 40.0},
+        std::vector<poly_traj::CoefficientMat>{seg(0.0, 0.5), seg(0.5, 1.0)});
+    const auto fv = chain.evaluateFlightForTest(
+        grazing, {{grazing.getTotalDuration(),
+                   path_manager::SegmentChainPlanner::PhaseKind::CRUISE,
+                   "synthetic"}});
+    expect(fv.evaluated, "the grazing flight was evaluated");
+    expect(!fv.underground, "it does not clip terrain");
+    expect(!fv.no_cruise, "it reaches cruise speed");
+    expect(fv.policy_measurable, "on a snapshot that IS measurable");
+    expect(fv.zone_standoff_n > 0,
+           "the standoff shell is entered and COUNTED");
+    expect(fv.zone_hard_n == 0,
+           "...and the authored volume is not entered");
+    expect(!fv.unflyable(),
+           "a standoff graze does NOT make the flight unflyable");
+
+    // And the caller must receive it as a flyable, labelled degradation
+    // with its trajectory intact.
+    pm->traj_.setLocalTraj(grazing, 100.0, 0);
+    const auto pr = chain.verdictResultForTest(fv);
+    expect(pr.hasTrajectory(), "the standoff graze keeps its trajectory");
+    expect(pr.outcome == path_manager::PlanOutcome::DEGRADED,
+           "...as DEGRADED, not SUCCESS — the operator is told");
+    expect(pr.reason == path_manager::PlanReason::STITCHED_ZONE_STANDOFF,
+           "...with the standoff reason, not an envelope budget");
+    expect(pm->traj_.local_traj.duration > 0.0 &&
+               pm->traj_.local_traj.start_time > 0.0,
+           "...and the stored trajectory stays executable");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

@@ -715,6 +715,18 @@ public:
                                        const Eigen::Vector3d &pos) const {
         return zoneVolumeContains(i, pos, kZoneHardInflate, kZoneHardVis);
     }
+    // [S13] The volume the MISSION AUTHORED: the ellipsoid as written in the
+    // scenario, un-inflated, with the SAME visibility floor. The 1.05 above
+    // is a route-seeding standoff (see insideHardZoneVol) and the two must
+    // not be conflated — a flight refused for entering the standoff is
+    // refused half a kilometre outside the volume anyone declared. Note the
+    // floor is kZoneHardVis (0.35), NOT the 0.5 of
+    // zoneVisibleVolumeContains: visibility in (0.35, 0.5] still carries
+    // positive risk, so the stricter-looking helper is the wrong test here.
+    inline bool zoneAuthoredVolumeContains(size_t i,
+                                           const Eigen::Vector3d &pos) const {
+        return zoneVolumeContains(i, pos, 1.0, kZoneHardVis);
+    }
     // Shared single-zone volume test: scaled ellipsoid + LOS contour.
     inline bool zoneVolumeContains(size_t i, const Eigen::Vector3d &pos,
                                    double scale, double vis_floor) const {

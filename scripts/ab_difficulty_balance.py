@@ -60,7 +60,7 @@ FIELDS = [
     "soft_zone_contacts", "zone_policy_measurable", "zone_sample_dt",
     "obstacles_expected", "obstacles_added", "obstacles_deferred",
     "obstacles_skipped", "retry_fallback", "seam_worst",
-    "zones_in_search", "leaked_procs", "yaw_seed",
+    "zones_in_search", "leaked_procs", "yaw_seed", "standoff_zone_contacts",
     "hard_zone_qmin", "hard_zone_t0", "hard_zone_t1", "hard_zone_runs",
     "log", "log_src",
 ]
@@ -106,6 +106,11 @@ RX = {
     # [ZONE-AUDIT] line is a missing measurement and fails the run.
     "hard_zone_contacts": r"\[ZONE-AUDIT\] hard=(\d+)",
     "hard_zone_contact_s": r"\[ZONE-AUDIT\] hard=\d+ hard_s=([0-9.]+)",
+    # The 1.0-1.05 routing standoff shell: entered, reported, never refused.
+    # Split out from hard= because refusing it was the defect — a flight can
+    # be half a kilometre outside everything the mission authored and still
+    # land in this column.
+    "standoff_zone_contacts": r"\[ZONE-AUDIT\].* standoff=(\d+)",
     "soft_zone_contacts": r"\[ZONE-AUDIT\].* soft=(\d+)",
     "zone_policy_measurable": r"\[ZONE-AUDIT\].* measurable=(true|false)",
     "zone_sample_dt": r"\[ZONE-AUDIT\].* sample_dt=([0-9.]+)",

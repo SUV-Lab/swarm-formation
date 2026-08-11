@@ -36,6 +36,18 @@ enum class PlanReason {
   NONE,
   PHASE_BOUNDARY_FALLBACK,
   SINGLE_PLAN_FALLBACK,
+  // The flight entered the 1.05x routing standoff shell around a HARD_AVOID
+  // zone WITHOUT entering the zone itself. Reported, never refused: the shell
+  // is a margin the route planner keeps so a geodesic does not hug the rim,
+  // not a volume any mission forbids, and it is the exact surface where the
+  // optimizer's zone force is zero in both value and gradient — a hard
+  // refusal there flips between CLEAN and FAILED on numerical noise (it did:
+  // docs/design/zone_gate_surface.md).
+  // Ranked BELOW the envelope budget deliberately. degrade() picks the
+  // surviving reason by enum order, and "the airframe is hotter than
+  // requested" is the more urgent thing to tell an operator than "we passed
+  // nearer a zone than the route planner would have chosen".
+  STITCHED_ZONE_STANDOFF,
   // The whole-flight evaluation of the STITCHED product reads worse than
   // any per-solve audit did — a limit budget the caller is knowingly
   // spending. Above the fallbacks: "the flight you are getting is hotter

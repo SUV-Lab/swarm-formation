@@ -222,6 +222,35 @@ std::vector<double> SegmentChainPlanner::capAlongRoute(
   return out;
 }
 
+void SegmentChainPlanner::degradeForVerdict(PlanResult *r,
+                                            const FlightVerdict &fv,
+                                            const char *what) const
+{
+  // One place, four callers (both baseline exits, the multi-waypoint
+  // single-shot, the direct fallback). These each grew their own copy of the
+  // envelope degrade and none of them grew the standoff one; a shared helper
+  // is how the next verdict field reaches all of them instead of three of
+  // them.
+  if (!r || !fv.evaluated) return;
+  if (!fv.clean) {
+    char why[192];
+    snprintf(why, sizeof why,
+             "%s whole-flight reading exceeds the envelope budget "
+             "(viol %.1f%%, peak %.1f%%)",
+             what, fv.viol_pct, 100.0 * fv.util_peak);
+    r->degrade(PlanReason::STITCHED_ENVELOPE_BUDGET, why);
+  }
+  if (fv.zone_standoff_n > 0) {
+    char why[192];
+    snprintf(why, sizeof why,
+             "%s entered the routing standoff shell around a HARD_AVOID zone "
+             "(%d samples) without entering the authored volume",
+             what, fv.zone_standoff_n);
+    log_->warnf("[STITCH-GATE] %s", why);
+    r->degrade(PlanReason::STITCHED_ZONE_STANDOFF, why);
+  }
+}
+
 void SegmentChainPlanner::invalidateStoredTrajectory() const
 {
   // A refused plan must not leave a flyable-looking trajectory behind:
@@ -389,7 +418,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
                !mv.evaluated ? "not evaluated" : "",
                mv.underground ? "terrain overlap; " : "",
                mv.no_cruise ? "never reaches cruise; " : "",
-               mv.zone_hard_n > 0 ? "hard-zone contact; " : "",
+               mv.zone_hard_n > 0 ? "authored zone entered; " : "",
                mv.evaluated && !mv.policy_measurable
                    ? "zone policy unevaluated" : "");
       log_->errorf("[STITCH-GATE] %s", why);
@@ -400,9 +429,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     PlanResult r = PlanResult::success();
     r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
               "multi-waypoint mission — chain not attempted");
-    if (!mv.clean)
-      r.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET,
-                "whole-flight reading exceeds the envelope budget");
+    degradeForVerdict(&r, mv, "multi-waypoint single-shot flight");
     return r;
   }
 
@@ -480,7 +507,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
              !bv.evaluated ? "not evaluated" : "",
              bv.underground ? "terrain overlap; " : "",
              bv.no_cruise ? "never reaches cruise; " : "",
-             bv.zone_hard_n > 0 ? "hard-zone contact; " : "",
+             bv.zone_hard_n > 0 ? "authored zone entered; " : "",
              !bv.evaluated ? "" :
                  (!bv.policy_measurable ? "zone policy unevaluated" : ""));
     log_->errorf("[STITCH-GATE] %s", why);
@@ -507,13 +534,11 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     // A mission genuinely too small to split IS correctly served by the
     // baseline — SUCCESS, not a degradation (outcome matrix, frozen).
     PlanResult r = PlanResult::success();
-    // ...but a baseline whose whole-flight reading exceeds the envelope
-    // budget must SAY so. Only unflyable() refuses here; everything else was
-    // returning a plain SUCCESS while FINAL-EVAL printed CHECK, so the two
-    // channels disagreed about the same flight.
-    if (!baseline_verdict.clean)
-      r.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET,
-                "baseline whole-flight reading exceeds the envelope budget");
+    // ...but a baseline whose whole-flight reading is worse than clean must
+    // SAY so. Only unflyable() refuses here; everything else was returning a
+    // plain SUCCESS while FINAL-EVAL printed CHECK, so the two channels
+    // disagreed about the same flight.
+    degradeForVerdict(&r, baseline_verdict, "baseline");
     return r;
   };
   if (!resolveAutoSegments(baseline.getPieceNum(), "baseline"))
@@ -737,9 +762,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
                 "segment " + std::to_string(i + 1) + "/" +
                     std::to_string(segments_) +
                     " failed — baseline restored");
-      if (!baseline_verdict.clean)
-        r.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET,
-                  "baseline whole-flight reading exceeds the envelope budget");
+      degradeForVerdict(&r, baseline_verdict, "restored baseline");
       return r;
     }
     runs.push_back(pm_->traj_.local_traj.traj);
@@ -2021,7 +2044,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
                    "viol %.1f%%, peak %.1f%%)",
                    fv.underground ? "terrain overlap, " : "",
                    fv.no_cruise ? "never reaches cruise, " : "",
-                   fv.zone_hard_n > 0 ? "hard-zone contact, " : "",
+                   fv.zone_hard_n > 0 ? "authored zone entered, " : "",
                    !fv.policy_measurable ? "zone policy unevaluated, " : "",
                    fv.viol_pct, 100.0 * fv.util_peak);
         }
@@ -2760,7 +2783,7 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
              "evaluation, which no per-solve audit performs",
              fv.underground ? "terrain overlap; " : "",
              fv.no_cruise ? "never reaches cruise; " : "",
-             fv.zone_hard_n > 0 ? "hard-zone contact; " : "",
+             fv.zone_hard_n > 0 ? "authored zone entered; " : "",
              !fv.policy_measurable ? "zone policy unevaluated" : "");
     log_->errorf("[STITCH-GATE] %s", why);
     // Nothing stored on this path today, but the guarantee has to hold for
@@ -2778,6 +2801,19 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
              fv.viol_pct, 100.0 * fv.util_peak);
     log_->warnf("[STITCH-GATE] %s", why);
     ok_result.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET, why);
+  }
+  // Reported as its own thing, never folded into the envelope reason: the
+  // caller has to be able to tell "hotter than requested" from "closer to a
+  // zone than the route planner wanted", and only one of those is about the
+  // airframe.
+  if (fv.evaluated && fv.zone_standoff_n > 0) {
+    char why[176];
+    snprintf(why, sizeof why,
+             "flight entered the routing standoff shell around a HARD_AVOID "
+             "zone (%d samples) without entering the authored volume",
+             fv.zone_standoff_n);
+    log_->warnf("[STITCH-GATE] %s", why);
+    ok_result.degrade(PlanReason::STITCHED_ZONE_STANDOFF, why);
   }
   return ok_result;
 }
@@ -2863,8 +2899,10 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     // final field was pass-2 all-soft — a permitted crossing dressed up as a
     // safety breach. The two are kept apart and both are reported.
     // Sampled at the dt below (0.1 s), so these are SAMPLE counts.
-    int zone_hard_n{0};
+    int zone_hard_n{0};       // inside the AUTHORED volume (q < 1.0)
     double zone_hard_s{0.0};
+    int zone_standoff_n{0};   // in the 1.0-1.05 routing standoff shell
+    double zone_standoff_s{0.0};
     int zone_soft_n{0};
     double zone_soft_s{0.0};
     bool zone_contact_measurable{true};
@@ -2940,7 +2978,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       s.risk_max = std::max(s.risk_max, r);
       s.risk_int += r * dt;
 
-      bool hard = false, soft = false;
+      bool hard = false, standoff = false, soft = false;
       int hard_zi = -1;
       double hard_q = 1e9;
       for (size_t zi = 0; zi < nz; ++zi) {
@@ -2949,7 +2987,11 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
             if (zi < eval_snap.zones.size() &&
                 eval_snap.zones[zi].disposition ==
                     PathManager::ZoneDisposition::HARD_AVOID) {
-              hard = true;
+              // WHICH BAND. zoneContact() reports the 1.05x standoff volume,
+              // which is the surface a ROUTE is kept out of; only the
+              // authored volume refuses a finished flight.
+              if (pm_->zoneContactAuthored(eval_snap, zi, p)) hard = true;
+              else standoff = true;
               // Only on contact, so the deep-sample cost never touches the
               // common path.
               const double q = pm_->getZoneEllipsoidRadius(zi, p);
@@ -2969,9 +3011,12 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
             break;
         }
       }
-      if (hard) {
-        ++s.zone_hard_n;
-        s.zone_hard_s += dt;
+      if (standoff) { ++s.zone_standoff_n; s.zone_standoff_s += dt; }
+      // The contact-detail fields track EITHER band, so the emitted line can
+      // say which one the deepest sample was in; the counters above are what
+      // decide refusal.
+      if (hard || standoff) {
+        if (hard) { ++s.zone_hard_n; s.zone_hard_s += dt; }
         if (s.zone_hard_t_first < 0.0) s.zone_hard_t_first = t;
         s.zone_hard_t_last = t;
         if (!s.zone_hard_prev) ++s.zone_hard_runs;
@@ -2983,7 +3028,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
               hard_zi >= 0 ? pm_->getRiskVisibility(hard_zi, p) : -1.0;
         }
       }
-      s.zone_hard_prev = hard;
+      s.zone_hard_prev = hard || standoff;
       if (soft) { ++s.zone_soft_n; s.zone_soft_s += dt; }
     }
   }
@@ -3037,6 +3082,8 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     tot.risk_int += s.risk_int;
     tot.zone_hard_n += s.zone_hard_n;
     tot.zone_hard_s += s.zone_hard_s;
+    tot.zone_standoff_n += s.zone_standoff_n;
+    tot.zone_standoff_s += s.zone_standoff_s;
     tot.zone_hard_runs += s.zone_hard_runs;
     if (s.zone_hard_t_first >= 0.0 &&
         (tot.zone_hard_t_first < 0.0 ||
@@ -3085,17 +3132,19 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   if (clean) {
     log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
                 "%.1f%% (peak %.1f%% %s), risk exposure %.1f s, "
-                "zone contact hard 0 soft %d (%.1f s) @0.1s sampling",
+                "zone contact hard 0 standoff %d (%.1f s) soft %d (%.1f s) "
+                "@0.1s sampling",
                 tot.min_agl, viol_pct, 100.0 * tot.util_peak,
                 mmp_vehicle_dynamics::envelopeLimitName(tot.peak_limit),
-                tot.risk_int, tot.zone_soft_n, tot.zone_soft_s);
+                tot.risk_int, tot.zone_standoff_n, tot.zone_standoff_s,
+                tot.zone_soft_n, tot.zone_soft_s);
   } else {
     log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s%s%s(AGL min %.3f u "
                 "@%.0fs, env viol %.1f%%) — the stitched flight carries "
                 "hazards no per-solve audit saw",
                 tot.n_below_ground ? "TERRAIN OVERLAP " : "",
                 no_cruise ? "NEVER REACHES CRUISE " : "",
-                tot.zone_hard_n > 0 ? "HARD ZONE CONTACT " : "",
+                tot.zone_hard_n > 0 ? "AUTHORED ZONE ENTERED " : "",
                 !tot.zone_contact_measurable ? "ZONE POLICY UNEVALUATED " : "",
                 !no_cruise && viol_pct >= viol_max_pct ? "ENVELOPE " : "",
                 tot.min_agl, tot.min_agl_t, viol_pct);
@@ -3106,6 +3155,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   v.underground = tot.n_below_ground != 0;
   v.no_cruise = no_cruise;
   v.zone_hard_n = tot.zone_hard_n;
+  v.zone_standoff_n = tot.zone_standoff_n;
   v.zone_soft_n = tot.zone_soft_n;
   v.policy_measurable = tot.zone_contact_measurable;
   v.viol_pct = viol_pct;
@@ -3114,9 +3164,12 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   // parser) must not have to infer zone safety from the ABSENCE of a
   // warning word — that is fail-open by construction: a reworded log or a
   // dropped call both read as "measurable, no contact".
-  log_->infof("[ZONE-AUDIT] hard=%d hard_s=%.1f soft=%d soft_s=%.1f "
-              "measurable=%s sample_dt=%.2f risk_max=%.4f risk_exposure_s=%.1f",
-              v.zone_hard_n, tot.zone_hard_s, v.zone_soft_n, tot.zone_soft_s,
+  log_->infof("[ZONE-AUDIT] hard=%d hard_s=%.1f standoff=%d standoff_s=%.1f "
+              "soft=%d soft_s=%.1f measurable=%s sample_dt=%.2f "
+              "risk_max=%.4f risk_exposure_s=%.1f",
+              v.zone_hard_n, tot.zone_hard_s,
+              v.zone_standoff_n, tot.zone_standoff_s,
+              v.zone_soft_n, tot.zone_soft_s,
               v.policy_measurable ? "true" : "false", dt,
               tot.risk_max, tot.risk_int);
   // The count above says a breach happened; this says WHICH breach. Without
@@ -3128,7 +3181,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   // above is therefore 0.0000 whatever the flight did.
   // runs= is summed per phase, so a contact straddling a phase boundary
   // reads as two.
-  if (tot.zone_hard_n > 0) {
+  if (tot.zone_hard_n > 0 || tot.zone_standoff_n > 0) {
     log_->infof("[ZONE-CONTACT] zone=%d t=[%.2f, %.2f]s runs=%d q_min=%.5f "
                 "%s vis=%.3f at (%.2f, %.2f, %.2f)",
                 tot.zone_hard_qmin_zone, tot.zone_hard_t_first,

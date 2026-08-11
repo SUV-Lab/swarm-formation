@@ -3835,6 +3835,16 @@ PathManager::ZoneContactResult PathManager::zoneContact(
                : ZoneContactResult::CLEAR;
 }
 
+bool PathManager::zoneContactAuthored(const ZonePolicySnapshot &snap,
+                                      size_t idx,
+                                      const Eigen::Vector3d &p) const
+{
+    if (!snap.valid || !zoneSnapshotCurrent(snap, idx)) return false;
+    // Same primitive, same visibility floor, ONE difference: no 1.05
+    // inflation. What the mission authored, nothing added.
+    return searcher_.zoneAuthoredVolumeContains(idx, p);
+}
+
 bool PathManager::zoneExposureRaw(const ZonePolicySnapshot &snap,
                                   size_t idx, const Eigen::Vector3d &p,
                                   double *exposure) const

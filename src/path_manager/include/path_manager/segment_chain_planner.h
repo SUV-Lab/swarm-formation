@@ -151,7 +151,15 @@ public:
     // reported, not judged. policy_measurable is false when zones exist but
     // the snapshot was stale or invalid — "could not check" must never read
     // as "clear".
+    // zone_hard_n counts samples inside the volume the MISSION AUTHORED.
+    // zone_standoff_n counts samples in the 1.0-1.05 routing standoff shell
+    // outside it. Refusing the second was the original defect: it fails a
+    // flight half a kilometre clear of anything the mission declared, on the
+    // exact surface where the optimizer's only restoring force is zero by
+    // construction, so identical missions flipped between CLEAN and FAILED.
+    // The shell is reported and degrades; the authored volume refuses.
     int zone_hard_n{0};
+    int zone_standoff_n{0};
     int zone_soft_n{0};
     bool policy_measurable{true};
     // The conditions no trajectory may ever fly with, whatever produced it.
@@ -251,6 +259,11 @@ private:
   // through verdictResultForTest above, and through planOverRoute end to end.
   PlanResult stitchedVerdictResult(const FlightVerdict &fv,
                                    PlanResult ok_result) const;
+  // Applies the NON-refusing half of the verdict (envelope budget, zone
+  // standoff) to a result that is already a success. Shared by the exits
+  // that do not go through stitchedVerdictResult.
+  void degradeForVerdict(PlanResult *r, const FlightVerdict &fv,
+                         const char *what) const;
   // Junction contract: the shared boundary state between two adjacent runs.
   struct Contract {
     double t;  // baseline trajectory time the state was sampled at

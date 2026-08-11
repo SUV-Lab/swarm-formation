@@ -495,6 +495,18 @@ namespace path_manager
     // and never the nominal 1.0x/0.5 volume (review find: that read
     // CLEAR inside the standoff band, where visibility in (0.35, 0.5]
     // still carries positive risk).
+    // Inside the volume the MISSION AUTHORED (q < 1.0), as distinct from the
+    // 1.05x routing standoff that zoneContact() reports. The two are
+    // deliberately different surfaces and mean different things: standing off
+    // the rim is how a ROUTE is chosen, entering the rim is what a MISSION
+    // forbids. Refusing a finished flight is the second question, so it gets
+    // the second test. The visibility floor stays at kZoneHardVis (0.35) —
+    // raising it to the nominal helper's 0.5 would read CLEAR at visibility
+    // 0.4, where the risk field is positive.
+    // Callers must establish snapshot validity with zoneContact() first; this
+    // answers WHICH BAND a known contact is in, not whether one occurred.
+    bool zoneContactAuthored(const ZonePolicySnapshot &snap, size_t idx,
+                             const Eigen::Vector3d &p) const;
     ZoneContactResult zoneContact(const ZonePolicySnapshot &snap, size_t idx,
                                   const Eigen::Vector3d &p) const;
     // RAW smooth risk value for SOFT_* exposure statistics — separate

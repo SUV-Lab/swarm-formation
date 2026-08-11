@@ -29,12 +29,18 @@ SAFETY_HIGHER_BETTER = ["min_agl_u"]
 # listed as evaluated had in fact never been read. Missing values are now an
 # error, not a silence.
 SAFETY_LOWER_BETTER = ["env_viol_pct", "env_peak_pct", "risk_exposure_s",
-                       "risk_max", "hard_zone_contacts"]
+                       "risk_max", "hard_zone_contacts",
+                       # the standoff shell is not a breach, but flying
+                       # nearer a zone than the route planner wanted is
+                       # still worse, so it is compared like any other
+                       # safety metric — it just does not stop the analysis
+                       "standoff_zone_contacts"]
 # Every safety metric must be present on a successful row. A hole here is a
 # hole in the verdict, so the run EXITS NON-ZERO rather than printing a note
 # nobody has to act on.
 REQUIRED_ON_SUCCESS = ["min_agl_u", "env_peak_pct", "env_viol_pct",
                        "risk_max", "risk_exposure_s", "hard_zone_contacts",
+                       "standoff_zone_contacts",
                        "zone_policy_measurable", "zone_sample_dt",
                        "plan_mode", "plan_total_ms"]
 # plan_total_ms spans both planning modes; the chain-only columns are checked
