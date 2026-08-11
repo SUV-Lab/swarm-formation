@@ -61,6 +61,7 @@ FIELDS = [
     "obstacles_expected", "obstacles_added", "obstacles_deferred",
     "obstacles_skipped", "retry_fallback", "seam_worst",
     "zones_in_search", "leaked_procs", "yaw_seed", "standoff_zone_contacts",
+    "zone_clearance_qmin",
     "hard_zone_qmin", "hard_zone_t0", "hard_zone_t1", "hard_zone_runs",
     "log", "log_src",
 ]
@@ -111,6 +112,11 @@ RX = {
     # be half a kilometre outside everything the mission authored and still
     # land in this column.
     "standoff_zone_contacts": r"\[ZONE-AUDIT\].* standoff=(\d+)",
+    # Closest approach to a HARD_AVOID zone, emitted whether or not anything
+    # was touched. A contact count is a threshold answer; this is the
+    # measurement, and it is the only column that lets two products on the
+    # same route be compared when neither breached.
+    "zone_clearance_qmin": r"\[ZONE-CLEARANCE\].* q_min=([0-9.]+)",
     "soft_zone_contacts": r"\[ZONE-AUDIT\].* soft=(\d+)",
     "zone_policy_measurable": r"\[ZONE-AUDIT\].* measurable=(true|false)",
     "zone_sample_dt": r"\[ZONE-AUDIT\].* sample_dt=([0-9.]+)",

@@ -2915,6 +2915,13 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     double zone_hard_t_last{-1.0};
     int zone_hard_runs{0};       // contiguous contact intervals
     bool zone_hard_prev{false};  // sampler state behind the run count
+    // Closest approach to any HARD_AVOID zone over the whole span, contact
+    // or not. Distinct from zone_hard_qmin, which only exists when a contact
+    // occurred.
+    double zone_clear_qmin{1e9};
+    Eigen::Vector3d zone_clear_p{Eigen::Vector3d::Zero()};
+    double zone_clear_t{-1.0};
+    int zone_clear_zone{-1};
     double zone_hard_qmin{1e9};
     Eigen::Vector3d zone_hard_qmin_p{Eigen::Vector3d::Zero()};
     double zone_hard_qmin_vis{-1.0};
@@ -2981,6 +2988,24 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       bool hard = false, standoff = false, soft = false;
       int hard_zi = -1;
       double hard_q = 1e9;
+      // Closest approach to a HARD_AVOID zone, tracked on EVERY sample and
+      // not only on contact. "No contact" is a threshold answer; how close
+      // the flight came is the measurement, and without it two products on
+      // the same route cannot be compared at all — which is exactly the
+      // question a contact on one and not the other raises.
+      for (size_t zi = 0; zi < nz; ++zi) {
+        if (zi >= eval_snap.zones.size() ||
+            eval_snap.zones[zi].disposition !=
+                PathManager::ZoneDisposition::HARD_AVOID)
+          continue;
+        const double q = pm_->getZoneEllipsoidRadius(zi, p);
+        if (q < s.zone_clear_qmin) {
+          s.zone_clear_qmin = q;
+          s.zone_clear_p = p;
+          s.zone_clear_t = t;
+          s.zone_clear_zone = static_cast<int>(zi);
+        }
+      }
       for (size_t zi = 0; zi < nz; ++zi) {
         switch (pm_->zoneContact(eval_snap, zi, p)) {
           case PathManager::ZoneContactResult::CONTACT:
@@ -3097,6 +3122,12 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       tot.zone_hard_qmin_vis = s.zone_hard_qmin_vis;
       tot.zone_hard_qmin_zone = s.zone_hard_qmin_zone;
     }
+    if (s.zone_clear_qmin < tot.zone_clear_qmin) {
+      tot.zone_clear_qmin = s.zone_clear_qmin;
+      tot.zone_clear_p = s.zone_clear_p;
+      tot.zone_clear_t = s.zone_clear_t;
+      tot.zone_clear_zone = s.zone_clear_zone;
+    }
     tot.zone_soft_n += s.zone_soft_n;
     tot.zone_soft_s += s.zone_soft_s;
     tot.zone_contact_measurable &= s.zone_contact_measurable;
@@ -3181,6 +3212,18 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   // above is therefore 0.0000 whatever the flight did.
   // runs= is summed per phase, so a contact straddling a phase boundary
   // reads as two.
+  // Emitted for every flight that had a HARD_AVOID zone to stay clear of,
+  // whether or not it touched anything. q_min is on the same scale the two
+  // thresholds use: < 1.00 entered the authored volume, < 1.05 entered the
+  // routing standoff, and anything above is the margin that was actually
+  // kept.
+  if (tot.zone_clear_zone >= 0) {
+    log_->infof("[ZONE-CLEARANCE] zone=%d q_min=%.5f t=%.2fs "
+                "at (%.2f, %.2f, %.2f)",
+                tot.zone_clear_zone, tot.zone_clear_qmin, tot.zone_clear_t,
+                tot.zone_clear_p.x(), tot.zone_clear_p.y(),
+                tot.zone_clear_p.z());
+  }
   if (tot.zone_hard_n > 0 || tot.zone_standoff_n > 0) {
     log_->infof("[ZONE-CONTACT] zone=%d t=[%.2f, %.2f]s runs=%d q_min=%.5f "
                 "%s vis=%.3f at (%.2f, %.2f, %.2f)",
