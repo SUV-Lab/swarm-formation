@@ -7,8 +7,8 @@ The rule was fixed before the data existed, so it cannot be bent to fit it:
     whatever it does for time.
 
 Safety is minimum AGL (higher is better), envelope violation percentage and
-peak utilisation (lower is better), hard-zone contacts (lower), and the
-outcome itself — a combination that plans with the flag off and is REFUSED
+peak utilisation (lower is better), risk exposure and peak risk (lower), and
+the outcome itself — a combination that plans with the flag off and is REFUSED
 with it on is the worst regression available and is reported first.
 
 Everything is compared PAIRWISE within (rep, mission, scenario), because the
@@ -22,7 +22,14 @@ import csv
 import statistics as st
 
 SAFETY_HIGHER_BETTER = ["min_agl_u"]
-SAFETY_LOWER_BETTER = ["env_viol_pct", "env_peak_pct", "hard_zone_contacts"]
+# risk_exposure_s / risk_max are what FINAL-EVAL actually reports. The first
+# sweep asked for "hard_zone_contacts", a string no planner log contains, and
+# this file skipped the empty column without a word — so a metric the write-up
+# listed as evaluated had in fact never been read. Missing values are now an
+# error, not a silence.
+SAFETY_LOWER_BETTER = ["env_viol_pct", "env_peak_pct",
+                       "risk_exposure_s", "risk_max"]
+REQUIRED_ON_SUCCESS = ["min_agl_u", "env_peak_pct", "total_ms", "frontend_ms"]
 TIME = ["total_ms", "max_solve_ms", "frontend_ms"]
 USABLE = ("CLEAN", "DEGRADED")
 
@@ -86,6 +93,21 @@ def main():
         print("  없음")
     print()
 
+    # --- required columns must actually be present -------------------------
+    holes = collections.Counter()
+    for r in rows:
+        if r["outcome"] not in USABLE:
+            continue
+        for c in REQUIRED_ON_SUCCESS:
+            if not (r.get(c) or "").strip():
+                holes[c] += 1
+    if holes:
+        print("!!! 성공 행인데 비어 있는 필수 지표 (측정 공백):")
+        for c, n in holes.most_common():
+            print(f"      {c}: {n}행")
+        print("    -> 이 열은 비교에서 빠지므로, 해당 조합의 판정은 근거가 없다.")
+        print()
+
     # --- pairwise metric comparison ----------------------------------------
     pairs = [(k, v) for k, v in by_key.items()
              if "off" in v and "on" in v
@@ -107,6 +129,8 @@ def main():
                 continue
             per_combo[(m, sc)].append((o, n))
         if not per_combo:
+            print(f"--- {metric}: 유효 값이 하나도 없음 — 이 지표는 평가되지 "
+                  f"않았다 (하네스가 잘못된 로그 문자열을 찾고 있을 수 있다)\n")
             continue
         print(f"--- {metric} ({'높을수록 좋음' if higher_better else '낮을수록 좋음'})"
               f"{' [안전]' if is_safety else ' [시간]'}")

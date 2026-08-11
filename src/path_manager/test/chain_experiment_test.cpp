@@ -2288,7 +2288,7 @@ int main(int argc, char **argv)
            "auto-N resolved 2 segments (13 pieces / target 6)");
   }
   if (with_autosmall) {
-    // [AUTO-N] production target 70: the fixture is far below ~1.5 targets,
+    // [AUTO-N] production target (35 since 2410bdb): the fixture is far below
     // so the mission must not split — the single-shot plan fills both slots.
     expect(std::abs(bt - ct) < 1e-9 &&
                baseline.getPieceNum() == chained.getPieceNum(),

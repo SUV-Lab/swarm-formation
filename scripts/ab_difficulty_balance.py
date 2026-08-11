@@ -52,8 +52,8 @@ FIELDS = [
     "outcome", "reason", "zone_pass", "total_ms", "frontend_ms", "max_solve_ms",
     "eikonal_ms", "grid", "ceiling_u", "geo_z_max_u", "pieces", "flight_s",
     "min_agl_u", "env_viol_pct", "env_peak_pct", "env_peak_limit",
-    "hard_zone_contacts", "retry_fallback", "seam_worst", "zones_in_search",
-    "leaked_procs", "log",
+    "risk_max", "risk_exposure_s", "retry_fallback", "seam_worst",
+    "zones_in_search", "leaked_procs", "log", "log_src",
 ]
 
 RX = {
@@ -79,7 +79,12 @@ RX = {
     "zones_in_search": r"setRiskZones: (\d+) zones",
     "zone_pass": r"\[ZONE-AVOID\] pass=(\d+)",
     "seam_worst": r"worst \|d\(P,V,A\)\| = ([0-9.eE+-]+)",
-    "hard_zone_contacts": r"zone_hard_contacts[= ]+(\d+)",
+    # NOT zone_hard_contacts — that string does not exist in a planner log,
+    # so the column it fed was empty in all 160 rows of the first sweep while
+    # the document claimed zone contact was among the safety metrics. What
+    # FINAL-EVAL actually reports is peak risk and time spent exposed.
+    "risk_max": r"risk max ([0-9.]+)",
+    "risk_exposure_s": r"risk exposure ([0-9.]+) s",
 }
 
 
@@ -195,9 +200,18 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
         lg = newest_log(logdir, t_start)
         return lg is not None and "Terrain data received and forwarded" in open(
             lg, errors="ignore").read()
-    if not wait_for(ready, 240):
+    def bail(outcome, reason=""):
+        """Every early return must clean up, or the next run inherits it."""
+        for h in launched:
+            kill_group(h)
+        for nm in ("path_manager_node", "terrain_publisher", "topic pub"):
+            reap(nm)
         return {"rep": rep, "arm": arm, "mission": mission,
-                "scenario": scenario or "", "outcome": "NO_TERRAIN", "log": ""}
+                "scenario": scenario or "", "outcome": outcome,
+                "reason": reason, "log": ""}
+
+    if not wait_for(ready, 240):
+        return bail("NO_TERRAIN")
 
     n_zones = n_obs = 0
     if scenario:
@@ -242,11 +256,8 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
         kill_group(ch)
         reap("topic pub")
         if not cleared:
-            return {"rep": rep, "arm": arm, "mission": mission,
-                    "scenario": scenario, "zones_installed": -1,
-                    "obstacles_installed": n_obs, "outcome": "ZONE_CLEAR_FAILED",
-                    "reason": "planner never confirmed an empty zone set",
-                    "log": os.path.basename(newest_log(logdir, t_start) or "")}
+            return bail("ZONE_CLEAR_FAILED",
+                        "planner never confirmed an empty zone set")
         time.sleep(2)
 
         holders = [sh_bg(line.replace("timeout 60 ros2 topic pub -1",
@@ -260,17 +271,21 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
             t = open(lg2, errors="ignore").read()
             return bool(re.search(rf"loadRiskZones: replaced with {n_zones} zones", t))
 
-        installed = wait_for(zones_in, 90)
+        def obstacles_in():
+            lg2 = newest_log(logdir, t_start)
+            if not lg2:
+                return False
+            t = open(lg2, errors="ignore").read()
+            return n_obs == 0 or bool(re.search(r"loadObstacles: added", t))
+
+        installed = wait_for(zones_in, 90) and wait_for(obstacles_in, 60)
         for h in holders:
             kill_group(h)
         reap("topic pub")
         if not installed:
-            return {"rep": rep, "arm": arm, "mission": mission,
-                    "scenario": scenario, "zones_installed": 0,
-                    "obstacles_installed": n_obs,
-                    "outcome": "ZONE_INSTALL_FAILED",
-                    "reason": f"planner never accepted {n_zones} zones off the topic",
-                    "log": os.path.basename(newest_log(logdir, t_start) or "")}
+            return bail("SCENARIO_INSTALL_FAILED",
+                        f"planner never accepted {n_zones} zones "
+                        f"and {n_obs} obstacles off the topic")
         time.sleep(3)
 
     cmd = (
@@ -314,7 +329,10 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
     else:
         row["outcome"] = "UNKNOWN"
         row["reason"] = ""
-    shutil.copy(lg, os.path.join(out, "logs", f"{arm}_{mission}_{scenario or 'nozone'}_r{rep}.log"))
+    archived = f"{arm}_{mission}_{scenario or 'nozone'}_r{rep}.log"
+    shutil.copy(lg, os.path.join(out, "logs", archived))
+    row["log_src"] = os.path.basename(lg)   # planner's own timestamped name
+    row["log"] = archived                   # what is actually in the archive
     for h in launched:
         kill_group(h)
     for nm in ("path_manager_node", "terrain_publisher", "topic pub"):
@@ -354,7 +372,10 @@ def main():
         w.writeheader()
         for rep in range(1, a.reps + 1):
             for mission, scenario in MISSIONS:
-                for arm in ("off", "on"):
+                # Alternate, so a warm-up or drift effect cannot masquerade as
+                # an arm effect in the timing columns.
+                arms = ("off", "on") if rep % 2 else ("on", "off")
+                for arm in arms:
                     try:
                         row = run_one(a.ws, a.out, mission, scenario, arm, rep,
                                       a.missions, a.obstacles, a.logdir)
