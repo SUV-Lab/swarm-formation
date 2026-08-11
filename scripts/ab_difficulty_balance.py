@@ -462,6 +462,9 @@ def main():
                     help="force ONE obstacle-orientation seed for every run "
                          "(reproducing a specific archived run; the planner "
                          "log of that run prints the seed it drew)")
+    # A seed that does not arrive is worse than no seed: the run looks pinned
+    # and is not. The planner reads the parameter as int64 and truncates
+    # above 2^32, so anything larger cannot replay a logged uint32 seed.
     ap.add_argument("--out", required=True)
     # Inputs default INSIDE the pinned workspace. They used to default to
     # /ws — the dev tree — so the binary was pinned while the missions,
@@ -471,6 +474,9 @@ def main():
     ap.add_argument("--missions", default=None)
     ap.add_argument("--obstacles", default=None)
     a = ap.parse_args()
+    if a.yaw_seed is not None and not (0 <= a.yaw_seed <= 0xFFFFFFFF):
+        raise SystemExit(f"--yaw-seed {a.yaw_seed} is outside the 32-bit seed "
+                         f"range; it would not replay any logged run")
     scen = os.path.join(a.ws, "src/mmp_terrain/data/scenarios")
     a.logdir = a.logdir or os.path.join(a.ws, "logs/runtime")
     a.missions = a.missions or os.path.join(scen, "missions")

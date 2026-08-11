@@ -206,11 +206,22 @@ namespace path_manager
         // hence the FM2 route, so a random seed made identical missions plan
         // differently each run.) Set < 0 to randomize per run for robustness tests.
         {
-          int yaw_seed = 42;
+          // int64, not int. The drawn seed is a uint32 printed with %u and
+          // the log tells the reader to pin it — but read back into `int`,
+          // every value above INT32_MAX wrapped NEGATIVE and fell into the
+          // randomize branch below. Half of all "reproducible" seeds
+          // reproduced nothing, silently, and the log said FIXED nowhere.
+          int64_t yaw_seed = 42;
           node_->get_parameter("manager/dyn_yaw_seed", yaw_seed);
           std::mt19937::result_type applied;
           if (yaw_seed >= 0) {
-            applied = static_cast<std::mt19937::result_type>(yaw_seed);
+            if (yaw_seed > 0xFFFFFFFFLL)
+              log_manager_->warnf(
+                  "dyn_yaw_seed %ld is outside the 32-bit seed range — "
+                  "truncated, so this value does NOT replay a logged run",
+                  static_cast<long>(yaw_seed));
+            applied = static_cast<std::mt19937::result_type>(
+                yaw_seed & 0xFFFFFFFFLL);
             log_manager_->infof("dyn_yaw_seed: FIXED %u", applied);
           } else {
             // Random mode still logs the drawn seed so ANY run is
