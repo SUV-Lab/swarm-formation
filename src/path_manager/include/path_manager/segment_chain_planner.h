@@ -173,6 +173,17 @@ public:
       return evaluated && (underground || no_cruise || zone_hard_n > 0 ||
                            !policy_measurable);
     }
+    // The unflyable conditions this verdict actually MEASURED, without the
+    // "could not check" one. For callers whose mission shape puts zone
+    // policy outside what the snapshot can express at all — a multi-leg
+    // front end — !policy_measurable is a statement about scope rather than
+    // about the flight, and treating it as a hazard refused every such
+    // mission that had a zone anywhere. Those callers refuse on this and
+    // degrade on the missing scope, so "we did not check" still never reads
+    // as "it is clear".
+    bool unflyableMeasured() const {
+      return evaluated && (underground || no_cruise || zone_hard_n > 0);
+    }
   };
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
                                const std::vector<PhaseSpan> &spans) const;

@@ -380,7 +380,11 @@ TrajectoryVerdict validateTransitionTrajectory(
     }
     switch (req.zone_probe(p)) {
       case ZoneProbe::CLEAR: break;
-      case ZoneProbe::CONTACT_HARD: return false;
+      // A generated arc that grazes the ROUTING standoff is not a reason to
+      // refuse the mission — the cruise gate stopped refusing on that
+      // surface, and one flight must not carry two exclusion radii.
+      case ZoneProbe::CONTACT_STANDOFF: break;
+      case ZoneProbe::CONTACT_AUTHORED: return false;
       case ZoneProbe::STALE_OR_INVALID: stale = true; return false;
     }
     const double V = v.norm();
@@ -604,7 +608,16 @@ TransitionResult generate(const TransitionRequest &req)
             std::fprintf(stderr, "[TP-TRACE] k0 zone probe\n");
           switch (req.zone_probe(s.position_m)) {
             case ZoneProbe::CLEAR: break;
-            case ZoneProbe::CONTACT_HARD:
+            // Propagation is SELECTION: standing off is what a candidate is
+            // chosen for, so both bands disqualify here. They are counted
+            // apart because the open question is whether a mission with no
+            // standoff-clear candidate should fall back to an
+            // authored-clear one rather than fail — and that cannot be
+            // decided without knowing how often standoff alone is what
+            // empties the candidate set.
+            case ZoneProbe::CONTACT_STANDOFF:
+              ++audit.disq_zone_standoff; disq = true; break;
+            case ZoneProbe::CONTACT_AUTHORED:
               ++audit.disq_zone; disq = true; break;
             case ZoneProbe::STALE_OR_INVALID:
               zone_stale_abort = true; disq = true; break;

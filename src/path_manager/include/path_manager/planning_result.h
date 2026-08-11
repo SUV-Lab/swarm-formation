@@ -36,6 +36,14 @@ enum class PlanReason {
   NONE,
   PHASE_BOUNDARY_FALLBACK,
   SINGLE_PLAN_FALLBACK,
+  // The whole-flight audit could not judge zone policy AT ALL, because the
+  // mission's shape puts it outside what the snapshot mechanism can express
+  // — a multi-leg front end runs one search per leg and the snapshot is
+  // deliberately plan-wide-or-nothing (path_manager.cpp:3775). That is a
+  // SCOPE statement, not a hazard reading: refusing on it took out every
+  // multi-waypoint mission that had a zone anywhere on the map, including
+  // zones 50 km off the route. The caller is told what was not checked.
+  ZONE_POLICY_UNEVALUATED,
   // The flight entered the 1.05x routing standoff shell around a HARD_AVOID
   // zone WITHOUT entering the zone itself. Reported, never refused: the shell
   // is a margin the route planner keeps so a geodesic does not hug the rim,

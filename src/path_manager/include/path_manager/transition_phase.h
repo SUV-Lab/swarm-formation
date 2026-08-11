@@ -77,7 +77,20 @@ struct EntryCandidate {
 
 // Zone judgment through the coordinator's snapshot closure. STALE/INVALID
 // aborts the whole generation — it is never "no contact".
-enum class ZoneProbe { CLEAR, CONTACT_HARD, STALE_OR_INVALID };
+// Two contact bands, because the two mean different things and only one of
+// them refuses a flight (docs/design/zone_radii.md):
+//   CONTACT_STANDOFF  the 1.05x routing standoff shell. A candidate that
+//                     stands off is PREFERRED, so propagation disqualifies
+//                     on it — but a generated trajectory that merely grazes
+//                     it must not refuse the mission, exactly as the cruise
+//                     gate no longer does.
+//   CONTACT_AUTHORED  inside the volume the mission declared. Refuses.
+enum class ZoneProbe {
+  CLEAR,
+  CONTACT_STANDOFF,
+  CONTACT_AUTHORED,
+  STALE_OR_INVALID
+};
 
 struct TransitionRequest {
   Eigen::Vector3d initial_pos_m{0.0, 0.0, 0.0};
@@ -114,7 +127,8 @@ struct TransitionAudit {
   int disq_representable{0};
   int disq_saturated{0};
   int disq_terrain{0};
-  int disq_zone{0};
+  int disq_zone{0};            // inside the AUTHORED volume
+  int disq_zone_standoff{0};   // in the 1.05x routing standoff shell only
   // Transition-model limits DURING propagation: speed band, dynamic
   // pressure, load factor — the same Parameters the EOM closes over,
   // enforced per step (saturation flags alone see only CL/thrust/bank).

@@ -38,10 +38,26 @@ rim에서 **떨어져 서도록** 하는 여유다.
 - 판정: `zoneHardVolumeContains(i, p)` = `zoneVolumeContains(i, p, 1.05, 0.35)`
 - 쓰는 곳:
   - front end가 경로를 이 부피 밖으로 유지 (`insideHardZoneVol`, 3-pass)
-  - transition 후보 선택이 이 부피 안의 점을 거부
+  - transition **후보 선택**이 이 부피 안의 점을 실격 — 선택은 "떨어져 선 후보를
+    고르는" 일이므로 여기서는 standoff가 기준이다 (`disq_zone_standoff`로 별도 계수)
   - whole-flight audit의 `zone_standoff_n` → `DEGRADED(STITCHED_ZONE_STANDOFF)`
-- **거부하지 않는다.** 이 껍질 진입은 보고 대상이다.
+- **비행을 거부하지 않는다.** 이 껍질 진입은 보고 대상이다. transition이 **생성한
+  궤적**의 검증(`validateTransitionTrajectory`)도 여기서 거부하지 않는다 — 한 비행이
+  구간마다 다른 배제 반경으로 판정되면 안 된다.
 - 회귀: `standoffpen` 변형 (접선 통과 → DEGRADED, 궤적 유지)
+
+### 남은 비대칭 (측정 필요)
+
+후보 선택이 standoff에서 실격시키므로, standoff-clear 후보가 하나도 없으면 후보 집합이
+비고 `TRANSITION_GENERATION_FAILED`로 미션이 거부된다. 즉 **간접적으로는** standoff가
+아직 미션을 거부할 수 있다.
+
+옳은 해법은 2단계 선택으로 보인다 — standoff-clear를 선호하되 없으면 authored-clear를
+받고 DEGRADED로 표시. 하지만 그 전에 **standoff 단독으로 후보 집합이 비는 일이 실제로
+얼마나 있는지**를 알아야 한다. 그래서 `TransitionAudit`에 `disq_zone`(authored)과
+`disq_zone_standoff`를 나눠 세도록 했다. 판별 실험: transition이 켜진 시나리오 전체를
+돌려 `disq_zone_standoff > 0 && disq_zone == 0`이면서 후보가 0개가 된 실행 수를 센다.
+0이면 2단계 선택은 불필요하다.
 
 ## 3. barrier support — 복원력이 존재하는 구간
 

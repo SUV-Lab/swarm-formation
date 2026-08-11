@@ -94,6 +94,23 @@ def main():
               if (r.get("zone_policy_measurable") or "true") != "true"]
     check(not unmeas, "성공 행의 구역 정책이 판정 가능", "; ".join(unmeas[:3]))
 
+    # A seed that did not arrive is worse than no seed: the run looks pinned
+    # and is not. The planner's own echo is the only evidence.
+    notfixed = [f"{r['arm']}/{r['mission'][:16]}={r.get('yaw_seed_mode')}"
+                for r in rows if r["scenario"]
+                and (r.get("yaw_seed_mode") or "") != "FIXED"]
+    check(not notfixed, "장애물 seed가 실제로 FIXED로 도착", "; ".join(notfixed[:3]))
+
+    # The pairing exists to remove the obstacle layout as a factor. If the
+    # arms drew different seeds, it is inside the pair instead.
+    byk = {}
+    for r in rows:
+        byk.setdefault((r["rep"], r["mission"], r["scenario"]), {})[r["arm"]] = \
+            r.get("yaw_seed") or ""
+    split = [f"rep{k[0]} {k[1][:16]}: {sorted(set(v.values()))}"
+             for k, v in byk.items() if len(set(v.values())) > 1]
+    check(not split, "한 쌍의 모든 팔이 같은 seed", "; ".join(split[:3]))
+
     modes = {r.get("plan_mode") for r in ok_rows}
     check("direct" in modes, "direct 모드가 최소 1행 (공통 시간 계측 검증)",
           f"모드: {sorted(m for m in modes if m)}")

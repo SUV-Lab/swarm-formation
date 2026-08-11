@@ -411,16 +411,21 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     const poly_traj::Trajectory &mw = pm_->traj_.local_traj.traj;
     const FlightVerdict mv = evaluateFlight(
         mw, {{mw.getTotalDuration(), PhaseKind::CRUISE, "direct"}});
-    if (!mv.evaluated || mv.unflyable()) {
+    // unflyableMeasured(), NOT unflyable(). A multi-leg front end runs one
+    // zone search PER LEG and zonePolicySnapshot is plan-wide-or-nothing
+    // (path_manager.cpp:3775), so every multi-waypoint mission with a zone
+    // ANYWHERE reports policy_measurable=false — and gating on that refused
+    // all of them outright, whatever the flight did. That was a regression
+    // this gate introduced. The unmeasured scope is degraded and named
+    // below instead.
+    if (!mv.evaluated || mv.unflyableMeasured()) {
       char why[192];
       snprintf(why, sizeof why,
-               "multi-waypoint single-shot flight is unflyable (%s%s%s%s%s)",
+               "multi-waypoint single-shot flight is unflyable (%s%s%s%s)",
                !mv.evaluated ? "not evaluated" : "",
                mv.underground ? "terrain overlap; " : "",
                mv.no_cruise ? "never reaches cruise; " : "",
-               mv.zone_hard_n > 0 ? "authored zone entered; " : "",
-               mv.evaluated && !mv.policy_measurable
-                   ? "zone policy unevaluated" : "");
+               mv.zone_hard_n > 0 ? "authored zone entered; " : "");
       log_->errorf("[STITCH-GATE] %s", why);
       invalidateStoredTrajectory();
       return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE,
@@ -429,6 +434,14 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     PlanResult r = PlanResult::success();
     r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
               "multi-waypoint mission — chain not attempted");
+    if (!mv.policy_measurable) {
+      const char *why2 =
+          "zone policy was NOT evaluated: a multi-leg front end cannot "
+          "produce a plan-wide zone snapshot, so this flight is uncleared "
+          "with respect to risk zones";
+      log_->warnf("[STITCH-GATE] %s", why2);
+      r.degrade(PlanReason::ZONE_POLICY_UNEVALUATED, why2);
+    }
     degradeForVerdict(&r, mv, "multi-waypoint single-shot flight");
     return r;
   }
@@ -1698,7 +1711,9 @@ PlanResult SegmentChainPlanner::planTransitionMission(
           // endpoint exemptions) stay traversable, exposure measured.
           if (snap.zones[i].disposition ==
               PathManager::ZoneDisposition::HARD_AVOID)
-            return tp::ZoneProbe::CONTACT_HARD;
+            return pm_->zoneContactAuthored(snap, i, p_u)
+                       ? tp::ZoneProbe::CONTACT_AUTHORED
+                       : tp::ZoneProbe::CONTACT_STANDOFF;
           break;
         case PathManager::ZoneContactResult::STALE:
         case PathManager::ZoneContactResult::INVALID:
@@ -2019,6 +2034,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
     // pass. Phase labels decide what the spans are CALLED, never whether the
     // flight is judged.
     log_->infof("[PLAN-MODE] direct");
+    FlightVerdict direct_verdict{};
     {
       // The LOCAL slot carries the optimized trajectory that is actually
       // flown; the global slot is the pre-L-BFGS seed (path_manager.cpp
@@ -2027,6 +2043,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
       const poly_traj::Trajectory &fly = pm_->traj_.local_traj.traj;
       const FlightVerdict fv = evaluateFlight(
           fly, {{fly.getTotalDuration(), PhaseKind::CRUISE, "direct"}});
+      direct_verdict = fv;
       // Fail-CLOSED (review find): a flight the evaluator could not judge
       // is as unflyable as one it condemned — "no verdict" must never read
       // as "clean" for a product that skipped every whole-flight audit.
@@ -2060,6 +2077,11 @@ PlanResult SegmentChainPlanner::planOverRoute(
     if (!hardmin.empty())
       r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
                 "hard limits preserved conservatively in the single plan");
+    // The fourth caller the helper's own comment promised and did not have.
+    // Without it the same trajectory was DEGRADED when the chain delivered
+    // it and SUCCESS when the direct path did — the standoff shell went
+    // unreported on 21 of the archived 176 runs' worth of direct products.
+    degradeForVerdict(&r, direct_verdict, "direct fallback");
     return r;
   };
 

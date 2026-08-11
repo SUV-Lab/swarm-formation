@@ -370,7 +370,7 @@ int main(int argc, char **argv)
     auto req = makeRequest(baseParams());
     req.zone_probe = [](const Eigen::Vector3d &p) {
       return (p.x() > 2000.0 && p.x() < 2400.0)
-                 ? tp::ZoneProbe::CONTACT_HARD
+                 ? tp::ZoneProbe::CONTACT_AUTHORED
                  : tp::ZoneProbe::CLEAR;
     };
     const auto r = tp::generate(req);

@@ -919,7 +919,7 @@ ReproductionMetrics evaluateReproduction(
     m.gate_zone_skipped = false;
     for (const auto &fs : flown.samples) {
       const auto z = hooks.zone_probe(fs.pos_m);
-      if (z == tp::ZoneProbe::CONTACT_HARD) ++m.zone_hard_contacts;
+      if (z == tp::ZoneProbe::CONTACT_AUTHORED) ++m.zone_hard_contacts;
       if (z == tp::ZoneProbe::STALE_OR_INVALID) {
         // Never readable as clear: the whole evaluation is void.
         m.measured = false;

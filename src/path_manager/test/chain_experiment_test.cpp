@@ -159,7 +159,7 @@ int main(int argc, char **argv)
        with_transfallback = false, with_overrouteretry = false,
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false, with_hardpen = false,
-       with_standoffpen = false,
+       with_standoffpen = false, with_wpzone = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -314,6 +314,7 @@ int main(int argc, char **argv)
     // it, "a hard contact refuses the flight" is a branch nothing executes.
     if (v == "hardpen") { with_route = true; with_hardpen = true; }
     if (v == "standoffpen") { with_route = true; with_standoffpen = true; }
+    if (v == "wpzone") { with_route = true; with_wpzone = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -744,7 +745,7 @@ int main(int argc, char **argv)
           case path_manager::PathManager::ZoneContactResult::CONTACT:
             if (snap.zones[i].disposition ==
                 path_manager::PathManager::ZoneDisposition::HARD_AVOID)
-              return path_manager::transition_phase::ZoneProbe::CONTACT_HARD;
+              return path_manager::transition_phase::ZoneProbe::CONTACT_AUTHORED;
             break;
           default:
             return path_manager::transition_phase::ZoneProbe::
@@ -900,7 +901,7 @@ int main(int argc, char **argv)
       int src_contacts = 0;
       for (const auto &p_m : src.pos_m)
         if (hooks.zone_probe(p_m) ==
-            path_manager::transition_phase::ZoneProbe::CONTACT_HARD)
+            path_manager::transition_phase::ZoneProbe::CONTACT_AUTHORED)
           ++src_contacts;
       expect(src_contacts == 0,
              "the PLANNED trajectory itself never contacts a hard zone");
@@ -1766,6 +1767,45 @@ int main(int argc, char **argv)
     expect(pm->traj_.local_traj.duration == 0.0 &&
                pm->traj_.local_traj.start_time == 0.0,
            "...and the stored trajectory stops being executable");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_wpzone) {
+    // A multi-waypoint mission with a risk zone ANYWHERE must still plan.
+    // The whole-flight gate added to this branch refused all of them: a
+    // multi-leg front end runs one zone search PER LEG and
+    // zonePolicySnapshot is plan-wide-or-nothing, so policy_measurable is
+    // false for every such mission and unflyable() fired on it — whatever
+    // the flight did, and however far the zone was from the route.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(600.0, 600.0, 3.0);   // far off the route
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+
+    // Two legs: an intermediate waypoint plus the goal.
+    std::vector<Eigen::Vector3d> legs;
+    legs.push_back(0.5 * (start_pos + goal[0]));
+    legs.push_back(goal[0]);
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, start_vel, start_acc, legs, true, {});
+
+    expect(r.hasTrajectory(),
+           "a multi-waypoint mission with a distant zone still plans");
+    expect(r.outcome == path_manager::PlanOutcome::DEGRADED,
+           "...as DEGRADED, because something really was not checked");
+    // The scope must be NAMED. Planning it while saying nothing about the
+    // zones would be the fail-open this gate exists to prevent; refusing it
+    // was the outage. The third option is the correct one: fly it and say
+    // what was not evaluated.
+    expect(r.detail.find("zone policy was NOT evaluated") != std::string::npos,
+           "...and the unevaluated zone policy is stated to the caller");
+    const auto snap = pm->zonePolicySnapshot();
+    expect(!snap.valid,
+           "the multi-leg snapshot really is invalid — the premise holds");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
