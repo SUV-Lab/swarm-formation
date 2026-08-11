@@ -543,6 +543,15 @@ namespace path_manager
                                 const Eigen::Vector3d &pos) const {
       return riskShadowCeiling(zone_index, pos);
     }
+    // Normalized ellipsoid radius: q < 1 is inside the AUTHORED volume, and
+    // the contact gate fires at q < 1.05. A contact count alone cannot tell
+    // those apart — a graze of the standoff shell and a traverse of the
+    // authored zone print the same number — so the audit reports q too.
+    double getZoneEllipsoidRadius(size_t zone_index,
+                                  const Eigen::Vector3d &pos) const {
+      if (zone_index >= risk_zones_.size()) return 1e9;
+      return riskEllipsoidRadius(risk_zones_[zone_index], pos);
+    }
     double getEffectiveRisk(size_t zone_index,
                             const Eigen::Vector3d &pos) const {
       return riskZoneValue(zone_index, pos);

@@ -1,0 +1,28 @@
+{
+  "pinned_sha": "bea94b8d3869af4b2aab15f062f4af78e88d45df",
+  "ws": "/home/user/ab",
+  "reps": 5,
+  "rasters": {
+    "full_map.tif": {
+      "bytes": 378792007,
+      "mtime": 1784967889,
+      "realpath": "/ws/src/mmp_terrain/data/full_map.tif"
+    },
+    "full_map_dem30.tif": {
+      "bytes": 2110484454,
+      "mtime": 1784967889,
+      "realpath": "/ws/src/mmp_terrain/data/full_map_dem30.tif"
+    },
+    "small_island.tif": {
+      "bytes": 261726,
+      "mtime": 1780772518,
+      "realpath": "/ws/src/mmp_terrain/data/small_island.tif"
+    }
+  },
+  "only": 0,
+  "direct_reps": 1,
+  "missions": "/home/user/ab/src/mmp_terrain/data/scenarios/missions",
+  "obstacles": "/home/user/ab/src/mmp_terrain/data/scenarios/obstacles",
+  "scenario_sha256": "e912cbcd5134444bdd2e18aa077bfc32a5784b5c2e4b9d99223f437c0b653c01",
+  "started": "2026-08-11 14:57:48"
+}

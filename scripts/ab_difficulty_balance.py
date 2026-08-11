@@ -60,7 +60,9 @@ FIELDS = [
     "soft_zone_contacts", "zone_policy_measurable", "zone_sample_dt",
     "obstacles_expected", "obstacles_added", "obstacles_deferred",
     "obstacles_skipped", "retry_fallback", "seam_worst",
-    "zones_in_search", "leaked_procs", "log", "log_src",
+    "zones_in_search", "leaked_procs", "yaw_seed",
+    "hard_zone_qmin", "hard_zone_t0", "hard_zone_t1", "hard_zone_runs",
+    "log", "log_src",
 ]
 
 RX = {
@@ -113,6 +115,18 @@ RX = {
     "plan_total_ms": r"Global trajectory planning took (\d+) ms",
     # Explicit rather than inferred from the absence of a chain line.
     "plan_mode": r"\[PLAN-MODE\] (direct|chain)",
+    # [ZONE-CONTACT] — emitted only when hard > 0. q_min is the one number
+    # that separates a graze of the 1.05x routing standoff from a traverse of
+    # the volume the mission authored: q < 1.00 is inside the authored
+    # ellipsoid, 1.00 <= q < 1.05 is the standoff shell where the optimizer's
+    # risk term is zero by construction.
+    "hard_zone_qmin": r"\[ZONE-CONTACT\].* q_min=([0-9.]+)",
+    "hard_zone_t0": r"\[ZONE-CONTACT\] zone=-?\d+ t=\[([0-9.]+),",
+    "hard_zone_t1": r"\[ZONE-CONTACT\] zone=-?\d+ t=\[[0-9.]+, ([0-9.]+)\]",
+    "hard_zone_runs": r"\[ZONE-CONTACT\].* runs=(\d+)",
+    # The planner echoes the seed it applied; recording it from the LOG
+    # rather than from the harness proves the parameter actually arrived.
+    "yaw_seed": r"dyn_yaw_seed: (?:FIXED|RANDOM -> ) ?(\d+)",
 }
 
 
@@ -203,7 +217,24 @@ def newest_log(logdir, after_ts):
     return max(c, key=os.path.getmtime) if c else None
 
 
-def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, logdir):
+def yaw_seed_for(mission, rep, override):
+    """One obstacle layout per (mission, rep), shared by BOTH arms.
+
+    manager/dyn_yaw_seed defaults to -1 in the shipped yaml, which draws a
+    fresh random_device seed every process. Each arm is its own process, so
+    off and on were planning against DIFFERENTLY ORIENTED obstacles — the
+    pairing exists precisely to remove that factor and instead carried it.
+    Derived from a stable digest rather than hash(), which is salted per
+    process and would defeat the point on the next run.
+    """
+    if override is not None:
+        return override
+    h = hashlib.sha256(f"{mission}|{rep}".encode()).hexdigest()
+    return int(h[:8], 16) & 0x7FFFFFFF
+
+
+def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir,
+            logdir, yaw_seed):
     for nm in ("path_manager_node", "terrain_publisher", "topic pub"):
         reap(nm)
     time.sleep(4)
@@ -231,6 +262,7 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
           f"--params-file {ws}/install/path_manager/share/path_manager/config/drone_hardware.yaml "
           f"-p drone_id:=0 -p manager/world:=full_map "
           f"-p chain/difficulty_balance:={dbal} "
+          f"-p manager/dyn_yaw_seed:={yaw_seed} "
           f"-p chain/auto_pieces_per_segment:={pieces_target} "
         f"> /tmp/ab_pm.log 2>&1", ws))
 
@@ -426,6 +458,10 @@ def main():
     # rep would inflate the sweep by half for no pairwise value.
     ap.add_argument("--direct-reps", type=int, default=1,
                     help="reps that also run the direct-mode probe arm")
+    ap.add_argument("--yaw-seed", type=int, default=None,
+                    help="force ONE obstacle-orientation seed for every run "
+                         "(reproducing a specific archived run; the planner "
+                         "log of that run prints the seed it drew)")
     ap.add_argument("--out", required=True)
     # Inputs default INSIDE the pinned workspace. They used to default to
     # /ws — the dev tree — so the binary was pinned while the missions,
@@ -484,13 +520,14 @@ def main():
             for mission, scenario in missions:
                 # Alternate, so a warm-up or drift effect cannot masquerade as
                 # an arm effect in the timing columns.
+                seed = yaw_seed_for(mission, rep, a.yaw_seed)
                 arms = ("off", "on") if rep % 2 else ("on", "off")
                 if rep <= a.direct_reps:
                     arms = arms + ("direct_off",)
                 for arm in arms:
                     try:
                         row = run_one(a.ws, a.out, mission, scenario, arm, rep,
-                                      a.missions, a.obstacles, a.logdir)
+                                      a.missions, a.obstacles, a.logdir, seed)
                     except Exception as e:  # a crashed run is data, not a stop
                         row = {"rep": rep, "arm": arm, "mission": mission,
                                "scenario": scenario or "", "outcome": "HARNESS_ERROR",

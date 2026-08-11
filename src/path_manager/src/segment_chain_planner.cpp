@@ -2868,6 +2868,19 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     int zone_soft_n{0};
     double zone_soft_s{0.0};
     bool zone_contact_measurable{true};
+    // [ZONE-CONTACT] WHERE and HOW DEEP, not just how many. A count alone
+    // cannot separate a 2 m graze of the 1.05x standoff shell from a
+    // traverse of the authored volume, and those two call for opposite
+    // responses. q < 1 is inside the authored ellipsoid; the gate fires at
+    // q < 1.05, so q_min is the number that says which one happened.
+    double zone_hard_t_first{-1.0};
+    double zone_hard_t_last{-1.0};
+    int zone_hard_runs{0};       // contiguous contact intervals
+    bool zone_hard_prev{false};  // sampler state behind the run count
+    double zone_hard_qmin{1e9};
+    Eigen::Vector3d zone_hard_qmin_p{Eigen::Vector3d::Zero()};
+    double zone_hard_qmin_vis{-1.0};
+    int zone_hard_qmin_zone{-1};
   };
   std::vector<PhaseStat> st(spans.size());
 
@@ -2928,15 +2941,22 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       s.risk_int += r * dt;
 
       bool hard = false, soft = false;
+      int hard_zi = -1;
+      double hard_q = 1e9;
       for (size_t zi = 0; zi < nz; ++zi) {
         switch (pm_->zoneContact(eval_snap, zi, p)) {
           case PathManager::ZoneContactResult::CONTACT:
             if (zi < eval_snap.zones.size() &&
                 eval_snap.zones[zi].disposition ==
-                    PathManager::ZoneDisposition::HARD_AVOID)
+                    PathManager::ZoneDisposition::HARD_AVOID) {
               hard = true;
-            else
+              // Only on contact, so the deep-sample cost never touches the
+              // common path.
+              const double q = pm_->getZoneEllipsoidRadius(zi, p);
+              if (q < hard_q) { hard_q = q; hard_zi = static_cast<int>(zi); }
+            } else {
               soft = true;
+            }
             break;
           case PathManager::ZoneContactResult::STALE:
           case PathManager::ZoneContactResult::INVALID:
@@ -2949,7 +2969,21 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
             break;
         }
       }
-      if (hard) { ++s.zone_hard_n; s.zone_hard_s += dt; }
+      if (hard) {
+        ++s.zone_hard_n;
+        s.zone_hard_s += dt;
+        if (s.zone_hard_t_first < 0.0) s.zone_hard_t_first = t;
+        s.zone_hard_t_last = t;
+        if (!s.zone_hard_prev) ++s.zone_hard_runs;
+        if (hard_q < s.zone_hard_qmin) {
+          s.zone_hard_qmin = hard_q;
+          s.zone_hard_qmin_p = p;
+          s.zone_hard_qmin_zone = hard_zi;
+          s.zone_hard_qmin_vis =
+              hard_zi >= 0 ? pm_->getRiskVisibility(hard_zi, p) : -1.0;
+        }
+      }
+      s.zone_hard_prev = hard;
       if (soft) { ++s.zone_soft_n; s.zone_soft_s += dt; }
     }
   }
@@ -3003,6 +3037,19 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     tot.risk_int += s.risk_int;
     tot.zone_hard_n += s.zone_hard_n;
     tot.zone_hard_s += s.zone_hard_s;
+    tot.zone_hard_runs += s.zone_hard_runs;
+    if (s.zone_hard_t_first >= 0.0 &&
+        (tot.zone_hard_t_first < 0.0 ||
+         s.zone_hard_t_first < tot.zone_hard_t_first))
+      tot.zone_hard_t_first = s.zone_hard_t_first;
+    if (s.zone_hard_t_last > tot.zone_hard_t_last)
+      tot.zone_hard_t_last = s.zone_hard_t_last;
+    if (s.zone_hard_qmin < tot.zone_hard_qmin) {
+      tot.zone_hard_qmin = s.zone_hard_qmin;
+      tot.zone_hard_qmin_p = s.zone_hard_qmin_p;
+      tot.zone_hard_qmin_vis = s.zone_hard_qmin_vis;
+      tot.zone_hard_qmin_zone = s.zone_hard_qmin_zone;
+    }
     tot.zone_soft_n += s.zone_soft_n;
     tot.zone_soft_s += s.zone_soft_s;
     tot.zone_contact_measurable &= s.zone_contact_measurable;
@@ -3072,6 +3119,24 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
               v.zone_hard_n, tot.zone_hard_s, v.zone_soft_n, tot.zone_soft_s,
               v.policy_measurable ? "true" : "false", dt,
               tot.risk_max, tot.risk_int);
+  // The count above says a breach happened; this says WHICH breach. Without
+  // it, a 2 m graze of the 1.05x standoff shell and a traverse of the
+  // authored volume are the same line — and they are not the same event.
+  // q_min < 1.00 means the flight was inside the zone the mission authored;
+  // 1.00 <= q_min < 1.05 means it stayed in the routing standoff margin,
+  // where the optimizer's risk term is zero by construction and risk_max
+  // above is therefore 0.0000 whatever the flight did.
+  // runs= is summed per phase, so a contact straddling a phase boundary
+  // reads as two.
+  if (tot.zone_hard_n > 0) {
+    log_->infof("[ZONE-CONTACT] zone=%d t=[%.2f, %.2f]s runs=%d q_min=%.5f "
+                "%s vis=%.3f at (%.2f, %.2f, %.2f)",
+                tot.zone_hard_qmin_zone, tot.zone_hard_t_first,
+                tot.zone_hard_t_last, tot.zone_hard_runs, tot.zone_hard_qmin,
+                tot.zone_hard_qmin < 1.0 ? "INSIDE-AUTHORED" : "standoff-shell",
+                tot.zone_hard_qmin_vis, tot.zone_hard_qmin_p.x(),
+                tot.zone_hard_qmin_p.y(), tot.zone_hard_qmin_p.z());
+  }
   // LAST, and only once every field is filled: an earlier assignment left
   // viol_pct/util_peak at zero in the recorded copy.
   last_verdict_ = v;
