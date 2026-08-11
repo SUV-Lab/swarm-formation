@@ -179,6 +179,20 @@ public:
   // missing, when the check never ran, and when an older file is read by
   // mistake — three ways to certify a safety property nobody measured.
   const FlightVerdict &lastFlightVerdict() const { return last_verdict_; }
+  // Test seam: judge a SYNTHESISED flight. The refusal branch for a
+  // hard-zone contact cannot be reached by planning — the 3-pass exists to
+  // prevent exactly that trajectory — so the regression has to supply one.
+  FlightVerdict evaluateFlightForTest(
+      const poly_traj::Trajectory &flight,
+      const std::vector<PhaseSpan> &spans) const {
+    return evaluateFlight(flight, spans);
+  }
+  // ...and the mapping from that verdict to what the caller receives, so a
+  // regression can pin BOTH halves: that a hard contact is detected, and
+  // that detecting it refuses the flight and drops any stored trajectory.
+  PlanResult verdictResultForTest(const FlightVerdict &fv) {
+    return stitchedVerdictResult(fv, PlanResult::success());
+  }
 
   // [S13] Start-state regime classifier (enum, never string-matched): the
   // single entry gate plan() dispatches on. TRANSITION_REQUIRED = outside
@@ -233,8 +247,8 @@ private:
   // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
   // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
   // budget exceeded -> the given result degraded, otherwise unchanged.
-  // PRIVATE since the coordinator internalized it: the harness pins the
-  // mapping through the public planOverRoute path (coverage relocation).
+  // PRIVATE since the coordinator internalized it; the harness reaches it
+  // through verdictResultForTest above, and through planOverRoute end to end.
   PlanResult stitchedVerdictResult(const FlightVerdict &fv,
                                    PlanResult ok_result) const;
   // Junction contract: the shared boundary state between two adjacent runs.

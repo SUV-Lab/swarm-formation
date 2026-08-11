@@ -25,7 +25,8 @@ import subprocess
 import sys
 
 REQUIRED = ["min_agl_u", "env_peak_pct", "env_viol_pct", "risk_max",
-            "risk_exposure_s", "hard_zone_contacts", "plan_total_ms"]
+            "risk_exposure_s", "hard_zone_contacts", "zone_policy_measurable",
+            "zone_sample_dt", "plan_total_ms"]
 USABLE = ("CLEAN", "DEGRADED")
 
 

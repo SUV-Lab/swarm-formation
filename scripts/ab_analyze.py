@@ -35,7 +35,8 @@ SAFETY_LOWER_BETTER = ["env_viol_pct", "env_peak_pct", "risk_exposure_s",
 # nobody has to act on.
 REQUIRED_ON_SUCCESS = ["min_agl_u", "env_peak_pct", "env_viol_pct",
                        "risk_max", "risk_exposure_s", "hard_zone_contacts",
-                       "plan_total_ms"]
+                       "zone_policy_measurable", "zone_sample_dt",
+                       "plan_mode", "plan_total_ms"]
 # plan_total_ms spans both planning modes; the chain-only columns are checked
 # per mode instead of globally.
 TIME = ["plan_total_ms", "chain_total_ms", "max_solve_ms", "frontend_ms"]
@@ -122,6 +123,25 @@ def main():
         print("이 데이터로는 판정할 수 없다. 하네스가 해당 지표를 실제로")
         print("기록하는지 확인하고 다시 측정할 것 (종료코드 2).")
         sys.exit(2)
+
+    # --- absolute safety invariants ---------------------------------------
+    # Not a comparison. No successful row may have entered a hard zone or
+    # have an unjudgeable policy, in EITHER arm — that is a defect to fix,
+    # not a difference to weigh, so it stops the analysis rather than
+    # appearing as a column.
+    hard = [r for r in rows if r["outcome"] in USABLE
+            and (r.get("hard_zone_contacts") or "0") not in ("0", "")]
+    unmeas = [r for r in rows if r["outcome"] in USABLE
+              and (r.get("zone_policy_measurable") or "") != "true"]
+    if hard or unmeas:
+        print("!!! 안전 불변조건 위반 — 이 데이터로 판정하면 안 된다:")
+        for r in hard[:5]:
+            print(f"      하드 구역 접촉 {r['hard_zone_contacts']}: "
+                  f"rep{r['rep']} {r['arm']} {r['mission'][:24]}/{r['scenario'][:16]}")
+        for r in unmeas[:5]:
+            print(f"      구역 정책 판정 불가: rep{r['rep']} {r['arm']} "
+                  f"{r['mission'][:24]}/{r['scenario'][:16]}")
+        sys.exit(3)
 
     # --- pairwise metric comparison ----------------------------------------
     pairs = [(k, v) for k, v in by_key.items()

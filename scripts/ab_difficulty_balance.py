@@ -54,7 +54,7 @@ FIELDS = [
     "eikonal_ms", "grid", "ceiling_u", "geo_z_max_u", "pieces", "flight_s",
     "min_agl_u", "env_viol_pct", "env_peak_pct", "env_peak_limit",
     "risk_max", "risk_exposure_s", "hard_zone_contacts", "hard_zone_contact_s",
-    "soft_zone_contacts", "zone_policy_measurable",
+    "soft_zone_contacts", "zone_policy_measurable", "zone_sample_dt",
     "obstacles_expected", "obstacles_added", "obstacles_deferred",
     "obstacles_skipped", "retry_fallback", "seam_worst",
     "zones_in_search", "leaked_procs", "log", "log_src",
@@ -87,22 +87,29 @@ RX = {
     # so the column it fed was empty in all 160 rows of the first sweep while
     # the document claimed zone contact was among the safety metrics. What
     # FINAL-EVAL actually reports is peak risk and time spent exposed.
-    "risk_max": r"risk max ([0-9.]+)",
-    "risk_exposure_s": r"risk exposure ([0-9.]+) s",
+    # From [ZONE-AUDIT], which carries the WHOLE-FLIGHT values. The bare
+    # "risk max" string appears on every per-span line, so taking the last
+    # match returned the final span — usually arrival — not the flight.
+    "risk_max": r"\[ZONE-AUDIT\].* risk_max=([0-9.]+)",
+    "risk_exposure_s": r"\[ZONE-AUDIT\].* risk_exposure_s=([0-9.]+)",
     # The actual question — did the delivered flight enter a hard zone —
     # measured by the planner against the same primitive the hard passes use.
     # risk_max/exposure are field statistics and cannot answer it.
-    # Matches the CURRENT log form. The previous pattern kept matching an
-    # older one, which would have made the metric silently absent on a rerun
-    # — the same failure mode as the nonexistent zone_hard_contacts string.
-    "hard_zone_contacts": r"zone contact hard (\d+) ",
-    "hard_zone_contact_s": r"zone contact hard \d+ \(([0-9.]+) s\)",
-    "soft_zone_contacts": r"zone contact hard \d+ \([0-9.]+ s\) soft (\d+) ",
-    "zone_policy_measurable": r"(UNMEASURABLE|UNEVALUATED)",
+    # ONE machine-readable line, parsed positionally. Deriving safety from
+    # the ABSENCE of a warning word is fail-open by construction: a reworded
+    # log or a dropped call both read as "measurable, no contact". A missing
+    # [ZONE-AUDIT] line is a missing measurement and fails the run.
+    "hard_zone_contacts": r"\[ZONE-AUDIT\] hard=(\d+)",
+    "hard_zone_contact_s": r"\[ZONE-AUDIT\] hard=\d+ hard_s=([0-9.]+)",
+    "soft_zone_contacts": r"\[ZONE-AUDIT\].* soft=(\d+)",
+    "zone_policy_measurable": r"\[ZONE-AUDIT\].* measurable=(true|false)",
+    "zone_sample_dt": r"\[ZONE-AUDIT\].* sample_dt=([0-9.]+)",
     # Common to BOTH planning modes. The chain-only "=> TOTAL n ms" is absent
     # on the direct-fallback path, which is why 10 successful rows had no time
     # at all in the first sweep.
     "plan_total_ms": r"Global trajectory planning took (\d+) ms",
+    # Explicit rather than inferred from the absence of a chain line.
+    "plan_mode": r"\[PLAN-MODE\] (direct|chain)",
 }
 
 
@@ -203,13 +210,20 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
     launched.append(sh_bg(
         f"exec ros2 run mmp_terrain terrain_publisher --ros-args -p world:=full_map "
         f"-p corridor_mission:={mpath} > /tmp/ab_terr.log 2>&1", ws))
-    dbal = "true" if arm == "on" else "false"
+    dbal = "true" if arm in ("on", "direct_on") else "false"
+    # A direct-mode probe: an enormous per-segment target makes auto-N pick
+    # the single-shot plan, which is the only way to exercise the direct
+    # path's timing and its whole-flight gate on demand. Until that gate was
+    # made unconditional this probe would have "passed" without any safety
+    # evaluation at all.
+    pieces_target = 100000 if arm.startswith("direct") else 35
     launched.append(sh_bg(
         f"exec ros2 run path_manager path_manager_node --ros-args "
           f"--params-file {ws}/install/path_manager/share/path_manager/config/optimizer_params.yaml "
           f"--params-file {ws}/install/path_manager/share/path_manager/config/drone_hardware.yaml "
           f"-p drone_id:=0 -p manager/world:=full_map "
-          f"-p chain/difficulty_balance:={dbal} -p chain/auto_pieces_per_segment:=35 "
+          f"-p chain/difficulty_balance:={dbal} "
+          f"-p chain/auto_pieces_per_segment:={pieces_target} "
         f"> /tmp/ab_pm.log 2>&1", ws))
 
     # Readiness poll instead of a fixed sleep: the planner must have INGESTED
@@ -366,16 +380,10 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
         m = re.findall(r"loadObstacles: added=(\d+) deferred=(\d+) "
                        r"skipped=(\d+) \(total in msg=(\d+)\)", text)
         oc = tuple(int(x) for x in m[-1]) if m else None
-    # the regex captures the WARNING word; absence means it was measurable
-    row["zone_policy_measurable"] = "false" if row.get(
-        "zone_policy_measurable") else "true"
     row["obstacles_expected"] = n_obs
     row["obstacles_added"] = oc[0] if oc else ""
     row["obstacles_deferred"] = oc[1] if oc else ""
     row["obstacles_skipped"] = oc[2] if oc else ""
-    # Which planning path ran: frontend/chain columns are undefined on the
-    # direct-fallback path and must read as "not applicable", not "missing".
-    row["plan_mode"] = "chain" if row.get("chain_total_ms") else "direct"
     row["log_src"] = os.path.basename(lg)   # planner's own timestamped name
     row["log"] = archived                   # what is actually in the archive
     for h in launched:

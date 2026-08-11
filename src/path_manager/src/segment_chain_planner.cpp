@@ -1,5 +1,7 @@
 #include "path_manager/segment_chain_planner.h"
 
+#include <optional>
+
 #include <cstdio>
 
 #include "path_manager/traj_sampling.h"
@@ -169,6 +171,10 @@ void SegmentChainPlanner::resetPlanState()
   phase_applied_ = false;
   phase_note_.clear();
   last_spans_.clear();
+  // Per-plan like the spans beside it: a caller reading lastFlightVerdict()
+  // after a plan that never got as far as evaluating must not be handed the
+  // previous mission's answer.
+  last_verdict_ = FlightVerdict{};
   dep_candidates_.clear();
   arr_candidates_.clear();
   phase_tan_grade_ = 1e9;
@@ -369,9 +375,34 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
                              mission_tail))
       return PlanResult::failed("multi-waypoint single-shot plan failed");
+    // Same contract as every other direct product: judged before it is
+    // accepted. "Chain not attempted" is a statement about how the flight
+    // was produced, never about whether it was checked.
+    log_->infof("[PLAN-MODE] direct");
+    const poly_traj::Trajectory &mw = pm_->traj_.local_traj.traj;
+    const FlightVerdict mv = evaluateFlight(
+        mw, {{mw.getTotalDuration(), PhaseKind::CRUISE, "direct"}});
+    if (!mv.evaluated || mv.unflyable()) {
+      char why[192];
+      snprintf(why, sizeof why,
+               "multi-waypoint single-shot flight is unflyable (%s%s%s%s%s)",
+               !mv.evaluated ? "not evaluated" : "",
+               mv.underground ? "terrain overlap; " : "",
+               mv.no_cruise ? "never reaches cruise; " : "",
+               mv.zone_hard_n > 0 ? "hard-zone contact; " : "",
+               mv.evaluated && !mv.policy_measurable
+                   ? "zone policy unevaluated" : "");
+      log_->errorf("[STITCH-GATE] %s", why);
+      invalidateStoredTrajectory();
+      return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE,
+                                       why);
+    }
     PlanResult r = PlanResult::success();
     r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
               "multi-waypoint mission — chain not attempted");
+    if (!mv.clean)
+      r.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET,
+                "whole-flight reading exceeds the envelope budget");
     return r;
   }
 
@@ -428,15 +459,62 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   // the degrade path leaves: baseline in BOTH slots (at this point the
   // global slot still holds the MINCO seed — the baseline copy normally
   // happens after the segments run) plus viz and the final evaluation.
+  // One gate, two baseline exits. Both used to store and publish first and
+  // keep evaluateFlight only for its log line; a whole-flight refusal that
+  // the stitched path enforces must not be escapable by bailing out to the
+  // baseline.
+  FlightVerdict baseline_verdict{};
+  const auto baseline_gate = [&](const poly_traj::Trajectory &b)
+      -> std::optional<PlanResult> {
+    const auto bv = evaluateFlight(
+        b, {{b.getTotalDuration(), PhaseKind::CRUISE, "baseline"}});
+    baseline_verdict = bv;
+    // !evaluated must fail too. unflyable() is false when nothing was
+    // judged, so testing it alone lets a flight the evaluator could not
+    // read pass as safe — the exact fail-open this gate exists to remove.
+    if (bv.evaluated && !bv.unflyable()) return std::nullopt;
+    char why[176];
+    snprintf(why, sizeof why,
+             "baseline flight is unflyable (%s%s%s%s%s) — whole-flight "
+             "evaluation",
+             !bv.evaluated ? "not evaluated" : "",
+             bv.underground ? "terrain overlap; " : "",
+             bv.no_cruise ? "never reaches cruise; " : "",
+             bv.zone_hard_n > 0 ? "hard-zone contact; " : "",
+             !bv.evaluated ? "" :
+                 (!bv.policy_measurable ? "zone policy unevaluated" : ""));
+    log_->errorf("[STITCH-GATE] %s", why);
+    invalidateStoredTrajectory();
+    return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
+  };
+
   const auto fly_baseline = [&]() {
+    // Explicit, so a consumer never has to infer the mode from the ABSENCE
+    // of a chain line — the same fail-open shape as inferring zone safety
+    // from a missing warning.
+    log_->infof("[PLAN-MODE] direct");
+    // EVALUATE BEFORE STORING. This path used to store, publish, and then
+    // call evaluateFlight for its log line only, discarding the answer — so
+    // a baseline that touched a HARD_AVOID volume, or one whose zone policy
+    // could not be judged, was returned as a success and was publishable.
+    // The stitched path refuses exactly that, and a bail-out to the baseline
+    // must not be the way around the refusal.
+    if (const auto bad = baseline_gate(baseline)) return *bad;
     const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
     pm_->traj_.setGlobalTraj(baseline, now_s);
     pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
     pm_->publishTrajectoryViz(baseline, baseline);
-    evaluateFlight(baseline, {{T, PhaseKind::CRUISE, "baseline"}});
     // A mission genuinely too small to split IS correctly served by the
     // baseline — SUCCESS, not a degradation (outcome matrix, frozen).
-    return PlanResult::success();
+    PlanResult r = PlanResult::success();
+    // ...but a baseline whose whole-flight reading exceeds the envelope
+    // budget must SAY so. Only unflyable() refuses here; everything else was
+    // returning a plain SUCCESS while FINAL-EVAL printed CHECK, so the two
+    // channels disagreed about the same flight.
+    if (!baseline_verdict.clean)
+      r.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET,
+                "baseline whole-flight reading exceeds the envelope budget");
+    return r;
   };
   if (!resolveAutoSegments(baseline.getPieceNum(), "baseline"))
     return fly_baseline();  // [AUTO-N] mission below the split threshold
@@ -644,21 +722,24 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
       // failed experiment is visible in the log, not in the sky.
       log_->warnf("[CHAIN] segment %d/%d FAILED — restoring and flying the "
                   "baseline", i + 1, segments_);
+      // Restore BEFORE both readouts: the risk viz and [FINAL-EVAL] must
+      // describe this baseline under MISSION-WIDE parameters, not the
+      // failed segment's overrides — same order as the success path. The
+      // gate therefore runs after the restore and before any storing.
+      restore_guard.restore();
+      if (const auto bad = baseline_gate(baseline)) return *bad;
       const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
       pm_->traj_.setGlobalTraj(baseline, now_s);
       pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
-      // Restore BEFORE both readouts: the risk viz and [FINAL-EVAL] must
-      // describe this baseline under MISSION-WIDE parameters, not the
-      // failed segment's overrides — same order as the success path.
-      restore_guard.restore();
       pm_->publishTrajectoryViz(baseline, baseline);
-      evaluateFlight(baseline, {{baseline.getTotalDuration(),
-                                 PhaseKind::CRUISE, "baseline"}});
       PlanResult r = PlanResult::success();
       r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
                 "segment " + std::to_string(i + 1) + "/" +
                     std::to_string(segments_) +
                     " failed — baseline restored");
+      if (!baseline_verdict.clean)
+        r.degrade(PlanReason::STITCHED_ENVELOPE_BUDGET,
+                  "baseline whole-flight reading exceeds the envelope budget");
       return r;
     }
     runs.push_back(pm_->traj_.local_traj.traj);
@@ -1907,7 +1988,15 @@ PlanResult SegmentChainPlanner::planOverRoute(
     // sibling — so the SAME fitness evaluation gates it: pass -> DEGRADED as
     // before, fail -> FAILED(DIRECT_FALLBACK_UNSAFE). "No phase labels"
     // must never mean "no gate".
-    if (readNumParam(node_, "chain/phase/enable", 0.0) != 0.0) {
+    // UNCONDITIONAL. This gate used to run only with chain/phase/enable on,
+    // which is the shape the A/B does NOT use: with phase off the direct
+    // product skipped the whole-flight evaluation entirely, so it carried no
+    // [ZONE-AUDIT], no hard-zone refusal and no [PLAN-MODE] line — a
+    // trajectory delivered without any of the checks the stitched path must
+    // pass. Phase labels decide what the spans are CALLED, never whether the
+    // flight is judged.
+    log_->infof("[PLAN-MODE] direct");
+    {
       // The LOCAL slot carries the optimized trajectory that is actually
       // flown; the global slot is the pre-L-BFGS seed (path_manager.cpp
       // stores out_global there as the comparison channel). Judging the
@@ -1918,7 +2007,9 @@ PlanResult SegmentChainPlanner::planOverRoute(
       // Fail-CLOSED (review find): a flight the evaluator could not judge
       // is as unflyable as one it condemned — "no verdict" must never read
       // as "clean" for a product that skipped every whole-flight audit.
-      if (!fv.evaluated || !fv.clean) {
+      // unflyable() adds the hard-zone and unmeasurable-policy conditions,
+      // which !clean alone does not carry to a refusal.
+      if (!fv.evaluated || fv.unflyable() || !fv.clean) {
         char why2[192];
         if (!fv.evaluated) {
           snprintf(why2, sizeof why2,
@@ -1926,10 +2017,12 @@ PlanResult SegmentChainPlanner::planOverRoute(
                    "fitness gate (degenerate product)");
         } else {
           snprintf(why2, sizeof why2,
-                   "direct fallback failed the flight fitness gate (%s%senv "
+                   "direct fallback failed the flight fitness gate (%s%s%s%senv "
                    "viol %.1f%%, peak %.1f%%)",
                    fv.underground ? "terrain overlap, " : "",
                    fv.no_cruise ? "never reaches cruise, " : "",
+                   fv.zone_hard_n > 0 ? "hard-zone contact, " : "",
+                   !fv.policy_measurable ? "zone policy unevaluated, " : "",
                    fv.viol_pct, 100.0 * fv.util_peak);
         }
         log_->errorf("[ENVELOPE] %s — FAILED (DIRECT_FALLBACK_UNSAFE)", why2);
@@ -2608,6 +2701,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
     snprintf(b, sizeof b, "%s%.0f", i ? "/" : "", solve_ms[i]);
     per += b;
   }
+  log_->infof("[PLAN-MODE] chain");
   log_->infof("[CHAIN-PAR] %s: front-end %.0f ms + author %.0f ms + solves "
               "[%s] ms (wall %.0f, max %.0f) => TOTAL %.0f ms | %d pieces, "
               "%.1f s flight",
@@ -2692,6 +2786,11 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     const poly_traj::Trajectory &flight,
     const std::vector<PhaseSpan> &spans) const
 {
+  // Clear FIRST, so an early return can never leave the PREVIOUS flight's
+  // verdict readable through lastFlightVerdict(). A regression that asserts
+  // on a stale verdict is worse than one that has none: it reports on a
+  // flight that is not the one under test.
+  last_verdict_ = FlightVerdict{};
   const double T = flight.getTotalDuration();
   if (T <= 1e-9 || spans.empty()) return {};
   // [S13] Span input contract, fail-closed to UNEVALUATED (the direct
@@ -2962,9 +3061,20 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   v.zone_hard_n = tot.zone_hard_n;
   v.zone_soft_n = tot.zone_soft_n;
   v.policy_measurable = tot.zone_contact_measurable;
-  last_verdict_ = v;
   v.viol_pct = viol_pct;
   v.util_peak = tot.util_peak;
+  // Machine-readable, always emitted, one line. A reader (and the A/B
+  // parser) must not have to infer zone safety from the ABSENCE of a
+  // warning word — that is fail-open by construction: a reworded log or a
+  // dropped call both read as "measurable, no contact".
+  log_->infof("[ZONE-AUDIT] hard=%d hard_s=%.1f soft=%d soft_s=%.1f "
+              "measurable=%s sample_dt=%.2f risk_max=%.4f risk_exposure_s=%.1f",
+              v.zone_hard_n, tot.zone_hard_s, v.zone_soft_n, tot.zone_soft_s,
+              v.policy_measurable ? "true" : "false", dt,
+              tot.risk_max, tot.risk_int);
+  // LAST, and only once every field is filled: an earlier assignment left
+  // viol_pct/util_peak at zero in the recorded copy.
+  last_verdict_ = v;
   return v;
 }
 

@@ -158,7 +158,7 @@ int main(int argc, char **argv)
        with_handoffcap = false, with_overroutebad = false,
        with_transfallback = false, with_overrouteretry = false,
        with_badspans = false, with_zonesnapshot = false,
-       with_zonewall = false, with_zonepass0 = false,
+       with_zonewall = false, with_zonepass0 = false, with_hardpen = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -306,6 +306,12 @@ int main(int argc, char **argv)
     if (v == "zonewall") { with_route = true; with_zonewall = true; }
     // zonepass0: zones + 3-pass policy OFF -> INVALID snapshot fail-closed.
     if (v == "zonepass0") { with_route = true; with_zonepass0 = true; }
+    // hardpen: a flight is judged against a zone the policy marked
+    // HARD_AVOID and that the trajectory demonstrably passes through. No
+    // planner run can produce this — the 3-pass exists to avoid it — so the
+    // flight is SYNTHESISED and handed to the evaluator directly. Without
+    // it, "a hard contact refuses the flight" is a branch nothing executes.
+    if (v == "hardpen") { with_route = true; with_hardpen = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -1674,6 +1680,91 @@ int main(int argc, char **argv)
     const auto snap2 = pm->zonePolicySnapshot();
     expect(snap2.valid, "single-goal epoch -> snapshot valid again");
 
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_hardpen) {
+    using ZD = path_manager::PathManager::ZoneDisposition;
+    using ZC = path_manager::PathManager::ZoneContactResult;
+    // A zone far from the route, so a NORMAL plan avoids it and the 3-pass
+    // leaves it HARD_AVOID on a VALID snapshot. Then a flight is synthesised
+    // straight THROUGH its centre and handed to the evaluator: the planner
+    // will not build such a trajectory, which is exactly why the refusal
+    // branch needs one made by hand. Without this the "hard contact refuses
+    // the flight" path ships untested.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(180.0, 120.0, 3.0);
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+    const path_manager::PlanResult r0 =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(r0.hasTrajectory(), "the avoiding plan itself succeeds");
+    const auto snap = pm->zonePolicySnapshot();
+    expect(snap.valid, "snapshot is VALID (the policy really ran)");
+    const bool is_hard = !snap.zones.empty() &&
+                         snap.zones[0].disposition == ZD::HARD_AVOID;
+    expect(is_hard, "an unneeded zone stays HARD_AVOID");
+    expect(pm->zoneContact(snap, 0, z.center) == ZC::CONTACT,
+           "the zone centre reads CONTACT on this snapshot");
+
+    // Straight line through the zone centre. The SPEED matters: 120 u in
+    // 120 s is 1.0 u/s = 100 m/s, below the 122 m/s cruise minimum, so such
+    // a flight is unflyable on no_cruise ALONE and the test would keep
+    // passing if the hard-zone condition were later dropped from
+    // unflyable(). 60 u per 40 s piece is 1.5 u/s = 150 m/s — inside the
+    // band — which leaves the hard contact as the only cause available.
+    const Eigen::Vector3d a(z.center.x() - 60.0, z.center.y(), z.center.z());
+    const Eigen::Vector3d b(z.center.x() + 60.0, z.center.y(), z.center.z());
+    const auto seg = [&](double f0, double f1) {
+      Eigen::Matrix<double, 3, 6> c = Eigen::Matrix<double, 3, 6>::Zero();
+      const Eigen::Vector3d p0 = a + f0 * (b - a);
+      const Eigen::Vector3d p1 = a + f1 * (b - a);
+      c.col(5) = p0;                 // constant term
+      c.col(4) = (p1 - p0) / 40.0;   // linear over the 40 s piece
+      return c;
+    };
+    const poly_traj::Trajectory through(
+        std::vector<double>{40.0, 40.0},
+        std::vector<poly_traj::CoefficientMat>{seg(0.0, 0.5), seg(0.5, 1.0)});
+    const auto fv = chain.evaluateFlightForTest(
+        through, {{through.getTotalDuration(),
+                   path_manager::SegmentChainPlanner::PhaseKind::CRUISE,
+                   "synthetic"}});
+    expect(fv.evaluated, "the synthetic flight was evaluated");
+    // Every OTHER unflyable cause must be absent, or "unflyable" below says
+    // nothing about the hard zone.
+    expect(!fv.underground, "the synthetic flight does not clip terrain");
+    expect(!fv.no_cruise, "...and it does reach cruise speed");
+    expect(fv.policy_measurable, "...on a snapshot that IS measurable");
+    expect(fv.zone_hard_n > 0,
+           "a flight through a HARD_AVOID volume counts hard contacts");
+    expect(fv.unflyable(),
+           "and THAT alone makes it unflyable — the hard contact is the only "
+           "cause left standing");
+
+    // The verdict must also reach the caller as a refusal. Detecting a hard
+    // contact and then returning it as a gradeable degradation would be the
+    // original defect wearing a new number.
+    // Store it first, the way an earlier stage would have. ReplanFSM
+    // executes local_traj on (duration > 0 && start_time > 0) alone
+    // (replan_fsm.cpp:461), so those two fields ARE the executability
+    // contract — and both must be non-zero going in, or the assertion
+    // below would pass against a default-constructed slot.
+    pm->traj_.setLocalTraj(through, 100.0, 0);
+    expect(pm->traj_.local_traj.duration > 0.0 &&
+               pm->traj_.local_traj.start_time > 0.0,
+           "the trajectory really is executable before the gate runs");
+    const auto pr = chain.verdictResultForTest(fv);
+    expect(!pr.hasTrajectory(), "a hard contact FAILS the plan");
+    expect(pr.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
+           "...as STITCHED_FLIGHT_UNSAFE, not an envelope budget");
+    expect(pm->traj_.local_traj.duration == 0.0 &&
+               pm->traj_.local_traj.start_time == 0.0,
+           "...and the stored trajectory stops being executable");
+    rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
     return 1;
