@@ -61,7 +61,7 @@ FIELDS = [
     "obstacles_expected", "obstacles_added", "obstacles_deferred",
     "obstacles_skipped", "retry_fallback", "seam_worst",
     "zones_in_search", "leaked_procs", "yaw_seed", "standoff_zone_contacts",
-    "zone_clearance_qmin",
+    "zone_clearance_qmin", "plan_outcome", "plan_reason",
     "hard_zone_qmin", "hard_zone_t0", "hard_zone_t1", "hard_zone_runs",
     "log", "log_src",
 ]
@@ -117,6 +117,12 @@ RX = {
     # measurement, and it is the only column that lets two products on the
     # same route be compared when neither breached.
     "zone_clearance_qmin": r"\[ZONE-CLEARANCE\].* q_min=([0-9.]+)",
+    # The PlanResult the caller receives, which is NOT the FINAL-EVAL verdict
+    # in the outcome column. A flight can read CLEAN there and still be
+    # returned DEGRADED — the standoff shell does exactly that — so a run
+    # recording only the verdict cannot see the degradation at all.
+    "plan_outcome": r"\b(DEGRADED|FAILED)\b:",
+    "plan_reason": r"\b(?:DEGRADED|FAILED): ([^\n]{0,80})",
     "soft_zone_contacts": r"\[ZONE-AUDIT\].* soft=(\d+)",
     "zone_policy_measurable": r"\[ZONE-AUDIT\].* measurable=(true|false)",
     "zone_sample_dt": r"\[ZONE-AUDIT\].* sample_dt=([0-9.]+)",
