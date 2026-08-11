@@ -946,10 +946,31 @@ std::string PathManager::stateEnvelopeProblem(
         // keeps the flight altitude inside the box even over low terrain.
         // The headroom sets the FM2 grid's z extent and so its cell count
         // (see manager/map_ceiling_headroom).
+        //
+        // RISK ZONE TOPS ARE DELIBERATELY NOT IN THIS MAX. It looks like an
+        // omission — a zone is an obstacle with a top, and going over it is
+        // a way past — and it was tried: ceiling = max(terrain, zone tops) +
+        // headroom, only over the zones the xy fixpoint already included.
+        // The zonewall regression killed it in one run. With the zone tops
+        // covered, the box grew to z 112.68 and the eikonal promptly found
+        // its "way past": geo_z=[2.57, 81.55], i.e. climb to 8.2 km and hop
+        // the wall. Every solve then died on the envelope audit (violations
+        // 94-99% against a 30% hard ceiling) and the mission produced no
+        // trajectory at all.
+        //
+        // So this bound is load-bearing, not an oversight: it keeps the wave
+        // inside airspace the vehicle could actually use, and a zone is
+        // overflown only when it fits under a ceiling the platform can
+        // reach. Raising it does not unlock a route, it manufactures one
+        // nobody can fly. If a mission genuinely needs to clear a taller
+        // zone, that is an altitude-envelope decision (what can this
+        // platform climb to?), not a bounding-box one.
         map_upper_bound_.z() =
             std::max(max_terrain_z, map_upper_bound_.z()) + map_ceiling_headroom_;
 
-        log_manager_->infof("[BBOX] headroom=%.2f terrain_peak=%.2f", map_ceiling_headroom_, max_terrain_z);
+        log_manager_->infof("[BBOX] headroom=%.2f terrain_peak=%.2f -> ceiling %.2f",
+                            map_ceiling_headroom_, max_terrain_z,
+                            map_upper_bound_.z());
         log_manager_->infof("Map bounds: lower=(%.2f,%.2f,%.2f), upper=(%.2f,%.2f,%.2f)",
             map_lower_bound_.x(), map_lower_bound_.y(), map_lower_bound_.z(),
             map_upper_bound_.x(), map_upper_bound_.y(), map_upper_bound_.z());
