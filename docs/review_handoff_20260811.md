@@ -12,10 +12,15 @@
 
 | | 시작 | 현재 |
 |---|---|---|
-| 서브모듈 `mmp_dev` | `49cc53e` | `3f3a92c` |
-| 상위 `lgh/dev` | `678a743` | `d1c750c` |
+| 서브모듈 `mmp_dev` | `49cc53e` | `7cffec3` |
+| 상위 `lgh/dev` | `678a743` | `be0c12a` |
 
-미커밋: `scripts/scenario_pub.py` (§4.2에서 설명).
+추가 772줄 중 문서가 247줄이므로 **비문서 추가는 약 525줄**이다.
+`scripts/scenario_pub.py`는 `7cffec3`에 포함돼 있다(§4.2).
+
+> **2026-08-11 2차 검토(Codex) 반영.** 아래 §9에 검토 지적과 내 확인
+> 결과를 붙였다. **§2.5의 200 m/s 설명과 §2.2의 47/47 근거는 틀렸다.**
+> 해당 절에도 표시해 뒀다.
 
 발단: "궤적 생성 시간이 너무 오래 걸린다. 측정·검사하고 정말 이게
 최선인지 확인해라."
@@ -69,6 +74,15 @@ solves `[1/8/1017/1] ms`.
 28.7%>25%"라는 이유로 꺼져 있었다. 그게 이 결함이 있던 상태의 결과라고
 판단해 켰다. 재측정에서 기각·재시도 0건이었지만, 그 판단 자체를 봐 달라.
 
+> **정정(2차 검토) — 47/47은 이 기본값의 근거가 아니다.**
+> `chain_experiment_test.cpp:379`가 `force("chain/difficulty_balance",
+> false)`를 **조건 없이 모든 변형에** 건다. 47개 회귀 전부가 이 기본값을
+> **끈 채로** 돈다. 커밋 `2410bdb`가 47/47을 기본값 안전성 근거로 인용한
+> 것은 잘못이다. 구역 포함 on/off A/B가 끝나기 전에는 근거가 없다.
+> 덧붙여 yaml은 35/true인데 C++ fallback은 여전히 70/false다
+> (`segment_chain_planner.cpp` `resolveAutoSegments`,
+> `declare_parameter("chain/difficulty_balance", false)`).
+
 ### 2.3 `93849d2` + 상위 `e6ae8db`/`99ff50e` 전이 런치 스위치
 
 `mmp.launch.py`는 플래너를 띄우지 않는다. RViz "MMP Control" 패널이
@@ -105,9 +119,14 @@ false로 고정하게 했다. **검토 포인트**: 이게 정당한 고정인�
 - 선언했는데 실속 미만 → `INITIAL_MODE_UNSUPPORTED`로 거절.
   합성 헤드는 **방향만** 우리 것이고 크기는 미션 값이라는 근거
 
-미션 8개에 `initial_speed_mps: 200.0` 명시. **이 값은 내가 정했다** —
-계획 상한(2.0 u/s)이고 물리 대역 122~230 안이며, 원래 암묵적으로 받던
-순항 인계를 명시한 것. **검토 포인트**: 도메인상 이 값이 맞는지.
+미션 8개에 `initial_speed_mps: 200.0` 명시.
+
+> **정정(2차 검토).** 처음에 "이 값은 내가 정했다"고 적었는데 **틀렸다.**
+> 200 m/s는 RViz 패널(`mission_config_panel.hpp:78`, 2026-07-17)과
+> `scripts/e2e_smoke.py:106`(07-31)이 **이미 쓰던 발행기 기본값**이다.
+> 즉 이 8개 yaml 변경은 새 값을 도입한 게 아니라 **기존 기본값을
+> 명시화**한 것이다. 플랫폼 검증값이 아니라 중립 벤치마크 기본값이라는
+> 점은 그대로 문서화가 필요하다.
 
 부수 효과(좋은 쪽): r4 최소 AGL 10.2 → 29.1 m, 피크 102.2 → 98.5%.
 
@@ -321,7 +340,7 @@ r3는 시나리오가 6개인데 가장 빡센 `dense_corridor` 하나만 돌렸
 ## 8. 재현 방법
 
 ```bash
-# 회귀 47개
+# 회귀 47개 (작업 디렉터리 /ws, yaml 경로는 거기 기준)
 docker exec -u 1000:1000 mmp_dev bash -c \
   'source /opt/ros/humble/setup.bash; source /ws/install/setup.bash; cd /ws
    /ws/install/path_manager/lib/path_manager/chain_experiment_test \
@@ -332,5 +351,105 @@ eval "$(python3 scripts/scenario_pub.py \
   ../mmp_terrain/data/scenarios/obstacles/r6_slalom_gates.yaml)"
 ```
 
+`scenario_pub.py`는 `/ws/src/mmp_path_planning`에서 실행하거나 절대 경로를
+쓸 것.
+
 빌드는 **컨테이너 안에서만**(호스트 `colcon build`가 build/install을 오염).
 측정 전 바이너리 정합성 확인 필수.
+
+**한계**: 실미션 표와 12개 세션의 원시 로그·CSV가 저장소에 추적되지 않아
+수치 자체는 독립 재검증이 불가능하다. 다음 스윕부터 산출물을 커밋한다.
+
+---
+
+## 9. 2차 검토 결과 (Codex, 2026-08-11) — 지적과 내 확인
+
+검토 판정: **"승인 완료 아님. main 머지 보류."** 아래 항목을 닫기 전까지.
+현 단계는 "구조 검증을 통과한 **제한적** 초기 전이 플래너"이지 일반
+초기 플래너가 아니다.
+
+내가 소스로 확인한 결과 **지적 전부가 사실**이었다. 반박할 것이 없다.
+
+### 9.1 머지·기본 활성화를 막는 항목
+
+**(1) 초기 속도 입력 계약이 모호하다 — 인터페이스가 원칙을 표현 못 함**
+
+`TrajectoryCommand.msg`에 `use_initial_speed`가 없고, 메시지 자체가
+`0 = start from rest`라고 **정의**한다. 그런데 FSM은
+`commanded_initial_speed_ > 0.0`일 때만 "선언됐다"고 본다. 따라서
+미입력 / 명시적 0("정지 시작") / 음수 보정 입력이 전부
+`INITIAL_STATE_UNSPECIFIED`로 합쳐진다.
+
+→ 내 새 원칙("없는 값은 만들지 않고, 선언된 값은 고치지 않는다")을
+인터페이스가 못 나른다. **명시적 0을 거절하는 것은 메시지 정의 위반이다.**
+`bool use_initial_speed` 추가 필요.
+
+**(2) 지형 영수증이 여전히 거짓 양성 가능**
+
+FSM은 `resolution > 0 && !data.empty()`만으로 "ingested" 영수증을 낸다.
+`setTerrainData`는 그 뒤에도 거부한다 — elevation 층 없음, payload 없음,
+layout 불량, 크기 불일치. 확인함(내 조건 이후 `return`이 4개 이상).
+
+→ `setTerrainData`가 `INGESTED/CLEARED/REJECTED`를 반환하고 그 결과로
+영수증을 내야 한다. 추가로 **같은 geometry의 새 지형이 이전 영수증과
+구분되지 않으므로** generation/request ID가 필요하다. 30초 fail-open도
+안전 정책상 재검토 대상.
+
+**(3) `difficulty_balance=true`를 47개 회귀가 검사하지 않는다**
+
+`chain_experiment_test.cpp:379`의 `force("chain/difficulty_balance",
+false)`가 **조건 없이 전 변형에** 걸린다. 47/47은 이 기본값의 안전성
+근거가 아니다. 구역 포함 전/후 A/B도 없다. 현재 측정에서 구역이 있으면
+r3/r4/r6의 피크·AGL이 악화되므로, **A/B 완료 전에는 기본 활성화 승인
+불가.** yaml 35/true와 C++ fallback 70/false의 불일치도 정리 필요.
+
+**(4) r5 전이 실패는 시나리오 짝 오류가 아니다**
+
+`r5_transition_success_probe`와 `r5_corridor_wall`은 시작·목표 geometry가
+동일하다. 구역 파일 주석이 기본 r5 미션만 지칭할 뿐 공간적으로는 맞는
+짝이다. → **현 전이 프리미티브 24개의 실제 능력 한계**로 봐야 한다.
+"성공 프로브"라는 이름이 결과와 맞지 않으므로 성공/한계 시나리오를
+분리하거나 생성기를 확장해야 한다.
+
+**(5) 전단·뒷단 등판 한계 불일치는 실제 결함** (내 §6.3과 동일 판단)
+
+전단 30° 유효 원뿔(`path_manager.cpp:1283`) vs 체인이 계산하는 추력
+지속 가능 ~7°(`segment_chain_planner.cpp:1104`). 구역 미션의 추력·뱅크
+기각을 줄이려면 이 값을 전단에 넘기는 것이 우선이다.
+
+**(6) 말기는 완성된 말기 플래너가 아니다**
+
+헬릭스는 체인이 **이미 목표에 도착한 뒤** append되고, 테스트도 "목표
+이후 비행 연장"을 의도적으로 단정한다(`chain_experiment_test.cpp:2060`,
+`segment_chain_planner.cpp:2905`). 현 상태는:
+
+- 초기 전이: 구현됨, **조건부** 성공
+- 중기: 구현됨
+- 도착 전이: 경계조건 기반 구현됨
+- 별도 말기 기하: **실험 슬롯**, 목표 도달 플래너 아님
+
+→ "초기+중기+말기 전체 완료"라고 표현하면 안 된다.
+
+### 9.2 §7 7개 항목에 대한 판정
+
+| # | 판정 |
+|---|---|
+| 1 `forced` 조건 | **맞음.** 강제 접합 유지, 자유 접합만 창 전체 탐색 |
+| 2 사유 코드 변경 | **의미상 타당.** 단 외부 계약 변경이므로 transition-**on** 실패 사유 회귀를 별도 추가할 것. legacy 4개를 off로 두는 것 자체는 유효 |
+| 3 200 m/s | **플랫폼 검증값 아님.** 기존 발행기 기본값이며 중립 벤치마크용이라고 문서화할 것 |
+| 4 해상도 0 센티널 | **적절.** 단 (2)의 ingestion 결과·generation 계약이 추가로 필요 |
+| 5 r5 실패 | **생성기 한계로 보는 것이 맞음** |
+| 6 구역 상단 기각 이유 | **r6/r7 범위에서는 맞으나 일반 법칙 아님.** 도달 가능 고도 아래에 구역 상단이 있으면 상공 회피가 정당할 수 있다. 코드 주석의 보편적 표현을 관측 범위로 한정할 것 |
+| 7 테스트 3곳 | `twophase` **강화**. `waypoints` 절대 2 m/s는 합리적이나 **외부 요구가 아닌 관측 기반 벤치마크**. `synthclamp`은 새 정책을 반영했으나 `use_initial_speed` 부재로 입력 출처 계약이 미완성 |
+
+### 9.3 권장 순서 (검토자 제시)
+
+1. `use_initial_speed` 추가
+2. 지형 ingestion 결과·generation 영수증 수정
+3. 지속 가능 등판 한계를 전단에 공유
+4. 구역 포함 `difficulty_balance` on/off 및 변경 전/후 스윕
+5. r5 전이 후보 전멸 원인별 확장
+6. 그 후 초기 전이 기본 활성화 판단
+7. 말기 플래너는 별도 설계
+
+**`lgh/dev` → `main` 머지는 위 항목을 닫기 전까지 보류.**

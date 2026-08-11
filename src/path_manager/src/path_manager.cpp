@@ -947,10 +947,14 @@ std::string PathManager::stateEnvelopeProblem(
         // The headroom sets the FM2 grid's z extent and so its cell count
         // (see manager/map_ceiling_headroom).
         //
-        // RISK ZONE TOPS ARE DELIBERATELY NOT IN THIS MAX — because covering
-        // them buys nothing and costs a lot, NOT because the box steers the
-        // route. That distinction was got wrong once here and is worth
-        // stating precisely.
+        // RISK ZONE TOPS ARE NOT IN THIS MAX. Scope of that claim, since an
+        // earlier version of this comment overreached twice: what is
+        // MEASURED is that covering them bought nothing and cost a lot on
+        // r6/r7. It is NOT a general law — if a zone top sits below an
+        // altitude the platform can actually reach, overflying it may well
+        // be a legitimate route, and nothing here decides that. What is
+        // definitely wrong is the reason first given (that the box steers
+        // the route); see below.
         //
         // Measured with the shipped risk_vertical_ratio and the zone sets
         // the r6/r7 scenarios actually load (8 zones each), sweeping the
