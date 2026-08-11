@@ -61,34 +61,61 @@ polyline이 접촉면에 접한다. 보관된 7개 실행에서 committed polyli
 반경 105 u 구면에서 4.2 u(21 sample)의 접촉 현을 만드는 데 필요한 안쪽 편차는 **2.1 m**다.
 MINCO 모서리 둥글림 한 번의 크기다.
 
-## 4. 침입 깊이는 아직 확정되지 않았다
+## 4. 침입 깊이 — 측정됨
 
-구간만 말할 수 있다.
+`[ZONE-CONTACT]`를 넣고(6절 D) `manager/dyn_yaw_seed: 4155591226`으로 고정해 12회 돌렸다
+(`ab_repro2`, pinned c59764b). 체인 8회(off 4 + on 4)가 **전부 같은 줄을 냈다**.
 
-- 상한: 접촉 sample은 visibility > 0.35를 요구하고 `risk_max < 5e-5`이므로
-  `0.8·(1-q)²·0.35 < 5e-5` → **q > 0.9866** (rim 안쪽으로 최대 134 m).
-- 하한: 21 sample이 연속된 한 번의 통과라면 깊이 **2.1 m**.
-- 연속인지 흩어져 있는지는 **기록되지 않는다**. `evaluateFlight`는 카운트만 누적하고
-  zone index, t_first/t_last, q_min과 그 위치, 그 지점의 visibility를 남기지 않는다.
+```
+[ZONE-CONTACT] zone=1 t=[559.80, 561.80]s runs=1 q_min=1.04948 standoff-shell
+               vis=0.921 at (3894.23, 2395.21, 1.25)
+```
 
-`[ZONE-AUDIT]` 한 줄로는 2 m 스침과 5 km 관통을 구별할 수 없다. 이것이 먼저 고쳐야 할
-계측 결함이다.
+- **q_min = 1.04948.** authored rim(`reach = 100 u`, q = 1.0)에서 **바깥으로 494.8 m**,
+  게이트면(q = 1.05)에서 **안으로 5.2 m**.
+- 궤적은 mission yaml이 정의한 부피에 **들어간 적이 없다.** 앞서 로그 상한으로 얻었던
+  "rim 안쪽 최대 134 m"는 상한일 뿐이었고, 실측은 rim 바깥에 머문다.
+- 연속 구간 1개, 2.0 s. 흩어진 수치 잡음이 아니라 한 번의 접선 통과다.
+- visibility = 0.921. 판정 하한 0.35에서 한참 위라 LOS 경계의 knife edge는 아니다.
+  즉 이 접촉은 **기하 하나로 결정된다.**
+- `risk_max = 0.0000`은 여기서 모순이 아니라 정의다. q ≥ 1.0이면 risk는 0이다.
+
+즉 게이트는 **미션이 정의한 구역에서 반 km 떨어져 나는 비행을 FAILED로 거부하고 있었다.**
+
+## 4-1. 반복마다 갈리던 것의 정체
+
+seed를 고정하기 전 같은 팔이 CLEAN과 REJECTED로 갈렸다. 고정하니 체인 8회가 q_min
+소수 다섯째 자리까지 동일하다. **비결정성의 출처는 `dyn_yaw_seed` 하나였고, back end는
+결정적이다.** 5절에서 "route가 같아도 판정이 갈렸다"고 적었던 근거는 0.01 u로 반올림
+인쇄된 정점 좌표 비교였고, 그 해상도로는 route 차이를 가릴 수 있다. 철회한다.
+
+같은 seed에서 `difficulty_balance` off와 on이 **같은 접촉**을 낸다. 이 결함은 A/B 팔과
+무관하다.
+
+## 4-2. direct는 같은 seed에서 4/4 clean
+
+같은 seed·같은 미션에서 direct 산출물은 4회 모두 hard = 0이다. 표본이 우연히 clean했던
+것이 아니라 chained와 direct 사이에 실제 구조 차이가 있다. 원인은 아직 규명되지 않았다
+(7절 2번).
 
 ## 5. 실행 간 차이의 출처
 
-`optimizer_params.yaml:204`의 `manager/dyn_yaw_seed: -1`이 `path_manager.cpp:219`의
+`optimizer_params.yaml:204`의 `manager/dyn_yaw_seed: -1`이 `path_manager.cpp`의
 `std::random_device{}()` 분기를 타고, dynamic obstacle box의 spawn yaw를 매 프로세스
 새로 뽑는다. yaw는 SDF collision primitive를 회전시키므로 speed map과 geodesic이 바뀐다.
-로그가 뽑힌 seed를 인쇄하므로 사후 재현은 가능하다.
+
+로그가 뽑힌 seed를 인쇄하고 "이걸 pin하면 재현된다"고 적어 두는데, **그게 절반은
+거짓이었다.** seed는 `%u`로 인쇄되는 uint32인데 읽을 때는 `int`였다. INT32_MAX를 넘는
+값은 음수로 감겨 randomize 분기로 떨어진다 — 고정한 척하면서 새로 뽑고, 로그는 아무
+말도 하지 않는다. 실제로 이 문서의 재현 시도가 그 값(4155591226)으로 12회를 돌렸고
+12개의 서로 다른 seed가 나왔다. int64로 읽도록 고쳤다(c59764b).
 
 운용 기본값으로는 의도된 것이다. 다만 A/B에서는 **off 팔과 on 팔이 서로 다른 장애물
 배치를 본다** — 짝 비교가 제거하려던 요인이 짝 안에 남는다. 계통 편향은 아니지만
 잡음이다. 2026-08-12 측정(176행)은 이 상태로 돌았고, 다음 재실행부터 하네스가
 (rep, mission)별로 같은 seed를 양팔에 준다.
 
-route가 같아도 판정이 갈린 사례가 있으므로(`ab_zone` r1의 off/on은 접점 정점 좌표까지
-동일한데 hard=21 / hard=0) seed가 **유일한** 출처는 아니다. 병렬 back end 쪽 비결정성이
-남아 있고, 이건 아직 규명되지 않았다.
+seed를 제대로 고정하면 체인 8회가 동일하다(4-1절). **seed가 유일한 출처였다.**
 
 ## 6. 선택지
 
@@ -152,21 +179,21 @@ C와 A는 배타적이지 않다. 게이트가 지키는 면, cost가 방어하�
 
 ## 7. 아직 모르는 것
 
-seed를 거부가 난 실행의 값으로 고정한 뒤 수행한다.
+`manager/dyn_yaw_seed: 4155591226` 고정 상태에서 수행한다.
 
-1. 접촉 21 sample의 실제 좌표·q·visibility·zone index → **D**를 넣고 1회 재현.
-   깊이가 2 m대인지 100 m대인지가 여기서 결정된다.
-2. 경로 → 궤적의 법선 방향 편차 크기와 부호. `[TERRAIN-PROFILE]`은 78.8 u 간격이라
-   4.2 u 접촉을 볼 수 없다. 접점 ±10 u를 0.1 u로 덤프해야 한다.
-3. 접점에서 committed polyline의 visibility가 실제로 ≤ 0.35인가. ≤0.35라면 front end의
-   `pass=1`은 정당하고 게이트가 LOS contour 위에 놓인 것이며, 그러면 **A만으로는
-   부족하다**(기하 여유를 줘도 shadow 경계는 그대로다).
-4. direct가 정말 clean한가, 아니면 표본이 2개인가. 같은 seed로 direct 강제 10회.
-5. 같은 route에서 chained의 재현성. 같은 seed로 chained 10회. `ab_zone` r1의 off/on이
-   접점 정점까지 동일한데 판정이 갈렸으므로 정보량이 가장 크다.
-6. 접점에서 barrier가 실제로 얼마나 기여했는가. 1절의 수치는 소스에서 유도한 것이고
+1. **왜 chained만 접촉하는가.** 같은 seed에서 direct 4/4 clean, chained 8/8 접촉.
+   경로는 같은 front end에서 나오는데 최적화 결과가 다르다. 접점 arc ±10 u를 0.1 u로
+   덤프해 committed polyline 대비 법선 편차의 크기와 부호를 봐야 한다.
+   `[TERRAIN-PROFILE]`은 78.8 u 간격이라 4.2 u 접촉을 볼 수 없다.
+2. 접점에서 committed polyline 자체의 q와 visibility. 3절의 접선 수치는 로그의 반올림된
+   정점 좌표에서 재계산한 것이라 ±0.00005 포락이 있다. front end가 실제로 어느 쪽에
+   서 있는지는 직접 인쇄해야 확정된다.
+3. 접점에서 barrier가 실제로 얼마나 기여했는가. 1절의 수치는 소스에서 유도한 것이고
    측정값이 아니다.
-7. A/B/C 각각의 미션 거부 비용. **어느 것도 측정되지 않았다.**
+4. A/B/C 각각의 미션 거부 비용. **어느 것도 측정되지 않았다.**
+
+해결된 것: 접촉의 깊이·위치·연속성(4절), 실행 간 차이의 출처(4-1절), direct가 표본이
+아니라 구조 차이라는 것(4-2절).
 
 ## 8. 확인했지만 원인이 아닌 것
 
