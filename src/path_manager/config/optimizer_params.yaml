@@ -81,7 +81,15 @@
     # 선정 루프가 창 하단 첫 정점에서 멈추던 결함 상태에서 난 결과다
     # (→ docs/planning_perf_notes.md). 결함을 고친 뒤 재측정하면 r4에서
     # 기각·재시도 0건, 판정·이음매 지표 동일, 3792→3554 ms.
-    chain/difficulty_balance: true
+    #
+    # 2026-08-11: **false로 복귀.** 위 재측정은 위험 구역을 하나도 싣지
+    # 않은 조건이었고, 회귀 47개는 이 플래그를 강제로 끄고 돌기 때문에
+    # (chain_experiment_test.cpp의 force(..., false)) 47/47도 이 기본값의
+    # 근거가 아니다. 구역을 실은 측정에서는 r3/r4/r6의 피크·최소 AGL이
+    # 악화됐다. 증명되기 전에는 안전했던 쪽을 기본으로 둔다 —
+    # 구역 포함 false/true A/B(반복 5회, 원시 로그·CSV 보존)에서
+    # 안전 지표가 하나도 나빠지지 않을 때만 다시 켠다.
+    chain/difficulty_balance: false
     # [STAGE-2] 구간별 요구조건 차등: chain/seg<i>/params 에 "이름=값" 문자열
     # 배열. 구간 실행 직전 옵티마이저를 강제 재초기화해 optimization/* 전체를
     # 다시 읽으므로 그 계열만 구간별로 실제 반영된다(manager/*는 기동 시 1회

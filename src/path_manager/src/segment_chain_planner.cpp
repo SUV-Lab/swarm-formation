@@ -830,9 +830,12 @@ void SegmentChainPlanner::applyContractJitter(
 bool SegmentChainPlanner::resolveAutoSegments(int pieces, const char *source)
 {
   if (!auto_segments_) return true;
-  int target = 70;
+  // Keep this in step with optimizer_params.yaml — the yaml wins when it is
+  // loaded, so a divergent fallback only shows up for an embedder that does
+  // not load it, which is the worst place to discover a different default.
+  int target = 35;
   if (!node_->has_parameter("chain/auto_pieces_per_segment"))
-    node_->declare_parameter("chain/auto_pieces_per_segment", 70);
+    node_->declare_parameter("chain/auto_pieces_per_segment", 35);
   node_->get_parameter("chain/auto_pieces_per_segment", target);
   target = std::max(5, target);  // floor guards absurd targets (N = pieces)
   const int n = (pieces + target / 2) / target;  // round to nearest
