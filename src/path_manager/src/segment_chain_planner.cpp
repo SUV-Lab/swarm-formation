@@ -300,9 +300,21 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   // [STALL-FLOOR] clamp doctrine.
   StartRegime regime = StartRegime::CRUISE_VALID;
   std::string regime_why;
-  if (start_vel_commanded) {
+  // ONE gate for BOTH stated forms. A scalar-stated head used to take a
+  // different branch below and be judged by statedStartSpeedProblem, which
+  // checked the stall floor and nothing else — so initial_speed 400 m/s
+  // planned while initial_velocity [400,0,0] was refused for exceeding the
+  // handoff ceiling, the flight-path cone was never applied to the scalar
+  // form at all, and TRANSITION_REQUIRED was unreachable from it: a level
+  // 60 m/s stated as a vector dispatched to the coordinator while the same
+  // 60 m/s stated as a scalar did not. The two forms differ in what you may
+  // SAY, never in what is accepted.
+  if (start_vel_commanded || start_vel_synthesized) {
+    // acc_prescribed is false for the scalar form: it states a magnitude,
+    // not an acceleration, and a numeric zero is never evidence of one.
     regime = classifyStartState(start_pos, start_vel, start_acc,
-                                start_acc_commanded, &regime_why);
+                                start_vel_commanded && start_acc_commanded,
+                                &regime_why);
     if (regime == StartRegime::UNSUPPORTED) {
       log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s "
                    "(INITIAL_MODE_UNSUPPORTED)", regime_why.c_str());
@@ -325,20 +337,6 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
             "initial state unsupported: " + regime_why +
                 " (transition disabled)");
       }
-    }
-  } else if (start_vel_synthesized) {
-    // A synthesized head is the mission's initial_speed aimed level along
-    // the first leg — a STATED magnitude, even though the direction is
-    // ours. The rule lives in PathManager because the single-shot path in
-    // the FSM must apply the identical one; having it here alone left the
-    // clamp reachable whenever chain/enable was off.
-    const std::string prob = pm_->statedStartSpeedProblem(start_vel);
-    if (!prob.empty()) {
-      log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s "
-                   "(INITIAL_MODE_UNSUPPORTED)", prob.c_str());
-      return PlanResult::failedBecause(
-          PlanReason::INITIAL_MODE_UNSUPPORTED,
-          "initial state unsupported: " + prob);
     }
   }
   // [PHASE] Final-boundary validation happens ONCE, here — every exit of

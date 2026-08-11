@@ -347,15 +347,16 @@ namespace path_manager
     std::string pvaEnvelopeProblem(const Eigen::Vector3d &pos_units,
                                    const Eigen::Vector3d &vel_units,
                                    const Eigen::Vector3d &acc_units) const;
-    // Is a mission-STATED start speed flyable? Empty = yes. The synthesized
-    // head carries the mission's own initial_speed with a direction we
-    // chose, so [VEL-ALIGN] may re-aim it but nothing may change how fast
-    // it is: below the stall floor the [STALL-FLOOR] clamps would silently
-    // publish a flight that starts faster than the mission asked for.
-    // Defined once here because BOTH planning modes must apply it — the
-    // chain planner at its entry and the single-shot path in the FSM.
-    // Dynamics model off = no floor to violate = empty.
-    std::string statedStartSpeedProblem(const Eigen::Vector3d &vel_units) const;
+    // NOTE: statedStartSpeedProblem is DELETED. It was a second validator
+    // for the same quantity, and two validators for one quantity always
+    // drift: it tested the stall floor alone, so a scalar-stated 400 m/s
+    // planned while the identical vector was refused for exceeding the
+    // handoff ceiling; it returned empty on a non-positive floor while its
+    // sibling returns empty on !dynamicsEnabled(), so the two forms
+    // disagreed differently again with the model off; and the branch it sat
+    // in bypassed classifyStartState entirely, making TRANSITION_REQUIRED
+    // unreachable from the scalar form. Both stated forms now go through
+    // stateEnvelopeProblem / pvaEnvelopeProblem and classifyStartState.
     int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
 
     // [CHAIN] committed front-end products of the most recent plan, retained

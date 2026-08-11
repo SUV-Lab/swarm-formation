@@ -847,12 +847,19 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // sub-floor head fell through here untouched and [STALL-FLOOR]
         // raised it downstream, which is the rewrite the whole gate exists
         // to prevent.
+        // The scalar form is judged by the SAME validator as the vector
+        // form, minus the acceleration it did not state. It used to get
+        // statedStartSpeedProblem, which tested the stall floor alone — no
+        // handoff ceiling, no flight-path cone — so the two forms disagreed
+        // about the identical physical state, and disagreed differently
+        // again with the dynamics model off (one returns {} on a
+        // non-positive floor, the other on !dynamicsEnabled()).
         const std::string head_prob =
             start_vel_commanded_
                 ? path_manager_->pvaEnvelopeProblem(start_pt_, start_vel_,
                                                     start_acc_)
                 : (start_vel_synthesized_
-                       ? path_manager_->statedStartSpeedProblem(start_vel_)
+                       ? path_manager_->stateEnvelopeProblem(start_vel_)
                        : std::string{});
         {
             const std::string &prob = head_prob;

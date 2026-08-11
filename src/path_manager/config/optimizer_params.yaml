@@ -485,13 +485,21 @@
                                         # = 200 m/s) unless max_vel is raised — cruise
                                         # settles ~201 m/s, so this ceiling does not
                                         # bind today. See max_vel note above.
-    optimization/dynamics_activation_speed_mps: 40.0  # REPORTING/BUCKETING ONLY,
-                                        # vestigial after the q-floor fix: it no
-                                        # longer gates any penalty (the old sigma
-                                        # speed-gate is gone). Now used only to split
-                                        # the audit/panel sub-stall vs cruise buckets
-                                        # and as the envelopeUtilization low-speed
-                                        # guard. Changing it has no trajectory effect.
+    optimization/dynamics_activation_speed_mps: 40.0  # LOAD-BEARING. It is the
+                                        # UNSUPPORTED / TRANSITION_REQUIRED boundary
+                                        # in classifyStartState: a stated start below
+                                        # it has no transition model and is refused,
+                                        # above it (and below the cruise floor) it
+                                        # dispatches to the transition coordinator.
+                                        # BOTH stated forms lean on that boundary now
+                                        # — the scalar reached it only after
+                                        # statedStartSpeedProblem was deleted, and
+                                        # before that this comment's "changing it has
+                                        # no trajectory effect" was true only because
+                                        # half the inputs could not get there.
+                                        # It also still splits the audit/panel
+                                        # sub-stall vs cruise buckets and guards
+                                        # envelopeUtilization at low speed.
     optimization/dynamics_dynamic_pressure_max_pa: 45000.0  # DEAD in the live config:
                                         # needs >= 260 m/s at sea level to reach the
                                         # margined 41.4 kPa, but cruise is pinned ~201

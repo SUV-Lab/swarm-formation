@@ -2288,9 +2288,29 @@ int main(int argc, char **argv)
                    goal, /*start_vel_synthesized=*/true, {});
     expect(!r.hasTrajectory(),
            "synthesized sub-floor start is REFUSED, not clamped and flown");
-    expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
-           "reason is INITIAL_MODE_UNSUPPORTED (the mission's own stated "
-           "speed is unflyable)");
+    // The REASON is no longer INITIAL_MODE_UNSUPPORTED, and that is the fix
+    // rather than a regression. 50 m/s sits above the model activation speed
+    // (40) and below the cruise floor (131.8): it is the TRANSITION regime.
+    // The scalar form used to be judged by statedStartSpeedProblem, which
+    // tested the stall floor and refused outright, so classifyStartState was
+    // unreachable from it and a launch-regime start stated as a scalar could
+    // never dispatch to the coordinator — while the identical speed stated
+    // as a vector did. Now both reach it.
+    //
+    // So the assertion that matters is not which reason came back, it is
+    // that the two stated forms of the SAME physical state agree. That is
+    // the contract in one line, and it holds whatever the coordinator then
+    // decides.
+    const path_manager::PlanResult rv =
+        chain.plan(start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc,
+                   goal, /*start_vel_synthesized=*/false, {},
+                   /*start_vel_commanded=*/true, /*start_acc_commanded=*/false);
+    expect(r.hasTrajectory() == rv.hasTrajectory() && r.reason == rv.reason,
+           "the scalar and vector forms of the same start state get the SAME "
+           "outcome — one quantity, one gate");
+    expect(r.reason == path_manager::PlanReason::TRANSITION_GENERATION_FAILED,
+           "...and a sub-cruise, above-activation start now REACHES the "
+           "transition coordinator instead of being refused before it");
     // Half 2: a flyable stated speed still plans, and is still not
     // misread as a launch-regime state — the original coverage, kept.
     const path_manager::PlanResult r2 =
