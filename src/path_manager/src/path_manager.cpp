@@ -947,30 +947,62 @@ std::string PathManager::stateEnvelopeProblem(
         // The headroom sets the FM2 grid's z extent and so its cell count
         // (see manager/map_ceiling_headroom).
         //
-        // RISK ZONE TOPS ARE DELIBERATELY NOT IN THIS MAX. It looks like an
-        // omission — a zone is an obstacle with a top, and going over it is
-        // a way past — and it was tried: ceiling = max(terrain, zone tops) +
-        // headroom, only over the zones the xy fixpoint already included.
-        // The zonewall regression killed it in one run. With the zone tops
-        // covered, the box grew to z 112.68 and the eikonal promptly found
-        // its "way past": geo_z=[2.57, 81.55], i.e. climb to 8.2 km and hop
-        // the wall. Every solve then died on the envelope audit (violations
-        // 94-99% against a 30% hard ceiling) and the mission produced no
-        // trajectory at all.
+        // RISK ZONE TOPS ARE DELIBERATELY NOT IN THIS MAX — because covering
+        // them buys nothing and costs a lot, NOT because the box steers the
+        // route. That distinction was got wrong once here and is worth
+        // stating precisely.
         //
-        // So this bound is load-bearing, not an oversight: it keeps the wave
-        // inside airspace the vehicle could actually use, and a zone is
-        // overflown only when it fits under a ceiling the platform can
-        // reach. Raising it does not unlock a route, it manufactures one
-        // nobody can fly. If a mission genuinely needs to clear a taller
-        // zone, that is an altitude-envelope decision (what can this
-        // platform climb to?), not a bounding-box one.
+        // Measured with the shipped risk_vertical_ratio and the zone sets
+        // the r6/r7 scenarios actually load (8 zones each), sweeping the
+        // ceiling over a 4x range:
+        //     r6  ceiling 21.47 / 35.47 / 53.82  ->  geodesic [1.99, 6.60]
+        //     r7  ceiling 13.95 / 27.95 / 46.64  ->  geodesic [3.01, 5.56]
+        // The geodesic does not move at all. Covering the tops only inflated
+        // the z grid (r6 128 -> 189 cells) and the plan (4922 -> 7110 ms,
+        // +44%). The box is a PERMISSIVE BOUND, not an attractor: the wave
+        // goes where the speed field sends it, and raising the lid over
+        // airspace nothing wants to use just buys cells to fill.
+        //
+        // The zonewall regression does fail when tops are covered, and that
+        // failure is real — but it is stage-specific and its mechanism is
+        // not "the wave climbs to the ceiling". In the same run, ceiling
+        // 157.51 produced a LOWER climb (47.33) than ceiling 112.68 did
+        // (81.55), and a third stage at ceiling 111.18 climbed only 23.93
+        // and planned CLEAN. That fixture forces risk_vertical_ratio to 3.0
+        // (8.6x shipped) with LOS masking off specifically to seal an
+        // over-the-top escape, so raising the lid dissolves its premise;
+        // what it demonstrates is that the fixture depends on the lid, not
+        // that production does.
+        //
+        // What the failing stages DO show is worth keeping in view: the
+        // rejects there name maximum thrust and bank angle, not altitude.
+        // The geodesic is shear-limited to the model's flight-path VALIDITY
+        // cone (tan 30 deg), while the thrust-sustainable climb grade is
+        // ~7 deg — a number segment_chain_planner already computes from the
+        // same shared model and never tells the front end. A route the front
+        // end may draw at 30 deg and the back end can only fly at 7 is the
+        // actual gap; the bounding box is not where it lives.
         map_upper_bound_.z() =
             std::max(max_terrain_z, map_upper_bound_.z()) + map_ceiling_headroom_;
 
-        log_manager_->infof("[BBOX] headroom=%.2f terrain_peak=%.2f -> ceiling %.2f",
-                            map_ceiling_headroom_, max_terrain_z,
-                            map_upper_bound_.z());
+        // zone_top is REPORTED but not applied: the sweep above showed the
+        // geodesic ignores the lid, so this number exists to make "is a zone
+        // above the ceiling?" answerable from a log rather than only by
+        // patching the planner.
+        double max_zone_top = 0.0;
+        int n_zone_top = 0;
+        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
+            if (!zone_in[zi]) continue;
+            const double top = risk_zones_[zi].center.z() +
+                               risk_zones_[zi].reach * risk_vertical_ratio_;
+            if (top > max_zone_top) max_zone_top = top;
+            ++n_zone_top;
+        }
+        log_manager_->infof(
+            "[BBOX] headroom=%.2f terrain_peak=%.2f zone_top=%.2f (%d zones, "
+            "not covered) -> ceiling %.2f",
+            map_ceiling_headroom_, max_terrain_z, max_zone_top, n_zone_top,
+            map_upper_bound_.z());
         log_manager_->infof("Map bounds: lower=(%.2f,%.2f,%.2f), upper=(%.2f,%.2f,%.2f)",
             map_lower_bound_.x(), map_lower_bound_.y(), map_lower_bound_.z(),
             map_upper_bound_.x(), map_upper_bound_.y(), map_upper_bound_.z());
