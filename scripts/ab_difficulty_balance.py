@@ -173,7 +173,12 @@ def sh_bg(cmd, ws):
     Detach the session and give it no inherited streams; the command redirects
     its own output to a file.
     """
-    full = f"source /opt/ros/humble/setup.bash && source {ws}/install/setup.bash && {cmd}"
+    # MMP_WS is what terrain_publisher resolves DATA_DIR from (it reads the
+    # SOURCE tree, never the install share). Left unset it defaults to /ws —
+    # so a pinned workspace still served its terrain and its scenario yamls
+    # out of the dev tree, whatever the src/ layout suggested.
+    full = (f"export MMP_WS={ws} && source /opt/ros/humble/setup.bash && "
+            f"source {ws}/install/setup.bash && {cmd}")
     return subprocess.Popen(["bash", "-lc", full], stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
@@ -452,7 +457,15 @@ def main():
         for f in sorted(os.listdir(d)):
             h.update(f.encode())
             h.update(open(os.path.join(d, f), "rb").read())
-    meta = {"pinned_sha": sha, "ws": a.ws, "reps": a.reps,
+    rasters = {}
+    dd = os.path.join(a.ws, "src/mmp_terrain/data")
+    for f in sorted(os.listdir(dd)) if os.path.isdir(dd) else []:
+        fp = os.path.join(dd, f)
+        if f.endswith(".tif") and os.path.isfile(fp):
+            st = os.stat(fp)
+            rasters[f] = {"bytes": st.st_size, "mtime": int(st.st_mtime),
+                          "realpath": os.path.realpath(fp)}
+    meta = {"pinned_sha": sha, "ws": a.ws, "reps": a.reps, "rasters": rasters,
             "only": a.only, "direct_reps": a.direct_reps,
             "missions": a.missions, "obstacles": a.obstacles,
             "scenario_sha256": h.hexdigest(),
