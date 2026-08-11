@@ -409,6 +409,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ws", required=True, help="PINNED workspace (never the dev tree)")
     ap.add_argument("--reps", type=int, default=5)
+    # The dry run used to be a hand-edited COPY of this file with a shorter
+    # mission list and an extra arm. Two instruments means the gate passes on
+    # one and the measurement runs on the other — so the subset is an
+    # argument now and the copy is gone.
+    ap.add_argument("--only", type=int, default=0,
+                    help="use only the first N mission/scenario pairs (0=all)")
+    # The direct-mode probe is not part of the comparison — it exists so the
+    # measurement itself contains evidence that a single-shot product is
+    # audited and labelled. One rep's worth is enough; running it in every
+    # rep would inflate the sweep by half for no pairwise value.
+    ap.add_argument("--direct-reps", type=int, default=1,
+                    help="reps that also run the direct-mode probe arm")
     ap.add_argument("--out", required=True)
     # Inputs default INSIDE the pinned workspace. They used to default to
     # /ws — the dev tree — so the binary was pinned while the missions,
@@ -441,20 +453,27 @@ def main():
             h.update(f.encode())
             h.update(open(os.path.join(d, f), "rb").read())
     meta = {"pinned_sha": sha, "ws": a.ws, "reps": a.reps,
+            "only": a.only, "direct_reps": a.direct_reps,
             "missions": a.missions, "obstacles": a.obstacles,
             "scenario_sha256": h.hexdigest(),
             "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     json.dump(meta, open(os.path.join(a.out, "meta.json"), "w"), indent=2)
+
+    missions = MISSIONS[:a.only] if a.only else MISSIONS
+    print(f"{len(missions)} combos x {a.reps} reps, "
+          f"direct probe in reps 1..{a.direct_reps}")
 
     csv_path = os.path.join(a.out, "runs.csv")
     with open(csv_path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=FIELDS, extrasaction="ignore")
         w.writeheader()
         for rep in range(1, a.reps + 1):
-            for mission, scenario in MISSIONS:
+            for mission, scenario in missions:
                 # Alternate, so a warm-up or drift effect cannot masquerade as
                 # an arm effect in the timing columns.
                 arms = ("off", "on") if rep % 2 else ("on", "off")
+                if rep <= a.direct_reps:
+                    arms = arms + ("direct_off",)
                 for arm in arms:
                     try:
                         row = run_one(a.ws, a.out, mission, scenario, arm, rep,
