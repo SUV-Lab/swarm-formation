@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 
@@ -51,7 +52,8 @@ FIELDS = [
     "outcome", "reason", "zone_pass", "total_ms", "frontend_ms", "max_solve_ms",
     "eikonal_ms", "grid", "ceiling_u", "geo_z_max_u", "pieces", "flight_s",
     "min_agl_u", "env_viol_pct", "env_peak_pct", "env_peak_limit",
-    "hard_zone_contacts", "retry_fallback", "seam_worst", "zones_in_search", "log",
+    "hard_zone_contacts", "retry_fallback", "seam_worst", "zones_in_search",
+    "leaked_procs", "log",
 ]
 
 RX = {
@@ -98,6 +100,38 @@ def sh(cmd, ws, timeout=180):
                           timeout=timeout)
 
 
+def reap(name):
+    """Kill every process whose cmdline matches, by PID, from Python.
+
+    NOT `bash -lc "pkill -f <name>"`: that shell's own cmdline contains the
+    pattern, so pkill kills the shell before it reaches the next statement.
+    That is how 279 terrain_publisher processes accumulated during a run —
+    the first pkill in a two-pkill line killed its own shell every time, the
+    second never executed, and the survivors slowly starved the machine until
+    zone installs and mission commands stopped being delivered at all.
+    """
+    me = str(os.getpid())
+    out = subprocess.run(["pgrep", "-f", name], capture_output=True,
+                         text=True).stdout.split()
+    for pid in out:
+        if pid == me:
+            continue
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except (ProcessLookupError, ValueError, PermissionError):
+            pass
+
+
+def kill_group(proc):
+    """Kill a detached launch and everything it spawned."""
+    if proc is None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def sh_bg(cmd, ws):
     """Launch a node and return immediately.
 
@@ -132,25 +166,28 @@ def newest_log(logdir, after_ts):
 
 
 def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, logdir):
-    subprocess.run(["bash", "-lc", "pkill -f 'path_manager_node' ; pkill -f 'terrain_publisher'"],
-                   capture_output=True)
+    for nm in ("path_manager_node", "terrain_publisher", "topic pub"):
+        reap(nm)
     time.sleep(4)
     t_start = time.time()
+    launched = []
 
     mpath = f"{missions_dir}/{mission}.yaml"
     import yaml as _y
     m = _y.safe_load(open(mpath))["mission"]
     s, g = m["start"], m["goal"]
 
-    sh_bg(f"exec ros2 run mmp_terrain terrain_publisher --ros-args -p world:=full_map "
-          f"-p corridor_mission:={mpath} > /tmp/ab_terr.log 2>&1", ws)
+    launched.append(sh_bg(
+        f"exec ros2 run mmp_terrain terrain_publisher --ros-args -p world:=full_map "
+        f"-p corridor_mission:={mpath} > /tmp/ab_terr.log 2>&1", ws))
     dbal = "true" if arm == "on" else "false"
-    sh_bg(f"exec ros2 run path_manager path_manager_node --ros-args "
+    launched.append(sh_bg(
+        f"exec ros2 run path_manager path_manager_node --ros-args "
           f"--params-file {ws}/install/path_manager/share/path_manager/config/optimizer_params.yaml "
           f"--params-file {ws}/install/path_manager/share/path_manager/config/drone_hardware.yaml "
           f"-p drone_id:=0 -p manager/world:=full_map "
           f"-p chain/difficulty_balance:={dbal} -p chain/auto_pieces_per_segment:=35 "
-          f"> /tmp/ab_pm.log 2>&1", ws)
+        f"> /tmp/ab_pm.log 2>&1", ws))
 
     # Readiness poll instead of a fixed sleep: the planner must have INGESTED
     # the corridor, which is the state a fixed sleep only assumed.
@@ -181,6 +218,37 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
         # run still looked healthy. Hold the publisher open and REQUIRE the
         # planner's own confirmation before the mission goes out; a run that
         # cannot confirm is not a datapoint, it is a failed setup.
+        # CLEAR FIRST, and confirm the clear. A ghost publisher from an
+        # earlier run put "loadRiskZones: replaced with 10 zones" into an r1
+        # run whose scenario has 2 — the count was then read off the wrong
+        # line and the run looked healthy. Chasing where that publisher came
+        # from is the wrong fix; starting from a state the planner has just
+        # CONFIRMED as empty makes any leftover irrelevant, because the
+        # install below is then the only thing that can raise the count.
+        clear = ('exec ros2 topic pub -r 2.0 /mission/risk_zones '
+                 'mmp_mission_msgs/msg/RiskZoneArray '
+                 '"{replace: true, zones: []}" >/dev/null 2>&1')
+        ch = sh_bg(clear, ws)
+
+        def zones_cleared():
+            lg2 = newest_log(logdir, t_start)
+            if not lg2:
+                return False
+            t = open(lg2, errors="ignore").read()
+            m = re.findall(r"loadRiskZones: replaced with (\d+) zones", t)
+            return bool(m) and m[-1] == "0"
+
+        cleared = wait_for(zones_cleared, 60)
+        kill_group(ch)
+        reap("topic pub")
+        if not cleared:
+            return {"rep": rep, "arm": arm, "mission": mission,
+                    "scenario": scenario, "zones_installed": -1,
+                    "obstacles_installed": n_obs, "outcome": "ZONE_CLEAR_FAILED",
+                    "reason": "planner never confirmed an empty zone set",
+                    "log": os.path.basename(newest_log(logdir, t_start) or "")}
+        time.sleep(2)
+
         holders = [sh_bg(line.replace("timeout 60 ros2 topic pub -1",
                                       "exec ros2 topic pub -r 0.5"), ws)
                    for line in pub.stdout.splitlines()]
@@ -194,12 +262,8 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
 
         installed = wait_for(zones_in, 90)
         for h in holders:
-            try:
-                h.terminate()
-            except Exception:
-                pass
-        subprocess.run(["bash", "-lc", "pkill -f 'topic pub -r 0.5'"],
-                       capture_output=True)
+            kill_group(h)
+        reap("topic pub")
         if not installed:
             return {"rep": rep, "arm": arm, "mission": mission,
                     "scenario": scenario, "zones_installed": 0,
@@ -251,6 +315,19 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir, l
         row["outcome"] = "UNKNOWN"
         row["reason"] = ""
     shutil.copy(lg, os.path.join(out, "logs", f"{arm}_{mission}_{scenario or 'nozone'}_r{rep}.log"))
+    for h in launched:
+        kill_group(h)
+    for nm in ("path_manager_node", "terrain_publisher", "topic pub"):
+        reap(nm)
+    # A leak here degrades every later run, so it is recorded per row rather
+    # than discovered at the end by counting corpses.
+    time.sleep(1)
+    # pgrep never matches its own process, and this runs without a shell, so
+    # the count is the true survivor count — no self-match to subtract.
+    row["leaked_procs"] = sum(
+        int(subprocess.run(["pgrep", "-cf", nm], capture_output=True,
+                           text=True).stdout.strip() or 0)
+        for nm in ("terrain_publisher", "path_manager_node"))
     return row
 
 
@@ -290,8 +367,8 @@ def main():
                     print(f"[{rep}/{a.reps}] {arm:3s} {mission} / {scenario or '-'}"
                           f" -> {row.get('outcome')} zones={row.get('zones_installed')}",
                           flush=True)
-    subprocess.run(["bash", "-lc", "pkill -f 'path_manager_node' ; pkill -f 'terrain_publisher'"],
-                   capture_output=True)
+    for nm in ("path_manager_node", "terrain_publisher", "topic pub"):
+        reap(nm)
     print("AB_DONE", csv_path)
 
 
