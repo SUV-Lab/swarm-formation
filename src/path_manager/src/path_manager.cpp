@@ -2493,6 +2493,29 @@ void PathManager::publishTubeMarker(
     pub->publish(m);
 }
 
+void PathManager::clearTrajectoryViz()
+{
+    // The tube and risk channels are transient_local (latched), so a REFUSED
+    // plan whose trajectory was invalidated still shows in RViz as the
+    // current plan — and any RViz that connects afterwards is handed it from
+    // the latch. Zeroing the two execution fields says nothing to a
+    // subscriber. Every refusal exit that invalidates must also erase, or
+    // the operator is looking at a flight the planner already rejected.
+    visualization_msgs::msg::Marker del;
+    del.header.frame_id = "world";
+    del.action = visualization_msgs::msg::Marker::DELETEALL;
+    for (const auto &pub : {opt_traj_tube_pub_, global_traj_tube_pub_,
+                            traj_risk_pub_}) {
+        if (pub) pub->publish(del);
+    }
+    // The risk profile is a Float64MultiArray, not markers: an EMPTY array
+    // is its "nothing to show" value.
+    if (risk_profile_pub_) {
+        std_msgs::msg::Float64MultiArray empty;
+        risk_profile_pub_->publish(empty);
+    }
+}
+
 void PathManager::publishTrajTube(
     const poly_traj::Trajectory &traj,
     const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,

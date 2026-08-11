@@ -260,6 +260,13 @@ void SegmentChainPlanner::invalidateStoredTrajectory() const
   // (review find). Zeroing the two fields it tests is the whole contract.
   pm_->traj_.local_traj.duration = 0.0;
   pm_->traj_.local_traj.start_time = 0.0;
+  // ...and erase what was already drawn. The direct paths publish the tube
+  // and the risk band from INSIDE planGlobalTraj, before this gate can run,
+  // and those channels are latched — so a refused flight stayed on screen
+  // as the current plan, and was handed to any RViz that connected later.
+  // The stitched paths draw nothing before judging, so this is a no-op for
+  // them; the guarantee has to hold for every caller either way.
+  pm_->clearTrajectoryViz();
 }
 
 PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,

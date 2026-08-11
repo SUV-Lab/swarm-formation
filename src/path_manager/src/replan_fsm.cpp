@@ -342,6 +342,27 @@ void ReplanFSM::computeAndPublishPaths() {
                 break;
             }
             auto local_traj = &path_manager_->traj_.local_traj;
+            // A refused plan zeroes duration and start_time
+            // (SegmentChainPlanner::invalidateStoredTrajectory). Without
+            // this guard the completion test below reads
+            // t_cur = min(0, huge) = 0 and "0 > 0 - 0.2" is TRUE, so a
+            // refusal arriving mid-flight was reported as [reached goal]
+            // and the FSM parked as though the mission had succeeded.
+            // Arrival and invalidation must not share an exit.
+            if (local_traj->duration <= 0.0)
+            {
+                have_target_ = false;
+                have_local_traj_ = false;
+                changeFSMExecState(WAIT_POSITION, "FSM");
+                RCLCPP_ERROR(node_->get_logger(),
+                             "[drone %d] stored trajectory invalidated during "
+                             "execution — the plan was REFUSED, this is not "
+                             "arrival", drone_id_);
+                log_manager_->errorf(
+                    "[drone %d] stored trajectory invalidated during execution "
+                    "— the plan was REFUSED, this is not arrival", drone_id_);
+                return;
+            }
             double t_cur = rclcpp::Clock(RCL_ROS_TIME).now().seconds() - local_traj->start_time;
             t_cur = std::min(local_traj->duration, t_cur);
 

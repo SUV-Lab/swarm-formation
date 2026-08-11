@@ -507,6 +507,11 @@ namespace path_manager
     // answers WHICH BAND a known contact is in, not whether one occurred.
     bool zoneContactAuthored(const ZonePolicySnapshot &snap, size_t idx,
                              const Eigen::Vector3d &p) const;
+    // Erase the latched trajectory visualisation. Paired with a refusal:
+    // the tube channels are transient_local, so a rejected flight otherwise
+    // stays on screen as the current plan and is replayed to any RViz that
+    // connects later.
+    void clearTrajectoryViz();
     ZoneContactResult zoneContact(const ZonePolicySnapshot &snap, size_t idx,
                                   const Eigen::Vector3d &p) const;
     // RAW smooth risk value for SOFT_* exposure statistics — separate
