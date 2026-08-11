@@ -160,6 +160,7 @@ int main(int argc, char **argv)
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false, with_hardpen = false,
        with_standoffpen = false, with_wpzone = false,
+       with_nophasedirect = false, with_baserefuse = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -315,6 +316,8 @@ int main(int argc, char **argv)
     if (v == "hardpen") { with_route = true; with_hardpen = true; }
     if (v == "standoffpen") { with_route = true; with_standoffpen = true; }
     if (v == "wpzone") { with_route = true; with_wpzone = true; }
+    if (v == "nophasedirect") { with_route = true; with_autosmall = true; with_nophasedirect = true; }
+    if (v == "baserefuse") { with_autosmall = true; with_baserefuse = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -362,7 +365,7 @@ int main(int argc, char **argv)
   {
     std::vector<rclcpp::Parameter> ovr;
     // zonepass0: 3-pass policy off -> pass stays 0 with zones present.
-    if (with_zonepass0)
+    if (with_zonepass0 || with_baserefuse)
       ovr.emplace_back("manager/zone_avoid_lexicographic", false);
     // zonewall: block the OVER-THE-TOP escape (default vertical ratio
     // 0.35 leaves a ~12 u ceiling the front end can climb past) so the
@@ -1764,6 +1767,70 @@ int main(int argc, char **argv)
     expect(!pr.hasTrajectory(), "a hard contact FAILS the plan");
     expect(pr.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
            "...as STITCHED_FLIGHT_UNSAFE, not an envelope budget");
+    expect(pm->traj_.local_traj.duration == 0.0 &&
+               pm->traj_.local_traj.start_time == 0.0,
+           "...and the stored trajectory stops being executable");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_baserefuse) {
+    // The BASELINE exits (mission below the split threshold, and segment
+    // failure restoring the baseline) got a gate this session, and nothing
+    // exercised its refusal direction: every non-route variant asserts a
+    // baseline that SUCCEEDS, and the two variants asserting
+    // STITCHED_FLIGHT_UNSAFE both reach it through stitchedVerdictResult
+    // instead. Deleting the baseline_gate call would have gone unnoticed —
+    // FlightVerdict::clean defaults to true, so the degrade beside it does
+    // not misfire either.
+    //
+    // Mechanism borrowed from zonepass0: zones present with the
+    // lexicographic 3-pass OFF leaves pass = 0, which makes the policy
+    // snapshot INVALID, which makes the whole-flight verdict unmeasurable —
+    // and an unjudgeable policy must refuse exactly like a condemned one.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(180.0, 120.0, 3.0);
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+    const auto snap = pm->zonePolicySnapshot();
+    expect(!snap.valid,
+           "the premise holds: pass 0 with zones leaves the snapshot INVALID");
+
+    // Store something executable first, so the invalidation assertion below
+    // cannot pass against an empty slot.
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(!r.hasTrajectory(),
+           "a baseline whose zone policy cannot be judged is REFUSED");
+    expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
+           "...as STITCHED_FLIGHT_UNSAFE");
+    expect(pm->traj_.local_traj.duration == 0.0 &&
+               pm->traj_.local_traj.start_time == 0.0,
+           "...and nothing executable is left behind");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_nophasedirect) {
+    // unsafedirect with ONE difference: chain/phase/enable is OFF. That
+    // variant is the only one asserting the direct gate's refusal
+    // direction, and it runs with the flag ON — so re-wrapping the gate in
+    // "if (phase enabled)" would not have failed a single check anywhere in
+    // the suite. The flag is the whole point of the comparison, so nothing
+    // else may differ.
+    force("chain/phase/enable", false);
+    force("optimization/audit_envelope_peak_max", 0.01);
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+    expect(!r.hasTrajectory(),
+           "with phase OFF the direct product is still gated and refused");
+    expect(r.reason == path_manager::PlanReason::DIRECT_FALLBACK_UNSAFE,
+           "...as DIRECT_FALLBACK_UNSAFE");
     expect(pm->traj_.local_traj.duration == 0.0 &&
                pm->traj_.local_traj.start_time == 0.0,
            "...and the stored trajectory stops being executable");

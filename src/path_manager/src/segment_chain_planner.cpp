@@ -2034,12 +2034,17 @@ PlanResult SegmentChainPlanner::planOverRoute(
     // before, fail -> FAILED(DIRECT_FALLBACK_UNSAFE). "No phase labels"
     // must never mean "no gate".
     // UNCONDITIONAL. This gate used to run only with chain/phase/enable on,
-    // which is the shape the A/B does NOT use: with phase off the direct
-    // product skipped the whole-flight evaluation entirely, so it carried no
-    // [ZONE-AUDIT], no hard-zone refusal and no [PLAN-MODE] line — a
-    // trajectory delivered without any of the checks the stitched path must
-    // pass. Phase labels decide what the spans are CALLED, never whether the
-    // flight is judged.
+    // so with the flag off a direct product was delivered with no
+    // [ZONE-AUDIT], no refusal and no [PLAN-MODE] line at all. Phase labels
+    // decide what the spans are CALLED, never whether the flight is judged,
+    // and a safety gate behind a feature flag is one config edit from
+    // absent.
+    // CORRECTION to the commit that made this change: it claimed the A/B ran
+    // with phase off and had therefore been measuring ungated direct
+    // products. That was wrong — optimizer_params.yaml:27 has
+    // chain/phase/enable: true and the harness does not override it, so the
+    // gate was live in all 176 archived rows. The change stands on its own
+    // reasoning; the motivation given for it did not.
     log_->infof("[PLAN-MODE] direct");
     FlightVerdict direct_verdict{};
     {
