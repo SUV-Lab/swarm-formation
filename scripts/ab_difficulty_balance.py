@@ -6,8 +6,10 @@ measurement rounds were both invalidated by process errors, not by the
 planner — one measured a stale binary after a branch switch, the other ran
 the "zone missions" with no zones because risk zones reach the planner only
 via /mission/risk_zones. Both are now structural: the workspace is pinned and
-verified before anything runs, and every row records the zone count the
-planner actually installed, so a zero can never pass as a measurement again.
+verified before anything runs, every row records the zone count the planner
+actually installed so a zero can never pass as a measurement again, and the
+scenario yamls are read from the pinned workspace and digested into meta.json
+— pinning the binary is worth little while the inputs stay editable.
 
 Emits one CSV row per run and keeps every planner log. Nothing is averaged
 away: repetitions are kept individually so median/p95 can be recomputed and
@@ -17,6 +19,7 @@ so a single anomalous run stays visible.
 """
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -407,15 +410,39 @@ def main():
     ap.add_argument("--ws", required=True, help="PINNED workspace (never the dev tree)")
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--logdir", default="/ws/logs/runtime")
-    ap.add_argument("--missions", default="/ws/src/mmp_terrain/data/scenarios/missions")
-    ap.add_argument("--obstacles", default="/ws/src/mmp_terrain/data/scenarios/obstacles")
+    # Inputs default INSIDE the pinned workspace. They used to default to
+    # /ws — the dev tree — so the binary was pinned while the missions,
+    # obstacles and log directory it read were still editable mid-measurement.
+    # That is the same isolation hole the pin exists to close, one level down.
+    ap.add_argument("--logdir", default=None)
+    ap.add_argument("--missions", default=None)
+    ap.add_argument("--obstacles", default=None)
     a = ap.parse_args()
+    scen = os.path.join(a.ws, "src/mmp_terrain/data/scenarios")
+    a.logdir = a.logdir or os.path.join(a.ws, "logs/runtime")
+    a.missions = a.missions or os.path.join(scen, "missions")
+    a.obstacles = a.obstacles or os.path.join(scen, "obstacles")
+    for d in (a.missions, a.obstacles):
+        if not os.path.isdir(d):
+            raise SystemExit(f"scenario input missing from the pinned "
+                             f"workspace: {d}")
+        if os.path.realpath(d).startswith("/ws/"):
+            raise SystemExit(f"scenario input resolves into the dev tree: {d}")
 
     os.makedirs(os.path.join(a.out, "logs"), exist_ok=True)
     sha = open(os.path.join(a.ws, "PINNED_SHA")).read().strip() \
         if os.path.exists(os.path.join(a.ws, "PINNED_SHA")) else "unknown"
+    # The scenario yamls are measurement INPUTS; a run that cannot say which
+    # bytes it fed the planner is not reproducible, so they are digested here
+    # exactly like the source commit is.
+    h = hashlib.sha256()
+    for d in (a.missions, a.obstacles):
+        for f in sorted(os.listdir(d)):
+            h.update(f.encode())
+            h.update(open(os.path.join(d, f), "rb").read())
     meta = {"pinned_sha": sha, "ws": a.ws, "reps": a.reps,
+            "missions": a.missions, "obstacles": a.obstacles,
+            "scenario_sha256": h.hexdigest(),
             "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     json.dump(meta, open(os.path.join(a.out, "meta.json"), "w"), indent=2)
 
