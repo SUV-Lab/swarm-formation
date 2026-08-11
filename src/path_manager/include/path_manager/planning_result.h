@@ -67,6 +67,15 @@ enum class PlanReason {
   // needs a transition planner (contract 2), not a clamp: rewriting the
   // operator's stated start into a different flyable one is a lie.
   INITIAL_MODE_UNSUPPORTED,
+  // The command could not be READ: two stated initial-state sources at once,
+  // a non-finite or negative speed, a value with no claim bit. Distinct from
+  // INITIAL_STATE_UNSPECIFIED, which means the command was read and said
+  // nothing. The distinction matters to a publisher author: one is "you sent
+  // something contradictory", the other is "you sent nothing".
+  // An initial_speed value with use_initial_speed false is THIS, not
+  // UNSPECIFIED — a stale field from an un-updated publisher must break
+  // loudly rather than be flown.
+  INITIAL_STATE_MALFORMED,
   // A phase-mode direct fallback that failed the whole-flight fitness gate
   // (the same evaluation the stitched chain gets). "No phase labels" must
   // never mean "no audit".

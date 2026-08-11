@@ -113,6 +113,15 @@ ament_target_dependencies(${PROJECT_NAME}_node
 add_executable(load_obstacles_test test/load_obstacles_test.cpp)
 ament_target_dependencies(load_obstacles_test mmp_mission_msgs)
 
+# Stage 1 of the initial-state contract: a pure function of the message, so
+# this target needs neither the message package nor rclcpp. That is the point
+# — the malformed rows are MESSAGE states and are not expressible through the
+# planner's own entry point, which is why they had no test before.
+add_executable(start_claim_test test/start_claim_test.cpp)
+target_include_directories(start_claim_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(start_claim_test Eigen3::Eigen)
+
 # V3 scenario harness for risk-aware A*.
 add_executable(risk_scenarios_test test/risk_scenarios_test.cpp)
 target_link_libraries(risk_scenarios_test
@@ -166,6 +175,10 @@ if(BUILD_TESTING)
     COMMAND $<TARGET_FILE:load_obstacles_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 60)
+  ament_add_test(start_claim_test
+    COMMAND $<TARGET_FILE:start_claim_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60)
   # Spins its own node + intra-process pubs; needs a working RMW but no
   # external nodes.
   ament_add_test(terrain_risk_mask_test
@@ -196,6 +209,10 @@ install(TARGETS ${PROJECT_NAME}_node
 )
 
 install(TARGETS load_obstacles_test
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS start_claim_test
   DESTINATION lib/${PROJECT_NAME}
 )
 
