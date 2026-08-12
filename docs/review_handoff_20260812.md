@@ -566,32 +566,12 @@ direct   calls=179/9800  = 98-piece 전 구간
 |---|---|
 | 176행 A/B (raw + 로그 + 분석) | 저장소 `docs/measurements/ab_difficulty_balance_zone_20260812/` |
 | q_min 494.8 m / 5.2 m / vis 0.921 | 저장소 `docs/design/zone_gate_surface.md` |
-| 14.3 m, 509.1 m, 1.05091, iter 287 vs 179 | **커밋 메시지에만**(`7b8d37c`) + 이 문서 |
+| 14.3 m, 509.1 m, 1.05091 | `docs/design/zone_gate_surface.md` §4-2 (2026-08-12 반영) |
+| calls 27 / 179와 그 해석의 철회 | 같은 파일 §4-2 + 이 문서 §1-24, §1-27 |
 | `ab_repro2` / `ab_cmp` / `ab_gate` / `ab_repro` / `ab_dry`의 행과 로그 | **컨테이너에만.** 커밋 안 됨 |
 
 마지막 줄이 약점이다. 재현 명령은 문서와 커밋 메시지에 있지만 원시 행은 컨테이너가
 사라지면 없어진다.
-
----
-
-## 4. 열려 있는 것
-
-1. **왜 chained가 14 m 더 안쪽인가.** 크기와 부호는 측정됐고 메커니즘은 모른다.
-   chained의 cruise segment는 미션 시작·목표가 아니라 양 끝에 규정된 junction PVA를
-   갖는 부분 문제로 풀린다 — 그럴듯하지만 측정 안 됨
-2. **transition 후보 선택의 남은 비대칭.** standoff-clear 후보가 하나도 없으면 후보
-   집합이 비어 미션이 거부된다. `disq_zone_standoff > 0 && disq_zone == 0`이면서 후보가
-   0이 된 실행 수를 세야 2단계 선택이 필요한지 판단된다
-3. **`r5_transition_success_probe`가 이름과 달리 10/10 실패.** 이전 측정에서도 그랬으니
-   이 세션과 무관한 기존 문제
-4. **`r3_dense_overlap` / `r3_single_large_zone` / `r7_encircled_goal`이 항상 실패**
-   (merge 재시도 소진). 기존 문제
-5. **초기 상태 계약 2~4단계 미구현**: FSM 콜백 순서 재배치(검증 후 상태 변경),
-   `resolveStartSource`, `StartHead` 시그니처 통일, `applyHeadPolicy` 단일 구현
-   ([VEL-ALIGN]/[STALL-FLOOR]가 `path_manager.cpp`와 `segment_chain_planner.cpp`에
-   중복 구현돼 있음), 단위 일관성 검사
-6. **dt=0.1 앨리어싱**은 현재 시나리오에서 무해하다(§1-7). 구역이 작아지면 다시 봐야
-   한다 — dt와 구역 크기 사이에 코드상 연결이 없다
 
 ---
 
@@ -610,6 +590,10 @@ seed 전부 FIXED, 짝 내 seed 불일치 0, 초기상태 계약 오류 0
 
 **판정: `chain/difficulty_balance = false` 유지.** 안전 지표 후퇴 5건, 전부 `on` 쪽.
 
+**판정의 범위.** 이 결론은 **이 pin과 여기서 평가된 11개 조합에 한해** 인과 근거가 있다.
+전 플랫폼·전 미션에 대한 일반 법칙으로 확대하면 안 된다. 16조합 중 5개는 양팔 모두
+거부라 짝이 없고, 그중 2개는 §1-25의 짝 오류 때문이었다.
+
 | 조합 | 안전 | 시간 |
 |---|---|---|
 | r4_traverse_chain | min AGL 0.364 → **0.150 u (−58.8%)**, env peak 100.3 → 106.6%, viol 0.0 → 0.3(절대) | −2.1% (이득 없음) |
@@ -627,6 +611,34 @@ r4는 최소 AGL이 36.4 m에서 15.0 m로 떨어지는데 시간 이득이 없�
 **이 실행의 한계**: 16조합 중 2개(`r5_transition_*`)가 §1-25의 짝 오류 때문에 아무것도
 측정하지 않았다. 양팔 모두 거부라 짝 비교에는 들어가지 않으므로 위 판정은 영향받지
 않지만, 그 두 조합에 대해서는 이 실행이 아무 말도 하지 않는다.
+
+짝을 고친 뒤 1회 재실행(`ab_probe`, 32행)에서 두 probe 모두 이름대로 동작한다 —
+`success_probe` 양팔 CLEAN, `reject_probe` 양팔 REJECTED. 이 두 조합의 A/B 값은 다음
+전체 실행에서 채워진다.
+
+---
+
+## 4. 열려 있는 것
+
+1. **왜 chained가 14 m 더 안쪽인가.** 크기와 부호는 측정됐고 메커니즘은 모른다.
+   chained의 cruise segment는 미션 시작·목표가 아니라 양 끝에 규정된 junction PVA를
+   갖는 부분 문제로 풀린다 — 그럴듯하지만 측정 안 됨
+2. **transition 후보 선택의 남은 비대칭.** standoff-clear 후보가 하나도 없으면 후보
+   집합이 비어 미션이 거부된다. `disq_zone_standoff > 0 && disq_zone == 0`이면서 후보가
+   0이 된 실행 수를 세야 2단계 선택이 필요한지 판단된다
+3. ~~`r5_transition_success_probe`가 이름과 달리 10/10 실패~~ — **해결됨.** 원인은 플래너가
+   아니라 하네스의 짝 오류였다(§1-25). 시나리오를 떼고 재실행하니
+   `success_probe`는 양팔 CLEAN, `reject_probe`는 양팔 REJECTED
+   ("commanded start acceleration is not flyable by the model")로 **둘 다 이름대로**
+   동작한다 `[재현: ab_probe]`
+4. **`r3_dense_overlap` / `r3_single_large_zone` / `r7_encircled_goal`이 항상 실패**
+   (merge 재시도 소진). 기존 문제
+5. **초기 상태 계약 2~4단계 미구현**: FSM 콜백 순서 재배치(검증 후 상태 변경),
+   `resolveStartSource`, `StartHead` 시그니처 통일, `applyHeadPolicy` 단일 구현
+   ([VEL-ALIGN]/[STALL-FLOOR]가 `path_manager.cpp`와 `segment_chain_planner.cpp`에
+   중복 구현돼 있음), 단위 일관성 검사
+6. **dt=0.1 앨리어싱**은 현재 시나리오에서 무해하다(§1-7). 구역이 작아지면 다시 봐야
+   한다 — dt와 구역 크기 사이에 코드상 연결이 없다
 
 ---
 
@@ -664,9 +676,10 @@ r4는 최소 AGL이 36.4 m에서 15.0 m로 떨어지는데 시간 이득이 없�
 
 - **§2-1의 판단** — 1.05가 안전 요구가 아니라는 근거가 주석 한 덩어리다. 이 판단이
   틀리면 거부면 변경 전체가 틀린다
-- **§1-11의 수정 방향** — 판정 불가를 거부에서 DEGRADED로 내린 것이 fail-open인가.
-  나는 "무엇이 검사되지 않았는지 이름 붙여 알린다"가 옳다고 봤지만, 구역이 있는 다구간
-  미션을 날려도 되는가는 별개 질문이다
+- ~~§1-11의 수정 방향이 fail-open인가~~ — **답 받았고 반영했다.** fail-open이 맞았다.
+  DEGRADED는 FSM이 실제로 실행하는 결과이므로 "검사 못 했지만 알림"은 안전 논증이 아니다.
+  기본값을 fail-closed로 되돌리고 `manager/allow_unmeasured_zone_policy`를 명시적
+  opt-in으로 뒀다. 진짜 해결(leg별 스냅샷)은 §4에 남아 있다
 - **§3의 수치 중 `[내 독해]` 표시가 붙은 것**
 - **이 세션이 만들었을 수 있는 다른 회귀** — §1-11은 계측기 두 종류가 모두 눈이 먼
   자리에 있었다. 같은 종류의 사각이 더 있는지
