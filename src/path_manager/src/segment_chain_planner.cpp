@@ -1529,10 +1529,13 @@ SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
   const Eigen::Vector3d v_si(vel_u.x() * um, vel_u.y() * um,
                              vel_u.z() * uz);
   const double V = v_si.norm();
-  if (V < dyn->model_activation_speed_mps)
+  // [SPEED-BOUNDARY] same numeric-equality rule as the envelope limits
+  // (path_manager.h): a speed commanded exactly at the boundary lands on the
+  // passing side in every direction.
+  if (PathManager::belowSpeedBoundary(V, dyn->model_activation_speed_mps))
     return unsupported(prob + "; below the transition model's activation "
                               "speed");
-  if (V > dyn->speed_max_mps)
+  if (PathManager::aboveSpeedBoundary(V, dyn->speed_max_mps))
     return unsupported(prob + "; above the model ceiling — the model is "
                               "undefined there, a transition claim would "
                               "be a physics claim");

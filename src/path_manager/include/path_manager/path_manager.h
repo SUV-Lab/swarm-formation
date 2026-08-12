@@ -313,7 +313,10 @@ namespace path_manager
 
     // [CHAIN-PAR] read-only bits the chain planner needs for authoring.
     double maxVel() const { return max_vel_; }
-    // [PHASE] margin-backed stall floor (planner units) for tail-boundary
+    // [PHASE] margin-backed CRUISE FLOOR (planner units) for tail-boundary.
+    // Not the raw dynamics_speed_min_mps (122.0): this is that value with
+    // dynamics_margin applied, 131.76 m/s on the shipped configuration.
+    // "stall floor" names the wrong number and is being retired.
     // validation — same floor the [STALL-FLOOR] start guard uses.
     double stallFloorUnits() const
     {
@@ -347,6 +350,33 @@ namespace path_manager
     std::string pvaEnvelopeProblem(const Eigen::Vector3d &pos_units,
                                    const Eigen::Vector3d &vel_units,
                                    const Eigen::Vector3d &acc_units) const;
+    // [SPEED-BOUNDARY] One numeric-equality rule for every speed limit a
+    // stated initial state is judged against. A speed commanded EXACTLY at a
+    // boundary must land on the passing side of it, in every direction —
+    // and it does not, because the value makes a round trip through planner
+    // units: the FSM divides by initial_speed_unit_m and the gate multiplies
+    // back by dynamics_unit_xy_m. Measured on the shipped configuration, the
+    // margin-backed cruise floor 122.0 * 1.08 = 131.76000000000002 m/s
+    // recomputes to 131.75999999999999 for the direction (1,1,0) — and for
+    // (-18.3, -199.2, 0), which is r5_extended_corridor's actual first-leg
+    // aim. A strict comparison refuses a state the operator commanded
+    // exactly.
+    //
+    // This is a numeric-equality rule, NOT a relaxation: +-1 um/s is treated
+    // as the same speed. It must never become a percentage — that would move
+    // the physical limit instead of respecting the arithmetic.
+    //
+    // The same rule applies to all four boundaries: the margin-backed cruise
+    // floor and the effective handoff ceiling here, and the transition
+    // model's activation speed and maximum speed in classifyStartState.
+    static constexpr double kSpeedBoundaryEpsMps = 1e-6;
+    static bool belowSpeedBoundary(double v_mps, double floor_mps) {
+        return v_mps < floor_mps - kSpeedBoundaryEpsMps;
+    }
+    static bool aboveSpeedBoundary(double v_mps, double ceiling_mps) {
+        return v_mps > ceiling_mps + kSpeedBoundaryEpsMps;
+    }
+
     // NOTE: statedStartSpeedProblem is DELETED. It was a second validator
     // for the same quantity, and two validators for one quantity always
     // drift: it tested the stall floor alone, so a scalar-stated 400 m/s

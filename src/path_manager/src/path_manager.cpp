@@ -647,10 +647,14 @@ std::string PathManager::stateEnvelopeProblem(
         const double floor_mps =
             poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy;
         char buf[160];
-        if (vm < floor_mps) {
+        // [SPEED-BOUNDARY] see path_manager.h. Commanding exactly the floor
+        // must pass whatever the direction; the unit round trip puts some
+        // directions 2.8e-14 m/s under it — (1,1,0) and r5's own first-leg
+        // aim (-18.3, -199.2, 0) among them.
+        if (belowSpeedBoundary(vm, floor_mps)) {
             snprintf(buf, sizeof buf,
-                     "speed %.1f m/s below the stall floor %.1f m/s", vm,
-                     floor_mps);
+                     "speed %.1f m/s below the margin-backed cruise floor "
+                     "%.1f m/s", vm, floor_mps);
             return buf;
         }
         // THREE ceilings, three meanings — conflated once, separated on
@@ -689,19 +693,11 @@ std::string PathManager::stateEnvelopeProblem(
         if (node_->has_parameter("planning/handoff_max_vel_mps"))
             node_->get_parameter("planning/handoff_max_vel_mps",
                                  explicit_cap);
-        // INCLUSIVE at the cap. A state stated exactly AT the ceiling must
-        // pass: the comment above says contracts author at it, and 8 of the
-        // 10 shipped missions state exactly optimization/max_vel * unit =
-        // 200.0 m/s. A strict > puts every one of them on the last bits of
-        // the first-leg direction normalization — |dir| = 1 ± 1e-16 makes vm
-        // = 200.0 ± 2e-14, so the same mission passes or classifies as
-        // TRANSITION_REQUIRED depending on rounding. That coin was never
-        // flipped while the scalar form bypassed this validator; unifying the
-        // two forms started flipping it, and r5_extended_corridor came up
-        // tails. 1 um/s is far below any physical meaning and far above the
-        // arithmetic noise.
-        constexpr double kCapEpsMps = 1e-6;
-        if (vm > vmax_mps + kCapEpsMps) {
+        // [SPEED-BOUNDARY] INCLUSIVE at the cap, same rule as the floor.
+        // Eight of the ten shipped missions state exactly
+        // optimization/max_vel * unit = 200.0 m/s, and a strict > put every
+        // one of them on the last bits of the direction normalization.
+        if (aboveSpeedBoundary(vm, vmax_mps)) {
             const char *which =
                 vmax_mps >= dyn.speed_max_mps - 1e-9
                     ? "model maximum"

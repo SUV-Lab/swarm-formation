@@ -1810,6 +1810,31 @@ int main(int argc, char **argv)
     expect(pm->stateEnvelopeProblem(dir * one_ulp_over).empty(),
            "...and one ULP above it too — that is rounding, not overspeed");
 
+    // ALL FOUR speed boundaries, three points each: exactly at it passes,
+    // half an epsilon past it passes, two epsilons past it is refused. One
+    // rule, one constant, four limits — the ceiling was fixed alone first
+    // and the floor turned out to have the identical defect: the unit round
+    // trip (FSM divides by initial_speed_unit_m, the gate multiplies back by
+    // dynamics_unit_xy_m) puts the direction (1,1,0) at 2.8e-14 m/s BELOW a
+    // floor commanded exactly, and (-18.3, -199.2, 0) — r5's real first-leg
+    // aim — with it.
+    {
+      const double eps_u = 1e-8;   // 1 um/s expressed in u/s (100 m per unit)
+      const Eigen::Vector3d diag =
+          Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
+      const double floor_u = pm->stallFloorUnits();
+      expect(floor_u > 0.0, "the cruise floor is available to test against");
+
+      // FLOOR. The diagonal is the direction that actually rounds under.
+      expect(pm->stateEnvelopeProblem(diag * floor_u).empty(),
+             "exactly AT the margin-backed cruise floor passes (diagonal — "
+             "the direction that rounds under)");
+      expect(pm->stateEnvelopeProblem(diag * (floor_u - 0.5 * eps_u)).empty(),
+             "floor - 0.5 um/s passes");
+      expect(!pm->stateEnvelopeProblem(diag * (floor_u - 2.0 * eps_u)).empty(),
+             "floor - 2 um/s is refused — the rule is 1 um/s, not 'small'");
+    }
+
     // The TOLERANCE ITSELF, both sides of it. Checking "1 ULP passes, 1%
     // fails" leaves everything from 0.1 to 1.9 m/s passing as well, so it
     // pins the sign of the fix and not its value — the earlier claim that
@@ -1849,6 +1874,44 @@ int main(int argc, char **argv)
              "...and is not pushed into the transition regime by rounding" +
                  tag);
     }
+    // The remaining two boundaries live in classifyStartState, which is
+    // private — so they are exercised through plan() and read off the
+    // REASON. Below the activation speed there is no transition model and
+    // the answer is INITIAL_MODE_UNSUPPORTED; at or above it the state is
+    // TRANSITION_REQUIRED and the mission goes somewhere else, whatever the
+    // coordinator then decides.
+    {
+      const auto *dyn = pm->dynamicsParams();
+      expect(dyn != nullptr, "the dynamics model is available");
+      if (dyn) {
+        const double UM = 100.0;
+        const double eps_u = 1e-8;                       // 1 um/s in u/s
+        const double act_u = dyn->model_activation_speed_mps / UM;
+        const Eigen::Vector3d diag =
+            Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
+        const auto reason_at = [&](double mag_u) {
+          return chain.plan(start_pos, diag * mag_u, start_acc, goal, true, {})
+              .reason;
+        };
+        const auto UNSUP = path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED;
+        expect(reason_at(act_u) != UNSUP,
+               "exactly AT the transition activation speed is not "
+               "UNSUPPORTED");
+        expect(reason_at(act_u - 0.5 * eps_u) != UNSUP,
+               "activation - 0.5 um/s is not UNSUPPORTED either");
+        expect(reason_at(act_u - 2.0 * eps_u) == UNSUP,
+               "activation - 2 um/s IS UNSUPPORTED — the same 1 um/s rule");
+
+        const double max_u = dyn->speed_max_mps / UM;
+        expect(reason_at(max_u) != UNSUP,
+               "exactly AT the model maximum speed is not UNSUPPORTED");
+        expect(reason_at(max_u + 0.5 * eps_u) != UNSUP,
+               "model max + 0.5 um/s is not UNSUPPORTED either");
+        expect(reason_at(max_u + 2.0 * eps_u) == UNSUP,
+               "model max + 2 um/s IS UNSUPPORTED");
+      }
+    }
+
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
