@@ -18,6 +18,7 @@
 #include "mmp_mission_msgs/msg/risk_zone_spec.hpp"
 #include "path_manager/path_manager.h"
 #include "path_manager/planning_result.h"
+#include "path_manager/start_state.h"
 #include "path_manager/segment_chain_planner.h"
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
@@ -146,6 +147,9 @@ private:
     // uses frame units/s, so convert once and apply it along the first route
     // chord when there is no preceding trajectory.
     double commanded_initial_speed_{0.0};
+    // [INITIAL-STATE] The validated claim from the last accepted command.
+    // Parsed at the top of the callback, before any state is consumed.
+    path_manager::MissionStartClaim mission_start_claim_{};
     double initial_speed_unit_m_{100.0};
     bool use_commanded_initial_velocity_{false};
     bool use_commanded_initial_acceleration_{false};

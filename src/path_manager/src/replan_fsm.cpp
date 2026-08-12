@@ -86,6 +86,33 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
                     "manager/initial_speed_unit_m must be positive; using 100 m");
         initial_speed_unit_m_ = 100.0;
     }
+    // The FSM converts every stated component — including z — with THIS
+    // parameter, while the envelope gates convert back with
+    // optimization/dynamics_unit_xy_m and _z_m. Nothing cross-checked them,
+    // so a drift silently makes the magnitude JUDGED differ from the
+    // magnitude STATED — the exact fabrication the message contract forbids.
+    // Loud at construction rather than wrong in flight.
+    {
+        double ux = 100.0, uz = 100.0;
+        if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+            node_->get_parameter("optimization/dynamics_unit_xy_m", ux);
+        if (node_->has_parameter("optimization/dynamics_unit_z_m"))
+            node_->get_parameter("optimization/dynamics_unit_z_m", uz);
+        if (std::abs(ux - initial_speed_unit_m_) > 1e-9 ||
+            std::abs(uz - initial_speed_unit_m_) > 1e-9) {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "[INITIAL-STATE] unit mismatch: "
+                         "manager/initial_speed_unit_m=%.6f but "
+                         "optimization/dynamics_unit_xy_m=%.6f, "
+                         "dynamics_unit_z_m=%.6f. A stated initial state "
+                         "would be judged at a different magnitude than it "
+                         "was stated at.", initial_speed_unit_m_, ux, uz);
+            log_manager_->errorf(
+                "[INITIAL-STATE] unit mismatch: initial_speed_unit_m=%.6f "
+                "vs dynamics_unit_xy_m=%.6f dynamics_unit_z_m=%.6f",
+                initial_speed_unit_m_, ux, uz);
+        }
+    }
 
     if (inject_init_state_) {
         FSM_LOG_WARN("[TEST] inject_init_state ENABLED: init vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
@@ -615,7 +642,12 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
             start_vel_commanded_ = true;
             start_state_stated_ = true;
             vel_src = "commanded vector (use_initial_velocity)";
-        } else if (commanded_initial_speed_ > 0.0) {
+        } else if (mission_start_claim_.src ==
+                   path_manager::StartStateSource::STATED_SPEED) {
+            // The claim decides, not the value. "> 0.0" sent a STATED zero
+            // down the else branch, where it became an UNSPECIFIED mission
+            // — so an operator who explicitly asked for a rest start got
+            // "you said nothing" instead of "this stack cannot fly that".
             // Aim the initial velocity along the FIRST ROUTE LEG, not the
             // final target: with intermediate waypoints the two differ, and
             // a target-aimed start manufactured an immediate high-load bank
@@ -1009,6 +1041,28 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
         return;
     }
 
+    // [INITIAL-STATE] Stage 1: PURE message validation, before any state is
+    // consumed or overwritten. The old order validated after mutating — the
+    // adoption block below overwrites start_pt_/current_pos_ and clears
+    // have_local_traj_, while the rollback at the end restores only the
+    // sequence and the mission id — so every refusal downstream of it
+    // dropped a flying trajectory and kept the rejected mission's start
+    // point. Refusing HERE touches nothing, so a corrected resend just works.
+    mission_start_claim_ =
+        path_manager::parseStartClaim(*msg, initial_speed_unit_m_);
+    if (mission_start_claim_.malformed()) {
+        FSM_LOG_ERROR("[INITIAL-STATE] command REJECTED: %s "
+                      "(INITIAL_STATE_MALFORMED) — nothing was consumed; fix "
+                      "the command and resend the same sequence",
+                      mission_start_claim_.problem.c_str());
+        return;
+    }
+    if (path_manager::statedVectorIgnoresScalar(*msg)) {
+        FSM_LOG_WARN("[INITIAL-STATE] initial_speed=%.3f is IGNORED: "
+                     "use_initial_velocity is set and the vector wins",
+                     msg->initial_speed);
+    }
+
     // Capture the pre-command sequencing state: if the plan below fails or is
     // rejected, both are ROLLED BACK at the end of this callback so a resend
     // of the SAME command retries instead of dying in the dedup gate above.
@@ -1026,16 +1080,16 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
         msg->mission_id != current_mission_id_;
 
     current_mission_id_ = msg->mission_id;
-    commanded_initial_speed_ =
-        std::max(0.0, msg->initial_speed) / initial_speed_unit_m_;
-    use_commanded_initial_velocity_ = msg->use_initial_velocity;
-    use_commanded_initial_acceleration_ = msg->use_initial_acceleration;
-    commanded_initial_velocity_ = Eigen::Vector3d(
-        msg->initial_velocity.x, msg->initial_velocity.y,
-        msg->initial_velocity.z) / initial_speed_unit_m_;
-    commanded_initial_acceleration_ = Eigen::Vector3d(
-        msg->initial_acceleration.x, msg->initial_acceleration.y,
-        msg->initial_acceleration.z) / initial_speed_unit_m_;
+    // All five come from the ONE validated claim. They used to be read
+    // straight off the message here, each with its own conversion and its
+    // own clamp — including std::max(0.0, initial_speed), which made a
+    // clamped -5 and a stated rest start into the same value.
+    commanded_initial_speed_ = mission_start_claim_.speed_u;
+    use_commanded_initial_velocity_ =
+        mission_start_claim_.src == path_manager::StartStateSource::STATED_VECTOR;
+    use_commanded_initial_acceleration_ = mission_start_claim_.acc_prescribed;
+    commanded_initial_velocity_ = mission_start_claim_.vel_u;
+    commanded_initial_acceleration_ = mission_start_claim_.acc_u;
     // [PHASE] mission FINAL boundary (SI -> planner units, same divisor as
     // the initial vectors). Validated at the plan entry, not here.
     mission_tail_ = ego_planner::TailBoundary{};
@@ -1063,18 +1117,10 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
                      mission_tail_.acc.x(), mission_tail_.acc.y(),
                      mission_tail_.acc.z());
     }
-    if (use_commanded_initial_velocity_ &&
-        !commanded_initial_velocity_.allFinite()) {
-        FSM_LOG_WARN("Ignoring non-finite commanded initial velocity");
-        use_commanded_initial_velocity_ = false;
-        commanded_initial_velocity_.setZero();
-    }
-    if (use_commanded_initial_acceleration_ &&
-        !commanded_initial_acceleration_.allFinite()) {
-        FSM_LOG_WARN("Ignoring non-finite commanded initial acceleration");
-        use_commanded_initial_acceleration_ = false;
-        commanded_initial_acceleration_.setZero();
-    }
+    // The two "Ignoring non-finite ..." WARN-and-downgrade blocks are gone.
+    // A non-finite stated value is MALFORMED and was already refused above,
+    // before anything was consumed. Downgrading it silently turned a broken
+    // command into an UNSPECIFIED one and reported the wrong diagnosis.
 
     // Adopt the commanded start for the FIRST command AND for every new
     // mission. Previously this was a write-once latch (only the first command

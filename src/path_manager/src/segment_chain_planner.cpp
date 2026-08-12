@@ -1475,6 +1475,19 @@ SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
   // Finiteness is judged regardless of prescription — garbage is garbage.
   if (!pos_u.allFinite() || !vel_u.allFinite() || !acc_u.allFinite())
     return unsupported("non-finite commanded state");
+  // A stated REST start, from either form, in EVERY configuration. This is
+  // model-independent on purpose: a zero head has no direction, the
+  // first-leg synthesis and every downstream normalization divide by it,
+  // and no parameter set makes it flyable. Justifying rest-refusal with the
+  // stall floor instead would leave it unrefused under
+  // optimization/dynamics_enable: false, where the floor does not exist.
+  // Legal to STATE — parseStartClaim accepts it — and refused here, by
+  // name, rather than silently raised to the floor.
+  if (vel_u.squaredNorm() <= 0.0)
+    return unsupported(
+        "stated initial speed is zero — a rest start has no direction and "
+        "this stack cannot fly one; the launch phase needs a transition "
+        "planner, not a clamp");
   // Prescribed: the full PVA is the operator's claim — judge all of it.
   // Unprescribed: the internal acc value is NOT evidence; the velocity
   // state alone decides the regime.

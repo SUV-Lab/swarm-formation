@@ -161,6 +161,7 @@ int main(int argc, char **argv)
        with_zonewall = false, with_zonepass0 = false, with_hardpen = false,
        with_standoffpen = false, with_wpzone = false,
        with_nophasedirect = false, with_baserefuse = false,
+       with_reststart = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -318,6 +319,7 @@ int main(int argc, char **argv)
     if (v == "wpzone") { with_route = true; with_wpzone = true; }
     if (v == "nophasedirect") { with_route = true; with_autosmall = true; with_nophasedirect = true; }
     if (v == "baserefuse") { with_autosmall = true; with_baserefuse = true; }
+    if (v == "reststart") { with_route = true; with_reststart = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -1770,6 +1772,51 @@ int main(int argc, char **argv)
     expect(pm->traj_.local_traj.duration == 0.0 &&
                pm->traj_.local_traj.start_time == 0.0,
            "...and the stored trajectory stops being executable");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_reststart) {
+    // A STATED rest start. Legal to say (parseStartClaim accepts it, so the
+    // operator's words survive intact); refused here, BY NAME, and never
+    // raised to the stall floor — a clamped rest start publishes a flight
+    // that begins at 131.8 m/s when the mission asked for 0.
+    //
+    // The refusal must be model-INDEPENDENT. Justifying it with the stall
+    // floor would leave it unrefused under optimization/dynamics_enable:
+    // false, where the floor does not exist; a zero head has no direction in
+    // any configuration.
+    for (int pass = 0; pass < 2; ++pass) {
+      const bool dyn_on = (pass == 0);
+      force("optimization/dynamics_enable", dyn_on);
+      // force() alone does NOT reach the optimizer: dynamics_enable_ is
+      // latched by setParam at init, so the second pass silently ran with
+      // dynamics still ON and the model-independence claim went untested.
+      // A forced re-init is what re-reads the parameter surface.
+      pm->initOptimizer(/*force_reinit=*/true);
+      expect(pm->dynamicsParams() != nullptr ? dyn_on : !dyn_on,
+             std::string("the dynamics model really is ") +
+                 (dyn_on ? "ON" : "OFF") + " for this pass");
+      // Both stated forms, since the contract is that they agree.
+      const path_manager::PlanResult rs =
+          chain.plan(start_pos, Eigen::Vector3d::Zero(), start_acc, goal,
+                     /*start_vel_synthesized=*/true, {});
+      const path_manager::PlanResult rv =
+          chain.plan(start_pos, Eigen::Vector3d::Zero(), start_acc, goal,
+                     /*start_vel_synthesized=*/false, {},
+                     /*start_vel_commanded=*/true,
+                     /*start_acc_commanded=*/false);
+      const std::string tag = dyn_on ? " (dynamics ON)" : " (dynamics OFF)";
+      expect(!rs.hasTrajectory(),
+             "a stated rest start is REFUSED, not clamped to the floor" + tag);
+      expect(rs.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
+             "...as INITIAL_MODE_UNSUPPORTED, not UNSPECIFIED — the mission "
+             "did say something" + tag);
+      expect(!rv.hasTrajectory() && rv.reason == rs.reason,
+             "...and the vector form of the same rest start agrees" + tag);
+    }
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
