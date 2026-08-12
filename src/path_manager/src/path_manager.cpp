@@ -1173,9 +1173,12 @@ std::string PathManager::stateEnvelopeProblem(
         }
 
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===
+        // [LEG-POLICY] last_route_edge_leg_, not the local edge_leg: the
+        // inherited-route branch leaves the local empty and the member is the
+        // one place that has already been size-checked against clean_path.
         bool opt_ok = optimizeStage(clean_path, full_route,
                                     start_pos, start_vel_eff, start_acc, wps,
-                                    cap_ref, tail);
+                                    cap_ref, tail, last_route_edge_leg_);
 
         auto t_total_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] === TOTAL planGlobalTraj: %.1f ms ===",
@@ -1756,7 +1759,8 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                                 const Eigen::Vector3d &start_acc,
                                 const std::vector<Eigen::Vector3d> &waypoints,
                                 const std::vector<double> &cap_ref,
-                                const ego_planner::TailBoundary &tail)
+                                const ego_planner::TailBoundary &tail,
+                                const std::vector<size_t> &edge_leg)
 {
         // Stage 2 = trajectory optimization. The optimizer owns the MINCO
         // initial-trajectory build + L-BFGS; we only pass the front-end path
@@ -1866,9 +1870,10 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         // barrier armed (see suppress_crossing_exempt_ in the optimizer).
         poly_traj_opt_->setSuppressCrossingExempt(
             searcher_.zoneAvoidPass() == 1);
+        last_piece_leg_.clear();
         bool opt_success = poly_traj_opt_->optimizeFromPath(
             clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
-            global_traj, local_traj, cap_ref, tail);
+            global_traj, local_traj, cap_ref, tail, edge_leg, &last_piece_leg_);
         if (!opt_success) {
             log_manager_->errorf("Trajectory optimization failed");
             return false;

@@ -417,6 +417,11 @@ namespace path_manager
     // PathManager can refuse tags minted against a different front-end run
     // rather than indexing this epoch's leg_policies_ with last epoch's legs.
     uint64_t lastCommittedRouteEpoch() const { return last_route_epoch_; }
+    // Which leg owns each MINCO piece of the trajectory from the last solve.
+    // locatePieceIdx() on the stored trajectory turns a flight time into an
+    // index into this, which is how a sampled point finds the policy that was
+    // in force where it flies. Empty means unknown — never leg 0 by default.
+    const std::vector<size_t>& lastPieceLeg() const { return last_piece_leg_; }
 
     void deliverTrajToOptimizer(void) {
         if (isOptimizerInitialized()) {
@@ -868,6 +873,10 @@ namespace path_manager
     // provenance bug and both this and the epoch stamp are dropped.
     std::vector<size_t> last_route_edge_leg_;
     uint64_t last_route_epoch_{0};
+    // [LEG-POLICY] The same ownership after the solve, one entry per MINCO
+    // piece of the trajectory just stored. Empty whenever the optimizer could
+    // not vouch for the mapping.
+    std::vector<size_t> last_piece_leg_;
     Eigen::Vector3d map_lower_bound_;
     Eigen::Vector3d map_upper_bound_;
     std::vector<LocalTrajData> swarm_traj_;
@@ -958,7 +967,8 @@ namespace path_manager
                        const Eigen::Vector3d &start_acc,
                        const std::vector<Eigen::Vector3d> &waypoints,
                        const std::vector<double> &cap_ref,
-                       const ego_planner::TailBoundary &tail);
+                       const ego_planner::TailBoundary &tail,
+                       const std::vector<size_t> &edge_leg = {});
 
     ego_planner::PolyTrajOptimizer::Ptr poly_traj_opt_;
     bool is_optimizer_initialized_;

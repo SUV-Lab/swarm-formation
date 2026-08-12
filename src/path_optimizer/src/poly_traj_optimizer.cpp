@@ -23,8 +23,11 @@ namespace ego_planner
                                            poly_traj::Trajectory &out_global,
                                            poly_traj::Trajectory &out_local,
                                            const std::vector<double> &cap_ref_z,
-                                           const TailBoundary &tail)
+                                           const TailBoundary &tail,
+                                           const std::vector<size_t> &edge_leg,
+                                           std::vector<size_t> *out_piece_leg)
   {
+    if (out_piece_leg) out_piece_leg->clear();
     // Barrier exemptions for this plan (same start/goal rule as the
     // front-end): must be recomputed per plan since zones and endpoints
     // both change at runtime. Zones the front-end route itself crosses are
@@ -44,6 +47,18 @@ namespace ego_planner
       cap_ref.clear();
     }
 
+    // [LEG-POLICY] Same discipline as cap_ref, one element shorter because it
+    // describes edges rather than vertices: mirror every clean_path insertion
+    // below onto it, and drop it whole on any size disagreement rather than
+    // let a shifted index attribute one leg's flight to another.
+    std::vector<size_t> piece_leg = edge_leg;
+    if (!piece_leg.empty() && piece_leg.size() + 1 != clean_path.size()) {
+      LOG_WARN("[LEG-POLICY] edge_leg size %zu != clean_path size %zu - 1 — "
+               "route provenance dropped for this solve",
+               piece_leg.size(), clean_path.size());
+      piece_leg.clear();
+    }
+
     // === MINCO initial trajectory from clean_path ===
     // Each shortcut vertex becomes one MINCO piece boundary directly;
     // clean_path is already densified so pieces stay roughly equal length.
@@ -56,6 +71,10 @@ namespace ego_planner
         // max(neighbours): erring permissive keeps the cap an upper bound.
         cap_ref.insert(cap_ref.begin() + 1, std::max(cap_ref[0], cap_ref[1]));
       }
+      // The midpoint splits edge 0 in two; both halves lie on it, so both
+      // belong to whichever leg owned it.
+      if (!piece_leg.empty())
+        piece_leg.insert(piece_leg.begin(), piece_leg.front());
     }
 
     // --- Initial-velocity lead-in ---
@@ -77,6 +96,9 @@ namespace ego_planner
       if (!cap_ref.empty()) {
         cap_ref.insert(cap_ref.begin() + 1, std::max(cap_ref[0], cap_ref[1]));
       }
+      // The lead-in point sits just past the start, so it too splits edge 0.
+      if (!piece_leg.empty())
+        piece_leg.insert(piece_leg.begin(), piece_leg.front());
       if (log_manager_) {
         log_manager_->infof("[LEAD-IN] start_vel=%.2f m/s -> lead point +%.2f m along (%.2f,%.2f,%.2f)",
                             start_vel.norm(), d_lead, v_hat.x(), v_hat.y(), v_hat.z());
@@ -84,6 +106,13 @@ namespace ego_planner
     }
 
     int piece_num = static_cast<int>(clean_path.size()) - 1;
+    if (!piece_leg.empty() &&
+        static_cast<int>(piece_leg.size()) != piece_num) {
+      LOG_WARN("[LEG-POLICY] %zu edge tags for %d pieces after the insertions "
+               "— route provenance dropped for this solve",
+               piece_leg.size(), piece_num);
+      piece_leg.clear();
+    }
 
     // [H4-COMMIT] decision layer as seed authority (default off): rewrite
     // the inner z profile from the vertex-lattice corridor DP BEFORE any
@@ -614,6 +643,23 @@ namespace ego_planner
     }
 
     out_local = jerkOpt_.getTraj();
+
+    // [LEG-POLICY] The mapping is only handed back if the trajectory that
+    // came out has exactly as many pieces as the route that went in. L-BFGS
+    // moves inner points and durations and is not supposed to change the
+    // count — but "is not supposed to" is not a guarantee to audit against,
+    // and a mapping one piece off would silently blame the wrong leg for a
+    // zone contact. Nothing out means the audit falls back to refusing.
+    if (out_piece_leg && !piece_leg.empty()) {
+      const int flown = static_cast<int>(out_local.getPieceNum());
+      if (flown == static_cast<int>(piece_leg.size())) {
+        *out_piece_leg = piece_leg;
+      } else {
+        LOG_WARN("[LEG-POLICY] solved trajectory has %d pieces for %zu tagged "
+                 "edges — route provenance dropped",
+                 flown, piece_leg.size());
+      }
+    }
 
     // [H4] post-solve leg of the corridor diagnostic: compare the flown z
     // against the pre-solve corridor and DP profile at the same stations.

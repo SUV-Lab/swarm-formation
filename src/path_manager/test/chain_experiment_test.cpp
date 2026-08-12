@@ -182,6 +182,7 @@ int main(int argc, char **argv)
        with_nophasedirect = false, with_baserefuse = false,
        with_reststart = false, with_capstart = false,
        with_headsrc = false, with_legpolicy = false, with_legtags = false,
+       with_legleadin = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -344,6 +345,7 @@ int main(int argc, char **argv)
     if (v == "headsrc") { with_route = true; with_headsrc = true; }
     if (v == "legpolicy") { with_route = true; with_legpolicy = true; }
     if (v == "legtags") { with_route = true; with_legtags = true; }
+    if (v == "legleadin") { with_route = true; with_legleadin = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -425,7 +427,13 @@ int main(int argc, char **argv)
     // OFF by default. The first draft of `legtags` asserted the handover
     // vertex without turning them on, and a mutation deleting the split
     // survived: the branch was never entered at all.
-    if (with_legtags) ovr.emplace_back("manager/corner_fillet_radius", 12.0);
+    if (with_legtags || with_legleadin)
+      ovr.emplace_back("manager/corner_fillet_radius", 12.0);
+    // [LEG-POLICY] optimization/lead_in_time ships as 0.0, so the optimizer's
+    // lead-in insertion — one of the two places clean_path grows after the
+    // tags were built — never fires in the default configuration and its
+    // mirror onto the tag vector was dead code no variant entered.
+    if (with_legleadin) ovr.emplace_back("optimization/lead_in_time", 1.0);
     if (!ovr.empty()) options.parameter_overrides(ovr);
   }
   auto node = std::make_shared<rclcpp::Node>("chain_experiment", options);
@@ -1862,7 +1870,7 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  if (with_legtags) {
+  if (with_legtags || with_legleadin) {
     // [LEG-POLICY] step 2: edge provenance survives the two transforms that
     // rewrite the route's point list after the search — corner fillets and
     // the piece-boundary subdivision. Tags are carried through both; nothing
@@ -1877,10 +1885,13 @@ int main(int argc, char **argv)
     // or even — and the even-N forcing that puts the split exactly on the
     // apex is invisible at a corner that was already even. One `mid` tested
     // the split's existence but not its placement.
-    const std::vector<Eigen::Vector3d> mids = {
-        {180.0, 80.0, 3.0},   {180.0, 40.0, 3.0},
-        {150.0, 100.0, 3.0},  {200.0, 60.0, 4.0},
-    };
+    const std::vector<Eigen::Vector3d> mids =
+        with_legleadin
+            ? std::vector<Eigen::Vector3d>{{180.0, 80.0, 3.0}}
+            : std::vector<Eigen::Vector3d>{
+                  {180.0, 80.0, 3.0},   {180.0, 40.0, 3.0},
+                  {150.0, 100.0, 3.0},  {200.0, 60.0, 4.0},
+              };
     for (const auto &mid : mids) {
       const std::string at_mid =
           " [mid " + std::to_string((int)mid.x()) + "," +
@@ -1937,6 +1948,68 @@ int main(int argc, char **argv)
       expect(at == closest,
              "the handover sits on the vertex nearest the junction "
              "waypoint" + at_mid);
+
+      // ...and the same ownership after the solve. Route edge i becomes MINCO
+      // piece i, so the map is only usable if it is exactly as long as the
+      // trajectory that actually came out — the optimizer withholds it
+      // otherwise. This is what turns a flight time into a policy: find the
+      // piece, read its leg.
+      const poly_traj::Trajectory &flight = pm->traj_.local_traj.traj;
+      const auto &pl = pm->lastPieceLeg();
+      if (with_legleadin) {
+        // The lead-in plants an extra vertex just past the start, so the
+        // trajectory carries one piece MORE than the route had edges. If the
+        // tag vector is not grown alongside it, every tag from the start
+        // onwards describes the wrong piece — and the size check makes the
+        // optimizer withhold the map rather than publish the shift.
+        expect(flight.getPieceNum() == static_cast<int>(route.size()),
+               "the lead-in added a piece" + at_mid);
+        expect(pl.size() >= 2 && pl[0] == pl[1] && pl[0] == 0,
+               "...and both halves of the split first edge stay on leg 0" +
+                   at_mid);
+      } else {
+        expect(flight.getPieceNum() ==
+                   static_cast<int>(route.size()) - 1,
+               "no insertion: one piece per route edge" + at_mid);
+      }
+      expect(!pl.empty() &&
+                 pl.size() == static_cast<size_t>(flight.getPieceNum()),
+             "one leg per MINCO piece of the trajectory that was stored" +
+                 at_mid);
+      if (!pl.empty() &&
+          pl.size() == static_cast<size_t>(flight.getPieceNum())) {
+        size_t p_trans = 0, p_count = 0;
+        bool p_monotone = true;
+        for (size_t i = 0; i + 1 < pl.size(); ++i) {
+          if (pl[i + 1] < pl[i]) p_monotone = false;
+          if (pl[i + 1] != pl[i]) { ++p_count; p_trans = i + 1; }
+        }
+        expect(p_monotone && p_count == 1 && pl.front() == 0 &&
+                   pl.back() == 1,
+               "the pieces change hands once, in flight order" + at_mid);
+        // The piece boundary is where the flight passes the junction. Walk
+        // the trajectory and find the piece holding the closest approach to
+        // mid; it must be one of the two the handover separates. (Not an
+        // exact index: the optimized curve rounds the corner, so the nearest
+        // approach can fall either side of the boundary — but never pieces
+        // away from it, which is what a shifted map would produce.)
+        const double T = flight.getTotalDuration();
+        double best_t = 0.0, best_d = std::numeric_limits<double>::max();
+        for (int k = 0; k <= 2000; ++k) {
+          const double t = T * k / 2000.0;
+          const double d = (flight.getPos(t) - mid).norm();
+          if (d < best_d) { best_d = d; best_t = t; }
+        }
+        double rem = best_t;
+        const int pi = flight.locatePieceIdx(rem);
+        std::cout << "[LEG-TAGS]" << at_mid << " pieces=" << pl.size()
+                  << " hand over between " << (p_trans - 1) << " and "
+                  << p_trans << "; closest approach to mid in piece " << pi
+                  << " (" << best_d << ")\n";
+        expect(std::abs(pi - static_cast<int>(p_trans)) <= 1,
+               "the piece flying nearest the junction is the one the pieces "
+               "change hands at" + at_mid);
+      }
     }
     const Eigen::Vector3d mid = mids.front();
     const auto &route = pm->lastCommittedRoute();

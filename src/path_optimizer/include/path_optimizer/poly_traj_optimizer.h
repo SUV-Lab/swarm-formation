@@ -670,7 +670,17 @@ namespace ego_planner
                           poly_traj::Trajectory &out_global,
                           poly_traj::Trajectory &out_local,
                           const std::vector<double> &cap_ref_z = {},
-                          const TailBoundary &tail = TailBoundary{});
+                          const TailBoundary &tail = TailBoundary{},
+                          // [LEG-POLICY] Which leg authored each clean_path
+                          // EDGE on entry (size == clean_path.size() - 1), and
+                          // which leg owns each MINCO PIECE on exit. Edge i
+                          // becomes piece i and L-BFGS changes neither the
+                          // count nor the order, so the mapping survives the
+                          // solve; the insertions below are mirrored onto it
+                          // the same way cap_ref_z is. Empty in means unknown,
+                          // and empty out means the caller must not assume.
+                          const std::vector<size_t> &edge_leg = {},
+                          std::vector<size_t> *out_piece_leg = nullptr);
 
     void setDesiredFormation(int type);
 
