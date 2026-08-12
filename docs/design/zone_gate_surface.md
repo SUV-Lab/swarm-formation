@@ -127,12 +127,31 @@ chained  calls=11 /3000   4-piece  arrival
 direct   calls=179/9800   98-piece 전 구간
 ```
 
-**cruise 기준 chained 27 vs direct 179 — chained가 6.6배 덜 다듬어졌다.** 방향이
-반대였고, 수렴 깊이 가설은 기각이 아니라 **지지된다.** 보강 증거: 총 비행시간이
-direct 828.0 s vs chained 20.1+789.8+18.7 = 828.6 s로, 같은 route·같은 `wei_time_`에서
-direct가 시간 목적함수에서도 낫다.
+**cruise 기준 chained 27 calls, direct 179 calls다.** 귀속 오류는 여기까지가 정정이다.
 
-세 줄 중 하나를 골라 쓰면서 어느 solve인지 확인하지 않은 것이 원인이다.
+**그 수치로 "chained가 6.6배 덜 다듬어졌다"고 쓴 것은 다시 틀렸다.** 로그에서 두 solve
+모두 같은 줄로 끝난다:
+
+```
+L-BFGS Result: 0 (Success: reached convergence (g_epsilon).), restarts=0
+```
+
+같은 수렴 기준을 둘 다 만족했고, 출력 필드도 iteration이 아니라
+`costFunction calls`다(`poly_traj_optimizer.cpp:1749`). 호출이 적다는 것은 **더 빨리
+수렴했다**는 뜻일 수도 있다. 게다가 chained cruise(83 piece, 양 끝 규정 PVA)와
+direct(98 piece, 미션 시작·목표)는 **변수 차원·경계조건·최적화 구간이 다르다** — 호출
+수를 "다듬어진 정도"로 직접 비교할 수 없다.
+
+정확한 진술은 이것뿐이다: **287의 귀속은 틀렸고, 실제 cruise는 27, direct는 179다.
+그러나 둘 다 g_epsilon 수렴이고 목적함수와 경계조건이 다르므로, 이 수치만으로 14 m
+차이의 원인도 최적화 완성도도 판정할 수 없다.**
+
+원인은 여전히 미해결이다. 필요한 것은 (a) 두 solve의 **최종 gradient norm**,
+(b) 목적함수 **항별** 값, (c) 접점 주변 법선 편차를 **같은 호장 해상도로** 기록한 것이다.
+호출 수는 그중 어느 것도 아니다.
+
+같은 실수를 두 번 했다 — 처음엔 어느 solve인지 확인하지 않았고, 정정하면서는 정정된
+수치가 무엇을 말할 수 있는지 확인하지 않았다.
 
 ## 5. 실행 간 차이의 출처
 

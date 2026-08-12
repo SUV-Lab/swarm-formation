@@ -1809,9 +1809,25 @@ int main(int argc, char **argv)
     const double one_ulp_over = std::nextafter(mv, 1e9);
     expect(pm->stateEnvelopeProblem(dir * one_ulp_over).empty(),
            "...and one ULP above it too — that is rounding, not overspeed");
+
+    // The TOLERANCE ITSELF, both sides of it. Checking "1 ULP passes, 1%
+    // fails" leaves everything from 0.1 to 1.9 m/s passing as well, so it
+    // pins the sign of the fix and not its value — the earlier claim that
+    // the mutation bracketed 1 um/s was wrong. kCapEpsMps is 1e-6 m/s and
+    // the frame is 100 m per unit, so 1 um/s is 1e-8 u/s.
+    const double half_eps_over = mv + 0.5e-8;    // cap + 0.5 um/s
+    const double two_eps_over  = mv + 2.0e-8;    // cap + 2   um/s
+    expect(pm->stateEnvelopeProblem(dir * half_eps_over).empty(),
+           "cap + 0.5 um/s is INSIDE the tolerance and passes");
+    const std::string just_over =
+        pm->stateEnvelopeProblem(dir * two_eps_over);
+    expect(!just_over.empty(),
+           "cap + 2 um/s is OUTSIDE it and is refused — the tolerance is "
+           "1 um/s, not 'some small number'");
+
     const std::string over = pm->stateEnvelopeProblem(dir * (mv * 1.01));
     expect(!over.empty(),
-           "...while a genuine 1% overspeed is still refused");
+           "...and a genuine 1% overspeed is refused as well");
     expect(over.find("maximum") != std::string::npos ||
                over.find("cap") != std::string::npos,
            "...for the ceiling, by name");
