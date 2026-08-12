@@ -237,30 +237,38 @@ start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : 
 
 ## 3. 열려 있는 것
 
-### 3-1. ④를 하지 않았다 — 그리고 그 이유
+### 3-1. ④를 하지 않았다 — 오늘 도달할 수 없는 경우이기 때문이다
 
 Codex의 ④는 "전이 prefix piece는 첫 leg 정책을 명시적으로 상속, `route_start_s` 절단은
 첫 호 구간만 clamp"다. 절단 쪽(`cutAtArc` 태그 suffix)은 §2-4에 들어갔다. **prefix 쪽은
 안 했다.**
 
-이유는 그 앞이 비어 있기 때문이다 [내 독해]:
+**시작했다가 되돌렸다.** `solveSlice`에 태그 in / piece 지도 out을 달고 stitched 지도를
+짜기 직전에, 소비자가 있는지부터 확인했다. 없다:
 
-- 전이 미션은 `planOverRoute`의 route/parallel 경로로 간다. 그 경로는 세그먼트를
-  `pm_->solveSlice(...)`로 **독립 최적화기 인스턴스에서** 푼다. `solveSlice`는 PathManager
-  상태를 건드리지 않으므로 `last_piece_leg_`를 만들지 않는다
-- 따라서 전이 비행은 stitched이고, per-piece 귀속이 없고, plan-wide 스냅샷으로 떨어진다
-- **단일 목표** 전이 미션은 그 스냅샷이 valid라서 문제가 없다 (= ④는 오늘 무효)
-- **다중 웨이포인트** 전이 미션은 `plan()`에서 `planImpl`의 단발 폴백보다 **먼저**
-  디스패치되므로 도달 가능하고, 이 경우 여전히 거부된다
+- stitched 비행이 나오는 경로는 두 개뿐이다 — `planImpl`의 체인, `planOverRoute`의
+  route/parallel
+- 둘 다 **다중 웨이포인트 미션에 도달하지 않는다.** `planImpl`의 가드
+  [읽음: `segment_chain_planner.cpp:444`, `if (waypoints.size() != 1)`]가
+  route 모드 디스패치(같은 함수 508행)보다 **먼저** 걸려 단발로 빠진다
+- 확인함 [재현]: `chain/author_from_route=true` + 웨이포인트 2개 + 구역 →
+  `detail=multi-waypoint mission — chain not attempted`. route 경로에 자체 가드는
+  없지만 거기까지 가지를 못한다
+- 단일 목표 stitched 비행은 leg가 1개이고 plan-wide 스냅샷이 valid다. 거기서 per-piece
+  귀속은 아무것도 더 말해주지 않는다
 
-즉 ④가 값을 내려면 그 앞에 stitched piece 지도가 있어야 한다:
-`solveSlice`에 태그 in / piece 지도 out을 달고, 세그먼트별 지도를 순서대로 이어 붙이고,
-전이 prefix piece에 첫 leg를 명시적으로 붙이고, 병합 경로(2슬라이스 merge)와 구조 경로
-(rescue)도 지도를 만들거나 무효화해야 한다. 그 경로 하나라도 빠지면 조용히 어긋난 지도가
-생긴다.
+즉 stitched piece 지도는 **오늘 존재하지 않는 미션 형태**를 위한 기계다. 그것이
+필요해지는 조건은 line 444의 가드를 걷어내는 것 — 그 주석이 말하는
+"waypoint-to-span assignment that does not exist yet" — 이고, 그건 별개의 더 큰 작업이다.
 
-**그래서 멈췄다.** 지금 상태는 "귀속 불가 → 거부"로 fail-closed이고, 잘못된 귀속보다
-낫다. 다음 증분의 범위는 위 다섯 지점이다.
+그래서 훅까지 지웠다. §1-9에서 "쓰이지 않는 선언을 커밋한 것 자체가 실수"라고 적어
+놓고 같은 커밋에 소비자 없는 매개변수를 남기는 것은 앞뒤가 안 맞는다.
+
+**다음에 ④를 할 때의 범위**(가드를 걷어낸 뒤): `solveSlice`에 태그 in / 지도 out,
+세그먼트별 지도를 순서대로 연결, 전이 prefix piece에 첫 leg 명시 부여, terminal piece에
+마지막 leg 부여, 병합 경로(2슬라이스 merge)와 구조 경로(rescue)에서 지도를 만들거나
+명시적으로 무효화. 그 중 하나라도 빠지면 조용히 어긋난 지도가 생긴다 — 지금처럼
+"귀속 불가 → 거부"인 편이 낫다.
 
 ### 3-2. 기본 구성에서 잠자는 코드
 
@@ -275,7 +283,10 @@ Codex의 ④는 "전이 prefix piece는 첫 leg 정책을 명시적으로 상속
 
 - 퇴화 중점 삽입의 태그 미러링 (위)
 - `cutAtArc`의 태그 suffix — 변이(off-by-one)를 걸었는데 `transition`/`transitionauto`
-  변형이 안 죽었다. 전이 경로가 태그를 소비하지 않기 때문이다(§3-1). ④를 하면 같이 덮인다
+  변형이 안 죽었다. 전이 경로가 태그를 **아직** 소비하지 않기 때문이다(§3-1).
+  ②c에 들어간 이 코드는 소비자가 생길 때까지 검증되지 않은 채로 있다. 지우지 않은
+  이유는 절단 로직 자체가 태그와 기하를 같이 다뤄야 옳고, 나중에 따로 붙이면 그때
+  같은 실수를 다시 하기 때문이다 — 다만 **검증되지 않았다는 사실은 그대로다**
 
 ### 3-4. 유지되는 제약
 
