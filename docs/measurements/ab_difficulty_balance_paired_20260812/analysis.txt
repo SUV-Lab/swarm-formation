@@ -1,0 +1,116 @@
+총 176행
+판정 분포: {'CLEAN': 121, 'REJECTED': 55}
+프로세스 누수 있는 행: 0
+시나리오 있는데 구역 미설치: 0
+
+=== 결과 뒤집힘 (한쪽만 계획에 성공) ===
+  없음
+
+=== 양팔 모두 계획 성공한 쌍: 55 ===
+조합 11개, 조합당 반복 Counter({5: 11})
+
+--- min_agl_u (높을수록 좋음) [안전]
+    r1_coastal_terrain_follo/r1_dynamic_surfa n=5 median    0.656 ->    0.656 ( +0.0%)  p95    0.719 ->    0.719
+    r2_high_altitude_probe  /                 n=5 median    0.579 ->    0.579 ( +0.0%)  p95    0.579 ->    0.579
+    r2_ridge_crossing       /r2_ridge_gauntle n=5 median    0.290 ->    0.290 ( +0.0%)  p95    0.290 ->    0.290
+    r3_mountain_terrain_foll/r3_dense_corrido n=5 median    0.290 ->    0.285 ( -1.7%)  p95    0.290 ->    0.285
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median    0.079 ->    0.079 ( +0.0%)  p95    0.083 ->    0.083
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median    0.179 ->    0.179 ( +0.0%)  p95    0.179 ->    0.179
+    r3_mountain_terrain_foll/r3_multiple_zone n=5 median    0.347 ->    0.347 ( +0.0%)  p95    0.362 ->    0.362
+    r3_mountain_terrain_foll/r3_nested_zones  n=5 median    0.352 ->    0.343 ( -2.6%)  p95    0.352 ->    0.343  <<< 악화
+    r4_long_range_traverse  /r4_traverse_chai n=5 median    0.364 ->    0.150 (-58.8%)  p95    0.364 ->    0.150  <<< 악화
+    r5_extended_corridor    /r5_corridor_wall n=5 median    0.399 ->    0.284 (-28.8%)  p95    0.399 ->    0.284  <<< 악화
+    r6_zone_slalom          /r6_slalom_gates  n=5 median    0.079 ->    0.079 ( +0.0%)  p95    0.079 ->    0.079
+
+--- env_viol_pct (낮을수록 좋음) [안전]
+    r3_mountain_terrain_foll/r3_dense_corrido n=5 median    0.400 ->    0.400 ( +0.0%)  p95    0.400 ->    0.400
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median    0.800 ->    0.800 ( +0.0%)  p95    0.800 ->    0.800
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median    1.600 ->    1.600 ( +0.0%)  p95    1.600 ->    1.600
+    r4_long_range_traverse  /r4_traverse_chai n=5 median    0.000 ->    0.300 (  abs +0.300)  p95    0.000 ->    0.300  <<< 악화
+    r6_zone_slalom          /r6_slalom_gates  n=5 median    0.100 ->    0.100 ( +0.0%)  p95    0.100 ->    0.100
+
+--- env_peak_pct (낮을수록 좋음) [안전]
+    r1_coastal_terrain_follo/r1_dynamic_surfa n=5 median   93.800 ->   93.800 ( +0.0%)  p95   98.200 ->   98.200
+    r2_high_altitude_probe  /                 n=5 median   94.300 ->   94.300 ( +0.0%)  p95   94.300 ->   94.300
+    r2_ridge_crossing       /r2_ridge_gauntle n=5 median   99.200 ->   99.200 ( +0.0%)  p95   99.200 ->   99.200
+    r3_mountain_terrain_foll/r3_dense_corrido n=5 median  101.900 ->  101.900 ( +0.0%)  p95  101.900 ->  101.900
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median  104.700 ->  104.700 ( +0.0%)  p95  104.700 ->  104.700
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median  102.600 ->  102.600 ( +0.0%)  p95  102.600 ->  102.600
+    r3_mountain_terrain_foll/r3_multiple_zone n=5 median   99.000 ->   99.000 ( +0.0%)  p95  100.700 ->  100.700
+    r3_mountain_terrain_foll/r3_nested_zones  n=5 median   97.800 ->   99.700 ( +1.9%)  p95   97.800 ->   99.700
+    r4_long_range_traverse  /r4_traverse_chai n=5 median  100.300 ->  106.600 ( +6.3%)  p95  100.300 ->  106.600  <<< 악화
+    r5_extended_corridor    /r5_corridor_wall n=5 median   96.600 ->   96.800 ( +0.2%)  p95   96.600 ->   96.800
+    r6_zone_slalom          /r6_slalom_gates  n=5 median  101.400 ->  101.400 ( +0.0%)  p95  101.400 ->  101.400
+
+--- risk_exposure_s (낮을수록 좋음) [안전]
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median    3.900 ->    3.900 ( +0.0%)  p95    3.900 ->    3.900
+    r6_zone_slalom          /r6_slalom_gates  n=5 median    0.300 ->    0.300 ( +0.0%)  p95    0.300 ->    0.300
+
+--- risk_max (낮을수록 좋음) [안전]
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median    0.814 ->    0.814 ( +0.0%)  p95    0.814 ->    0.814
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median    0.001 ->    0.001 ( +0.0%)  p95    0.001 ->    0.001
+    r6_zone_slalom          /r6_slalom_gates  n=5 median    0.054 ->    0.054 ( +0.0%)  p95    0.054 ->    0.054
+
+--- hard_zone_contacts (낮을수록 좋음) [안전]
+
+--- standoff_zone_contacts (낮을수록 좋음) [안전]
+    r1_coastal_terrain_follo/r1_dynamic_surfa n=5 median   21.000 ->   21.000 ( +0.0%)  p95   22.000 ->   22.000
+
+--- plan_total_ms (낮을수록 좋음) [시간]
+    r1_coastal_terrain_follo/r1_dynamic_surfa n=5 median 1005.000 -> 1002.000 ( -0.3%)  p95 1038.000 -> 1053.000
+    r2_high_altitude_probe  /                 n=5 median  496.000 ->  510.000 ( +2.8%)  p95  524.000 ->  520.000
+    r2_ridge_crossing       /r2_ridge_gauntle n=5 median 28775.000 -> 26209.000 ( -8.9%)  p95 32271.000 -> 26550.000
+    r3_mountain_terrain_foll/r3_dense_corrido n=5 median 5937.000 -> 5838.000 ( -1.7%)  p95 9011.000 -> 8841.000
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median 5151.000 -> 5221.000 ( +1.4%)  p95 10884.000 -> 10814.000
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median 9824.000 -> 10480.000 ( +6.7%)  p95 12495.000 -> 14094.000
+    r3_mountain_terrain_foll/r3_multiple_zone n=5 median  976.000 ->  929.000 ( -4.8%)  p95 1906.000 -> 1931.000
+    r3_mountain_terrain_foll/r3_nested_zones  n=5 median 1368.000 -> 1871.000 (+36.8%)  p95 1482.000 -> 2154.000
+    r4_long_range_traverse  /r4_traverse_chai n=5 median 3591.000 -> 3516.000 ( -2.1%)  p95 3946.000 -> 4003.000
+    r5_extended_corridor    /r5_corridor_wall n=5 median 7308.000 -> 7298.000 ( -0.1%)  p95 8364.000 -> 8184.000
+    r6_zone_slalom          /r6_slalom_gates  n=5 median 5794.000 -> 5767.000 ( -0.5%)  p95 5915.000 -> 5835.000
+
+--- chain_total_ms (낮을수록 좋음) [시간]
+    r1_coastal_terrain_follo/r1_dynamic_surfa n=5 median 1005.000 -> 1003.000 ( -0.2%)  p95 1039.000 -> 1053.000
+    r2_high_altitude_probe  /                 n=5 median  496.000 ->  510.000 ( +2.8%)  p95  525.000 ->  520.000
+    r3_mountain_terrain_foll/r3_dense_corrido n=5 median 5938.000 -> 5838.000 ( -1.7%)  p95 9012.000 -> 8841.000
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median 5151.000 -> 5222.000 ( +1.4%)  p95 10884.000 -> 10815.000
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median 9824.000 -> 10480.000 ( +6.7%)  p95 12496.000 -> 14095.000
+    r3_mountain_terrain_foll/r3_multiple_zone n=5 median  976.000 ->  930.000 ( -4.7%)  p95 1906.000 -> 1931.000
+    r3_mountain_terrain_foll/r3_nested_zones  n=5 median 1368.000 -> 1872.000 (+36.8%)  p95 1483.000 -> 2155.000
+    r4_long_range_traverse  /r4_traverse_chai n=5 median 3592.000 -> 3516.000 ( -2.1%)  p95 3946.000 -> 4004.000
+    r5_extended_corridor    /r5_corridor_wall n=5 median 7308.000 -> 7298.000 ( -0.1%)  p95 8364.000 -> 8184.000
+    r6_zone_slalom          /r6_slalom_gates  n=5 median 5795.000 -> 5767.000 ( -0.5%)  p95 5916.000 -> 5836.000
+
+--- max_solve_ms (낮을수록 좋음) [시간]
+    r1_coastal_terrain_follo/r1_dynamic_surfa n=5 median   34.000 ->   34.000 ( +0.0%)  p95   48.000 ->   45.000
+    r2_high_altitude_probe  /                 n=5 median  196.000 ->  199.000 ( +1.5%)  p95  199.000 ->  199.000
+    r3_mountain_terrain_foll/r3_dense_corrido n=5 median 5284.000 -> 5194.000 ( -1.7%)  p95 8269.000 -> 8107.000
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median 4795.000 -> 4855.000 ( +1.3%)  p95 10546.000 -> 10470.000
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median 8329.000 -> 8432.000 ( +1.2%)  p95 10856.000 -> 11746.000
+    r3_mountain_terrain_foll/r3_multiple_zone n=5 median  508.000 ->  456.000 (-10.2%)  p95 1356.000 -> 1379.000
+    r3_mountain_terrain_foll/r3_nested_zones  n=5 median  520.000 -> 1048.000 (+101.5%)  p95  591.000 -> 1263.000
+    r4_long_range_traverse  /r4_traverse_chai n=5 median 1403.000 -> 1365.000 ( -2.7%)  p95 1571.000 -> 1607.000
+    r5_extended_corridor    /r5_corridor_wall n=5 median 4440.000 -> 4415.000 ( -0.6%)  p95 5203.000 -> 5041.000
+    r6_zone_slalom          /r6_slalom_gates  n=5 median 2813.000 -> 2795.000 ( -0.6%)  p95 2908.000 -> 2824.000
+
+--- frontend_ms (낮을수록 좋음) [시간]
+    r1_coastal_terrain_follo/r1_dynamic_surfa n=5 median  969.000 ->  961.000 ( -0.8%)  p95  987.000 -> 1004.000
+    r2_high_altitude_probe  /                 n=5 median  306.000 ->  308.000 ( +0.7%)  p95  324.000 ->  319.000
+    r3_mountain_terrain_foll/r3_dense_corrido n=5 median  646.000 ->  641.000 ( -0.8%)  p95  738.000 ->  730.000
+    r3_mountain_terrain_foll/r3_goal_in_zone  n=5 median  334.000 ->  321.000 ( -3.9%)  p95  353.000 ->  364.000
+    r3_mountain_terrain_foll/r3_mixed_terrain n=5 median 1492.000 -> 1530.000 ( +2.5%)  p95 1636.000 -> 1731.000
+    r3_mountain_terrain_foll/r3_multiple_zone n=5 median  485.000 ->  478.000 ( -1.4%)  p95  548.000 ->  549.000
+    r3_mountain_terrain_foll/r3_nested_zones  n=5 median  846.000 ->  821.000 ( -3.0%)  p95  889.000 ->  891.000
+    r4_long_range_traverse  /r4_traverse_chai n=5 median 2171.000 -> 2150.000 ( -1.0%)  p95 2378.000 -> 2377.000
+    r5_extended_corridor    /r5_corridor_wall n=5 median 2875.000 -> 2875.000 ( +0.0%)  p95 3151.000 -> 3136.000
+    r6_zone_slalom          /r6_slalom_gates  n=5 median 3086.000 -> 3072.000 ( -0.5%)  p95 3113.000 -> 3183.000
+
+======================================================================
+판정: chain/difficulty_balance = false 유지
+이유: 안전 지표 후퇴 5건
+   - ('min_agl_u', ('r3_mountain_terrain_following', 'r3_nested_zones'), 0.352, 0.343)
+   - ('min_agl_u', ('r4_long_range_traverse', 'r4_traverse_chain'), 0.364, 0.15)
+   - ('min_agl_u', ('r5_extended_corridor', 'r5_corridor_wall'), 0.399, 0.284)
+   - ('env_viol_pct', ('r4_long_range_traverse', 'r4_traverse_chain'), 0.0, 0.3)
+   - ('env_peak_pct', ('r4_long_range_traverse', 'r4_traverse_chain'), 100.3, 106.6)
+======================================================================
