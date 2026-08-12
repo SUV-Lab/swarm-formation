@@ -27,6 +27,7 @@ import shutil
 import signal
 import subprocess
 import time
+import yaml
 
 # Obstacle scenarios name their own mission in a comment; that pairing is the
 # authority, not a guess from the filename.
@@ -239,6 +240,33 @@ def newest_log(logdir, after_ts):
     return max(c, key=os.path.getmtime) if c else None
 
 
+def start_state_problem(m):
+    """Why this mission cannot be published, or None.
+
+    The planner refuses a command that states both initial-state forms or
+    neither, and that refusal is CORRECT — but recording it as an A/B row
+    measures the harness's input, not the planner. The same check the panel
+    and e2e_smoke apply, applied before anything is published.
+    """
+    stated_speed = "initial_speed_mps" in m
+    stated_vector = bool(m.get("use_initial_velocity", False))
+    if stated_speed and stated_vector:
+        return ("states BOTH initial_speed_mps and use_initial_velocity — "
+                "one quantity, one claim")
+    if not stated_speed and not stated_vector:
+        return ("states NO initial state: add initial_speed_mps, or "
+                "use_initial_velocity + initial_velocity_mps")
+    if stated_speed:
+        v = m["initial_speed_mps"]
+        if not isinstance(v, (int, float)) or v != v or v in (float("inf"),
+                                                             float("-inf")):
+            return f"initial_speed_mps is not a finite number: {v!r}"
+        if v < 0.0:
+            return (f"initial_speed_mps is negative ({v}) — publishers must "
+                    f"not clamp, so this cannot be sent")
+    return None
+
+
 def yaw_seed_for(mission, rep, override):
     """One obstacle layout per (mission, rep), shared by BOTH arms.
 
@@ -266,6 +294,9 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir,
     mpath = f"{missions_dir}/{mission}.yaml"
     import yaml as _y
     m = _y.safe_load(open(mpath))["mission"]
+    prob = start_state_problem(m)
+    if prob:
+        raise RuntimeError(f"HARNESS_INPUT_INVALID: {mission}.yaml {prob}")
     s, g = m["start"], m["goal"]
 
     launched.append(sh_bg(
@@ -543,6 +574,22 @@ def main():
     json.dump(meta, open(os.path.join(a.out, "meta.json"), "w"), indent=2)
 
     missions = MISSIONS[:a.only] if a.only else MISSIONS
+    # Validate EVERY mission before the first node starts. A bad input found
+    # at row 90 has already cost 90 rows of wall clock, and the run has to be
+    # thrown away anyway because the combos are not comparable.
+    bad = []
+    for mission, _ in missions:
+        try:
+            mm = yaml.safe_load(open(f"{a.missions}/{mission}.yaml"))["mission"]
+        except Exception as e:      # noqa: BLE001 - reported, not swallowed
+            bad.append(f"{mission}: unreadable ({e})")
+            continue
+        p = start_state_problem(mm)
+        if p:
+            bad.append(f"{mission}: {p}")
+    if bad:
+        raise SystemExit("HARNESS_INPUT_INVALID — refusing to measure:\n  " +
+                         "\n  ".join(bad))
     print(f"{len(missions)} combos x {a.reps} reps, "
           f"direct probe in reps 1..{a.direct_reps}")
 

@@ -111,6 +111,19 @@ def main():
              for k, v in byk.items() if len(set(v.values())) > 1]
     check(not split, "한 쌍의 모든 팔이 같은 seed", "; ".join(split[:3]))
 
+    # An initial-state contract error is a PUBLISHER fault, not a datapoint.
+    # The harness refuses to launch on a malformed mission yaml, but a
+    # refusal that gets through would look like a planning result.
+    contract = [f"{r['arm']}/{r['mission'][:18]}"
+                for r in rows
+                if any(k in (r.get("reason") or "")
+                       for k in ("INITIAL_STATE_MALFORMED",
+                                 "initial-state contract",
+                                 "use_initial_speed",
+                                 "one quantity, one claim",
+                                 "no initial state"))]
+    check(not contract, "초기상태 계약 오류 0행", "; ".join(contract[:3]))
+
     modes = {r.get("plan_mode") for r in ok_rows}
     check("direct" in modes, "direct 모드가 최소 1행 (공통 시간 계측 검증)",
           f"모드: {sorted(m for m in modes if m)}")
