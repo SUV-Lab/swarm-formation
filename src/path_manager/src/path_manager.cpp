@@ -1183,6 +1183,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
     ++zone_policy_epoch_;
     zone_policy_epoch_generation_ = zone_policy_generation_;
     zone_policy_epoch_searches_ = 0;
+    leg_policies_.clear();
 
         // Segment list: start -> wp1 -> ... -> wpN
         std::vector<Eigen::Vector3d> all_points;
@@ -1340,6 +1341,18 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                     astar_step_size_, all_points[seg], all_points[seg + 1],
                     traj_.local_traj.drone_id);
             ++zone_policy_epoch_searches_;
+            // [LEG-POLICY] Captured HERE, while this leg's search still owns
+            // the searcher buffers. One line later the next leg overwrites
+            // them, which is exactly why the plan-wide snapshot refuses a
+            // multi-leg epoch.
+            {
+                LegPolicySnapshot lp;
+                if (captureLegPolicySnapshot(seg, zone_policy_epoch_searches_,
+                                             &lp))
+                    leg_policies_.push_back(lp);
+                else
+                    leg_policies_.clear();  // fail-closed: a hole is not a set
+            }
 
             log_manager_->infof("A* segment %zu: simple_path_size=%zu",
                 seg, seg_path.size());
@@ -3761,6 +3774,62 @@ void PathManager::flushPendingObstacles()
     }
     log_manager_->infof("Flushed %zu deferred dynamic obstacle(s) after SDF ready",
                         pend.size());
+}
+
+bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
+                                           LegPolicySnapshot *out) const
+{
+    if (!out) return false;
+    // The plan-wide rule ("exactly one search this epoch") is deliberately
+    // NOT reused here — it exists to refuse a plan-wide answer for a
+    // multi-leg mission, which is the very case this function serves. What
+    // must still hold is everything that makes the searcher's CURRENT
+    // buffers describe THIS leg:
+    //   - the 3-pass actually ran, when there are zones to have a policy
+    //     about (pass 0 means the override buffer may hold a previous
+    //     search's values — reading it would be fiction, same as above)
+    //   - the search ran on the current zone/terrain data
+    //   - the policy buffers are sized for the zones they describe
+    const int pass = searcher_.zoneAvoidPass();
+    const auto &nb = searcher_.zoneNoBarrier();
+    const auto &so = searcher_.zoneSoftOverride();
+    const bool ok =
+        (risk_zones_.empty() || pass != 0) &&
+        zone_policy_epoch_generation_ == zone_policy_generation_ &&
+        (risk_zones_.empty() ||
+         (nb.size() >= risk_zones_.size() && so.size() >= risk_zones_.size()));
+    if (!ok) {
+        if (log_manager_)
+            log_manager_->warnf(
+                "[LEG-POLICY] leg %zu NOT capturable (pass %d, %zu zones, "
+                "no-barrier %zu, soft-override %zu, search generation %lu vs "
+                "data %lu) — no snapshot rather than a wrong one",
+                leg, pass, risk_zones_.size(), nb.size(), so.size(),
+                static_cast<unsigned long>(zone_policy_epoch_generation_),
+                static_cast<unsigned long>(zone_policy_generation_));
+        return false;
+    }
+    out->leg = leg;
+    out->search_serial = search_serial;
+    out->policy.generation = zone_policy_generation_;
+    out->policy.epoch = zone_policy_epoch_;
+    // Valid PER LEG: this leg's search really did produce this policy.
+    out->policy.valid = true;
+    out->policy.zones.clear();
+    out->policy.zones.reserve(risk_zones_.size());
+    for (size_t i = 0; i < risk_zones_.size(); ++i) {
+        ZonePolicySnapshot::Entry e;
+        e.zone = risk_zones_[i];
+        const bool endpoint = i < nb.size() && nb[i];
+        const bool soft_override = i < so.size() && so[i];
+        e.disposition = endpoint ? ZoneDisposition::SOFT_ENDPOINT
+                        : pass == 2
+                            ? ZoneDisposition::SOFT_FALLBACK
+                            : soft_override ? ZoneDisposition::SOFT_UNAVOIDABLE
+                                            : ZoneDisposition::HARD_AVOID;
+        out->policy.zones.push_back(e);
+    }
+    return true;
 }
 
 PathManager::ZonePolicySnapshot PathManager::zonePolicySnapshot() const

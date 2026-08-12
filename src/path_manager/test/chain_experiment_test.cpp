@@ -181,7 +181,7 @@ int main(int argc, char **argv)
        with_standoffpen = false, with_wpzone = false,
        with_nophasedirect = false, with_baserefuse = false,
        with_reststart = false, with_capstart = false,
-       with_headsrc = false,
+       with_headsrc = false, with_legpolicy = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -342,6 +342,7 @@ int main(int argc, char **argv)
     if (v == "reststart") { with_route = true; with_reststart = true; }
     if (v == "capstart") { with_route = true; with_capstart = true; }
     if (v == "headsrc") { with_route = true; with_headsrc = true; }
+    if (v == "legpolicy") { with_route = true; with_legpolicy = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -1782,6 +1783,72 @@ int main(int argc, char **argv)
     expect(pm->traj_.local_traj.duration == 0.0 &&
                pm->traj_.local_traj.start_time == 0.0,
            "...and the stored trajectory stops being executable");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_legpolicy) {
+    using ZD = path_manager::PathManager::ZoneDisposition;
+    // [LEG-POLICY] step 1: each leg's policy is captured while THAT leg's
+    // search owns the searcher, so a multi-leg mission has one policy per
+    // leg instead of the last leg's policy published as plan-wide.
+    //
+    // The zone sits at the MISSION GOAL. Leg 1 ends inside it, so its
+    // policy must be SOFT_ENDPOINT — you may not avoid a zone you are told
+    // to arrive in. Leg 0 neither starts nor ends there, so the same zone is
+    // HARD_AVOID for it. That difference is the whole reason per-leg policy
+    // exists: a plan-wide snapshot has to pick one and is wrong for the
+    // other.
+    //
+    // The waypoint itself must be OUTSIDE the zone — the first draft put the
+    // zone on the intermediate waypoint, which is leg 1's START, so both
+    // legs saw an endpoint and the asymmetry never arose.
+    const Eigen::Vector3d mid(180.0, 80.0, 3.0);
+    path_manager::RiskZone z;
+    z.center = goal[0];
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+
+    const bool ok = pm->planGlobalTraj(
+        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+               start_vel, start_acc),
+        {mid, goal[0]});
+    expect(ok, "the two-leg mission plans");
+
+    const auto &legs = pm->legPolicySnapshots();
+    expect(legs.size() == 2,
+           "one policy per leg was captured, not one for the mission");
+    if (legs.size() == 2) {
+      expect(legs[0].leg == 0 && legs[1].leg == 1,
+             "...in leg order");
+      expect(legs[0].search_serial != legs[1].search_serial,
+             "...each with its own search serial (no double-write)");
+      expect(legs[0].policy.valid && legs[1].policy.valid,
+             "...and each is valid for ITS leg");
+      expect(legs[0].policy.zones.size() == 1 &&
+                 legs[1].policy.zones.size() == 1,
+             "...describing the one zone installed");
+      if (!legs[0].policy.zones.empty() && !legs[1].policy.zones.empty()) {
+        const auto d0 = legs[0].policy.zones[0].disposition;
+        const auto d1 = legs[1].policy.zones[0].disposition;
+        std::cout << "[LEG-POLICY] leg0=" << static_cast<int>(d0)
+                  << " leg1=" << static_cast<int>(d1) << "\n";
+        expect(d1 == ZD::SOFT_ENDPOINT,
+               "leg 1 ends INSIDE the zone -> SOFT_ENDPOINT");
+        expect(d0 != ZD::SOFT_ENDPOINT,
+               "leg 0 neither starts nor ends there -> not SOFT_ENDPOINT");
+        expect(d0 != d1,
+               "...the SAME zone has different dispositions per leg, which "
+               "is what a plan-wide snapshot cannot express");
+      }
+    }
+    // The plan-wide snapshot must STILL refuse this mission — its rule is
+    // not relaxed by the existence of per-leg capture.
+    expect(!pm->zonePolicySnapshot().valid,
+           "the plan-wide snapshot is still INVALID for a multi-leg epoch");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

@@ -519,6 +519,57 @@ namespace path_manager
         std::vector<Entry> zones;
     };
     ZonePolicySnapshot zonePolicySnapshot() const;
+
+    // [LEG-POLICY] One leg's zone policy, captured WHILE that leg's search
+    // still owns the searcher state — never copied afterwards from whatever
+    // the last leg left behind. zonePolicySnapshot() above stays exactly as
+    // strict as it is: it answers "is there ONE plan-wide policy", and for a
+    // multi-leg mission the honest answer is no. This answers a different
+    // question, per leg, and is captured at the only moment it can be.
+    struct LegPolicySnapshot {
+        size_t leg{0};
+        // Monotone per search within an epoch. A missing or repeated serial
+        // means the capture sequence has a hole or a double-write, which is
+        // a programming error and is refused rather than averaged over.
+        uint64_t search_serial{0};
+        ZonePolicySnapshot policy;
+    };
+
+    // A route that remembers which leg produced each EDGE. Ownership travels
+    // with the geometry: corner fillets and densification rewrite the point
+    // list, and an index recorded before those transforms is a guess after
+    // them. Re-deriving the leg later by nearest-point projection is worse —
+    // it picks the wrong leg at a U-turn, a self-crossing, or two legs
+    // running parallel a short distance apart.
+    struct TaggedRoute {
+        std::vector<Eigen::Vector3d> points;
+        std::vector<size_t> edge_leg;   // size == points.size() - 1
+        bool consistent() const {
+            return !points.empty() && edge_leg.size() + 1 == points.size();
+        }
+    };
+
+    // The same ownership after the optimizer, expressed over MINCO pieces.
+    // clean_path edge i becomes piece i (piece_num = clean_path.size() - 1,
+    // poly_traj_optimizer.cpp), and L-BFGS optimizes positions and times
+    // without changing the count or the order — so the trajectory does not
+    // have to be projected back onto anything to know which policy was in
+    // force where it flies.
+    struct PiecePolicyMap {
+        std::vector<size_t> piece_leg;              // size == getPieceNum()
+        std::vector<LegPolicySnapshot> leg_policies;
+        bool empty() const { return piece_leg.empty(); }
+    };
+
+    // Capture the policy for `leg` from the searcher's CURRENT state. Call
+    // immediately after that leg's search succeeded and before the next one
+    // runs. Returns false when the state cannot express a policy, which is
+    // fail-closed: no snapshot rather than a wrong one.
+    bool captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
+                                  LegPolicySnapshot *out) const;
+    const std::vector<LegPolicySnapshot> &legPolicySnapshots() const {
+        return leg_policies_;
+    }
     uint64_t zonePolicyGeneration() const { return zone_policy_generation_; }
     // Structured contact result — STALE/INVALID cannot be mistaken for
     // "no contact" (review find: an optional out-pointer let a caller read
@@ -638,6 +689,7 @@ namespace path_manager
     uint64_t zone_policy_epoch_{0};
     uint64_t zone_policy_epoch_generation_{0};
     uint64_t zone_policy_epoch_searches_{0};
+    std::vector<LegPolicySnapshot> leg_policies_;
     // Searcher-facing copy of risk_zones_. PathSearcher::setRiskZones stores
     // a RAW POINTER to this vector, so it must outlive the plan call — a
     // function-local here left the searcher holding a dangling pointer
