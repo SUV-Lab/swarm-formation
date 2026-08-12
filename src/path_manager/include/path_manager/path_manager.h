@@ -259,12 +259,15 @@ namespace path_manager
     // final waypoint as a mid-route junction between chained segment plans:
     // its z is ABSOLUTE (sampled from a trajectory that already flies there),
     // so the [GOAL AGL] reinterpretation must not re-add the terrain under it.
-    // junction_head marks the START state as a prescribed contract — a state
+    // (Historical note: a junction head used to be marked by a separate
+    // bool here. It is StartStateSource::CHAIN_JUNCTION now — the same fact
+    // in one place instead of two.) A junction head is a prescribed
+    // contract — a state
     // the baseline trajectory actually flew — so [STALL-FLOOR] must not
     // rewrite it: the neighbouring segment's tail pins the SAME state
     // verbatim, and flooring only this side would put a velocity step at the
     // seam ([VEL-ALIGN] is already routed off for contract heads via
-    // setStartVelSynthesized). The dynamics floor is margin-backed (~8%
+    // the head's source). The dynamics floor is margin-backed (~8%
     // above hard stall), so a converged baseline legitimately cruises below
     // it and above stall — exactly where junctions land on zone/terrain
     // missions.
@@ -780,7 +783,8 @@ namespace path_manager
     double alt_cap_headroom_{5.0};        // z-cap slack above the geodesic max; must fit sparse-piece quintic swell (~ FM2 coarse-cell band tolerance)
     double alt_floor_headroom_{0.5};      // z-floor slack below min(start,goal) z; stops min-jerk sags bouncing off the water/terrain clearance
     double min_goal_agl_{1.0};            // waypoints get z >= terrain elevation + this (frame z units); kills underground goals from fixed-z mission sources
-    // [VEL-ALIGN] see setStartVelSynthesized().
+    // [VEL-ALIGN] see applyHeadPolicy() in start_state.h — the rule is keyed
+    // on StartHead::src, not on a member of this class.
     bool align_start_vel_to_route_{true};
     HeadPolicy last_head_policy_{};
     // [ZONE-AVOID] lexicographic zone policy (see dyn_a_star.h).

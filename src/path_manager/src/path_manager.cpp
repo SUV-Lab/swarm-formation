@@ -1112,13 +1112,7 @@ std::string PathManager::stateEnvelopeProblem(
         // and not the other. The DECISION now has one owner; the log tags
         // stay here because the two callers report differently.
         //
-        // The source is derived from the booleans this signature still
-        // carries. Threading StartHead through plan/planImpl/
-        // planRouteParallel/planOverRoute/commitRoute is the next step; the
-        // mapping is exact in the meantime:
-        //   junction_head            -> CHAIN_JUNCTION (never touched)
-        //   start_vel_synthesized_   -> STATED_SPEED   (re-aim, never floor)
-        //   otherwise                -> TRAJECTORY_DERIVED (floor, no re-aim)
+        // The head arrives with its own provenance; nothing here derives it.
         const double v_floor = poly_traj_opt_
             ? poly_traj_opt_->dynamicsMinSpeedFloorUnits() : 0.0;
         double um_xy_head = 100.0;

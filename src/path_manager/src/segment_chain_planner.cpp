@@ -287,13 +287,16 @@ PlanResult SegmentChainPlanner::plan(const StartHead &head,
   const Eigen::Vector3d &start_pos = head.pos_u;
   const Eigen::Vector3d &start_vel = head.vel_u;
   const Eigen::Vector3d &start_acc = head.acc_u;
+  // Read below by the one gate that still distinguishes the two stated
+  // forms; the other two functions derived the same locals and never used
+  // them, which is how a reader concludes the boolean still means something
+  // there.
   const bool start_vel_synthesized =
       head.src == StartStateSource::STATED_SPEED;
   const bool start_vel_commanded =
       head.src == StartStateSource::STATED_VECTOR ||
       head.src == StartStateSource::TEST_INJECTED;
   const bool start_acc_commanded = head.acc_prescribed;
-  (void)start_vel_synthesized;
   // [PLAN-STATE] FIRST, before any early return. No member may carry a
   // previous mission's value into this one — and I put the fail-closed head
   // checks ABOVE this, so a malformed head returned while
@@ -436,9 +439,6 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   const Eigen::Vector3d &start_pos = head.pos_u;
   const Eigen::Vector3d &start_vel = head.vel_u;
   const Eigen::Vector3d &start_acc = head.acc_u;
-  const bool start_vel_synthesized =
-      head.src == StartStateSource::STATED_SPEED;
-  (void)start_vel_synthesized;
   // Stage-1 scope: one goal. Multi-waypoint missions need a waypoint-to-span
   // assignment that does not exist yet — fall back to the single-shot plan.
   if (waypoints.size() != 1) {
@@ -1960,10 +1960,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
   const Eigen::Vector3d &start_pos = head.pos_u;
   const Eigen::Vector3d &start_vel = head.vel_u;
   const Eigen::Vector3d &start_acc = head.acc_u;
-  const bool start_vel_synthesized =
-      head.src == StartStateSource::STATED_SPEED;
   const bool start_acc_commanded = head.acc_prescribed;
-  (void)start_vel_synthesized;
   // [PLAN-STATE] This function is PUBLIC and re-entrant — the coordinator
   // and the harness call it directly — but the audit state was cleared only
   // in plan(). A direct re-call that returned at the input contract below
