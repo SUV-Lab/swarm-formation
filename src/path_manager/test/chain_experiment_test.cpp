@@ -131,6 +131,25 @@ static void segvHandler(int sig)
   _exit(139);
 }
 
+
+// [HEAD-POLICY] plan() takes the head as one value now. These call sites
+// used to assemble three booleans by hand, which is exactly the assembly
+// that produced an illegal combination in production (a prescribed
+// acceleration dropped because the velocity came in the scalar form).
+static path_manager::StartHead mkHead(
+    path_manager::StartStateSource src, const Eigen::Vector3d &p,
+    const Eigen::Vector3d &v, const Eigen::Vector3d &a,
+    bool acc_prescribed = false)
+{
+  path_manager::StartHead h;
+  h.src = src;
+  h.pos_u = p;
+  h.vel_u = v;
+  h.acc_u = a;
+  h.acc_prescribed = acc_prescribed;
+  return h;
+}
+
 int main(int argc, char **argv)
 {
   signal(SIGSEGV, segvHandler);
@@ -538,12 +557,12 @@ int main(int argc, char **argv)
     bad.prescribe_vel = true;
     bad.vel = Eigen::Vector3d(0.5, 0.0, 0.0);
     const path_manager::PlanResult r1 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, bad);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, bad);
     expect(!r1.hasTrajectory(),
            "sub-stall final boundary rejected (FAILED, no opt-in)");
     force("planning/allow_final_boundary_relaxation", true);
     const path_manager::PlanResult r2 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, bad);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, bad);
     expect(r2.hasTrajectory(), "relaxed plan produces a trajectory");
     expect(r2.outcome == path_manager::PlanOutcome::DEGRADED &&
                r2.reason == path_manager::PlanReason::FINAL_BOUNDARY_RELAXED,
@@ -560,9 +579,7 @@ int main(int argc, char **argv)
     // set, no trajectory, and the armed fault injection untouched (nothing
     // downstream of validation ever ran).
     const path_manager::PlanResult r =
-        chain.plan(start_pos, Eigen::Vector3d(0.0, -1.6, 1.0), start_acc,
-                   goal, /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d(0.0, -1.6, 1.0), start_acc, false), goal, {});
     expect(!r.hasTrajectory(),
            "out-of-cone commanded initial state FAILED (no trajectory)");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
@@ -614,8 +631,7 @@ int main(int argc, char **argv)
     // rejection the reason and the validator's own words must reach the
     // caller. (start_vel_synthesized=false, commanded=true: this is an
     // explicit handoff state.)
-    const path_manager::PlanResult r = chain.plan(
-        p_u, v_u, a_u, goal, false, {}, true, /*start_acc_commanded=*/true);
+    const path_manager::PlanResult r = chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, p_u, v_u, a_u, true), goal, {});
     if (prob.empty()) {
       expect(r.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
              "validator passed -> plan() does not reject the head");
@@ -638,12 +654,12 @@ int main(int argc, char **argv)
     // screened candidate lists leaked, the second plan inherits the first
     // one's N (possibly already decremented by a merge) and its handoffs.
     const path_manager::PlanResult r1 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r1.hasTrajectory(), "first plan (N=3) produces a trajectory");
     const int p1 = pm->traj_.local_traj.traj.getPieceNum();
     force("chain/segments", 5);
     const path_manager::PlanResult r2 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r2.hasTrajectory(), "second plan (N=5) produces a trajectory");
     const int p2 = pm->traj_.local_traj.traj.getPieceNum();
     std::cout << "twophase: N=3 -> " << p1 << " pieces, N=5 -> " << p2
@@ -700,9 +716,7 @@ int main(int argc, char **argv)
     }
     const Eigen::Vector3d v32(1.6, 0.0, 1.0);   // 32 deg, out of cruise cone
     const path_manager::PlanResult r =
-        chain.plan(start_pos, v32, start_acc, goal,
-                   /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, v32, start_acc, false), goal, {});
     expect(r.hasTrajectory(), "transition mission planned");
     if (!r.hasTrajectory()) {
       std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -1259,9 +1273,7 @@ int main(int argc, char **argv)
     // vertices size honestly.
     const Eigen::Vector3d v32(1.6, 0.0, 1.0);
     const path_manager::PlanResult r =
-        chain.plan(start_pos, v32, start_acc, goal,
-                   /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, v32, start_acc, false), goal, {});
     expect(r.hasTrajectory(), "auto-N transition mission returns a flight");
     const int n = chain.segments();
     const auto &spans = chain.lastPhaseSpans();
@@ -1307,9 +1319,7 @@ int main(int argc, char **argv)
     // initfail (reason INITIAL_MODE_UNSUPPORTED, unchanged).
     const Eigen::Vector3d v32(1.6, 0.0, 1.0);  // 188.7 m/s at 32 deg
     const path_manager::PlanResult r =
-        chain.plan(start_pos, v32, start_acc, goal,
-                   /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, v32, start_acc, false), goal, {});
     std::cout << "transition: outcome " << static_cast<int>(r.outcome)
               << " reason " << static_cast<int>(r.reason) << "\n";
     expect(r.hasTrajectory(), "transition mission returns a flight");
@@ -1365,16 +1375,14 @@ int main(int argc, char **argv)
     // the transition ENABLED must still fail — the initaccfail
     // protection is not allowed to be laundered through the new path.
     const path_manager::PlanResult racc =
-        chain.plan(start_pos, v32, Eigen::Vector3d(0.0, 0.0, 5.0), goal,
-                   false, {}, true, /*start_acc_commanded=*/true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, v32, Eigen::Vector3d(0.0, 0.0, 5.0), true), goal, {});
     expect(!racc.hasTrajectory(),
            "unflyable commanded start acceleration FAILED with the "
            "transition enabled (no laundering)");
     // Prescribed EXACTLY ZERO through the plumbed message bool: at the
     // 32-deg start a=0 is unflyable — refuse, never model-substitute.
     const path_manager::PlanResult rz =
-        chain.plan(start_pos, v32, Eigen::Vector3d::Zero(), goal, false,
-                   {}, true, /*start_acc_commanded=*/true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, v32, Eigen::Vector3d::Zero(), true), goal, {});
     expect(!rz.hasTrajectory(),
            "prescribed zero acc refused (the numeric value never decides "
            "prescription)");
@@ -1404,8 +1412,7 @@ int main(int argc, char **argv)
     // FAILED, nothing downstream runs (over-ceiling is a physics claim
     // v1 refuses to make).
     const path_manager::PlanResult r2 =
-        chain.plan(start_pos, Eigen::Vector3d(2.6, 0.0, 0.0), start_acc,
-                   goal, false, {}, true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d(2.6, 0.0, 0.0), start_acc, false), goal, {});
     expect(!r2.hasTrajectory() &&
                r2.reason ==
                    path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
@@ -1428,7 +1435,7 @@ int main(int argc, char **argv)
     z.peak = 0.8;
     pm->setRiskZonesRuntime({z});
     const path_manager::PlanResult r1 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r1.hasTrajectory(), "plan with an avoidable zone succeeds");
     const auto snap = pm->zonePolicySnapshot();
     expect(snap.valid, "snapshot valid after a 3-pass search");
@@ -1465,8 +1472,7 @@ int main(int argc, char **argv)
     // dispositions are per-plan state, so the OLD snapshot must go STALE
     // even though no zone data changed (policy epoch, review find).
     const Eigen::Vector3d goal_in_zone(130.0, 180.0, 2.2);
-    const path_manager::PlanResult r2 = chain.plan(
-        start_pos, start_vel, start_acc, {goal_in_zone}, true, {});
+    const path_manager::PlanResult r2 = chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), {goal_in_zone}, {});
     expect(r2.hasTrajectory(), "re-plan into the zone succeeds");
     expect(pm->zoneContact(snap, 0, z.center) == ZC::STALE,
            "same-list re-plan makes the old snapshot STALE (epoch)");
@@ -1521,7 +1527,7 @@ int main(int argc, char **argv)
     }
     pm->setRiskZonesRuntime(wall);
     const path_manager::PlanResult r =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r.hasTrajectory(), "plan through the unavoidable wall succeeds");
     const int pass = pm->zoneAvoidPassNow();
     std::cout << "zonewall: zone-avoid pass " << pass << "\n";
@@ -1587,7 +1593,7 @@ int main(int argc, char **argv)
     }
     pm->setRiskZonesRuntime(tri);
     const path_manager::PlanResult r3 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r3.hasTrajectory(), "triangle-enclosure plan succeeds");
     const int pass3 = pm->zoneAvoidPassNow();
     const auto snap3 = pm->zonePolicySnapshot();
@@ -1626,7 +1632,7 @@ int main(int argc, char **argv)
     }
     pm->setRiskZonesRuntime(porous);
     const path_manager::PlanResult r4 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r4.hasTrajectory(), "porous-ring plan succeeds");
     const int pass4 = pm->zoneAvoidPassNow();
     const auto snap4 = pm->zonePolicySnapshot();
@@ -1675,7 +1681,8 @@ int main(int argc, char **argv)
     z.peak = 0.8;
     pm->setRiskZonesRuntime({z});
     const bool ok = pm->planGlobalTraj(
-        start_pos, start_vel, start_acc,
+        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+               start_vel, start_acc),
         {Eigen::Vector3d(180.0, 80.0, 3.0), goal[0]});
     expect(ok, "two-leg mission plans");
     const auto snap = pm->zonePolicySnapshot();
@@ -1684,7 +1691,7 @@ int main(int argc, char **argv)
            "contact through a multi-leg snapshot reads INVALID");
     // A fresh SINGLE-goal search restores validity on the same zone list.
     const path_manager::PlanResult r1 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r1.hasTrajectory(), "single-goal replan succeeds");
     const auto snap2 = pm->zonePolicySnapshot();
     expect(snap2.valid, "single-goal epoch -> snapshot valid again");
@@ -1709,7 +1716,7 @@ int main(int argc, char **argv)
     z.peak = 0.9;
     pm->setRiskZonesRuntime({z});
     const path_manager::PlanResult r0 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r0.hasTrajectory(), "the avoiding plan itself succeeds");
     const auto snap = pm->zonePolicySnapshot();
     expect(snap.valid, "snapshot is VALID (the policy really ran)");
@@ -1869,10 +1876,8 @@ int main(int argc, char **argv)
       const bool as_vector = (form == 1);
       const path_manager::PlanResult r =
           as_vector
-              ? chain.plan(start_pos, at_cap, start_acc, goal, false, {},
-                           /*start_vel_commanded=*/true,
-                           /*start_acc_commanded=*/false)
-              : chain.plan(start_pos, at_cap, start_acc, goal, true, {});
+              ? chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, at_cap, start_acc, false), goal, {})
+              : chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, at_cap, start_acc, false), goal, {});
       const std::string tag = as_vector ? " (vector form)" : " (scalar form)";
       expect(r.hasTrajectory(),
              "a start stated exactly AT the planning cap plans" + tag);
@@ -1901,7 +1906,7 @@ int main(int argc, char **argv)
         const Eigen::Vector3d diag =
             Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
         const auto reason_at = [&](double mag_u) {
-          return chain.plan(start_pos, diag * mag_u, start_acc, goal, true, {})
+          return chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, diag * mag_u, start_acc, false), goal, {})
               .reason;
         };
         const auto UNSUP = path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED;
@@ -1952,13 +1957,9 @@ int main(int argc, char **argv)
                  (dyn_on ? "ON" : "OFF") + " for this pass");
       // Both stated forms, since the contract is that they agree.
       const path_manager::PlanResult rs =
-          chain.plan(start_pos, Eigen::Vector3d::Zero(), start_acc, goal,
-                     /*start_vel_synthesized=*/true, {});
+          chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, Eigen::Vector3d::Zero(), start_acc, false), goal, {});
       const path_manager::PlanResult rv =
-          chain.plan(start_pos, Eigen::Vector3d::Zero(), start_acc, goal,
-                     /*start_vel_synthesized=*/false, {},
-                     /*start_vel_commanded=*/true,
-                     /*start_acc_commanded=*/false);
+          chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d::Zero(), start_acc, false), goal, {});
       const std::string tag = dyn_on ? " (dynamics ON)" : " (dynamics OFF)";
       expect(!rs.hasTrajectory(),
              "a stated rest start is REFUSED, not clamped to the floor" + tag);
@@ -2000,7 +2001,7 @@ int main(int argc, char **argv)
     // Store something executable first, so the invalidation assertion below
     // cannot pass against an empty slot.
     const path_manager::PlanResult r =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(!r.hasTrajectory(),
            "a baseline whose zone policy cannot be judged is REFUSED");
     expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
@@ -2024,7 +2025,7 @@ int main(int argc, char **argv)
     force("chain/phase/enable", false);
     force("optimization/audit_envelope_peak_max", 0.01);
     const path_manager::PlanResult r =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(!r.hasTrajectory(),
            "with phase OFF the direct product is still gated and refused");
     expect(r.reason == path_manager::PlanReason::DIRECT_FALLBACK_UNSAFE,
@@ -2066,7 +2067,7 @@ int main(int argc, char **argv)
     // a real cost; flying an unchecked one is a bigger one, and the choice
     // belongs to an operator rather than to a default.
     const path_manager::PlanResult r =
-        chain.plan(start_pos, start_vel, start_acc, legs, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), legs, {});
     expect(!r.hasTrajectory(),
            "by DEFAULT an unmeasurable zone policy REFUSES the mission");
     expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
@@ -2081,7 +2082,7 @@ int main(int argc, char **argv)
     // not true here.
     force("manager/allow_unmeasured_zone_policy", true);
     const path_manager::PlanResult r2 =
-        chain.plan(start_pos, start_vel, start_acc, legs, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), legs, {});
     expect(r2.hasTrajectory(),
            "with the opt-in set the mission plans");
     expect(r2.outcome == path_manager::PlanOutcome::DEGRADED,
@@ -2113,7 +2114,7 @@ int main(int argc, char **argv)
     z.peak = 0.9;
     pm->setRiskZonesRuntime({z});
     const path_manager::PlanResult r0 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r0.hasTrajectory(), "the avoiding plan itself succeeds");
     const auto snap = pm->zonePolicySnapshot();
     expect(snap.valid, "snapshot is VALID (the policy really ran)");
@@ -2197,7 +2198,7 @@ int main(int argc, char **argv)
     z.peak = 0.8;
     pm->setRiskZonesRuntime({z});
     const path_manager::PlanResult r =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     // Contract change: an unjudgeable zone policy is now fail-closed. Before,
     // the flight was returned and only the log said CHECK — a verdict nobody
     // downstream consumed, so the trajectory was stored and publishable.
@@ -2230,7 +2231,7 @@ int main(int argc, char **argv)
   if (with_badspans) {
     // A real flight to judge: plan once, keep the stored trajectory.
     const path_manager::PlanResult r0 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r0.hasTrajectory(), "fixture plan succeeds");
     const poly_traj::Trajectory traj = pm->traj_.local_traj.traj;
     const double T = traj.getTotalDuration();
@@ -2280,20 +2281,15 @@ int main(int argc, char **argv)
     std::vector<Eigen::Vector3d> route;
     std::vector<double> cap;
     double fe_ms = 0.0;
-    expect(chain.commitRoute(start_pos, start_vel, start_acc, goal, false,
-                             &route, &cap, &fe_ms),
+    expect(chain.commitRoute(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED, start_pos, start_vel, start_acc), goal, false, &route, &cap, &fe_ms),
            "commitRoute produces the route");
     const int n_confirmed = chain.segments();
-    const path_manager::PlanResult ra = chain.planOverRoute(
-        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
-        false, {});
+    const path_manager::PlanResult ra = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(ra.hasTrajectory(), "reference call succeeds");
     const poly_traj::Trajectory ref = pm->traj_.local_traj.traj;
 
     force("chain/jitter/fail_segment", 2);  // one-shot: forces a merge
-    const path_manager::PlanResult rb = chain.planOverRoute(
-        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
-        false, {});
+    const path_manager::PlanResult rb = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(rb.hasTrajectory(), "merged call still delivers a trajectory");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == 0,
            "fault injection consumed (the failure was actually injected)");
@@ -2307,9 +2303,7 @@ int main(int argc, char **argv)
     expect(chain.segments() == n_confirmed,
            "segments() restored to the confirmed N after the merge call");
 
-    const path_manager::PlanResult rc = chain.planOverRoute(
-        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
-        false, {});
+    const path_manager::PlanResult rc = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(rc.hasTrajectory(), "post-merge clean call succeeds");
     const poly_traj::Trajectory &out = pm->traj_.local_traj.traj;
     std::cout << "overrouteretry: ref " << ref.getPieceNum() << " pieces "
@@ -2337,30 +2331,23 @@ int main(int argc, char **argv)
     std::vector<Eigen::Vector3d> route;
     std::vector<double> cap;
     double fe_ms = 0.0;
-    expect(chain.commitRoute(start_pos, start_vel, start_acc, goal, false,
-                             &route, &cap, &fe_ms),
+    expect(chain.commitRoute(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED, start_pos, start_vel, start_acc), goal, false, &route, &cap, &fe_ms),
            "commitRoute produces a route to tamper with");
     // (a) truncated cap — the silent-abandonment case
     std::vector<double> cap_bad(cap.begin(), cap.end() - 1);
-    const path_manager::PlanResult ra = chain.planOverRoute(
-        route, cap_bad, fe_ms, start_pos, start_vel, start_acc, goal, true,
-        false, {});
+    const path_manager::PlanResult ra = chain.planOverRoute(route, cap_bad, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(!ra.hasTrajectory() &&
                ra.detail.find("cap size") != std::string::npos,
            "mismatched cap FAILS with the invariant named");
     // (b) head displaced off the route start
-    const path_manager::PlanResult rb = chain.planOverRoute(
-        route, cap, fe_ms, start_pos + Eigen::Vector3d(1.0, 0.0, 0.0),
-        start_vel, start_acc, goal, true, false, {});
+    const path_manager::PlanResult rb = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos + Eigen::Vector3d(1.0, 0.0, 0.0), start_vel, start_acc), goal, false, {});
     expect(!rb.hasTrajectory() &&
                rb.detail.find("head position") != std::string::npos,
            "head off the route start FAILS");
     // (c) NaN vertex
     std::vector<Eigen::Vector3d> route_nan = route;
     route_nan[route_nan.size() / 2].z() = std::nan("");
-    const path_manager::PlanResult rc = chain.planOverRoute(
-        route_nan, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
-        false, {});
+    const path_manager::PlanResult rc = chain.planOverRoute(route_nan, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(!rc.hasTrajectory() &&
                rc.detail.find("non-finite route") != std::string::npos,
            "NaN route vertex FAILS");
@@ -2378,14 +2365,11 @@ int main(int argc, char **argv)
     std::vector<Eigen::Vector3d> route;
     std::vector<double> cap;
     double fe_ms = 0.0;
-    expect(chain.commitRoute(start_pos, start_vel, start_acc, goal, false,
-                             &route, &cap, &fe_ms),
+    expect(chain.commitRoute(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED, start_pos, start_vel, start_acc), goal, false, &route, &cap, &fe_ms),
            "commitRoute produces the route");
     chain.setTransitionActive(true);
     force("chain/jitter/fail_segment", -1);
-    const path_manager::PlanResult r = chain.planOverRoute(
-        route, cap, fe_ms, start_pos, start_vel, start_acc, goal, true,
-        false, {});
+    const path_manager::PlanResult r = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(!r.hasTrajectory(),
            "transition-active: single-shot fallback refused (FAILED)");
     expect(r.detail.find("forbidden while a transition is active") !=
@@ -2431,9 +2415,7 @@ int main(int argc, char **argv)
     // 2.1 u/s = 210 m/s level: within the model's 230 m/s but above the
     // frame's max_vel 200 m/s. Must reject on the EFFECTIVE ceiling with
     // the frame cap named in the reason.
-    const path_manager::PlanResult r = chain.plan(
-        start_pos, Eigen::Vector3d(2.1, 0.0, 0.0), start_acc, goal,
-        /*start_vel_synthesized=*/false, {}, /*start_vel_commanded=*/true);
+    const path_manager::PlanResult r = chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d(2.1, 0.0, 0.0), start_acc, false), goal, {});
     expect(!r.hasTrajectory(),
            "above-frame-cap commanded speed FAILED (no trajectory)");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
@@ -2449,10 +2431,7 @@ int main(int argc, char **argv)
   }
 
   if (with_initnan) {
-    const path_manager::PlanResult r = chain.plan(
-        start_pos, Eigen::Vector3d(1.8, 0.0, 0.0),
-        Eigen::Vector3d(0.0, std::nan(""), 0.0), goal,
-        /*start_vel_synthesized=*/false, {}, /*start_vel_commanded=*/true);
+    const path_manager::PlanResult r = chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d(1.8, 0.0, 0.0), Eigen::Vector3d(0.0, std::nan(""), 0.0), false), goal, {});
     expect(!r.hasTrajectory(), "NaN commanded acceleration FAILED");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "reason is INITIAL_MODE_UNSUPPORTED");
@@ -2469,11 +2448,7 @@ int main(int argc, char **argv)
     // (0, 5, 0) u/s² = 500 m/s² lateral (~51 g) is not: the inverse-dynamics
     // stage of the PVA judgment must reject it before any planning.
     const path_manager::PlanResult r =
-        chain.plan(start_pos, Eigen::Vector3d(1.8, 0.0, 0.0),
-                   Eigen::Vector3d(0.0, 5.0, 0.0), goal,
-                   /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/true,
-                   /*start_acc_commanded=*/true);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d(1.8, 0.0, 0.0), Eigen::Vector3d(0.0, 5.0, 0.0), true), goal, {});
     expect(!r.hasTrajectory(),
            "undeliverable commanded acceleration FAILED (no trajectory)");
     expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
@@ -2501,8 +2476,7 @@ int main(int argc, char **argv)
     //
     // Half 1: 50 m/s stated, floor ~132 m/s -> refused, not repaired.
     const path_manager::PlanResult r =
-        chain.plan(start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc,
-                   goal, /*start_vel_synthesized=*/true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc, false), goal, {});
     expect(!r.hasTrajectory(),
            "synthesized sub-floor start is REFUSED, not clamped and flown");
     // The REASON is no longer INITIAL_MODE_UNSUPPORTED, and that is the fix
@@ -2519,9 +2493,7 @@ int main(int argc, char **argv)
     // the contract in one line, and it holds whatever the coordinator then
     // decides.
     const path_manager::PlanResult rv =
-        chain.plan(start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc,
-                   goal, /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/true, /*start_acc_commanded=*/false);
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc, false), goal, {});
     expect(r.hasTrajectory() == rv.hasTrajectory() && r.reason == rv.reason,
            "the scalar and vector forms of the same start state get the SAME "
            "outcome — one quantity, one gate");
@@ -2531,8 +2503,7 @@ int main(int argc, char **argv)
     // Half 2: a flyable stated speed still plans, and is still not
     // misread as a launch-regime state — the original coverage, kept.
     const path_manager::PlanResult r2 =
-        chain.plan(start_pos, Eigen::Vector3d(2.0, 0.0, 0.0), start_acc,
-                   goal, /*start_vel_synthesized=*/true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, Eigen::Vector3d(2.0, 0.0, 0.0), start_acc, false), goal, {});
     expect(r2.hasTrajectory(),
            "synthesized start above the floor plans normally");
     expect(r2.outcome == path_manager::PlanOutcome::SUCCESS,
@@ -2548,9 +2519,7 @@ int main(int argc, char **argv)
     // This half is here because the reversal above removed the only variant
     // that reached the clamp at all; without it the clamp ships untested.
     const path_manager::PlanResult r3 =
-        chain.plan(start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc,
-                   goal, /*start_vel_synthesized=*/false, {},
-                   /*start_vel_commanded=*/false);
+        chain.plan(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED, start_pos, Eigen::Vector3d(0.5, 0.0, 0.0), start_acc, false), goal, {});
     expect(r3.hasTrajectory(),
            "a trajectory-derived sub-floor head is still clamped and flies "
            "(the planner may repair a state it authored itself)");
@@ -2568,14 +2537,14 @@ int main(int argc, char **argv)
     // DEGRADED; under an impossible peak budget (1%) it must be REFUSED —
     // FAILED(DIRECT_FALLBACK_UNSAFE), never handed to the FSM.
     const path_manager::PlanResult r1 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r1.hasTrajectory(),
            "phase-mode direct fallback flies under the default gate");
     expect(r1.outcome == path_manager::PlanOutcome::DEGRADED,
            "direct fallback reports DEGRADED");
     force("optimization/audit_envelope_peak_max", 0.01);
     const path_manager::PlanResult r2 =
-        chain.plan(start_pos, start_vel, start_acc, goal, true, {});
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(!r2.hasTrajectory(), "unsafe direct fallback FAILED, not flown");
     expect(r2.reason == path_manager::PlanReason::DIRECT_FALLBACK_UNSAFE,
            "reason is DIRECT_FALLBACK_UNSAFE");
@@ -2594,9 +2563,7 @@ int main(int argc, char **argv)
   if (with_initok) start_vel = Eigen::Vector3d(0.0, -1.6, 0.2);
   const bool vel_commanded = with_departop || with_initok;
   const path_manager::PlanResult pres =
-      chain.plan(start_pos, start_vel, start_acc, goal,
-                 /*start_vel_synthesized=*/!vel_commanded, mtail,
-                 vel_commanded);
+      chain.plan(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED, start_pos, start_vel, start_acc, false), goal, mtail);
   if (vel_commanded)
     expect(pres.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "within-envelope commanded start not misclassified as "
@@ -2892,8 +2859,7 @@ int main(int argc, char **argv)
     // its duration/piece count shifts.
     const double base1 = bt;
     const int base1_pieces = baseline.getPieceNum();
-    const bool ok2 = chain.plan(start_pos, start_vel, start_acc, goal,
-                                /*start_vel_synthesized=*/true)
+    const bool ok2 = chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {})
                          .hasTrajectory();
     expect(ok2, "second plan in the same process succeeds");
     const poly_traj::Trajectory &base2 = pm->traj_.global_traj.traj;

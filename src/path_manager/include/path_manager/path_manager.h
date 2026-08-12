@@ -280,10 +280,17 @@ namespace path_manager
     // front_end_only: [CHAIN-PAR] stop after the committed front-end
     // products are retained (lastCommittedRoute/CapRef) — the route-based
     // contract authoring needs the route, not a full solve.
-    bool planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
-                        const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
+    // The head is REQUIRED and carries its own provenance. junction_head is
+    // gone: it was the source encoded a second time, in a bool that could
+    // disagree with start_vel_synthesized_ — and the pair could not express
+    // a stated VECTOR, a test injection or a transition handoff at all, so
+    // this function reconstructed a source it did not have. Making the head
+    // a required parameter turns "forgetting the provenance" from a
+    // convention six call sites happened to follow into a compile error.
+    bool planGlobalTraj(const StartHead &head,
+                        const std::vector<Eigen::Vector3d> &waypoints,
                         const ego_planner::TailBoundary &tail = ego_planner::TailBoundary{},
-                        bool junction_goal = false, bool junction_head = false,
+                        bool junction_goal = false,
                         const std::vector<Eigen::Vector3d> *route_override = nullptr,
                         const std::vector<double> *cap_ref_override = nullptr,
                         bool front_end_only = false);
@@ -317,7 +324,7 @@ namespace path_manager
     // [PHASE] margin-backed CRUISE FLOOR (planner units) for tail-boundary.
     // Not the raw dynamics_speed_min_mps (122.0): this is that value with
     // dynamics_margin applied, 131.76 m/s on the shipped configuration.
-    // "margin-backed cruise floor" names the wrong number and is being retired.
+    // "stall floor" named the wrong number and has been retired.
     // validation — same floor the [STALL-FLOOR] start guard uses.
     double cruiseFloorUnits() const
     {
@@ -447,7 +454,6 @@ namespace path_manager
     // planGlobalTraj re-aims that velocity onto the front-end route's actual
     // initial direction (manager/align_start_vel_to_route). Explicitly
     // commanded / trajectory-derived velocities are never re-aimed.
-    void setStartVelSynthesized(bool s) { start_vel_synthesized_ = s; }
     // [VEL-ALIGN] the operator kill switch (manager/align_start_vel_to_route)
     // — route mode replicates the re-aim itself and must honor it too.
     bool alignStartVelToRoute() const { return align_start_vel_to_route_; }
@@ -769,7 +775,6 @@ namespace path_manager
     double alt_floor_headroom_{0.5};      // z-floor slack below min(start,goal) z; stops min-jerk sags bouncing off the water/terrain clearance
     double min_goal_agl_{1.0};            // waypoints get z >= terrain elevation + this (frame z units); kills underground goals from fixed-z mission sources
     // [VEL-ALIGN] see setStartVelSynthesized().
-    bool start_vel_synthesized_{false};
     bool align_start_vel_to_route_{true};
     // [ZONE-AVOID] lexicographic zone policy (see dyn_a_star.h).
     bool zone_avoid_lexico_{true};

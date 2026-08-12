@@ -760,14 +760,17 @@ std::string PathManager::stateEnvelopeProblem(
         return {};
     }
 
-    bool PathManager::planGlobalTraj(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
-                                     const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
+    bool PathManager::planGlobalTraj(const StartHead &head,
+                                     const std::vector<Eigen::Vector3d> &waypoints,
                                      const ego_planner::TailBoundary &tail,
-                                     bool junction_goal, bool junction_head,
+                                     bool junction_goal,
                                      const std::vector<Eigen::Vector3d> *route_override,
                                      const std::vector<double> *cap_ref_override,
                                      bool front_end_only)
     {
+        const Eigen::Vector3d &start_pos = head.pos_u;
+        const Eigen::Vector3d &start_vel = head.vel_u;
+        const Eigen::Vector3d &start_acc = head.acc_u;
         log_manager_->infof("Planning global trajectory with %zu waypoints", waypoints.size());
         auto t_total_start = std::chrono::steady_clock::now();
 
@@ -1099,16 +1102,6 @@ std::string PathManager::stateEnvelopeProblem(
         //   junction_head            -> CHAIN_JUNCTION (never touched)
         //   start_vel_synthesized_   -> STATED_SPEED   (re-aim, never floor)
         //   otherwise                -> TRAJECTORY_DERIVED (floor, no re-aim)
-        StartHead head;
-        head.src = junction_head
-                       ? StartStateSource::CHAIN_JUNCTION
-                       : (start_vel_synthesized_
-                              ? StartStateSource::STATED_SPEED
-                              : StartStateSource::TRAJECTORY_DERIVED);
-        head.pos_u = start_pos;
-        head.vel_u = start_vel;
-        head.acc_u = start_acc;
-        head.acc_prescribed = false;
         const double v_floor = poly_traj_opt_
             ? poly_traj_opt_->dynamicsMinSpeedFloorUnits() : 0.0;
         double um_xy_head = 100.0;

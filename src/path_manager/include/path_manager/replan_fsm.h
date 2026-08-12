@@ -150,6 +150,10 @@ private:
     // [INITIAL-STATE] The validated claim from the last accepted command.
     // Parsed at the top of the callback, before any state is consumed.
     path_manager::MissionStartClaim mission_start_claim_{};
+    // [HEAD-POLICY] What the resolved start state IS. The three booleans
+    // beside it are on their way out; this is the value the planner reads.
+    path_manager::StartStateSource start_state_source_{
+        path_manager::StartStateSource::UNSPECIFIED};
     double initial_speed_unit_m_{100.0};
     bool use_commanded_initial_velocity_{false};
     bool use_commanded_initial_acceleration_{false};
@@ -157,7 +161,6 @@ private:
     // rather than commanded/trajectory-derived. planGlobalTraj may re-aim a
     // synthesized velocity onto the route's actual initial direction
     // ([VEL-ALIGN]); explicit vectors are never touched.
-    bool start_vel_synthesized_{false};
     // [ENVELOPE] True when start_vel_ is an EXPLICIT operator input
     // (use_initial_velocity vector or test injection). Commanded starts are
     // envelope-validated at plan entry (contract 1: outside the cruise

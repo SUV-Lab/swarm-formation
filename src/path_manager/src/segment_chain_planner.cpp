@@ -274,15 +274,25 @@ void SegmentChainPlanner::invalidateStoredTrajectory() const
   pm_->clearTrajectoryViz();
 }
 
-PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
-                                     const Eigen::Vector3d &start_vel,
-                                     const Eigen::Vector3d &start_acc,
+PlanResult SegmentChainPlanner::plan(const StartHead &head,
                                      const std::vector<Eigen::Vector3d> &waypoints,
-                                     bool start_vel_synthesized,
-                                     const ego_planner::TailBoundary &mission_tail,
-                                     bool start_vel_commanded,
-                                     bool start_acc_commanded)
+                                     const ego_planner::TailBoundary &mission_tail)
 {
+  // Unpacked once, at the entry. The body reads these names; what changed is
+  // that they come from ONE value whose combinations are all legal, instead
+  // of three booleans a caller assembled by hand — an assembly that had
+  // already produced an illegal one (a prescribed acceleration discarded
+  // because the velocity arrived in the scalar form).
+  const Eigen::Vector3d &start_pos = head.pos_u;
+  const Eigen::Vector3d &start_vel = head.vel_u;
+  const Eigen::Vector3d &start_acc = head.acc_u;
+  const bool start_vel_synthesized =
+      head.src == StartStateSource::STATED_SPEED;
+  const bool start_vel_commanded =
+      head.src == StartStateSource::STATED_VECTOR ||
+      head.src == StartStateSource::TEST_INJECTED;
+  const bool start_acc_commanded = head.acc_prescribed;
+  (void)start_vel_synthesized;
   // [PLAN-STATE] First statement of the only public entry: no member may
   // carry a previous mission's value into this one. The envelope rejection
   // below returns early, so the reset has to precede it.
@@ -315,11 +325,16 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   // 60 m/s stated as a scalar did not. The two forms differ in what you may
   // SAY, never in what is accepted.
   if (start_vel_commanded || start_vel_synthesized) {
-    // acc_prescribed is false for the scalar form: it states a magnitude,
-    // not an acceleration, and a numeric zero is never evidence of one.
+    // start_acc_commanded ALONE. It used to be ANDed with
+    // start_vel_commanded, which meant a prescribed acceleration was
+    // discarded whenever the velocity arrived in the SCALAR form —
+    // use_initial_speed + use_initial_acceleration is a legal message, and
+    // its acceleration reached the optimizer head with no envelope judgment
+    // at all. The two claims are independent on the wire and are
+    // independent here: the acceleration bool says whether an acceleration
+    // was prescribed, and nothing about which velocity form carried it.
     regime = classifyStartState(start_pos, start_vel, start_acc,
-                                start_vel_commanded && start_acc_commanded,
-                                &regime_why);
+                                start_acc_commanded, &regime_why);
     if (regime == StartRegime::UNSUPPORTED) {
       log_->errorf("[ENVELOPE] commanded initial state REJECTED: %s "
                    "(INITIAL_MODE_UNSUPPORTED)", regime_why.c_str());
@@ -386,33 +401,31 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
     // Tail validation above applies to EVERY mission shape — the
     // transition dispatch happens after it so a bad final boundary can
     // never slip out through the new path.
-    PlanResult r = planTransitionMission(start_pos, start_vel, start_acc,
-                                         start_acc_commanded, waypoints,
-                                         eff);
+    PlanResult r = planTransitionMission(head, waypoints, eff);
     if (relaxed) r.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
     return r;
   }
-  PlanResult r = planImpl(start_pos, start_vel, start_acc, waypoints,
-                          start_vel_synthesized, eff);
+  PlanResult r = planImpl(head, waypoints, eff);
   if (relaxed) r.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
   return r;
 }
 
-PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
-                               const Eigen::Vector3d &start_vel,
-                               const Eigen::Vector3d &start_acc,
+PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
                                const std::vector<Eigen::Vector3d> &waypoints,
-                               bool start_vel_synthesized,
                                const ego_planner::TailBoundary &mission_tail)
 {
+  const Eigen::Vector3d &start_pos = head.pos_u;
+  const Eigen::Vector3d &start_vel = head.vel_u;
+  const Eigen::Vector3d &start_acc = head.acc_u;
+  const bool start_vel_synthesized =
+      head.src == StartStateSource::STATED_SPEED;
+  (void)start_vel_synthesized;
   // Stage-1 scope: one goal. Multi-waypoint missions need a waypoint-to-span
   // assignment that does not exist yet — fall back to the single-shot plan.
   if (waypoints.size() != 1) {
     log_->warnf("[CHAIN] %zu waypoints — stage 1 chains single-goal missions "
                 "only, falling back to the single-shot plan", waypoints.size());
-    pm_->setStartVelSynthesized(start_vel_synthesized);
-    if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                             mission_tail))
+    if (!pm_->planGlobalTraj(head, waypoints, mission_tail))
       return PlanResult::failed("multi-waypoint single-shot plan failed");
     // Same contract as every other direct product: judged before it is
     // accepted. "Chain not attempted" is a statement about how the flight
@@ -489,8 +502,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
       // per worker (phase profiles + seg<i>), in the serial construction
       // window — see planRouteParallel. Non-whitelisted keys are dropped
       // loudly there.
-      return planRouteParallel(start_pos, start_vel, start_acc, waypoints,
-                               start_vel_synthesized, par, mission_tail);
+      return planRouteParallel(head, waypoints, par, mission_tail);
     } else if (par) {
       log_->warnf("[CHAIN] chain/parallel needs chain/author_from_route "
                   "(the baseline is inherently sequential) — running the "
@@ -511,9 +523,7 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
   else
     log_->infof("[CHAIN] baseline plan (unsplit mission; %d chained segments "
                 "follow)", segments_);
-  pm_->setStartVelSynthesized(start_vel_synthesized);
-  if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                           mission_tail)) {
+  if (!pm_->planGlobalTraj(head, waypoints, mission_tail)) {
     log_->errorf("[CHAIN] baseline plan failed — nothing to chain, nothing "
                  "to fly");
     return PlanResult::failed("baseline plan failed");
@@ -773,12 +783,19 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     // Contract heads are trajectory-derived states — never re-aim
     // ([VEL-ALIGN]) and never floor ([STALL-FLOOR]) them: the neighbour's
     // tail pins the same state verbatim.
-    pm_->setStartVelSynthesized(i == 0 ? start_vel_synthesized : false);
     const RouteSlice *slice =
         (i < static_cast<int>(slices.size())) ? &slices[i] : nullptr;
-    if (!pm_->planGlobalTraj(head_pos, head_vel, head_acc, goal,
+    // Segment 0's head is the mission head; every later segment's head is
+    // the previous segment's tail — a CHAIN_JUNCTION, which the policy
+    // leaves verbatim.
+    StartHead seg_head;
+    seg_head.src = (i == 0) ? head.src : StartStateSource::CHAIN_JUNCTION;
+    seg_head.pos_u = head_pos;
+    seg_head.vel_u = head_vel;
+    seg_head.acc_u = head_acc;
+    seg_head.acc_prescribed = (i == 0) ? head.acc_prescribed : true;
+    if (!pm_->planGlobalTraj(seg_head, goal,
                              seg_tail, /*junction_goal=*/!last,
-                             /*junction_head=*/i != 0,
                              slice ? &slice->path : nullptr,
                              slice ? &slice->cap : nullptr)) {
       // Degrade loudly to the baseline: the mission still flies, and the
@@ -1588,11 +1605,13 @@ bool SegmentChainPlanner::cutAtArc(const std::vector<Eigen::Vector3d> &route,
 }
 
 PlanResult SegmentChainPlanner::planTransitionMission(
-    const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
-    const Eigen::Vector3d &start_acc, bool start_acc_commanded,
-    const std::vector<Eigen::Vector3d> &waypoints,
+    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
     const ego_planner::TailBoundary &mission_tail)
 {
+  const Eigen::Vector3d &start_pos = head.pos_u;
+  const Eigen::Vector3d &start_vel = head.vel_u;
+  const Eigen::Vector3d &start_acc = head.acc_u;
+  const bool start_acc_commanded = head.acc_prescribed;
   namespace tp = transition_phase;
   // The section-13 sequence, owned end to end. transition_active_ holds
   // for the whole scope: every fallback() below the coordinator returns
@@ -1628,7 +1647,7 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   std::vector<Eigen::Vector3d> route;
   std::vector<double> cap;
   double fe_ms = 0.0;
-  if (!commitRoute(start_pos, start_vel, start_acc, waypoints, run_parallel,
+  if (!commitRoute(head, waypoints, run_parallel,
                    &route, &cap, &fe_ms))
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "route commit failed");
@@ -1845,27 +1864,33 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   TransitionPrefix prefix;
   prefix.traj = tr.traj;
   prefix.junction_pva_tol_u = 1e-6;
-  return planOverRoute(sub_route, sub_cap, fe_ms, end_pos_u, end_vel_u,
-                       end_acc_u, waypoints,
-                       /*start_vel_synthesized=*/false, run_parallel,
-                       mission_tail, &prefix);
+  // [HEAD-POLICY] The cruise planner's head is the transition arc's END
+  // state. TRANSITION_HANDOFF says so, and applyHeadPolicy refuses to
+  // re-aim or floor it BECAUSE OF THAT — it already passed the handoff gate
+  // and its terminal PVA was validated by the generator. Previously this
+  // was expressed as "the caller holds a transition pointer", which is the
+  // same fact stored twice in two places that could disagree.
+  StartHead handoff;
+  handoff.src = StartStateSource::TRANSITION_HANDOFF;
+  handoff.pos_u = end_pos_u;
+  handoff.vel_u = end_vel_u;
+  handoff.acc_u = end_acc_u;
+  handoff.acc_prescribed = true;   // the generator produced a full PVA
+  return planOverRoute(sub_route, sub_cap, fe_ms, handoff, waypoints,
+                       run_parallel, mission_tail, &prefix);
 }
 
 PlanResult SegmentChainPlanner::planRouteParallel(
-    const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
-    const Eigen::Vector3d &start_acc,
-    const std::vector<Eigen::Vector3d> &waypoints,
-    bool start_vel_synthesized, bool run_parallel,
-    const ego_planner::TailBoundary &mission_tail)
+    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+    bool run_parallel, const ego_planner::TailBoundary &mission_tail)
 {
   std::vector<Eigen::Vector3d> route;
   std::vector<double> cap;
   double fe_ms = 0.0;
-  if (!commitRoute(start_pos, start_vel, start_acc, waypoints, run_parallel,
+  if (!commitRoute(head, waypoints, run_parallel,
                    &route, &cap, &fe_ms))
     return PlanResult::failed("front-end failed");
-  return planOverRoute(route, cap, fe_ms, start_pos, start_vel, start_acc,
-                       waypoints, start_vel_synthesized, run_parallel,
+  return planOverRoute(route, cap, fe_ms, head, waypoints, run_parallel,
                        mission_tail);
 }
 
@@ -1873,12 +1898,13 @@ PlanResult SegmentChainPlanner::planRouteParallel(
 // (AGL/bbox/SDF/zone binding happen here exactly once — route decided once,
 // the r3 homotopy lesson).
 bool SegmentChainPlanner::commitRoute(
-    const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
-    const Eigen::Vector3d &start_acc,
-    const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
-    std::vector<Eigen::Vector3d> *route, std::vector<double> *cap,
-    double *fe_ms)
+    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+    bool run_parallel, std::vector<Eigen::Vector3d> *route,
+    std::vector<double> *cap, double *fe_ms)
 {
+  const Eigen::Vector3d &start_pos = head.pos_u;
+  const Eigen::Vector3d &start_vel = head.vel_u;
+  const Eigen::Vector3d &start_acc = head.acc_u;
   const auto t0 = std::chrono::steady_clock::now();
   if (auto_segments_)
     log_->infof("[CHAIN-PAR] route-%s plan, auto-sized segments "
@@ -1886,10 +1912,8 @@ bool SegmentChainPlanner::commitRoute(
   else
     log_->infof("[CHAIN-PAR] route-%s plan, %d segments (no baseline)",
                 run_parallel ? "parallel" : "sequential", segments_);
-  pm_->setStartVelSynthesized(false);
-  if (!pm_->planGlobalTraj(start_pos, start_vel, start_acc, waypoints,
-                           ego_planner::TailBoundary{},
-                           false, false, nullptr, nullptr,
+  if (!pm_->planGlobalTraj(head, waypoints, ego_planner::TailBoundary{},
+                           false, nullptr, nullptr,
                            /*front_end_only=*/true)) {
     log_->errorf("[CHAIN-PAR] front-end failed — nothing to author on");
     return false;
@@ -1908,13 +1932,19 @@ bool SegmentChainPlanner::commitRoute(
 // today the mission start, under contract 2 the transition end state.
 PlanResult SegmentChainPlanner::planOverRoute(
     const std::vector<Eigen::Vector3d> &route, const std::vector<double> &cap,
-    double fe_ms, const Eigen::Vector3d &start_pos,
-    const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
+    double fe_ms, const StartHead &head,
     const std::vector<Eigen::Vector3d> &waypoints,
-    bool start_vel_synthesized, bool run_parallel,
+    bool run_parallel,
     const ego_planner::TailBoundary &mission_tail,
     const TransitionPrefix *transition)
 {
+  const Eigen::Vector3d &start_pos = head.pos_u;
+  const Eigen::Vector3d &start_vel = head.vel_u;
+  const Eigen::Vector3d &start_acc = head.acc_u;
+  const bool start_vel_synthesized =
+      head.src == StartStateSource::STATED_SPEED;
+  const bool start_acc_commanded = head.acc_prescribed;
+  (void)start_vel_synthesized;
   // [S13] Fail-closed INPUT contract (review find): once a coordinator can
   // hand this function an external route slice and head PVA, a mismatch
   // must be a FAILED plan, not a silent degradation — sliceCommittedRoute
@@ -2044,9 +2074,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
             std::string("hard-limit preservation failed: ") + e.what());
       }
     }
-    pm_->setStartVelSynthesized(start_vel_synthesized);
-    const bool fb_ok = pm_->planGlobalTraj(start_pos, start_vel, start_acc,
-                                           waypoints, mission_tail);
+    const bool fb_ok = pm_->planGlobalTraj(head, waypoints, mission_tail);
     if (!hardmin.empty()) {
       fguard.restoreNow();
       try {
@@ -2158,19 +2186,26 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // rather than a local pointer test.
   StartHead head0;
   head0.src = transition != nullptr
-                  ? StartStateSource::TRAJECTORY_DERIVED
+                  ? StartStateSource::TRANSITION_HANDOFF
                   : (start_vel_synthesized ? StartStateSource::STATED_SPEED
                                            : StartStateSource::CHAIN_JUNCTION);
   head0.pos_u = start_pos;
   head0.vel_u = start_vel;
   head0.acc_u = start_acc;
-  head0.acc_prescribed = false;
+  // The real value, not a hardcoded false: a prescribed acceleration pins
+  // the frame the direction lives in, so it must stop the re-aim. Hardcoding
+  // false here let a STATED_SPEED head with a prescribed acceleration be
+  // re-aimed out from under it.
+  head0.acc_prescribed = start_acc_commanded;
   double um_head = 100.0;
   if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
     um_head = node_->get_parameter("optimization/dynamics_unit_xy_m")
                   .as_double();
-  const double floor_head =
-      transition != nullptr ? 0.0 : pm_->cruiseFloorUnits();
+  // No pointer test. TRANSITION_HANDOFF is neither re-aimed nor floored
+  // BECAUSE OF WHAT IT IS, and applyHeadPolicy knows that from the source —
+  // passing floor_u = 0 to suppress the rule encoded the same fact a second
+  // time, in a place that could disagree with the first.
+  const double floor_head = pm_->cruiseFloorUnits();
   const double eps_head =
       um_head > 1e-9 ? PathManager::kSpeedBoundaryEpsMps / um_head : 0.0;
   const HeadPolicy hp0 = applyHeadPolicy(

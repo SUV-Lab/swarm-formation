@@ -615,8 +615,8 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_pt_ = theoretical_pos;
         start_vel_ = theoretical_vel;
         start_acc_ = theoretical_acc;
-        start_vel_synthesized_ = false;  // trajectory-derived: real motion state
         start_vel_commanded_ = false;    // not an operator input
+        start_state_source_ = path_manager::StartStateSource::TRAJECTORY_DERIVED;
         start_state_stated_ = true;      // read off our own trajectory
 
         double pos_error = (current_pos_ - theoretical_pos).norm();
@@ -628,8 +628,10 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
     } else {
         start_pt_ = current_pos_;
         start_vel_.setZero();
-        start_vel_synthesized_ = false;
         start_vel_commanded_ = false;
+        // Overwritten by whichever branch below reads a stated start; if
+        // none does, the mission described no beginning and is refused.
+        start_state_source_ = path_manager::StartStateSource::UNSPECIFIED;
         // Set by whichever branch below actually reads a stated initial
         // state out of the mission. If none does, the mission described no
         // beginning and triggerGlobalPlan refuses it.
@@ -640,6 +642,8 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         if (use_commanded_initial_velocity_) {
             start_vel_ = commanded_initial_velocity_;
             start_vel_commanded_ = true;
+            start_state_source_ =
+                path_manager::StartStateSource::STATED_VECTOR;
             start_state_stated_ = true;
             vel_src = "commanded vector (use_initial_velocity)";
         } else if (mission_start_claim_.src ==
@@ -677,7 +681,8 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
             // Chord is only a PROXY for "cruising along the route" (the route
             // does not exist yet) — mark it so planGlobalTraj can re-aim onto
             // the front-end route's real initial direction ([VEL-ALIGN]).
-            start_vel_synthesized_ = true;
+            start_state_source_ =
+                path_manager::StartStateSource::STATED_SPEED;
             start_state_stated_ = true;
         }
         start_acc_ = use_commanded_initial_acceleration_
@@ -703,8 +708,8 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
     if (inject_init_state_) {
         start_vel_ = inject_init_vel_;
         start_acc_ = inject_init_acc_;
-        start_vel_synthesized_ = false;  // injected = explicit, never re-aim
         start_vel_commanded_ = true;     // explicit input: envelope-validated
+        start_state_source_ = path_manager::StartStateSource::TEST_INJECTED;
         start_state_stated_ = true;
         log_manager_->infof("[TEST] Injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
                    start_vel_(0), start_vel_(1), start_vel_(2),
@@ -859,10 +864,18 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // [CHAIN] baseline + N chained segment runs; the planner forwards
         // the synthesized flag itself (per-run semantics differ) and
         // envelope-validates a commanded start at its entry ([ENVELOPE]).
-        plan_res = chain_planner_->plan(start_pt_, start_vel_, start_acc_,
-                                        waypoints, start_vel_synthesized_,
-                                        mission_tail_, start_vel_commanded_,
-                                        use_commanded_initial_acceleration_);
+        // [HEAD-POLICY] The head is assembled HERE, where the claim was
+        // resolved, and travels as one value. The three booleans it replaces
+        // were assembled at every call and had already produced an illegal
+        // combination: a prescribed acceleration was silently dropped
+        // whenever the velocity arrived in the scalar form.
+        path_manager::StartHead head;
+        head.src = start_state_source_;
+        head.pos_u = start_pt_;
+        head.vel_u = start_vel_;
+        head.acc_u = start_acc_;
+        head.acc_prescribed = use_commanded_initial_acceleration_;
+        plan_res = chain_planner_->plan(head, waypoints, mission_tail_);
     } else {
         // [PHASE] The single path validates the boundaries HERE (the chain
         // planner validates inside plan()) — same frozen policy: a
@@ -886,13 +899,19 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // about the identical physical state, and disagreed differently
         // again with the dynamics model off (one returns {} on a
         // non-positive floor, the other on !dynamicsEnabled()).
+        // Keyed on the SOURCE and on whether an acceleration was actually
+        // prescribed — the two independent facts. The boolean pair could not
+        // express "scalar speed WITH a prescribed acceleration", so that
+        // message's acceleration reached the optimizer head unjudged.
+        const bool judge_pva =
+            path_manager::judgeFullPva(start_state_source_,
+                                       use_commanded_initial_acceleration_);
         const std::string head_prob =
-            start_vel_commanded_
-                ? path_manager_->pvaEnvelopeProblem(start_pt_, start_vel_,
-                                                    start_acc_)
-                : (start_vel_synthesized_
-                       ? path_manager_->stateEnvelopeProblem(start_vel_)
-                       : std::string{});
+            !path_manager::isOperatorInput(start_state_source_)
+                ? std::string{}
+                : (judge_pva ? path_manager_->pvaEnvelopeProblem(
+                                   start_pt_, start_vel_, start_acc_)
+                             : path_manager_->stateEnvelopeProblem(start_vel_));
         {
             const std::string &prob = head_prob;
             if (!prob.empty()) {
@@ -938,10 +957,13 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
             }
         }
         if (!head_rejected && !tail_rejected) {
-            path_manager_->setStartVelSynthesized(start_vel_synthesized_);
-            plan_res = path_manager_->planGlobalTraj(
-                           start_pt_, start_vel_, start_acc_, waypoints,
-                           eff_tail)
+            path_manager::StartHead sh;
+            sh.src = start_state_source_;
+            sh.pos_u = start_pt_;
+            sh.vel_u = start_vel_;
+            sh.acc_u = start_acc_;
+            sh.acc_prescribed = use_commanded_initial_acceleration_;
+            plan_res = path_manager_->planGlobalTraj(sh, waypoints, eff_tail)
                            ? PlanResult::success()
                            : PlanResult::failed("single plan failed");
             if (relaxed)

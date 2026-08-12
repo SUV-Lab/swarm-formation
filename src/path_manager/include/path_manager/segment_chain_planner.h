@@ -73,15 +73,19 @@ public:
   // (INITIAL_MODE_UNSUPPORTED) before the front end or any optimizer runs;
   // they are never clamped. Non-commanded starts keep the [STALL-FLOOR]
   // clamp doctrine (our own proxy states may be repaired, inputs may not).
-  PlanResult plan(const Eigen::Vector3d &start_pos,
-                  const Eigen::Vector3d &start_vel,
-                  const Eigen::Vector3d &start_acc,
+  // The head is a VALUE: the state plus where it came from. It replaced
+  // three booleans with eight combinations for four legal states — and the
+  // illegal ones were reachable, and one of them shipped: a prescribed
+  // acceleration was discarded whenever the velocity arrived in the scalar
+  // form, because the classifier asked for
+  // "start_vel_commanded && start_acc_commanded" and the scalar form sets
+  // the first to false. Passing the head means the policy sees what the
+  // operator actually said, and forgetting the provenance is a compile
+  // error rather than a convention.
+  PlanResult plan(const StartHead &head,
                   const std::vector<Eigen::Vector3d> &waypoints,
-                  bool start_vel_synthesized,
                   const ego_planner::TailBoundary &mission_tail =
-                      ego_planner::TailBoundary{},
-                  bool start_vel_commanded = false,
-                  bool start_acc_commanded = false);
+                      ego_planner::TailBoundary{});
 
   int segments() const { return segments_; }
 
@@ -93,9 +97,7 @@ public:
   // coordinator calls them separately with the transition in between;
   // planRouteParallel is their no-transition composition. Public: the
   // coordinator and the harness drive these seams directly.
-  bool commitRoute(const Eigen::Vector3d &start_pos,
-                   const Eigen::Vector3d &start_vel,
-                   const Eigen::Vector3d &start_acc,
+  bool commitRoute(const StartHead &head,
                    const std::vector<Eigen::Vector3d> &waypoints,
                    bool run_parallel, std::vector<Eigen::Vector3d> *route,
                    std::vector<double> *cap, double *fe_ms);
@@ -111,11 +113,9 @@ public:
   };
   PlanResult planOverRoute(const std::vector<Eigen::Vector3d> &route,
                            const std::vector<double> &cap, double fe_ms,
-                           const Eigen::Vector3d &start_pos,
-                           const Eigen::Vector3d &start_vel,
-                           const Eigen::Vector3d &start_acc,
+                           const StartHead &head,
                            const std::vector<Eigen::Vector3d> &waypoints,
-                           bool start_vel_synthesized, bool run_parallel,
+                           bool run_parallel,
                            const ego_planner::TailBoundary &mission_tail,
                            const TransitionPrefix *transition = nullptr);
   // [S13] Which JUDGMENT applies to a span of the flight. The evaluator
@@ -256,10 +256,7 @@ private:
   // commit -> snapshot -> entry screening -> generate -> cut -> chain with
   // the transition prefix. transition_active_ is asserted for its whole
   // scope, so every fallback inside returns FAILED.
-  PlanResult planTransitionMission(const Eigen::Vector3d &start_pos,
-                                   const Eigen::Vector3d &start_vel,
-                                   const Eigen::Vector3d &start_acc,
-                                   bool start_acc_commanded,
+  PlanResult planTransitionMission(const StartHead &head,
                                    const std::vector<Eigen::Vector3d> &waypoints,
                                    const ego_planner::TailBoundary &mission_tail);
   // [S13] Materialize the sub-route from an arc coordinate ONCE — the cut
@@ -331,20 +328,15 @@ private:
   // baseline to restore; failures repair through the retry ladders or the
   // gated single-shot fallback (DEGRADED), which a transition-active plan
   // forbids outright.
-  PlanResult planRouteParallel(const Eigen::Vector3d &start_pos,
-                               const Eigen::Vector3d &start_vel,
-                               const Eigen::Vector3d &start_acc,
+  PlanResult planRouteParallel(const StartHead &head,
                                const std::vector<Eigen::Vector3d> &waypoints,
-                               bool start_vel_synthesized, bool run_parallel,
+                               bool run_parallel,
                                const ego_planner::TailBoundary &mission_tail);
 
   // plan() minus the final-boundary validation (which must run exactly
   // once): every internal exit path receives the validated tail.
-  PlanResult planImpl(const Eigen::Vector3d &start_pos,
-                      const Eigen::Vector3d &start_vel,
-                      const Eigen::Vector3d &start_acc,
+  PlanResult planImpl(const StartHead &head,
                       const std::vector<Eigen::Vector3d> &waypoints,
-                      bool start_vel_synthesized,
                       const ego_planner::TailBoundary &mission_tail);
 
   // [STAGE-4] Whole-flight JUDGMENT of the FINAL stitched product — the one

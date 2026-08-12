@@ -39,6 +39,16 @@ enum class StartStateSource {
   // The tail of the previous chain segment. Judged as that segment's tail
   // already was; kept verbatim.
   CHAIN_JUNCTION,
+  // The end state of a generated transition arc, handed to the cruise
+  // planner. It has ALREADY passed the handoff gate and its terminal PVA was
+  // validated by the transition generator, so it is neither re-aimed nor
+  // floored — and, unlike CHAIN_JUNCTION, it is a state the transition
+  // planner authored rather than one a neighbouring segment flew.
+  // It exists as a SOURCE because the policy must be decided by where the
+  // state came from; deciding it by "the caller happened to hold a
+  // transition pointer" is the same fact encoded twice, in two places that
+  // can disagree.
+  TRANSITION_HANDOFF,
 };
 
 inline const char *sourceName(StartStateSource s)
@@ -50,6 +60,7 @@ inline const char *sourceName(StartStateSource s)
     case StartStateSource::TRAJECTORY_DERIVED: return "TRAJECTORY_DERIVED";
     case StartStateSource::TEST_INJECTED:      return "TEST_INJECTED";
     case StartStateSource::CHAIN_JUNCTION:     return "CHAIN_JUNCTION";
+    case StartStateSource::TRANSITION_HANDOFF: return "TRANSITION_HANDOFF";
   }
   return "UNKNOWN";
 }
@@ -84,6 +95,14 @@ inline bool mayReaim(StartStateSource s, bool acc_prescribed)
 inline bool mayClamp(StartStateSource s)
 {
   return s == StartStateSource::TRAJECTORY_DERIVED;
+}
+
+// A state produced by the planner itself rather than stated by an operator,
+// and already validated where it was produced. Neither re-aimed nor floored.
+inline bool isAlreadyValidated(StartStateSource s)
+{
+  return s == StartStateSource::CHAIN_JUNCTION ||
+         s == StartStateSource::TRANSITION_HANDOFF;
 }
 
 // The full position-velocity-acceleration triple is judged (rather than the

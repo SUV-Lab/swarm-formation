@@ -324,6 +324,63 @@ int main()
            "align disabled suppresses the re-aim");
   }
 
+  // --- the three cases the boolean plumbing could not express -------------
+  // These are the defects the head value exists to make impossible, asserted
+  // at the level where they were lost.
+  {
+    using path_manager::applyHeadPolicy;
+    using path_manager::isOperatorInput;
+    using path_manager::judgeFullPva;
+    using path_manager::StartHead;
+    const std::vector<Eigen::Vector3d> route = {
+        Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(10.0, 0.0, 1.0)};
+
+    // 1. A stated SPEED with a prescribed acceleration. The classifier used
+    //    to ask for "start_vel_commanded && start_acc_commanded", and the
+    //    scalar form sets the first to false — so the acceleration was
+    //    discarded and the head reached the optimizer unjudged. It must be
+    //    judged as a full PVA, and it must NOT be re-aimed.
+    StartHead sp_acc;
+    sp_acc.src = StartStateSource::STATED_SPEED;
+    sp_acc.vel_u = Eigen::Vector3d(0.0, 2.0, 0.0);
+    sp_acc.acc_prescribed = true;
+    expect(judgeFullPva(sp_acc.src, sp_acc.acc_prescribed),
+           "a stated SPEED with a prescribed acceleration is judged as a "
+           "full PVA");
+    expect(!applyHeadPolicy(sp_acc, route, 1.3176, true, 1e-8).reaimed,
+           "...and is NOT re-aimed — the acceleration pins the frame");
+    StartHead sp_noacc = sp_acc;
+    sp_noacc.acc_prescribed = false;
+    expect(!judgeFullPva(sp_noacc.src, sp_noacc.acc_prescribed),
+           "...while the same speed WITHOUT one is judged on velocity alone");
+    expect(applyHeadPolicy(sp_noacc, route, 1.3176, true, 1e-8).reaimed,
+           "...and is re-aimed");
+
+    // 2. A test injection with a prescribed acceleration is always full-PVA.
+    StartHead inj;
+    inj.src = StartStateSource::TEST_INJECTED;
+    inj.vel_u = Eigen::Vector3d(0.0, 2.0, 0.0);
+    inj.acc_prescribed = true;
+    expect(judgeFullPva(inj.src, inj.acc_prescribed),
+           "an injected state with a prescribed acceleration is judged as a "
+           "full PVA");
+    expect(isOperatorInput(inj.src),
+           "...because an injection is operator input, not our own product");
+
+    // 3. TRANSITION_HANDOFF: neither re-aimed nor floored, and it is a
+    //    SOURCE rather than "the caller happened to hold a pointer".
+    StartHead ho;
+    ho.src = StartStateSource::TRANSITION_HANDOFF;
+    ho.vel_u = Eigen::Vector3d(0.0, 0.5, 0.0);   // across the route AND under
+    ho.acc_prescribed = true;
+    const auto hp = applyHeadPolicy(ho, route, 1.3176, true, 1e-8);
+    expect(!hp.reaimed, "a transition handoff is NOT re-aimed");
+    expect(!hp.floored, "...and NOT floored — the generator validated it");
+    expect(hp.floor_declined, "...and the declined correction is reported");
+    expect(path_manager::isAlreadyValidated(ho.src),
+           "...because it is a state the planner already validated");
+  }
+
   if (failures == 0) {
     std::printf("PASS: 0 failed check(s)\n");
     return 0;
