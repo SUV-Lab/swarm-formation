@@ -3112,6 +3112,85 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   const double dt = 0.1;
   const size_t nz = pm_->numRiskZones();
   const auto eval_snap = pm_->zonePolicySnapshot();
+
+  // [LEG-POLICY] A multi-leg mission has no plan-wide policy — the front end
+  // runs one search per leg and the same zone can be HARD_AVOID on one and
+  // SOFT_ENDPOINT on the next, so eval_snap above is INVALID for it and every
+  // sample reads as unmeasurable. It is measurable; it just has to be asked
+  // per piece. Route edge i became MINCO piece i, so the piece a sample falls
+  // in names the leg that was flying there, and that leg's captured policy is
+  // the one in force.
+  //
+  // Every condition below is a refusal, not a repair: a map that does not
+  // describe THIS trajectory, a leg with no capture, a capture that is not
+  // valid, a leg list with a hole or a repeat, or a policy that does not cover
+  // the current zones. Any of them and this falls back to eval_snap, which
+  // then refuses in the usual way. Notably a STITCHED flight lands here — the
+  // manager's map describes the last segment only, and the piece counts
+  // disagree, which is exactly the disagreement that must not be papered over.
+  const auto &piece_leg = pm_->lastPieceLeg();
+  const auto &leg_pols = pm_->legPolicySnapshots();
+  bool per_piece = !piece_leg.empty() && !leg_pols.empty() &&
+                   piece_leg.size() ==
+                       static_cast<size_t>(flight.getPieceNum());
+  if (per_piece) {
+    for (size_t i = 0; i < leg_pols.size() && per_piece; ++i) {
+      // leg i at index i, serials strictly increasing: a hole or a
+      // double-write in the capture sequence is a programming error, and
+      // "some legs" is not a set this may average over.
+      if (leg_pols[i].leg != i || !leg_pols[i].policy.valid ||
+          leg_pols[i].policy.zones.size() != nz ||
+          (i > 0 && leg_pols[i].search_serial <= leg_pols[i - 1].search_serial))
+        per_piece = false;
+    }
+    for (size_t leg : piece_leg)
+      if (leg >= leg_pols.size()) per_piece = false;
+  }
+  // Warn only where it COSTS something. A chained single-goal flight is
+  // stitched, so the map never matches its piece count — but its plan-wide
+  // snapshot is valid and is the right answer, not a fallback. The case worth
+  // saying out loud is the one where neither is available.
+  if (nz > 0 && !per_piece && !eval_snap.valid)
+    log_->warnf("[LEG-POLICY] no per-piece attribution (%zu tags, %d pieces, "
+                "%zu legs) and no valid plan-wide policy — this flight cannot "
+                "be cleared",
+                piece_leg.size(), flight.getPieceNum(), leg_pols.size());
+  else if (per_piece)
+    log_->infof("[LEG-POLICY] audit reads policy per piece: %zu pieces over "
+                "%zu legs", piece_leg.size(), leg_pols.size());
+
+  // The policy in force at time t. A sample landing exactly on a piece
+  // boundary belongs to both pieces, so it takes the STRICTER of the two:
+  // an exemption earned on one leg does not extend across the junction into
+  // a leg that never had it. Stricter here means HARD_AVOID and nothing
+  // else — that is the only distinction the audit draws below, and inventing
+  // an order among the SOFT_* kinds would be an ordering no consumer reads.
+  PathManager::ZonePolicySnapshot junction_buf;
+  const auto policyAt =
+      [&](double t) -> const PathManager::ZonePolicySnapshot & {
+    if (!per_piece) return eval_snap;
+    double rem = t;
+    int pi = flight.locatePieceIdx(rem);
+    if (pi < 0) pi = 0;
+    if (pi >= static_cast<int>(piece_leg.size()))
+      pi = static_cast<int>(piece_leg.size()) - 1;
+    const size_t leg = piece_leg[static_cast<size_t>(pi)];
+    // locatePieceIdx leaves `rem` as the offset into the piece it chose, so
+    // a sample sitting on the seam shows up as rem ~ 0 with a previous piece
+    // to compare against.
+    if (rem > 1e-9 || pi == 0) return leg_pols[leg].policy;
+    const size_t prev = piece_leg[static_cast<size_t>(pi) - 1];
+    if (prev == leg) return leg_pols[leg].policy;
+    junction_buf = leg_pols[leg].policy;
+    const auto &other = leg_pols[prev].policy;
+    for (size_t zi = 0;
+         zi < junction_buf.zones.size() && zi < other.zones.size(); ++zi) {
+      if (other.zones[zi].disposition == PathManager::ZoneDisposition::HARD_AVOID)
+        junction_buf.zones[zi].disposition =
+            PathManager::ZoneDisposition::HARD_AVOID;
+    }
+    return junction_buf;
+  };
   // Same counting doctrine as the solver's [CONV-REJECT] audit, latch
   // included: the pre-cruise ramp (a rest-start mission legitimately
   // begins below stall) stays out of the statistics, but sub-min-speed
@@ -3168,14 +3247,17 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       bool hard = false, standoff = false, soft = false;
       int hard_zi = -1;
       double hard_q = 1e9;
+      // [LEG-POLICY] The policy that was in force WHERE THIS SAMPLE FLIES.
+      // Identical to eval_snap when there is one plan-wide policy to have.
+      const PathManager::ZonePolicySnapshot &snap = policyAt(t);
       // Closest approach to a HARD_AVOID zone, tracked on EVERY sample and
       // not only on contact. "No contact" is a threshold answer; how close
       // the flight came is the measurement, and without it two products on
       // the same route cannot be compared at all — which is exactly the
       // question a contact on one and not the other raises.
       for (size_t zi = 0; zi < nz; ++zi) {
-        if (zi >= eval_snap.zones.size() ||
-            eval_snap.zones[zi].disposition !=
+        if (zi >= snap.zones.size() ||
+            snap.zones[zi].disposition !=
                 PathManager::ZoneDisposition::HARD_AVOID)
           continue;
         const double q = pm_->getZoneEllipsoidRadius(zi, p);
@@ -3187,15 +3269,15 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
         }
       }
       for (size_t zi = 0; zi < nz; ++zi) {
-        switch (pm_->zoneContact(eval_snap, zi, p)) {
+        switch (pm_->zoneContact(snap, zi, p)) {
           case PathManager::ZoneContactResult::CONTACT:
-            if (zi < eval_snap.zones.size() &&
-                eval_snap.zones[zi].disposition ==
+            if (zi < snap.zones.size() &&
+                snap.zones[zi].disposition ==
                     PathManager::ZoneDisposition::HARD_AVOID) {
               // WHICH BAND. zoneContact() reports the 1.05x standoff volume,
               // which is the surface a ROUTE is kept out of; only the
               // authored volume refuses a finished flight.
-              if (pm_->zoneContactAuthored(eval_snap, zi, p)) hard = true;
+              if (pm_->zoneContactAuthored(snap, zi, p)) hard = true;
               else standoff = true;
               // Only on contact, so the deep-sample cost never touches the
               // common path.

@@ -182,7 +182,8 @@ int main(int argc, char **argv)
        with_nophasedirect = false, with_baserefuse = false,
        with_reststart = false, with_capstart = false,
        with_headsrc = false, with_legpolicy = false, with_legtags = false,
-       with_legleadin = false, with_legchain = false,
+       with_legleadin = false, with_legchain = false, with_legaudit = false,
+       with_wpzonepass0 = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -347,6 +348,8 @@ int main(int argc, char **argv)
     if (v == "legtags") { with_route = true; with_legtags = true; }
     if (v == "legleadin") { with_route = true; with_legleadin = true; }
     if (v == "legchain") { with_legchain = true; }
+    if (v == "legaudit") { with_legaudit = true; }
+    if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -394,7 +397,7 @@ int main(int argc, char **argv)
   {
     std::vector<rclcpp::Parameter> ovr;
     // zonepass0: 3-pass policy off -> pass stays 0 with zones present.
-    if (with_zonepass0 || with_baserefuse)
+    if (with_zonepass0 || with_baserefuse || with_wpzonepass0)
       ovr.emplace_back("manager/zone_avoid_lexicographic", false);
     // zonewall: block the OVER-THE-TOP escape (default vertical ratio
     // 0.35 leaves a ~12 u ceiling the front end can climb past) so the
@@ -1871,6 +1874,62 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_legaudit) {
+    // [LEG-POLICY] The payoff, and the case that made the whole thing
+    // necessary. The zone sits on the MISSION START, so leg 0 owns it as a
+    // SOFT_ENDPOINT containment exemption while leg 1 — which neither starts
+    // nor ends there — calls the same zone HARD_AVOID. The flight
+    // NECESSARILY begins inside the authored volume, so the early samples are
+    // a contact no matter what the optimizer does; the only question is which
+    // leg's policy judges them.
+    //
+    // Two failures this pins at once. Reading the LAST leg's policy for the
+    // whole flight refuses a start the mission itself authored. Refusing to
+    // read any policy — what a plan-wide-or-nothing snapshot forces on every
+    // multi-leg mission — refuses it too, just with a different sentence. It
+    // must fly, and it must fly MEASURED: manager/allow_unmeasured_zone_policy
+    // is left at its shipped false, so nothing here is excused rather than
+    // checked.
+    const Eigen::Vector3d mid(180.0, 80.0, 3.0);
+    path_manager::RiskZone z;
+    z.center = start_pos;
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+
+    const path_manager::PlanResult r = chain.plan(
+        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+               start_vel, start_acc, false),
+        {mid, goal[0]}, {});
+    std::cout << "[LEG-AUDIT] outcome=" << (int)r.outcome
+              << " reason=" << (int)r.reason
+              << " legs=" << pm->legPolicySnapshots().size()
+              << " pieces=" << pm->lastPieceLeg().size()
+              << " detail=" << r.detail << "\n";
+    expect(r.hasTrajectory(),
+           "a multi-leg mission starting inside a zone IT authored flies");
+    expect(r.reason != path_manager::PlanReason::ZONE_POLICY_UNEVALUATED,
+           "...and it was measured, not excused: the policy was evaluated");
+    expect(r.detail.find("allow_unmeasured_zone_policy") == std::string::npos,
+           "...without the unmeasured-policy escape being involved at all");
+
+    const auto &legs = pm->legPolicySnapshots();
+    expect(legs.size() == 2, "both legs were captured");
+    if (legs.size() == 2 && !legs[0].policy.zones.empty() &&
+        !legs[1].policy.zones.empty()) {
+      using ZD = path_manager::PathManager::ZoneDisposition;
+      expect(legs[0].policy.zones[0].disposition == ZD::SOFT_ENDPOINT,
+             "leg 0 starts in the zone -> SOFT_ENDPOINT");
+      expect(legs[1].policy.zones[0].disposition == ZD::HARD_AVOID,
+             "leg 1 does not touch it -> HARD_AVOID, and judging leg 0 by "
+             "THAT is what refuses an authored start");
+    }
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_legchain) {
     // [LEG-POLICY] Chaining and multi-leg are orthogonal: planImpl chains
     // SINGLE-GOAL missions only and hands anything with more waypoints to the
@@ -2557,13 +2616,19 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  if (with_wpzone) {
+  if (with_wpzone || with_wpzonepass0) {
     // A multi-waypoint mission with a risk zone ANYWHERE must still plan.
-    // The whole-flight gate added to this branch refused all of them: a
-    // multi-leg front end runs one zone search PER LEG and
-    // zonePolicySnapshot is plan-wide-or-nothing, so policy_measurable is
+    // The whole-flight gate first added to this branch refused all of them:
+    // a multi-leg front end runs one zone search PER LEG and
+    // zonePolicySnapshot is plan-wide-or-nothing, so policy_measurable was
     // false for every such mission and unflyable() fired on it — whatever
     // the flight did, and however far the zone was from the route.
+    //
+    // Per-leg capture plus per-piece attribution answers that properly, so
+    // `wpzone` now pins the mission FLYING, MEASURED. The refusal it used to
+    // pin has not gone away — it moved to the case where attribution is
+    // genuinely unavailable, which `wpzonepass0` drives by turning the 3-pass
+    // zone policy off so no leg can produce a capture at all.
     path_manager::RiskZone z;
     z.center = Eigen::Vector3d(600.0, 600.0, 3.0);   // far off the route
     z.reach = 20.0;
@@ -2578,37 +2643,50 @@ int main(int argc, char **argv)
     expect(!snap.valid,
            "the multi-leg snapshot really is invalid — the premise holds");
 
-    // DEFAULT: fail-CLOSED. A flight whose zone policy could not be
-    // evaluated is not cleared, and DEGRADED is a result the FSM EXECUTES —
-    // "we could not check, but we said so" is fail-open however loud the
-    // log is. Refusing every multi-waypoint mission with a zone anywhere is
-    // a real cost; flying an unchecked one is a bigger one, and the choice
-    // belongs to an operator rather than to a default.
     const path_manager::PlanResult r =
         chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), legs, {});
-    expect(!r.hasTrajectory(),
-           "by DEFAULT an unmeasurable zone policy REFUSES the mission");
-    expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
-           "...as STITCHED_FLIGHT_UNSAFE");
-    expect(r.detail.find("allow_unmeasured_zone_policy") != std::string::npos,
-           "...and the refusal names the opt-in that would change it");
 
-    // OPT-IN: flown, DEGRADED, and the gap NAMED in the machine-readable
-    // reason — not only in the detail string. Asserting the detail alone is
-    // what let the reason be silently overwritten with
-    // STITCHED_ENVELOPE_BUDGET, which is about the airframe and was simply
-    // not true here.
-    force("manager/allow_unmeasured_zone_policy", true);
-    const path_manager::PlanResult r2 =
-        chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), legs, {});
-    expect(r2.hasTrajectory(),
-           "with the opt-in set the mission plans");
-    expect(r2.outcome == path_manager::PlanOutcome::DEGRADED,
-           "...as DEGRADED, because something really was not checked");
-    expect(r2.reason == path_manager::PlanReason::ZONE_POLICY_UNEVALUATED,
-           "...and the REASON says so — a program reads this, not the detail");
-    expect(r2.detail.find("zone policy was NOT evaluated") != std::string::npos,
-           "...with the gap spelled out in the detail as well");
+    if (with_wpzone) {
+      expect(r.hasTrajectory(),
+             "a multi-leg mission with a zone far off the route flies");
+      expect(r.reason != path_manager::PlanReason::ZONE_POLICY_UNEVALUATED,
+             "...measured per leg, not excused");
+      expect(r.detail.find("allow_unmeasured_zone_policy") == std::string::npos,
+             "...with the opt-in never reached");
+      expect(pm->legPolicySnapshots().size() == 2,
+             "...because both legs were captured and both were usable");
+    } else {
+      // No pass ran, so there is no policy to capture and none to fall back
+      // on. DEGRADED is a result the FSM EXECUTES — "we could not check, but
+      // we said so" is fail-open however loud the log is. The cost of
+      // refusing is real; flying an unchecked flight is a bigger one, and the
+      // choice belongs to an operator rather than to a default.
+      expect(pm->legPolicySnapshots().empty(),
+             "with the 3-pass policy off no leg yields a capture");
+      expect(!r.hasTrajectory(),
+             "by DEFAULT an unmeasurable zone policy REFUSES the mission");
+      expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
+             "...as STITCHED_FLIGHT_UNSAFE");
+      expect(r.detail.find("allow_unmeasured_zone_policy") != std::string::npos,
+             "...and the refusal names the opt-in that would change it");
+
+      // OPT-IN: flown, DEGRADED, and the gap NAMED in the machine-readable
+      // reason — not only in the detail string. Asserting the detail alone is
+      // what let the reason be silently overwritten with
+      // STITCHED_ENVELOPE_BUDGET, which is about the airframe and was simply
+      // not true here.
+      force("manager/allow_unmeasured_zone_policy", true);
+      const path_manager::PlanResult r2 =
+          chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), legs, {});
+      expect(r2.hasTrajectory(),
+             "with the opt-in set the mission plans");
+      expect(r2.outcome == path_manager::PlanOutcome::DEGRADED,
+             "...as DEGRADED, because something really was not checked");
+      expect(r2.reason == path_manager::PlanReason::ZONE_POLICY_UNEVALUATED,
+             "...and the REASON says so — a program reads this, not the detail");
+      expect(r2.detail.find("zone policy was NOT evaluated") != std::string::npos,
+             "...with the gap spelled out in the detail as well");
+    }
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
