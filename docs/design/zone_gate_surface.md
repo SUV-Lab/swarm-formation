@@ -92,11 +92,47 @@ seed를 고정하기 전 같은 팔이 CLEAN과 REJECTED로 갈렸다. 고정하
 같은 seed에서 `difficulty_balance` off와 on이 **같은 접촉**을 낸다. 이 결함은 A/B 팔과
 무관하다.
 
-## 4-2. direct는 같은 seed에서 4/4 clean
+## 4-2. chained와 direct의 차이 — 14.3 m
 
-같은 seed·같은 미션에서 direct 산출물은 4회 모두 hard = 0이다. 표본이 우연히 clean했던
-것이 아니라 chained와 direct 사이에 실제 구조 차이가 있다. 원인은 아직 규명되지 않았다
-(7절 2번).
+`[ZONE-CLEARANCE]`(모든 비행의 최근접 거리)를 넣고 seed 4155591226으로 r1을 9회 돌렸다
+(`ab_cmp`, pinned 74b4f18).
+
+| 산출물 | q_min | authored rim 밖 | 접촉 |
+|---|---|---|---|
+| chained (off 3, on 3) | 1.04948 | 494.8 m | standoff 21 sample |
+| direct (3) | 1.05091 | 509.1 m | 0 |
+
+**두 산출물의 차이는 14.3 m다** — 반경 방향 기준. 두 접점 표본 사이의 거리는
+`hypot(0.01, 0.14) = 14.04 m`로 다른 수다. 옛 거부면 q = 1.05가 정확히 그 사이에
+있었다 — chained 쪽으로 5.2 m, direct 쪽으로 9.1 m.
+
+committed route는 **비트 단위로 같다**(양쪽 다 `A* shortcut 46 pts → sparse pieces
+99 pts`, `hard-blocked 5544228`, `pass=1 soft-crossings=0/2`). 즉 안전 성질의 차이가
+아니라 **모서리를 14 m 더 조여 도는 것**이고, 옛 게이트가 그 14 m를 FAILED와 CLEAN으로
+갈랐다.
+
+### 수렴 깊이 — 처음 적은 것이 틀렸다
+
+앞서 "chained 287 iter vs direct 179 iter이므로 chained가 덜 다듬어진 것이 아니다"라고
+적었다(커밋 `7b8d37c`). **287은 cruise가 아니라 departure segment의 값이다.**
+
+`max_iterations = min(20000, max(3000, 100 * piece_num_))`
+(`poly_traj_optimizer.cpp:1594`)이므로 로그의 상한이 piece 수의 지문이고, 그것으로
+어느 solve인지 확정된다 — `[CHAIN-REPORT]`가 run 1/2/3을 11 / 83 / 4 pieces로 적는다:
+
+```
+chained  calls=11 /3000   4-piece  arrival
+         calls=287/3000   11-piece departure
+         calls=27 /8300   83-piece CRUISE      <- 이것이 cruise다
+direct   calls=179/9800   98-piece 전 구간
+```
+
+**cruise 기준 chained 27 vs direct 179 — chained가 6.6배 덜 다듬어졌다.** 방향이
+반대였고, 수렴 깊이 가설은 기각이 아니라 **지지된다.** 보강 증거: 총 비행시간이
+direct 828.0 s vs chained 20.1+789.8+18.7 = 828.6 s로, 같은 route·같은 `wei_time_`에서
+direct가 시간 목적함수에서도 낫다.
+
+세 줄 중 하나를 골라 쓰면서 어느 solve인지 확인하지 않은 것이 원인이다.
 
 ## 5. 실행 간 차이의 출처
 
@@ -181,10 +217,11 @@ C와 A는 배타적이지 않다. 게이트가 지키는 면, cost가 방어하�
 
 `manager/dyn_yaw_seed: 4155591226` 고정 상태에서 수행한다.
 
-1. **왜 chained만 접촉하는가.** 같은 seed에서 direct 4/4 clean, chained 8/8 접촉.
-   경로는 같은 front end에서 나오는데 최적화 결과가 다르다. 접점 arc ±10 u를 0.1 u로
-   덤프해 committed polyline 대비 법선 편차의 크기와 부호를 봐야 한다.
-   `[TERRAIN-PROFILE]`은 78.8 u 간격이라 4.2 u 접촉을 볼 수 없다.
+1. **왜 chained가 14 m 더 안쪽인가.** 크기와 부호는 측정됐고(4-2절), 수렴 깊이가
+   차이의 방향과 일치한다(cruise 27 vs 179). 남은 것은 그 27회가 **어느 방향으로**
+   덜 수렴했는지다 — 접점 arc ±10 u를 0.1 u로 덤프해 committed polyline 대비 법선
+   편차의 부호를 봐야 한다. `[TERRAIN-PROFILE]`은 78.8 u 간격이라 4.2 u 접촉을 볼 수
+   없다.
 2. 접점에서 committed polyline 자체의 q와 visibility. 3절의 접선 수치는 로그의 반올림된
    정점 좌표에서 재계산한 것이라 ±0.00005 포락이 있다. front end가 실제로 어느 쪽에
    서 있는지는 직접 인쇄해야 확정된다.
@@ -192,8 +229,8 @@ C와 A는 배타적이지 않다. 게이트가 지키는 면, cost가 방어하�
    측정값이 아니다.
 4. A/B/C 각각의 미션 거부 비용. **어느 것도 측정되지 않았다.**
 
-해결된 것: 접촉의 깊이·위치·연속성(4절), 실행 간 차이의 출처(4-1절), direct가 표본이
-아니라 구조 차이라는 것(4-2절).
+해결된 것: 접촉의 깊이·위치·연속성(4절), 실행 간 차이의 출처(4-1절), chained와 direct의
+차이 크기와 그 방향이 수렴 깊이와 일치한다는 것(4-2절).
 
 ## 8. 확인했지만 원인이 아닌 것
 

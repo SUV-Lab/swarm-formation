@@ -45,8 +45,17 @@ MISSIONS = [
     ("r3_mountain_terrain_following", "r3_single_large_zone"),
     ("r4_long_range_traverse", "r4_traverse_chain"),
     ("r5_extended_corridor", "r5_corridor_wall"),
-    ("r5_transition_success_probe", "r5_corridor_wall"),
-    ("r5_transition_reject_probe", "r5_corridor_wall"),
+    # The transition probes get NO scenario. r5_corridor_wall's own header
+    # names r5_extended_corridor as its mission, and that pairing is above at
+    # :47 — the rule at the top of this file says the scenario's comment is
+    # the authority, and pairing these two with it broke that rule. The
+    # success probe has planned successfully with zero zones (audit
+    # "enumerated 10, winner 9"; docs/transition_v1_impl_notes.md records the
+    # completed 1114.7 s / 343-piece flight) and has failed 100% of the time
+    # with these eight zones installed, in every archived sweep. A probe that
+    # cannot pass is measuring the harness, not the planner.
+    ("r5_transition_success_probe", None),
+    ("r5_transition_reject_probe", None),
     ("r6_zone_slalom", "r6_slalom_gates"),
     ("r7_encircled_goal", "r7_goal_ring"),
 ]

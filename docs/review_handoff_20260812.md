@@ -189,6 +189,62 @@ uint32를 남긴다. **그 열을 "파라미터가 도착했다"는 증거로 �
 2파도를 분류 밖 관점으로 따로 돌렸다. 다만 2파도의 관점도 내가 골랐고, **내가 "이건
 안 물어봤네"라고 알아차릴 수 있는 것만** 들어갔다.
 
+### 1-26. 커밋 메시지가 일어나지 않은 문서 변경을 서술했다
+
+`7b8d37c`("chained vs direct on r1 is 14.3 metres")의 메시지는 그 내용을
+`docs/design/zone_gate_surface.md`에 적었다는 전제로 쓰였다. **그 파일은 그 커밋에
+포함되지 않았다** — `git show --stat 7b8d37c`가 `scripts/ab_difficulty_balance.py`
+한 개만 보여준다 `[재현]`.
+
+원인은 그 편집을 하던 python 블록이 두 번째 `assert`에서 죽어 `write()`에 도달하지
+못한 것이다. 첫 번째 치환은 메모리에서만 일어났고 파일은 안 바뀌었는데, 나는 스크립트
+출력의 traceback을 보고도 그 뒤에 이어 붙인 `git commit`이 성공한 것만 확인하고
+넘어갔다.
+
+§1-24를 고치려고 그 파일을 열었다가 발견했다. 이제 14.3 m 절과 정정이 함께 들어가 있다.
+
+**같은 형태의 실수가 이 세션에 세 번 있다** — §1-6(변이 바이너리로 회귀 실행),
+§1-22(빌드 실패한 pin으로 측정 시작), 그리고 이것. 전부 **명령이 실패했는데 그 뒤
+단계의 성공만 보고 넘어간** 경우다.
+
+### 1-24. 잘못 귀속된 수치로 가설을 기각했다
+
+"chained 287 iter vs direct 179 iter이므로 chained가 덜 다듬어진 것이 아니다"를 커밋
+메시지(`7b8d37c`)와 문서 두 곳에 적었다. **287은 cruise segment가 아니라 departure
+segment의 값이다.**
+
+체인 로그에는 solve마다 `Iteration info: costFunction calls=N, max_iterations=M`이
+찍히고, `M = min(20000, max(3000, 100 * piece_num_))`이라 **M이 piece 수의 지문**이다.
+8300은 83-piece, 3000은 30-piece 이하. `[CHAIN-REPORT]`가 run 2/3을 83 pieces로 적고
+있으므로 cruise는 `calls=27/8300`이다.
+
+**cruise 기준 chained 27 vs direct 179.** 방향이 반대였고, 그러면 수렴 깊이 가설은
+기각이 아니라 **지지**된다. 나는 세 줄 중 하나를 골라 쓰면서 어느 solve인지 확인하지
+않았다.
+
+커밋 메시지는 고칠 수 없으므로 문서 두 곳에 정정을 남겼다.
+
+### 1-25. A/B 하네스가 자기 규칙을 어긴 짝을 5개월째 측정하고 있었다
+
+`ab_difficulty_balance.py:32-33`이 규칙을 한 곳에서 정의한다 — *"Obstacle scenarios name
+their own mission in a comment; that pairing is the authority."* 그런데
+`obstacles/r5_corridor_wall.yaml` 머리글은 자기 미션을 `missions/r5_extended_corridor.yaml`
+이라고 적고 있고, 그 미션은 `:47`에 따로 짝지어져 있는데, `:48`과 `:49`가 **같은 시나리오를
+transition probe 두 개에 다시 붙인다** `[읽음]`.
+
+그 결과 `r5_transition_success_probe`가 모든 스윕에서 10/10, 3/3 실패한다. 그런데 이
+probe는 **통과한 적이 있다** — `path_manager_20260811_044828.log`에 `transition audit:
+enumerated 10, winner 9`와 `setRiskZones: 0 zones`가 함께 있고, `transition_v1_impl_notes.md`
+가 완주 결과(TRANSITION 37.4 s, 전체 1114.7 s, 343 pieces, FINAL-EVAL CLEAN)를 적어두고
+있다 `[읽음]`.
+
+즉 probe가 잘못 작성된 것도, coordinator가 고장난 것도 아니다. **하네스가 이 미션의 것이
+아닌 시나리오를 붙여 놓고 실패를 기록하고 있었다.**
+
+진행 중인 측정에는 영향이 없다 — 두 probe 조합은 양팔 모두 거부라 짝 비교에 들어가지
+않으므로 `difficulty_balance` 판정을 왜곡하지 않는다. 다만 16조합 중 2개가 아무것도
+측정하지 않고 있다. 다음 실행부터 짝을 바로잡았다.
+
 ### 1-17. 그 밖의 기계적 실수
 
 - `run_chain_variants.sh`에 `set -u`를 넣어 ROS setup 스크립트가 죽었다 — 첫 실행이
@@ -445,9 +501,19 @@ standoff-shell vis=0.921 at (3894.23, 2395.21, 1.25)` `[재현]`.
 거부면 q=1.05가 그 사이에 있었다. committed route는 비트 동일
 (`A* shortcut 46 pts → sparse pieces 99 pts`, `hard-blocked 5544228`, `pass=1`).
 
-수렴 깊이 가설 **기각**: **cruise를 소유한** solve가 chained 287 iter, direct 179 iter.
-체인 로그에는 세그먼트별로 세 개가 찍힌다(11 / 287 / 27) — 287만 떼어 비교하는 것이고
-"체인 전체가 287"이 아니다 `[읽음]`.
+**정정 — 이 수치를 거꾸로 읽었다.** 287은 cruise가 아니라 **departure** segment다.
+`max_iterations = min(20000, max(3000, 100 * piece_num_))`(`poly_traj_optimizer.cpp:1594`)
+이므로 상한이 piece 수의 지문이고, 그것으로 귀속이 확정된다 `[재현]`:
+
+```
+chained  calls=11 /3000  = 4-piece arrival | calls=287/3000 = 11-piece departure
+         calls=27 /8300  = 83-piece CRUISE
+direct   calls=179/9800  = 98-piece 전 구간
+```
+
+**cruise 기준으로 chained 27 vs direct 179 — chained가 6.6배 덜 다듬어졌다.**
+수렴 깊이 가설은 기각된 것이 아니라 지지되며, 나는 **잘못 귀속된 수치로 가설을
+기각했다**(§1-24).
 
 ### 3-3b. seed가 도착하지 않은 12회 (`ab_repro`) — 폐기
 
