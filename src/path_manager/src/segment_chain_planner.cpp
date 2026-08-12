@@ -686,9 +686,16 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   // Baseline's committed front-end products, sliced per span. Copied out
   // before the segment runs overwrite the manager's last-plan retention.
   std::vector<RouteSlice> slices;
+  uint64_t route_epoch = 0;
   if (inherit_route_) {
     slices = sliceCommittedRoute(pm_->lastCommittedRoute(),
-                                 pm_->lastCommittedCapRef(), contracts);
+                                 pm_->lastCommittedCapRef(), contracts,
+                                 pm_->lastCommittedRouteEdgeLeg());
+    // [LEG-POLICY] The epoch these slices' tags were minted in. Every segment
+    // hands it back so PathManager can prove no front end has run since — the
+    // segment solves take the inherited-route branch, which cannot mint tags
+    // of its own.
+    route_epoch = pm_->lastCommittedRouteEpoch();
     if (slices.size() != static_cast<size_t>(segments_)) {
       log_->warnf("[CHAIN] committed route did not slice cleanly (%zu/%d) — "
                   "falling back to per-span front-end search",
@@ -813,10 +820,17 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
     seg_head.vel_u = head_vel;
     seg_head.acc_u = head_acc;
     seg_head.acc_prescribed = (i == 0) ? head.acc_prescribed : true;
+    path_manager::PathManager::RouteProvenance prov;
+    if (slice && !slice->edge_leg.empty()) {
+      prov.edge_leg = &slice->edge_leg;
+      prov.epoch = route_epoch;
+    }
     if (!pm_->planGlobalTraj(seg_head, goal,
                              seg_tail, /*junction_goal=*/!last,
                              slice ? &slice->path : nullptr,
-                             slice ? &slice->cap : nullptr)) {
+                             slice ? &slice->cap : nullptr,
+                             /*front_end_only=*/false,
+                             prov.edge_leg ? &prov : nullptr)) {
       // Degrade loudly to the baseline: the mission still flies, and the
       // failed experiment is visible in the log, not in the sky.
       log_->warnf("[CHAIN] segment %d/%d FAILED — restoring and flying the "
@@ -1591,8 +1605,11 @@ bool SegmentChainPlanner::cutAtArc(const std::vector<Eigen::Vector3d> &route,
                                    const std::vector<double> &cap,
                                    double s_cut,
                                    std::vector<Eigen::Vector3d> *out_route,
-                                   std::vector<double> *out_cap) const
+                                   std::vector<double> *out_cap,
+                                   const std::vector<size_t> &edge_leg,
+                                   std::vector<size_t> *out_edge_leg) const
 {
+  if (out_edge_leg) out_edge_leg->clear();
   if (!out_route || !out_cap || route.size() < 2 ||
       cap.size() != route.size() || !std::isfinite(s_cut) || s_cut < 0.0)
     return false;
@@ -1620,7 +1637,16 @@ bool SegmentChainPlanner::cutAtArc(const std::vector<Eigen::Vector3d> &route,
     out_route->push_back(route[k]);
     out_cap->push_back(cap[k]);
   }
-  return out_route->size() >= 2;
+  if (out_route->size() < 2) return false;
+  // `i` now names the route edge the surviving head begins on, in BOTH
+  // branches above: the coincident case advanced it past the edge it
+  // consumed, the clipped case left it on the edge it cut.
+  if (out_edge_leg && edge_leg.size() + 1 == route.size() &&
+      i < edge_leg.size()) {
+    out_edge_leg->assign(edge_leg.begin() + i, edge_leg.end());
+    if (out_edge_leg->size() + 1 != out_route->size()) out_edge_leg->clear();
+  }
+  return true;
 }
 
 PlanResult SegmentChainPlanner::planTransitionMission(
@@ -1665,9 +1691,11 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   // [1] route commit — one front-end pass from the mission start.
   std::vector<Eigen::Vector3d> route;
   std::vector<double> cap;
+  std::vector<size_t> route_edge_leg;
+  uint64_t route_epoch = 0;
   double fe_ms = 0.0;
   if (!commitRoute(head, waypoints, run_parallel,
-                   &route, &cap, &fe_ms))
+                   &route, &cap, &fe_ms, &route_edge_leg, &route_epoch))
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "route commit failed");
 
@@ -1873,7 +1901,9 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   // further downstream.
   std::vector<Eigen::Vector3d> sub_route;
   std::vector<double> sub_cap;
-  if (!cutAtArc(route, cap, tr.route_start_s, &sub_route, &sub_cap))
+  std::vector<size_t> sub_edge_leg;
+  if (!cutAtArc(route, cap, tr.route_start_s, &sub_route, &sub_cap,
+                route_edge_leg, &sub_edge_leg))
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "route cut at the entry arc failed");
 
@@ -1896,7 +1926,8 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   handoff.acc_u = end_acc_u;
   handoff.acc_prescribed = true;   // the generator produced a full PVA
   return planOverRoute(sub_route, sub_cap, fe_ms, handoff, waypoints,
-                       run_parallel, mission_tail, &prefix);
+                       run_parallel, mission_tail, &prefix, sub_edge_leg,
+                       route_epoch);
 }
 
 PlanResult SegmentChainPlanner::planRouteParallel(
@@ -1905,12 +1936,14 @@ PlanResult SegmentChainPlanner::planRouteParallel(
 {
   std::vector<Eigen::Vector3d> route;
   std::vector<double> cap;
+  std::vector<size_t> route_edge_leg;
+  uint64_t route_epoch = 0;
   double fe_ms = 0.0;
   if (!commitRoute(head, waypoints, run_parallel,
-                   &route, &cap, &fe_ms))
+                   &route, &cap, &fe_ms, &route_edge_leg, &route_epoch))
     return PlanResult::failed("front-end failed");
   return planOverRoute(route, cap, fe_ms, head, waypoints, run_parallel,
-                       mission_tail);
+                       mission_tail, nullptr, route_edge_leg, route_epoch);
 }
 
 // [S13] Stage 1: the ONE front-end pass that commits the global route
@@ -1919,7 +1952,8 @@ PlanResult SegmentChainPlanner::planRouteParallel(
 bool SegmentChainPlanner::commitRoute(
     const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
     bool run_parallel, std::vector<Eigen::Vector3d> *route,
-    std::vector<double> *cap, double *fe_ms)
+    std::vector<double> *cap, double *fe_ms,
+    std::vector<size_t> *edge_leg, uint64_t *epoch)
 {
   const Eigen::Vector3d &start_pos = head.pos_u;
   const Eigen::Vector3d &start_vel = head.vel_u;
@@ -1939,6 +1973,8 @@ bool SegmentChainPlanner::commitRoute(
   }
   *route = pm_->lastCommittedRoute();
   *cap = pm_->lastCommittedCapRef();
+  if (edge_leg) *edge_leg = pm_->lastCommittedRouteEdgeLeg();
+  if (epoch) *epoch = pm_->lastCommittedRouteEpoch();
   if (fe_ms)
     *fe_ms = std::chrono::duration<double, std::milli>(
                  std::chrono::steady_clock::now() - t0)
@@ -1955,7 +1991,8 @@ PlanResult SegmentChainPlanner::planOverRoute(
     const std::vector<Eigen::Vector3d> &waypoints,
     bool run_parallel,
     const ego_planner::TailBoundary &mission_tail,
-    const TransitionPrefix *transition)
+    const TransitionPrefix *transition,
+    const std::vector<size_t> &route_edge_leg, uint64_t route_epoch)
 {
   const Eigen::Vector3d &start_pos = head.pos_u;
   const Eigen::Vector3d &start_vel = head.vel_u;
@@ -2273,7 +2310,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
     return fallback("route too small to author junctions on");
   applyContractJitter(route, &contracts);
   std::vector<RouteSlice> slices =
-      sliceCommittedRoute(route, cap, contracts);
+      sliceCommittedRoute(route, cap, contracts, route_edge_leg);
   if (slices.size() != static_cast<size_t>(segments_))
     return fallback("committed route did not slice cleanly");
 
@@ -2537,7 +2574,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
                                            phase_tan_grade_);
           std::vector<Contract> trial = contracts;
           trial[edge_dep ? 0 : trial.size() - 1] = nc;
-          auto ns = sliceCommittedRoute(route, cap, trial);
+          auto ns = sliceCommittedRoute(route, cap, trial, route_edge_leg);
           if (ns.size() != static_cast<size_t>(segments_)) continue;
           std::vector<Eigen::Vector3d> edge_path;
           std::vector<double> edge_cap;
@@ -3574,10 +3611,13 @@ std::vector<SegmentChainPlanner::RouteSlice>
 SegmentChainPlanner::sliceCommittedRoute(
     const std::vector<Eigen::Vector3d> &route,
     const std::vector<double> &cap,
-    const std::vector<Contract> &contracts) const
+    const std::vector<Contract> &contracts,
+    const std::vector<size_t> &edge_leg) const
 {
   if (route.size() < 2) return {};
   const bool has_cap = cap.size() == route.size();
+  // [LEG-POLICY] Provenance is sliced alongside the geometry or not at all.
+  const bool has_leg = edge_leg.size() + 1 == route.size();
 
   // Forward polyline projection of every contract position. The contract was
   // sampled from the OPTIMIZED baseline, which deviates from the committed
@@ -3622,7 +3662,10 @@ SegmentChainPlanner::sliceCommittedRoute(
   for (size_t j = 0; j + 1 < all.size(); ++j) {
     const Cut &a = all[j], &b = all[j + 1];
     RouteSlice s;
-    auto push = [&](const Eigen::Vector3d &p, double cp) {
+    // `leg` is the route edge the pushed point ARRIVES along; a cut splits an
+    // edge and both halves keep it, so the two clipped ends name the route
+    // edges their cuts landed on.
+    auto push = [&](const Eigen::Vector3d &p, double cp, size_t leg) {
       if (!s.path.empty() && (p - s.path.back()).norm() < 1e-3) {
         // Coincident with the previous vertex: keep the larger cap so the
         // dedup never tightens the ceiling.
@@ -3630,14 +3673,17 @@ SegmentChainPlanner::sliceCommittedRoute(
           s.cap.back() = std::max(s.cap.back(), cp);
         return;
       }
+      if (!s.path.empty() && has_leg) s.edge_leg.push_back(leg);
       s.path.push_back(p);
       if (has_cap) s.cap.push_back(cp);
     };
-    push(a.pos, a.cap);
+    push(a.pos, a.cap, 0);   // first point of the slice: no edge yet
     for (size_t i = a.seg + 1; i <= b.seg; ++i)
-      push(route[i], has_cap ? cap[i] : 0.0);
-    push(b.pos, b.cap);
+      push(route[i], has_cap ? cap[i] : 0.0,
+           has_leg ? edge_leg[i - 1] : 0);
+    push(b.pos, b.cap, has_leg ? edge_leg[b.seg] : 0);
     if (s.path.size() < 2) return {};  // degenerate span
+    if (has_leg && s.edge_leg.size() + 1 != s.path.size()) return {};
     slices.push_back(std::move(s));
   }
   return slices;

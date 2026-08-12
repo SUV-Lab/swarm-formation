@@ -100,7 +100,9 @@ public:
   bool commitRoute(const StartHead &head,
                    const std::vector<Eigen::Vector3d> &waypoints,
                    bool run_parallel, std::vector<Eigen::Vector3d> *route,
-                   std::vector<double> *cap, double *fe_ms);
+                   std::vector<double> *cap, double *fe_ms,
+                   std::vector<size_t> *edge_leg = nullptr,
+                   uint64_t *epoch = nullptr);
   // [S13] A transition product to PREPEND: planOverRoute then judges the
   // C2 junction (chain head vs transition tail, planner units), shifts
   // every span behind a leading TRANSITION span, and stores/visualizes
@@ -117,7 +119,12 @@ public:
                            const std::vector<Eigen::Vector3d> &waypoints,
                            bool run_parallel,
                            const ego_planner::TailBoundary &mission_tail,
-                           const TransitionPrefix *transition = nullptr);
+                           const TransitionPrefix *transition = nullptr,
+                           // [LEG-POLICY] Provenance of `route`, sliced with
+                           // it. `epoch` is what proves the manager's per-leg
+                           // captures still describe these tags.
+                           const std::vector<size_t> &route_edge_leg = {},
+                           uint64_t route_epoch = 0);
   // [S13] Which JUDGMENT applies to a span of the flight. The evaluator
   // selects the model by this CONTRACT TYPE — never by parsing the display
   // name (review point: labels are for output; a typo in a string must not
@@ -273,7 +280,13 @@ private:
   bool cutAtArc(const std::vector<Eigen::Vector3d> &route,
                 const std::vector<double> &cap, double s_cut,
                 std::vector<Eigen::Vector3d> *out_route,
-                std::vector<double> *out_cap) const;
+                std::vector<double> *out_cap,
+                // [LEG-POLICY] The cut lands INSIDE one route edge and both
+                // sides of it keep that edge's leg, so the surviving tail is
+                // a suffix of the tag list — no re-derivation, and the first
+                // arc interval is the only one clamped.
+                const std::vector<size_t> &edge_leg = {},
+                std::vector<size_t> *out_edge_leg = nullptr) const;
   // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
   // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
   // budget exceeded -> the given result degraded, otherwise unchanged.
@@ -390,6 +403,11 @@ private:
   struct RouteSlice {
     std::vector<Eigen::Vector3d> path;
     std::vector<double> cap;
+    // [LEG-POLICY] Which leg authored each edge of THIS slice, carried over
+    // from the committed route's own tags. A cut splits one route edge in
+    // two and both halves keep its leg; nothing is re-derived from geometry.
+    // Empty when the committed route had no provenance to slice.
+    std::vector<size_t> edge_leg;
   };
   // Cuts the committed route at every contract position by forward polyline
   // projection (each cut searched from the previous cut's segment on, so
@@ -399,7 +417,8 @@ private:
   std::vector<RouteSlice> sliceCommittedRoute(
       const std::vector<Eigen::Vector3d> &route,
       const std::vector<double> &cap,
-      const std::vector<Contract> &contracts) const;
+      const std::vector<Contract> &contracts,
+      const std::vector<size_t> &edge_leg = {}) const;
 
   // [CHAIN-PAR] see planRouteParallel. Contract.t carries pseudo-time
   // (arc / cruise) for the logs. v0 = the mission's effective start velocity

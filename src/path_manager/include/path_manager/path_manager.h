@@ -290,13 +290,28 @@ namespace path_manager
     // this function reconstructed a source it did not have. Making the head
     // a required parameter turns "forgetting the provenance" from a
     // convention six call sites happened to follow into a compile error.
+    // Provenance handed BACK IN with an inherited route. That branch of
+    // planGlobalTraj runs no search, so it cannot mint tags and it does not
+    // reach the epoch reset that would clear the per-leg captures; the caller
+    // supplies both the tags and the epoch they were minted in. The epoch is
+    // what makes the captures usable: it proves no front end has run since,
+    // so leg_policies_ still describes the legs these tags name. Ownership
+    // travels with the geometry — re-deriving it by projecting the slice back
+    // onto the legs picks the wrong one at a U-turn, a self-crossing, or two
+    // legs running parallel a short distance apart.
+    struct RouteProvenance {
+        const std::vector<size_t> *edge_leg{nullptr};  // size == points - 1
+        uint64_t epoch{0};                             // 0 = none, refuse
+    };
+
     bool planGlobalTraj(const StartHead &head,
                         const std::vector<Eigen::Vector3d> &waypoints,
                         const ego_planner::TailBoundary &tail = ego_planner::TailBoundary{},
                         bool junction_goal = false,
                         const std::vector<Eigen::Vector3d> *route_override = nullptr,
                         const std::vector<double> *cap_ref_override = nullptr,
-                        bool front_end_only = false);
+                        bool front_end_only = false,
+                        const RouteProvenance *provenance = nullptr);
 
     // [CHAIN-PAR] A fully configured, INDEPENDENT optimizer instance (same
     // configuration sequence initOptimizer applies to the member instance:
@@ -550,32 +565,6 @@ namespace path_manager
         // a programming error and is refused rather than averaged over.
         uint64_t search_serial{0};
         ZonePolicySnapshot policy;
-    };
-
-    // A route that remembers which leg produced each EDGE. Ownership travels
-    // with the geometry: corner fillets and densification rewrite the point
-    // list, and an index recorded before those transforms is a guess after
-    // them. Re-deriving the leg later by nearest-point projection is worse —
-    // it picks the wrong leg at a U-turn, a self-crossing, or two legs
-    // running parallel a short distance apart.
-    struct TaggedRoute {
-        std::vector<Eigen::Vector3d> points;
-        std::vector<size_t> edge_leg;   // size == points.size() - 1
-        bool consistent() const {
-            return !points.empty() && edge_leg.size() + 1 == points.size();
-        }
-    };
-
-    // The same ownership after the optimizer, expressed over MINCO pieces.
-    // clean_path edge i becomes piece i (piece_num = clean_path.size() - 1,
-    // poly_traj_optimizer.cpp), and L-BFGS optimizes positions and times
-    // without changing the count or the order — so the trajectory does not
-    // have to be projected back onto anything to know which policy was in
-    // force where it flies.
-    struct PiecePolicyMap {
-        std::vector<size_t> piece_leg;              // size == getPieceNum()
-        std::vector<LegPolicySnapshot> leg_policies;
-        bool empty() const { return piece_leg.empty(); }
     };
 
     // Capture the policy for `leg` from the searcher's CURRENT state. Call

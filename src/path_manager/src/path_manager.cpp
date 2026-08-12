@@ -766,7 +766,8 @@ std::string PathManager::stateEnvelopeProblem(
                                      bool junction_goal,
                                      const std::vector<Eigen::Vector3d> *route_override,
                                      const std::vector<double> *cap_ref_override,
-                                     bool front_end_only)
+                                     bool front_end_only,
+                                     const RouteProvenance *provenance)
     {
         const Eigen::Vector3d &start_pos = head.pos_u;
         const Eigen::Vector3d &start_vel = head.vel_u;
@@ -1089,13 +1090,34 @@ std::string PathManager::stateEnvelopeProblem(
                 "[CHAIN] inherited committed route: %zu vertices, cap_ref "
                 "%zu, committed max z %.2f (front-end search skipped)",
                 clean_path.size(), cap_ref.size(), fe_raw_max_z_);
-            // [LEG-POLICY] This branch runs NO search, so it also never runs
-            // the epoch reset at the top of planFrontEnd — leg_policies_ here
-            // still describes whichever plan last searched. The geometry came
-            // from the caller, so its provenance must come from the caller
-            // too; until it does, drop both rather than let a later audit
-            // read this plan's route against another plan's legs.
-            leg_policies_.clear();
+            // [LEG-POLICY] This branch runs NO search, so it can mint no
+            // tags, and it never runs the epoch reset at the top of
+            // planFrontEnd — leg_policies_ here still describes whichever
+            // plan last searched. The geometry came from the caller, so its
+            // provenance comes from the caller too, and it is only usable if
+            // the caller's epoch is still the current one: that is the proof
+            // that no front end has run in between and that leg_policies_
+            // still describes the legs these tags name. Anything else drops
+            // both, rather than read this plan's route against another
+            // plan's legs.
+            const bool prov_ok =
+                provenance != nullptr && provenance->edge_leg != nullptr &&
+                provenance->epoch != 0 &&
+                provenance->epoch == zone_policy_epoch_ &&
+                provenance->edge_leg->size() + 1 == clean_path.size();
+            if (prov_ok) {
+                edge_leg = *provenance->edge_leg;
+            } else {
+                if (provenance != nullptr && provenance->edge_leg != nullptr)
+                    log_manager_->warnf(
+                        "[LEG-POLICY] inherited route provenance refused "
+                        "(epoch %lu vs %lu, %zu tags for %zu vertices) — "
+                        "this plan has no leg attribution",
+                        (unsigned long)provenance->epoch,
+                        (unsigned long)zone_policy_epoch_,
+                        provenance->edge_leg->size(), clean_path.size());
+                leg_policies_.clear();
+            }
         } else if (!planFrontEnd(start_pos, wps, full_route, clean_path,
                                  cap_ref, edge_leg)) {
             return false;

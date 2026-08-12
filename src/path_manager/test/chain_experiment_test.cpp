@@ -182,7 +182,7 @@ int main(int argc, char **argv)
        with_nophasedirect = false, with_baserefuse = false,
        with_reststart = false, with_capstart = false,
        with_headsrc = false, with_legpolicy = false, with_legtags = false,
-       with_legleadin = false,
+       with_legleadin = false, with_legchain = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -346,6 +346,7 @@ int main(int argc, char **argv)
     if (v == "legpolicy") { with_route = true; with_legpolicy = true; }
     if (v == "legtags") { with_route = true; with_legtags = true; }
     if (v == "legleadin") { with_route = true; with_legleadin = true; }
+    if (v == "legchain") { with_legchain = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -1870,6 +1871,59 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_legchain) {
+    // [LEG-POLICY] Chaining and multi-leg are orthogonal: planImpl chains
+    // SINGLE-GOAL missions only and hands anything with more waypoints to the
+    // single-shot planner (its own comment says so). So a chained mission has
+    // exactly one leg — and the point here is not attribution but that the
+    // provenance survives the segment re-solves at all. Those go through the
+    // INHERITED-ROUTE branch, which runs no search and so mints no tags of
+    // its own; without the slice carrying them, a chained plan would end with
+    // no attribution and the manager's capture cleared under the fail-closed
+    // rule.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(30.0, 30.0, 3.0);   // off the corridor
+    z.reach = 15.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+
+    const path_manager::PlanResult r = chain.plan(
+        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+               start_vel, start_acc, false),
+        goal, {});
+    expect(r.hasTrajectory(), "the chained single-goal mission flies");
+
+    const auto &legs = pm->legPolicySnapshots();
+    const auto &pl = pm->lastPieceLeg();
+    const auto &slice = pm->lastCommittedRoute();
+    std::cout << "[LEG-CHAIN] legs=" << legs.size() << " piece_leg=" << pl.size()
+              << " slice=" << slice.size()
+              << " epoch=" << pm->lastCommittedRouteEpoch() << "\n";
+    // ONE front-end epoch for the whole chained mission. A segment that fell
+    // back to its own span search would have run the front end again and
+    // pushed this up, which would mean the assertions below were describing
+    // a re-search rather than an inherited slice.
+    expect(pm->lastCommittedRouteEpoch() == 1,
+           "every segment re-solved the SAME committed route — no segment ran "
+           "its own front end");
+    expect(legs.size() == 1,
+           "a single-goal mission has one leg, captured once");
+    expect(!pm->lastCommittedRouteEdgeLeg().empty() &&
+               pm->lastCommittedRouteEdgeLeg().size() + 1 == slice.size(),
+           "the retained slice arrived with its own tags");
+    expect(!pl.empty() && pl.size() + 1 == slice.size(),
+           "...so the segment's pieces are attributed");
+    if (!pl.empty()) {
+      bool all_leg0 = true;
+      for (size_t leg : pl) if (leg != 0) all_leg0 = false;
+      expect(all_leg0, "...to the only leg there is");
+    }
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_legtags || with_legleadin) {
     // [LEG-POLICY] step 2: edge provenance survives the two transforms that
     // rewrite the route's point list after the search — corner fillets and
@@ -2020,18 +2074,42 @@ int main(int argc, char **argv)
     // plan's legs as though they described this one.
     const auto inherited = route;   // by value: the call overwrites route
     const auto inherited_cap = pm->lastCommittedCapRef();
-    const bool ok2 = pm->planGlobalTraj(
-        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
-               start_vel, start_acc),
-        {mid, goal[0]}, ego_planner::TailBoundary{}, false, &inherited,
-        inherited_cap.size() == inherited.size() ? &inherited_cap : nullptr);
-    expect(ok2, "the same route re-solves as an inherited route");
+    const auto inherited_tags = pm->lastCommittedRouteEdgeLeg();
+    const uint64_t good_epoch = pm->lastCommittedRouteEpoch();
+    const auto resolve = [&](const path_manager::PathManager::RouteProvenance
+                                 *prov) {
+      return pm->planGlobalTraj(
+          mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                 start_vel, start_acc),
+          {mid, goal[0]}, ego_planner::TailBoundary{}, false, &inherited,
+          inherited_cap.size() == inherited.size() ? &inherited_cap : nullptr,
+          false, prov);
+    };
+
+    // Order matters: each refusal clears the captures, so the accepting case
+    // has to run while there is still something to keep.
+    path_manager::PathManager::RouteProvenance good{&inherited_tags,
+                                                    good_epoch};
+    expect(resolve(&good), "the same route re-solves as an inherited route");
+    expect(pm->lastCommittedRouteEdgeLeg().size() == inherited_tags.size(),
+           "provenance minted in the CURRENT epoch is accepted with it");
+    expect(pm->legPolicySnapshots().size() == 2,
+           "...and the per-leg captures it indexes are kept");
+
+    // The epoch is the whole guard: same tags, one epoch stale. Nothing about
+    // the tag vector itself says it describes a different search.
+    path_manager::PathManager::RouteProvenance stale{&inherited_tags,
+                                                     good_epoch + 1};
+    expect(resolve(&stale), "a stale-epoch re-solve still plans");
+    expect(pm->lastCommittedRouteEdgeLeg().empty(),
+           "...but its tags are refused: they name legs from another search");
+    expect(pm->legPolicySnapshots().empty(),
+           "...and the captures they would have indexed are dropped with them");
+
+    expect(resolve(nullptr), "a re-solve with no provenance still plans");
     expect(pm->lastCommittedRouteEdgeLeg().empty(),
            "a route that arrived from outside has NO provenance — not leg 0 "
            "by default");
-    expect(pm->legPolicySnapshots().empty(),
-           "...and the previous plan's per-leg policies are not left standing "
-           "for it");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
