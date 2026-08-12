@@ -2,11 +2,16 @@
 
 ## 0. 범위와 읽는 법
 
-`review_handoff_20260812.md` 이후, 서브모듈 **`d97f8c4..732dcb5`(5커밋)**.
-슈퍼프로젝트는 `af530ed..10ea8f8`.
+`review_handoff_20260812.md` 이후, 서브모듈 **`d97f8c4..109d19b`(9커밋)**.
+슈퍼프로젝트는 `af530ed..fde937b`.
 
 `review_handoff_20260812.md`가 끝난 지점 = leg 스냅샷 설계를 승인받고 ①포착부터
-짓기로 한 지점. 이 문서는 ①~③이다. ④는 **하지 않았다**(§3-1).
+짓기로 한 지점. 이 문서는 ①~③ + 검토 지적 반영이다. ④는 **하지 않았고**, 대신
+**명시적 UNSUPPORTED 계약으로 고정했다**(§3-1).
+
+**2차 검토(코덱스) 지적 4건은 전부 사실이었고 전부 고쳤다.** §1-12~§1-16이 그것이다.
+그중 §1-12는 이 문서의 §3-1 자체가 틀렸다는 지적이다 — 초판의 §3-1을 통째로
+바꿔 썼으니, 초판을 읽었다면 그 절은 무시할 것.
 
 §1이 **이번 라운드 내 실수 전부**다. 그다음이 코드 변경, 열린 문제 순이다.
 
@@ -132,6 +137,60 @@ zone별로 어느 쪽이든 HARD_AVOID면 HARD_AVOID를 취하는 병합으로 �
 체인 미션은 leg가 1개라 그렇지 않다. 실제 값은 "상속 경로에서 capture가 살아남는다"까지다.
 커밋 메시지는 고쳐서 넣었지만, 설계 자체를 그 전제로 진행했다.
 
+### 1-12. §3-1의 "다중 leg는 stitched 비행에 도달 못 한다"가 틀렸다
+
+`plan()`이 `TRANSITION_REQUIRED`를 **`planImpl`의 단일 목표 가드보다 먼저**
+디스패치한다 [읽음: `segment_chain_planner.cpp:426` vs `:444`]. 그래서 전이
+코디네이터는 전체 웨이포인트 목록을 본다.
+
+측정 [재현: `transwp` 변형]:
+- 구역 없음 → **날아간다.** `legs=2 pieces=75`, stitched 경로 통과
+- 구역 있음 → 거부. 다만 `TRANSITION_GENERATION_FAILED`로, 150줄 아래에서야
+  돌아가는 단계 이름을 달고
+
+내 오류의 형태: probe를 한 번 돌리고(그 probe는 전이 분기를 타지 않았다) 일반화했다.
+§1-6과 같은 종류이며, 그때 "이제 실행해서 확인한다"고 적어 놓고 또 했다.
+
+### 1-13. piece 경계 판정이 `locatePieceIdx` 의미와 반대로 구현돼 있었다
+
+`policyAt`은 경계에서 `rem ≈ 0`으로 다음 piece가 돌아온다고 가정했다. 실제로는
+루프 조건이 `t > dur`(strict)이라 **정확히 경계면 이전 piece를 rem = 그 piece의 전체
+duration으로** 돌려준다 [읽음: `poly_traj_utils.hpp:514-532`]. `rem <= 1e-9`는 성립한
+적이 없고 병합은 죽은 코드였다.
+
+게다가 옳게 썼더라도 0.1 s 격자가 정확한 seam에 걸릴 확률은 사실상 0이라 **어떤
+샘플러도 이 규칙을 강제할 수 없다.** seam 시각을 열거하는 별도 패스로 바꿨다.
+
+### 1-14. serial 검사가 설명보다 약했다
+
+`search_serial <= 이전 serial`은 증가만 본다. `[1, 3]`(가운데 누락)이 통과하는데
+바로 위 주석은 "구멍을 거부한다"고 적혀 있었다. `== i + 1` 연속성으로 바꿨다.
+
+양쪽 팔로 확인 [재현]: 생산 코드가 `[1,3]`을 내도록 변이하면 엄격 검사는 거부하고
+(3개 단언 사망), 기존 증가 검사는 **조용히 통과한다.**
+
+### 1-15. 거부하는 절반이 통째로 미검증이었다
+
+seam 패스를 넣고 "변이로 죽는 것을 확인했다"고 보고했지만, 내가 건 변이는
+`jhard = true`(전부 hard로 읽기) 쪽이었다. **반대 방향(`jhard = false`)은 전 suite를
+통과한다.** 어떤 테스트도 `zone_junction_hard_n > 0`을 기대값으로 본 적이 없었다.
+
+이건 §1-2/§1-5와 같은 실수의 3번째 형태다: 그때는 "분기에 들어가지 않는 테스트"였고,
+이번엔 그 분기를 **탐지에서 거부로 옮겨 놓고 거기서 다시 방치**했다.
+
+`legseam` 변형으로 닫았다(§2-8). 병합 삭제·탐지 삭제 둘 다 죽는다.
+
+### 1-16. 감사가 piece 지도를 전역처럼 읽고 있었다
+
+`evaluateFlight`가 `pm_->lastPieceLeg()`를 직접 읽고, **관여 여부를 크기 일치만으로**
+결정했다. stitched 비행이 우연히 마지막 단발 solve와 piece 수가 같으면 그 solve의
+지도로 판정될 수 있었다. 지금은 기본값 없는 매개변수이고, 단발 호출자는 지도를,
+stitch 지점은 `nullptr`을 넘긴다.
+
+같이 잡힌 것: `policyAt`이 범위 밖 인덱스를 0이나 마지막으로 **clamp** 하고 있었다 —
+그 샘플들을 leg 0이나 마지막 leg 정책으로 판정하는 것이고, 이 기계 전체가 막으려던
+실패가 뒷문으로 들어온 것이다. 거부로 바꿨다.
+
 ---
 
 ## 2. 코드 변경
@@ -223,16 +282,47 @@ epoch이 쓸모의 근거다 — 그 사이 front end가 안 돌았다는 증명
 못 만드는, 귀속이 **진짜로** 불가능한 경우다. opt-in·outcome·기계 판독 reason·detail
 문자열에 대한 단언은 전부 그대로 옮겨 갔다.
 
+### 2-7. 2차 검토 반영 (`ac26406`, `109d19b`)
+
+- seam 열거 패스: leg가 바뀌는 **모든** piece 경계 시각을 0.1 s 격자와 별개로 전수
+  평가. 경계에서는 양쪽 중 HARD_AVOID 우선. instant이므로 초 단위 누산기에는 절대
+  더하지 않고 자기 카운터(`zone_junction_n`/`zone_junction_hard_n`)를 갖는다
+- serial `== i + 1` 연속성 (§1-14)
+- `planGlobalTraj` 진입 시 provenance 5종 초기화. `leg_policies_`는 **제외** —
+  그건 front-end epoch의 것이고 상속 경로가 그것에 의존한다
+- `evaluateFlight`가 piece 지도를 **매개변수로** 받는다 (§1-16)
+- 거부 문장 4곳 + `[FINAL-EVAL] CHECK` 한 곳이 seam 원인을 말한다
+- 전이 다중 leg는 `TRANSITION_MULTI_LEG_UNSUPPORTED` (§3-1)
+
+### 2-8. `legseam` — 거부하는 절반
+
+seam은 항상 웨이포인트이고, 면제는 leg의 start **또는** goal 포함으로 주어진다
+[읽음: `dyn_a_star.h:473` `if (s_in || g_in)`]. 따라서 **실제 seam을 덮는 구역은 양쪽
+leg를 동시에 면제**하고, 계획으로는 비대칭을 만들 수 없다. 기존 합성 궤적 seam
+(`evaluateFlightForTest`)에 **leg 1을 leg 0보다 앞에 둔 지도**를 넘겨서, 병합이 서 있는
+piece가 아니라 반대쪽 leg까지 가서 HARD_AVOID를 찾아야만 성립하게 했다.
+
+측정으로 확인한 한계: 면제가 등록되려면 구역이 커야 하고(0.05 u → 양쪽 HARD_AVOID,
+2 u → leg0가 SOFT_FALLBACK, 20 u → leg0가 SOFT_ENDPOINT), 0.1 s 격자가 넘어가려면
+속도 상한 2.0 u/s에서 0.2 u 미만이어야 한다. **양립 불가**이므로 이 변형은 카운터와
+병합 방향을 고정하지, "seam만이 만든 거부"를 고정하지 않는다.
+
+### 2-9. `cutarc` — 순수 함수 회귀
+
+`cutAtArc`를 public으로 올리고(const·부작용 없음) 4정점 경로에서 edge 내부 절단,
+정점 정확 절단, dedup 허용오차 안쪽 절단, 끝단 절단, 길이 불일치 태그, 총 호장 초과를
+고정한다. 변이 3종(±1 suffix, 잘못된 길이를 패딩) 전부 사망.
+
 ### 2-6. 회귀 상태 [재현]
 
 ```
-62/62 chain variants
+65/65 chain variants
 risk harness 154/0
 start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : PASS
 ```
 
-신규 변형 7종: `legpolicy` `legtags` `legleadin` `legmid` `legchain` `legaudit`
-`wpzonepass0`.
+신규 변형 10종: `legpolicy` `legtags` `legleadin` `legmid` `legchain` `legaudit`
+`legseam` `cutarc` `transwp` `wpzonepass0`.
 
 `legmid`의 첫 판이 **또 공허하게 통과했다**: 미션이 아예 안 날았는데
 `piece_leg.size() == getPieceNum()`이 `0 == 0`으로 성립했다. `!pl.empty()`를 붙여서
@@ -243,38 +333,42 @@ start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : 
 
 ## 3. 열려 있는 것
 
-### 3-1. ④를 하지 않았다 — 오늘 도달할 수 없는 경우이기 때문이다
+### 3-1. ④ 대신 명시적 UNSUPPORTED 계약 (초판의 이 절은 틀렸다)
 
-Codex의 ④는 "전이 prefix piece는 첫 leg 정책을 명시적으로 상속, `route_start_s` 절단은
-첫 호 구간만 clamp"다. 절단 쪽(`cutAtArc` 태그 suffix)은 §2-4에 들어갔다. **prefix 쪽은
-안 했다.**
+**초판에 적은 "다중 leg는 stitched 비행에 도달할 수 없다"는 사실이 아니다**(§1-12).
+도달한다. 측정값 [재현: `transwp`]:
 
-**시작했다가 되돌렸다.** `solveSlice`에 태그 in / piece 지도 out을 달고 stitched 지도를
-짜기 직전에, 소비자가 있는지부터 확인했다. 없다:
+| 전이 + 웨이포인트 2개 | 오늘 |
+|---|---|
+| 구역 없음 | **날아간다** — `legs=2 pieces=75`, stitched 경로 통과 |
+| 구역 있음 | 거부 — 지금은 `TRANSITION_MULTI_LEG_UNSUPPORTED` |
 
-- stitched 비행이 나오는 경로는 두 개뿐이다 — `planImpl`의 체인, `planOverRoute`의
-  route/parallel
-- 둘 다 **다중 웨이포인트 미션에 도달하지 않는다.** `planImpl`의 가드
-  [읽음: `segment_chain_planner.cpp:444`, `if (waypoints.size() != 1)`]가
-  route 모드 디스패치(같은 함수 508행)보다 **먼저** 걸려 단발로 빠진다
-- 확인함 [재현]: `chain/author_from_route=true` + 웨이포인트 2개 + 구역 →
-  `detail=multi-waypoint mission — chain not attempted`. route 경로에 자체 가드는
-  없지만 거기까지 가지를 못한다
-- 단일 목표 stitched 비행은 leg가 1개이고 plan-wide 스냅샷이 valid다. 거기서 per-piece
-  귀속은 아무것도 더 말해주지 않는다
+그래서 선택지는 "소비자가 없으니 보류"가 아니라 **지원하거나 범위를 명시하거나**였다.
+범위 명시를 골랐다. 근거:
 
-즉 stitched piece 지도는 **오늘 존재하지 않는 미션 형태**를 위한 기계다. 그것이
-필요해지는 조건은 line 444의 가드를 걷어내는 것 — 그 주석이 말하는
-"waypoint-to-span assignment that does not exist yet" — 이고, 그건 별개의 더 큰 작업이다.
+1. **값이 나오는 경로가 하나뿐이다.** 다중 leg가 stitch에 닿는 길은
+   `planTransitionMission` 뿐이다. 나머지 `planOverRoute` 진입은 전부
+   `planImpl:444`를 지나므로 단일 목표이고, 그 지도는 전부 0이라 plan-wide 스냅샷이
+   이미 정답이다.
+2. **크기 검사로 못 잡는 자리가 3곳이다.** 전이 prefix, terminal 나선, rescue 후
+   재슬라이스 — 셋 다 **크기는 맞고 내용이 틀린** 지도를 만들 수 있다. stitch 시점의
+   크기 assert는 하나도 못 잡는다. 그런 지도는 없는 것보다 나쁘다: `zone_junction_hard_n`을
+   뒤집어 멀쩡한 비행을 거부하거나, 폴백이라면 거부했을 접촉을 지워 버린다.
+3. **코드가 정할 수 없는 판정이 2개 있다.** terminal 나선의 leg와 전이 prefix의 leg는
+   어떤 route edge 위에도 없다. 지도를 내보낸다는 것은 안전 감사 안에 **문서화되지 않은
+   재량 판정 2건**을 넣는다는 뜻이다.
 
-그래서 훅까지 지웠다. §1-9에서 "쓰이지 않는 선언을 커밋한 것 자체가 실수"라고 적어
-놓고 같은 커밋에 소비자 없는 매개변수를 남기는 것은 앞뒤가 안 맞는다.
+바꾼 것: 거부 이유가 `TRANSITION_GENERATION_FAILED`(돌지도 않은 단계 이름)에서
+`TRANSITION_MULTI_LEG_UNSUPPORTED`로 바뀌었고, 무엇이 왜 안 되는지 문장으로 말한다.
+**구역 없는 다중 웨이포인트 전이는 계속 난다** — 스냅샷이 valid하고 귀속할 것이 없으니,
+주석을 참으로 만들려고 동작하는 기능을 죽이지 않는다.
 
-**다음에 ④를 할 때의 범위**(가드를 걷어낸 뒤): `solveSlice`에 태그 in / 지도 out,
-세그먼트별 지도를 순서대로 연결, 전이 prefix piece에 첫 leg 명시 부여, terminal piece에
-마지막 leg 부여, 병합 경로(2슬라이스 merge)와 구조 경로(rescue)에서 지도를 만들거나
-명시적으로 무효화. 그 중 하나라도 빠지면 조용히 어긋난 지도가 생긴다 — 지금처럼
-"귀속 불가 → 거부"인 편이 낫다.
+회귀 `transwp`가 양쪽 팔을 고정한다.
+
+**④를 진짜로 할 때의 범위**(다중 leg 체이닝이 필요해질 때): `solveSlice` in/out 배선,
+세그먼트별 지도를 `runs`와 **한 몸으로** 유지(:2417 선언, :2458/:2550/:2624/:2646/:2775
+전부), 병합 span의 `edge_leg` 조립, stitch 시점 연결 + 크기 assert, 그리고 위 2번의
+재량 판정 2건을 **코드보다 먼저 계약 문서에 적을 것.**
 
 ### 3-2. 기본 구성에서 잠자는 코드
 
@@ -289,11 +383,15 @@ Codex의 ④는 "전이 prefix piece는 첫 leg 정책을 명시적으로 상속
 
 ### 3-3. 회귀가 없는 것
 
-- `cutAtArc`의 태그 suffix — 변이(off-by-one)를 걸었는데 `transition`/`transitionauto`
-  변형이 안 죽었다. 전이 경로가 태그를 **아직** 소비하지 않기 때문이다(§3-1).
-  ②c에 들어간 이 코드는 소비자가 생길 때까지 검증되지 않은 채로 있다. 지우지 않은
-  이유는 절단 로직 자체가 태그와 기하를 같이 다뤄야 옳고, 나중에 따로 붙이면 그때
-  같은 실수를 다시 하기 때문이다 — 다만 **검증되지 않았다는 사실은 그대로다**
+- **`policyAt`의 범위 밖 거부.** `locatePieceIdx`가 항상 `[0, N-1]`을 돌려주고
+  `per_piece`가 크기 일치를 요구하므로 구조적으로 도달 불가다. 변이를 걸어도 안 죽는다.
+  그래도 남긴 이유는 그것이 fail-closed 방향이고, "그 성질에 기대지 않는다"는 진술
+  자체가 값이기 때문이다. **도달 불가이므로 검증되지 않았다**는 사실은 그대로다
+- **seam만이 만들 수 있는 거부.** `legseam`은 seam 카운터와 병합 방향을 고정하지만,
+  0.1 s 격자가 못 본 것을 seam만 보는 격리 상황은 만들 수 없다(§2-8의 측정)
+
+`cutAtArc`의 태그 suffix는 이제 **순수 함수 회귀 `cutarc`가 고정한다**(§2-9) —
+소비자를 기다릴 이유가 없었다.
 
 ### 3-4. 유지되는 제약
 
