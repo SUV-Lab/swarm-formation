@@ -1888,6 +1888,88 @@ int main(int argc, char **argv)
     expect(!nn.hasTrajectory(), "a non-finite head is refused");
     expect(nn.reason == path_manager::PlanReason::INITIAL_STATE_MALFORMED,
            "...as INITIAL_STATE_MALFORMED");
+    // --- planOverRoute is PUBLIC and re-entrant ---------------------------
+    // The audit state used to be cleared only in plan(), so a direct
+    // re-call that returned at the input contract left the previous call's
+    // answers readable.
+    {
+      std::vector<Eigen::Vector3d> route;
+      std::vector<double> cap;
+      double fe = 0.0;
+      const auto ok_head =
+          mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED,
+                 start_pos, Eigen::Vector3d(1.8, 0.0, 0.0), start_acc);
+      const bool committed =
+          chain.commitRoute(ok_head, goal, false, &route, &cap, &fe);
+      expect(committed, "a route commits for the re-entrancy check");
+      if (committed) {
+        chain.planOverRoute(route, cap, fe, ok_head, goal, false, {});
+        expect(chain.lastHeadPolicy().evaluated,
+               "a direct planOverRoute leaves an evaluated audit");
+
+        // Now a call that dies at the input contract: a cap of the wrong
+        // size. Everything must read NOT evaluated.
+        std::vector<double> short_cap(cap.begin(), cap.end() - 1);
+        const auto bad =
+            chain.planOverRoute(route, short_cap, fe, ok_head, goal, false, {});
+        expect(!bad.hasTrajectory(), "a mismatched cap is refused");
+        expect(!chain.lastHeadPolicy().evaluated,
+               "...and the head-policy audit is cleared, not stale");
+        expect(!chain.lastFlightVerdict().evaluated,
+               "...and so is the flight verdict");
+        expect(chain.lastPhaseSpans().empty(),
+               "...and so are the phase spans");
+
+        // The prefix/source invariant must fire even on a route so short
+        // that the auto-N fallback would otherwise return first. That
+        // fallback only exists in AUTO mode, so the check has to run there
+        // — with chain/segments fixed it never triggers and the ordering
+        // this asserts is not exercised at all.
+        // AUTO must be latched by a plan() call: planOverRoute never reads
+        // the option (readSegmentsOption runs in plan()), so forcing the
+        // parameter alone leaves auto_segments_ false and the fallback this
+        // is meant to out-race never triggers.
+        force("chain/segments", 0);
+        chain.plan(ok_head, goal, {});       // latches auto_segments_
+        std::vector<Eigen::Vector3d> tiny(route.begin(), route.begin() + 2);
+        std::vector<double> tiny_cap(cap.begin(), cap.begin() + 2);
+        const auto ho_head =
+            mkHead(path_manager::StartStateSource::TRANSITION_HANDOFF,
+                   start_pos, Eigen::Vector3d(1.8, 0.0, 0.0), start_acc,
+                   true);
+        const auto bad2 = chain.planOverRoute(tiny, tiny_cap, fe, ho_head,
+                                              goal, false, {}, nullptr);
+        expect(!bad2.hasTrajectory(),
+               "a TRANSITION_HANDOFF head with NO prefix is refused");
+        expect(bad2.reason ==
+                   path_manager::PlanReason::TRANSITION_ADAPTER_UNSOUND,
+               "...as TRANSITION_ADAPTER_UNSOUND, even on a route short "
+               "enough that auto-N falls back first");
+        force("chain/segments", 3);
+      }
+    }
+
+    // --- the OTHER real policy call site ---------------------------------
+    // PathManager::planGlobalTraj applies the same policy and has its own
+    // audit; a regression reading only the chain's accessor pins only one
+    // of the two.
+    {
+      const bool ok = pm->planGlobalTraj(
+          mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED,
+                 start_pos, Eigen::Vector3d(1.8, 0.0, 0.0), start_acc),
+          goal);
+      expect(ok, "a direct planGlobalTraj succeeds");
+      expect(pm->lastHeadPolicy().evaluated,
+             "...and PathManager's own audit says the policy ran");
+      expect(pm->lastHeadPolicy().source ==
+                 path_manager::StartStateSource::TRAJECTORY_DERIVED,
+             "...on the source it was given");
+      const bool bad = pm->planGlobalTraj(path_manager::StartHead{}, goal);
+      expect(!bad, "an UNSPECIFIED head is refused there too");
+      expect(!pm->lastHeadPolicy().evaluated,
+             "...and that audit is cleared, not the previous call's answer");
+    }
+
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

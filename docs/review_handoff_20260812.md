@@ -220,6 +220,39 @@ ceiling, transition activation speed, transition model maximum. 상수 하나
 **이름도 틀렸다.** 이 값은 raw `speed_min` 122 m/s가 아니라 margin이 적용된 131.76이므로
 "stall floor"가 아니라 **margin-backed cruise floor**다. 메시지와 주석을 고쳤다.
 
+### 1-37. 공개 재진입 지점의 감사 상태를 초기화하지 않았다
+
+`planOverRoute()`는 공개 함수이고 좌표기와 하네스가 직접 부른다. 그런데 감사 상태
+초기화는 `plan()`에만 있었다. 직접 재호출이 입력 계약에서 반환하면
+`lastHeadPolicy()`·`lastFlightVerdict()`·`lastPhaseSpans()`가 **이전 호출의 답을 그대로
+노출**한다. §1-35와 같은 결함을 다른 진입점에서 반복했다.
+
+### 1-38. 불변조건 검사가 그것을 우회하는 fallback보다 뒤에 있었다
+
+전이 prefix와 head 출처가 일치하는지 보는 검사가 `applyHeadPolicy` 옆에 있었는데,
+**auto-N fallback이 그보다 먼저 반환**한다. 즉 짧은 경로에서는 불일치가 검사되기 전에
+prefix가 버려지고 단발 계획으로 갔다. 계약 위반이 "둘 중 하나를 조용히 선호"하는 방식으로
+해소된 것이다.
+
+세 검사(출처 != UNSPECIFIED / PVA 유한성 / prefix-출처 일치)를 `planOverRoute` 최초 입력
+계약으로 올렸다.
+
+### 1-39. 변이가 안 죽는 이유를 세 번 잘못 짚었다
+
+§1-38의 순서를 고정하는 회귀를 쓰는 데 네 번 걸렸다. 변이(불변조건을 fallback 아래로)가
+계속 통과했고, 그때마다 원인이 달랐다:
+
+1. `tiny` 경로가 2정점이라 fallback을 탈 줄 알았는데, `auto_segments_`가 꺼져 있어
+   `resolveAutoSegments`가 즉시 true를 반환한다 — fallback 자체가 없다
+2. `force("chain/segments", 0)`로 auto를 켰는데, 그 옵션은 `plan()`의
+   `readSegmentsOption()`에서만 읽힌다. **직접 `planOverRoute` 호출에는 안 먹는다**
+3. 그래서 `chain.plan()`을 먼저 불러 auto를 latch시킨 뒤에야 변이가 죽었다
+
+전부 **setup이 단정이 가정하는 상태를 실제로 만들지 못한** 경우다. §1-21(방향이 우연히
+내림으로 떨어짐)과 같은 뿌리이고, 매번 "왜 안 죽지"를 추측으로 답하다가 마지막에
+`[DIAG]`로 실제 반환값을 찍고 나서야 잡았다. **추측 대신 측정**이 세 번의 왕복을
+줄였을 것이다.
+
 ### 1-35. 내가 쓴 주석의 계약을 내가 깼다
 
 `resetPlanState()` 바로 위 주석이 **"reset은 모든 조기 반환보다 먼저"** 라고 적혀 있는데,

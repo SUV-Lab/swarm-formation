@@ -1964,6 +1964,38 @@ PlanResult SegmentChainPlanner::planOverRoute(
       head.src == StartStateSource::STATED_SPEED;
   const bool start_acc_commanded = head.acc_prescribed;
   (void)start_vel_synthesized;
+  // [PLAN-STATE] This function is PUBLIC and re-entrant — the coordinator
+  // and the harness call it directly — but the audit state was cleared only
+  // in plan(). A direct re-call that returned at the input contract below
+  // therefore left the PREVIOUS call's lastHeadPolicy(), lastFlightVerdict()
+  // and lastPhaseSpans() readable, which is the same stale-audit defect the
+  // reset ordering in plan() exists to prevent. Every entry clears them.
+  last_head_policy_ = HeadPolicy{};
+  last_verdict_ = FlightVerdict{};
+  last_spans_.clear();
+  // [HEAD-POLICY] The head's own contract, checked HERE rather than beside
+  // the policy call. The auto-N fallback below returns before that point on
+  // a short route, so a prefix/source disagreement could be discarded with
+  // the prefix instead of refused — a contract violation resolved by
+  // quietly preferring one of the two disagreeing facts.
+  if (head.src == StartStateSource::UNSPECIFIED)
+    return PlanResult::failedBecause(
+        PlanReason::INITIAL_STATE_UNSPECIFIED,
+        "start state has no source — the planner will not invent one");
+  if (!head.pos_u.allFinite() || !head.vel_u.allFinite() ||
+      !head.acc_u.allFinite())
+    return PlanResult::failedBecause(PlanReason::INITIAL_STATE_MALFORMED,
+                                     "start state is not finite");
+  if ((transition != nullptr) !=
+      (head.src == StartStateSource::TRANSITION_HANDOFF)) {
+    log_->errorf("[HEAD-POLICY] transition prefix %s but head source is %s — "
+                 "the same fact disagrees with itself",
+                 transition != nullptr ? "PRESENT" : "absent",
+                 sourceName(head.src));
+    return PlanResult::failedBecause(
+        PlanReason::TRANSITION_ADAPTER_UNSOUND,
+        "transition prefix and start-state source disagree");
+  }
   // [S13] Fail-closed INPUT contract (review find): once a coordinator can
   // hand this function an external route slice and head PVA, a mismatch
   // must be a FAILED plan, not a silent degradation — sliceCommittedRoute
@@ -2211,19 +2243,8 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // value and then re-deriving it at the far end is worse than not
   // threading it: it looks correct.
   //
-  // The transition pointer and the source say the same thing, so they must
-  // agree. Disagreement is a programming error and is refused rather than
-  // resolved by preferring one of them.
-  if ((transition != nullptr) !=
-      (head.src == StartStateSource::TRANSITION_HANDOFF)) {
-    log_->errorf("[HEAD-POLICY] transition prefix %s but head source is %s — "
-                 "the same fact disagrees with itself",
-                 transition != nullptr ? "PRESENT" : "absent",
-                 sourceName(head.src));
-    return PlanResult::failedBecause(
-        PlanReason::TRANSITION_ADAPTER_UNSOUND,
-        "transition prefix and start-state source disagree");
-  }
+  // (the prefix/source invariant is checked at the entry, above every
+  // fallback that could discard the prefix before it was validated)
   double um_head = 100.0;
   if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
     um_head = node_->get_parameter("optimization/dynamics_unit_xy_m")
