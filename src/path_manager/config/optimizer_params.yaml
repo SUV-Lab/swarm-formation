@@ -201,6 +201,13 @@
     # terrain-curved routes). Explicit use_initial_velocity vectors and
     # trajectory-derived (replan) states are never re-aimed. false = legacy chord.
     manager/align_start_vel_to_route: true
+    # A multi-leg (waypointed) mission cannot produce a plan-wide zone policy
+    # snapshot — one search runs per leg and the snapshot is
+    # plan-wide-or-nothing — so such a flight is UNCLEARED with respect to
+    # risk zones. false (default) refuses it. true flies it as DEGRADED with
+    # the gap named in the reason. This is an operator decision about an
+    # unchecked flight, never a planner default.
+    manager/allow_unmeasured_zone_policy: false
     manager/dyn_yaw_seed: -1                    # dynamic-obstacle (ship) spawn-orientation RNG seed.
                                         # (seed 60978556 reproduces the 2026-07-10 start-hump case
                                         # that led to the arc-varying cap — kept for regression.)

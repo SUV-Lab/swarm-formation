@@ -158,6 +158,14 @@ public:
     // exact surface where the optimizer's only restoring force is zero by
     // construction, so identical missions flipped between CLEAN and FAILED.
     // The shell is reported and degrades; the authored volume refuses.
+    // WHY the flight is not clean, separately. `clean` collapses three
+    // different causes into one bit, and the shared degrade helper then
+    // reported all of them as STITCHED_ENVELOPE_BUDGET — so a flight whose
+    // ZONE POLICY could not be evaluated came back with a machine-readable
+    // reason about the airframe's limits, and the enum priority buried the
+    // reason that was true. The detail string carried both; nothing a
+    // program reads did.
+    bool envelope_bad{false};
     int zone_hard_n{0};
     int zone_standoff_n{0};
     int zone_soft_n{0};

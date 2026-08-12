@@ -232,7 +232,12 @@ void SegmentChainPlanner::degradeForVerdict(PlanResult *r,
   // is how the next verdict field reaches all of them instead of three of
   // them.
   if (!r || !fv.evaluated) return;
-  if (!fv.clean) {
+  // envelope_bad, NOT !clean. !clean is true for an unevaluated zone policy
+  // and for an authored-zone contact too, and reporting either of those as
+  // STITCHED_ENVELOPE_BUDGET put a machine-readable reason on the result
+  // that was simply false — and, because degrade() resolves by enum order,
+  // it OVERWROTE the reason that was true.
+  if (fv.envelope_bad) {
     char why[192];
     snprintf(why, sizeof why,
              "%s whole-flight reading exceeds the envelope budget "
@@ -416,21 +421,34 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     const poly_traj::Trajectory &mw = pm_->traj_.local_traj.traj;
     const FlightVerdict mv = evaluateFlight(
         mw, {{mw.getTotalDuration(), PhaseKind::CRUISE, "direct"}});
-    // unflyableMeasured(), NOT unflyable(). A multi-leg front end runs one
-    // zone search PER LEG and zonePolicySnapshot is plan-wide-or-nothing
-    // (path_manager.cpp:3775), so every multi-waypoint mission with a zone
-    // ANYWHERE reports policy_measurable=false — and gating on that refused
-    // all of them outright, whatever the flight did. That was a regression
-    // this gate introduced. The unmeasured scope is degraded and named
-    // below instead.
-    if (!mv.evaluated || mv.unflyableMeasured()) {
-      char why[192];
+    // A multi-leg front end runs one zone search PER LEG and
+    // zonePolicySnapshot is plan-wide-or-nothing (path_manager.cpp), so
+    // every multi-waypoint mission with a zone ANYWHERE reports
+    // policy_measurable=false. Two wrong answers are available here and this
+    // gate has now had both:
+    //   refuse on it  -> a zone 50 km off the route kills the mission
+    //   degrade on it -> the FSM EXECUTES a flight nobody checked against
+    //                    the zones, which is fail-open however loudly it is
+    //                    logged. "We could not check" is not a safety
+    //                    argument, and one test with one distant zone is
+    //                    evidence about that zone, not about the policy.
+    // Until a per-leg snapshot exists, the default is fail-CLOSED and the
+    // other behaviour is an explicit, named opt-in someone has to turn on.
+    bool allow_unmeasured =
+        readNumParam(node_, "manager/allow_unmeasured_zone_policy", 0.0) != 0.0;
+    const bool unmeasured_blocks = !mv.policy_measurable && !allow_unmeasured;
+    if (!mv.evaluated || mv.unflyableMeasured() || unmeasured_blocks) {
+      char why[256];
       snprintf(why, sizeof why,
-               "multi-waypoint single-shot flight is unflyable (%s%s%s%s)",
+               "multi-waypoint single-shot flight is unflyable (%s%s%s%s%s)",
                !mv.evaluated ? "not evaluated" : "",
                mv.underground ? "terrain overlap; " : "",
                mv.no_cruise ? "never reaches cruise; " : "",
-               mv.zone_hard_n > 0 ? "authored zone entered; " : "");
+               mv.zone_hard_n > 0 ? "authored zone entered; " : "",
+               unmeasured_blocks
+                   ? "zone policy could not be evaluated on a multi-leg "
+                     "mission — set manager/allow_unmeasured_zone_policy to "
+                     "fly it uncleared" : "");
       log_->errorf("[STITCH-GATE] %s", why);
       invalidateStoredTrajectory();
       return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE,
@@ -440,10 +458,12 @@ PlanResult SegmentChainPlanner::planImpl(const Eigen::Vector3d &start_pos,
     r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
               "multi-waypoint mission — chain not attempted");
     if (!mv.policy_measurable) {
+      // Only reachable with the opt-in above set.
       const char *why2 =
           "zone policy was NOT evaluated: a multi-leg front end cannot "
           "produce a plan-wide zone snapshot, so this flight is uncleared "
-          "with respect to risk zones";
+          "with respect to risk zones (flown because "
+          "manager/allow_unmeasured_zone_policy is set)";
       log_->warnf("[STITCH-GATE] %s", why2);
       r.degrade(PlanReason::ZONE_POLICY_UNEVALUATED, why2);
     }
@@ -2837,7 +2857,7 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
     invalidateStoredTrajectory();
     return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
   }
-  if (fv.evaluated && !fv.clean) {
+  if (fv.evaluated && fv.envelope_bad) {
     char why[176];
     snprintf(why, sizeof why,
              "stitched flight exceeds the envelope budget (viol %.1f%%, peak "
@@ -3203,8 +3223,11 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   // unjudgeable snapshot is treated like a contact rather than like clear:
   // "we could not check" is not evidence of safety.
   const bool zone_bad = tot.zone_hard_n > 0 || !tot.zone_contact_measurable;
+  // Envelope alone, kept apart from the zone reasons: a caller that has to
+  // NAME the cause cannot recover it from `clean`.
+  const bool envelope_bad = viol_pct >= viol_max_pct || peak_bad;
   const bool clean = tot.n_below_ground == 0 && !no_cruise &&
-                     viol_pct < viol_max_pct && !peak_bad && !zone_bad;
+                     !envelope_bad && !zone_bad;
   if (clean) {
     log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
                 "%.1f%% (peak %.1f%% %s), risk exposure %.1f s, "
@@ -3228,6 +3251,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   FlightVerdict v;
   v.evaluated = true;
   v.clean = clean;
+  v.envelope_bad = envelope_bad;
   v.underground = tot.n_below_ground != 0;
   v.no_cruise = no_cruise;
   v.zone_hard_n = tot.zone_hard_n;

@@ -397,11 +397,17 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir,
     cmd = (
         '{drone_id: 0, mission_id: "%s", '
         "start_position: {x: %g, y: %g, z: %g}, target_position: {x: %g, y: %g, z: %g}, "
-        'formation_type: "none", use_initial_velocity: %s, initial_speed: %g, '
+        'formation_type: "none", use_initial_velocity: %s, '
+        "use_initial_speed: %s, initial_speed: %g, "
         "initial_velocity: {x: %g, y: %g, z: %g}, use_initial_acceleration: %s, "
         "initial_acceleration: {x: %g, y: %g, z: %g}}"
         % (mission, s[0], s[1], s[2] / 100.0, g[0], g[1], g[2] / 100.0,
            str(m.get("use_initial_velocity", False)).lower(),
+           # [INITIAL-STATE] key presence is the claim. Without this the
+           # harness publishes a bare initial_speed, which the contract calls
+           # MALFORMED — so a sweep would measure a publisher error rather
+           # than planning behaviour on every scalar-start scenario.
+           str("initial_speed_mps" in m).lower(),
            m.get("initial_speed_mps", 0.0),
            *(m.get("initial_velocity_mps") or [0, 0, 0]),
            str(m.get("use_initial_acceleration", False)).lower(),

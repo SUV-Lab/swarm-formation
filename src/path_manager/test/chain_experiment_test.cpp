@@ -1904,22 +1904,41 @@ int main(int argc, char **argv)
     std::vector<Eigen::Vector3d> legs;
     legs.push_back(0.5 * (start_pos + goal[0]));
     legs.push_back(goal[0]);
-    const path_manager::PlanResult r =
-        chain.plan(start_pos, start_vel, start_acc, legs, true, {});
-
-    expect(r.hasTrajectory(),
-           "a multi-waypoint mission with a distant zone still plans");
-    expect(r.outcome == path_manager::PlanOutcome::DEGRADED,
-           "...as DEGRADED, because something really was not checked");
-    // The scope must be NAMED. Planning it while saying nothing about the
-    // zones would be the fail-open this gate exists to prevent; refusing it
-    // was the outage. The third option is the correct one: fly it and say
-    // what was not evaluated.
-    expect(r.detail.find("zone policy was NOT evaluated") != std::string::npos,
-           "...and the unevaluated zone policy is stated to the caller");
     const auto snap = pm->zonePolicySnapshot();
     expect(!snap.valid,
            "the multi-leg snapshot really is invalid — the premise holds");
+
+    // DEFAULT: fail-CLOSED. A flight whose zone policy could not be
+    // evaluated is not cleared, and DEGRADED is a result the FSM EXECUTES —
+    // "we could not check, but we said so" is fail-open however loud the
+    // log is. Refusing every multi-waypoint mission with a zone anywhere is
+    // a real cost; flying an unchecked one is a bigger one, and the choice
+    // belongs to an operator rather than to a default.
+    const path_manager::PlanResult r =
+        chain.plan(start_pos, start_vel, start_acc, legs, true, {});
+    expect(!r.hasTrajectory(),
+           "by DEFAULT an unmeasurable zone policy REFUSES the mission");
+    expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
+           "...as STITCHED_FLIGHT_UNSAFE");
+    expect(r.detail.find("allow_unmeasured_zone_policy") != std::string::npos,
+           "...and the refusal names the opt-in that would change it");
+
+    // OPT-IN: flown, DEGRADED, and the gap NAMED in the machine-readable
+    // reason — not only in the detail string. Asserting the detail alone is
+    // what let the reason be silently overwritten with
+    // STITCHED_ENVELOPE_BUDGET, which is about the airframe and was simply
+    // not true here.
+    force("manager/allow_unmeasured_zone_policy", true);
+    const path_manager::PlanResult r2 =
+        chain.plan(start_pos, start_vel, start_acc, legs, true, {});
+    expect(r2.hasTrajectory(),
+           "with the opt-in set the mission plans");
+    expect(r2.outcome == path_manager::PlanOutcome::DEGRADED,
+           "...as DEGRADED, because something really was not checked");
+    expect(r2.reason == path_manager::PlanReason::ZONE_POLICY_UNEVALUATED,
+           "...and the REASON says so — a program reads this, not the detail");
+    expect(r2.detail.find("zone policy was NOT evaluated") != std::string::npos,
+           "...with the gap spelled out in the detail as well");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

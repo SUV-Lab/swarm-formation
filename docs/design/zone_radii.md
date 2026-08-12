@@ -9,7 +9,7 @@
 
 | 반경 | 값 | 답하는 질문 | 한 곳에서 정의된 위치 |
 |---|---|---|---|
-| **authored** | `q < 1.0` | 미션이 금지한 부피인가 | 시나리오 yaml의 `reach` |
+| **authored** | `q < 1.0` | 미션이 금지한 부피인가 | `RiskZoneSpec.msg`의 `reach` |
 | **standoff** | `q < 1.05` | 경로를 어디까지 떼어 놓을 것인가 | `dyn_a_star.h` `kZoneHardInflate` |
 | **barrier support** | `q < 1.0 + 0.05` | 최적화기가 어디서부터 밀어내는가 | `poly_traj_optimizer.h` `kRiskBarrierRampFrac` |
 
@@ -20,6 +20,15 @@
 ## 1. authored — 미션이 금지한 부피
 
 시나리오 작성자가 `reach`로 쓴 그 타원체. **이것만이 비행을 거부한다.**
+
+`reach`가 "HARD_AVOID의 금지 경계"라는 것은 **메시지에 대한 계약**이므로
+`RiskZoneSpec.msg`에도 적었다. 이 문서만 소스 오브 트루스로 두면, 구역을 발행하는
+쪽은 "가운데로 갈수록 비용이 오른다"까지만 읽고 "이 타원체는 금지"라는 뜻을 모른다.
+
+**이 결정이 틀릴 수 있는 지점.** 외부 요구사항에서 1.05 여유(이 시나리오에서 500 m)까지
+필수 이격거리라면, 거부면은 authored가 아니라 standoff여야 하고 이 변경은 반대로 틀린
+것이 된다. 코드·문서·메시지 어디에도 그렇게 적힌 곳이 없어 routing standoff로 판단했다
+(`dyn_a_star.h`의 도입 주석이 유일한 근거). 요구사항 출처가 있으면 그것이 이긴다.
 
 - 판정: `zoneAuthoredVolumeContains(i, p)` = `zoneVolumeContains(i, p, 1.0, 0.35)`
 - 쓰는 곳: `PathManager::zoneContactAuthored` → whole-flight audit의 `zone_hard_n`
