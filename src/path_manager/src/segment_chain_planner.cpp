@@ -175,6 +175,7 @@ void SegmentChainPlanner::resetPlanState()
   // after a plan that never got as far as evaluating must not be handed the
   // previous mission's answer.
   last_verdict_ = FlightVerdict{};
+  last_head_policy_ = HeadPolicy{};
   dep_candidates_.clear();
   arr_candidates_.clear();
   phase_tan_grade_ = 1e9;
@@ -293,6 +294,21 @@ PlanResult SegmentChainPlanner::plan(const StartHead &head,
       head.src == StartStateSource::TEST_INJECTED;
   const bool start_acc_commanded = head.acc_prescribed;
   (void)start_vel_synthesized;
+  // [HEAD-POLICY] fail-CLOSED at the entry. StartHead{} default-constructs
+  // to UNSPECIFIED, so "the provenance is a required parameter" is a
+  // compile-time guarantee about the CALL and not about the VALUE — a
+  // caller can still pass a default-constructed head. Refuse it here rather
+  // than plan from a state nobody described, which is the whole point of
+  // the contract.
+  if (head.src == StartStateSource::UNSPECIFIED)
+    return PlanResult::failedBecause(
+        PlanReason::INITIAL_STATE_UNSPECIFIED,
+        "start state has no source — the planner will not invent one");
+  if (!head.pos_u.allFinite() || !head.vel_u.allFinite() ||
+      !head.acc_u.allFinite())
+    return PlanResult::failedBecause(
+        PlanReason::INITIAL_STATE_MALFORMED,
+        "start state is not finite");
   // [PLAN-STATE] First statement of the only public entry: no member may
   // carry a previous mission's value into this one. The envelope rejection
   // below returns early, so the reset has to precede it.
@@ -2184,19 +2200,27 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // and not this. A transition-prescribed head is exempt STRUCTURALLY — it
   // already passed the handoff gate — and that exemption is now a SOURCE
   // rather than a local pointer test.
-  StartHead head0;
-  head0.src = transition != nullptr
-                  ? StartStateSource::TRANSITION_HANDOFF
-                  : (start_vel_synthesized ? StartStateSource::STATED_SPEED
-                                           : StartStateSource::CHAIN_JUNCTION);
-  head0.pos_u = start_pos;
-  head0.vel_u = start_vel;
-  head0.acc_u = start_acc;
-  // The real value, not a hardcoded false: a prescribed acceleration pins
-  // the frame the direction lives in, so it must stop the re-aim. Hardcoding
-  // false here let a STATED_SPEED head with a prescribed acceleration be
-  // re-aimed out from under it.
-  head0.acc_prescribed = start_acc_commanded;
+  // THE HEAD WE WERE GIVEN. Rebuilding it here — which this function did
+  // until now, from a boolean derived two frames up — collapsed
+  // TRAJECTORY_DERIVED, STATED_VECTOR and TEST_INJECTED all into
+  // CHAIN_JUNCTION, so a trajectory-derived head silently lost its floor
+  // correction and two operator forms were misclassified. Threading the
+  // value and then re-deriving it at the far end is worse than not
+  // threading it: it looks correct.
+  //
+  // The transition pointer and the source say the same thing, so they must
+  // agree. Disagreement is a programming error and is refused rather than
+  // resolved by preferring one of them.
+  if ((transition != nullptr) !=
+      (head.src == StartStateSource::TRANSITION_HANDOFF)) {
+    log_->errorf("[HEAD-POLICY] transition prefix %s but head source is %s — "
+                 "the same fact disagrees with itself",
+                 transition != nullptr ? "PRESENT" : "absent",
+                 sourceName(head.src));
+    return PlanResult::failedBecause(
+        PlanReason::TRANSITION_ADAPTER_UNSOUND,
+        "transition prefix and start-state source disagree");
+  }
   double um_head = 100.0;
   if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
     um_head = node_->get_parameter("optimization/dynamics_unit_xy_m")
@@ -2209,7 +2233,8 @@ PlanResult SegmentChainPlanner::planOverRoute(
   const double eps_head =
       um_head > 1e-9 ? PathManager::kSpeedBoundaryEpsMps / um_head : 0.0;
   const HeadPolicy hp0 = applyHeadPolicy(
-      head0, route, floor_head, pm_->alignStartVelToRoute(), eps_head);
+      head, route, floor_head, pm_->alignStartVelToRoute(), eps_head);
+  last_head_policy_ = hp0;
   Eigen::Vector3d v0 = hp0.vel_u;
   if (hp0.floored)
     log_->warnf("[CHAIN-PAR] start speed %.3f below the margin-backed cruise "
@@ -2219,7 +2244,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
     log_->infof("[HEAD-POLICY] head speed %.3f u/s is below the "
                 "margin-backed cruise floor %.3f u/s and was KEPT — source "
                 "%s may not be rewritten",
-                v0.norm(), hp0.floor_u, sourceName(head0.src));
+                v0.norm(), hp0.floor_u, sourceName(head.src));
 
   // === 2. author contracts + slices on the route ===
   std::vector<Contract> contracts;

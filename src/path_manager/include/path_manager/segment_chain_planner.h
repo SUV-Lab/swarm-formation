@@ -206,6 +206,12 @@ public:
   // missing, when the check never ran, and when an older file is read by
   // mistake — three ways to certify a safety property nobody measured.
   const FlightVerdict &lastFlightVerdict() const { return last_verdict_; }
+  // [HEAD-POLICY] What the head policy actually DID on the last plan. A
+  // regression that asserts "the plan flew" cannot tell whether the floor
+  // correction was applied — the solver may cope with a sub-floor head
+  // anyway — so re-deriving the source at the far end of the call chain
+  // went undetected. The decision is observable rather than inferred.
+  const HeadPolicy &lastHeadPolicy() const { return last_head_policy_; }
   // Test seam: judge a SYNTHESISED flight. The refusal branch for a
   // hard-zone contact cannot be reached by planning — the 3-pass exists to
   // prevent exactly that trajectory — so the regression has to supply one.
@@ -503,6 +509,7 @@ private:
   mutable std::vector<int> dep_candidates_, arr_candidates_;
   std::vector<PhaseSpan> last_spans_;
   mutable FlightVerdict last_verdict_{};
+  HeadPolicy last_head_policy_{};
   mutable double phase_tan_grade_{1e9};
   mutable double phase_turn_radius_u_{0.0};
 };

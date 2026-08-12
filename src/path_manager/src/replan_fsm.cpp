@@ -615,9 +615,8 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         start_pt_ = theoretical_pos;
         start_vel_ = theoretical_vel;
         start_acc_ = theoretical_acc;
-        start_vel_commanded_ = false;    // not an operator input
-        start_state_source_ = path_manager::StartStateSource::TRAJECTORY_DERIVED;
-        start_state_stated_ = true;      // read off our own trajectory
+        start_head_.src = path_manager::StartStateSource::TRAJECTORY_DERIVED;
+        start_head_.acc_prescribed = false;  // our own state, not a claim
 
         double pos_error = (current_pos_ - theoretical_pos).norm();
         log_manager_->infof("Formation change - using TRAJECTORY position/vel/acc (error from actual: %.2fm)",
@@ -628,23 +627,18 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
     } else {
         start_pt_ = current_pos_;
         start_vel_.setZero();
-        start_vel_commanded_ = false;
-        // Overwritten by whichever branch below reads a stated start; if
-        // none does, the mission described no beginning and is refused.
-        start_state_source_ = path_manager::StartStateSource::UNSPECIFIED;
-        // Set by whichever branch below actually reads a stated initial
-        // state out of the mission. If none does, the mission described no
-        // beginning and triggerGlobalPlan refuses it.
-        start_state_stated_ = false;
+        // Overwritten by whichever branch below reads a stated start. If
+        // none does the mission described no beginning, and UNSPECIFIED is
+        // what triggerGlobalPlan refuses on — one value, not a source plus a
+        // separate "was it stated" bool that could disagree with it.
+        start_head_ = path_manager::StartHead{};
         // Provenance tag for the log below: the derived first-leg velocity
         // was repeatedly misread as an applied use_initial_velocity vector.
         const char *vel_src = "rest (zero)";
         if (use_commanded_initial_velocity_) {
             start_vel_ = commanded_initial_velocity_;
-            start_vel_commanded_ = true;
-            start_state_source_ =
-                path_manager::StartStateSource::STATED_VECTOR;
-            start_state_stated_ = true;
+            start_head_.src = path_manager::StartStateSource::STATED_VECTOR;
+            start_head_.acc_prescribed = use_commanded_initial_acceleration_;
             vel_src = "commanded vector (use_initial_velocity)";
         } else if (mission_start_claim_.src ==
                    path_manager::StartStateSource::STATED_SPEED) {
@@ -681,9 +675,8 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
             // Chord is only a PROXY for "cruising along the route" (the route
             // does not exist yet) — mark it so planGlobalTraj can re-aim onto
             // the front-end route's real initial direction ([VEL-ALIGN]).
-            start_state_source_ =
-                path_manager::StartStateSource::STATED_SPEED;
-            start_state_stated_ = true;
+            start_head_.src = path_manager::StartStateSource::STATED_SPEED;
+            start_head_.acc_prescribed = use_commanded_initial_acceleration_;
         }
         start_acc_ = use_commanded_initial_acceleration_
             ? commanded_initial_acceleration_
@@ -708,9 +701,14 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
     if (inject_init_state_) {
         start_vel_ = inject_init_vel_;
         start_acc_ = inject_init_acc_;
-        start_vel_commanded_ = true;     // explicit input: envelope-validated
-        start_state_source_ = path_manager::StartStateSource::TEST_INJECTED;
-        start_state_stated_ = true;
+        // A test injection is a FULL PVA injection: the acceleration is
+        // supplied here regardless of what the message's flag said, so
+        // acc_prescribed is true by construction. Taking it from
+        // use_commanded_initial_acceleration_ meant an injected acceleration
+        // was judged on the velocity alone whenever the message had not also
+        // set the flag — which is every injection driven by test/inject_*.
+        start_head_.src = path_manager::StartStateSource::TEST_INJECTED;
+        start_head_.acc_prescribed = true;
         log_manager_->infof("[TEST] Injected initial vel=(%.2f,%.2f,%.2f) acc=(%.2f,%.2f,%.2f)",
                    start_vel_(0), start_vel_(1), start_vel_(2),
                    start_acc_(0), start_acc_(1), start_acc_(2));
@@ -836,7 +834,7 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     // it to ~132 m/s along the first leg, logging "commanded start speed
     // 0.000" for a speed nothing had commanded. The published flight then
     // began at cruise for a mission that never said so.
-    if (!start_state_stated_) {
+    if (start_head_.src == path_manager::StartStateSource::UNSPECIFIED) {
         const std::string why =
             "mission stated no initial state (neither use_initial_velocity "
             "with initial_velocity_mps, nor initial_speed_mps) — the initial "
@@ -869,13 +867,10 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // were assembled at every call and had already produced an illegal
         // combination: a prescribed acceleration was silently dropped
         // whenever the velocity arrived in the scalar form.
-        path_manager::StartHead head;
-        head.src = start_state_source_;
-        head.pos_u = start_pt_;
-        head.vel_u = start_vel_;
-        head.acc_u = start_acc_;
-        head.acc_prescribed = use_commanded_initial_acceleration_;
-        plan_res = chain_planner_->plan(head, waypoints, mission_tail_);
+        start_head_.pos_u = start_pt_;
+        start_head_.vel_u = start_vel_;
+        start_head_.acc_u = start_acc_;
+        plan_res = chain_planner_->plan(start_head_, waypoints, mission_tail_);
     } else {
         // [PHASE] The single path validates the boundaries HERE (the chain
         // planner validates inside plan()) — same frozen policy: a
@@ -904,10 +899,10 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // express "scalar speed WITH a prescribed acceleration", so that
         // message's acceleration reached the optimizer head unjudged.
         const bool judge_pva =
-            path_manager::judgeFullPva(start_state_source_,
-                                       use_commanded_initial_acceleration_);
+            path_manager::judgeFullPva(start_head_.src,
+                                       start_head_.acc_prescribed);
         const std::string head_prob =
-            !path_manager::isOperatorInput(start_state_source_)
+            !path_manager::isOperatorInput(start_head_.src)
                 ? std::string{}
                 : (judge_pva ? path_manager_->pvaEnvelopeProblem(
                                    start_pt_, start_vel_, start_acc_)
@@ -957,13 +952,11 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
             }
         }
         if (!head_rejected && !tail_rejected) {
-            path_manager::StartHead sh;
-            sh.src = start_state_source_;
-            sh.pos_u = start_pt_;
-            sh.vel_u = start_vel_;
-            sh.acc_u = start_acc_;
-            sh.acc_prescribed = use_commanded_initial_acceleration_;
-            plan_res = path_manager_->planGlobalTraj(sh, waypoints, eff_tail)
+            start_head_.pos_u = start_pt_;
+            start_head_.vel_u = start_vel_;
+            start_head_.acc_u = start_acc_;
+            plan_res = path_manager_->planGlobalTraj(start_head_, waypoints,
+                                                     eff_tail)
                            ? PlanResult::success()
                            : PlanResult::failed("single plan failed");
             if (relaxed)

@@ -220,6 +220,39 @@ ceiling, transition activation speed, transition model maximum. 상수 하나
 **이름도 틀렸다.** 이 값은 raw `speed_min` 122 m/s가 아니라 margin이 적용된 131.76이므로
 "stall floor"가 아니라 **margin-backed cruise floor**다. 메시지와 주석을 고쳤다.
 
+### 1-32. 관통시킨 값을 도착지에서 다시 만들었다
+
+`StartHead`를 전 구간에 관통시켜 놓고, `planOverRoute`가 **받은 head를 버리고 boolean
+하나로 다시 만들었다.** 결과:
+
+- `TRAJECTORY_DERIVED` → `CHAIN_JUNCTION`이 되어 **하한 보정을 잃음**
+- `STATED_VECTOR`, `TEST_INJECTED`도 `CHAIN_JUNCTION`으로 오분류
+- 전이 출처는 여전히 `transition != nullptr` 포인터가 결정
+
+값을 관통시키고 도착지에서 다시 유도하는 것은 관통시키지 않은 것보다 나쁘다 — **맞아
+보이기 때문이다.** 이제 받은 head를 그대로 쓰고, 전이 포인터와 출처가 어긋나면
+입력 불변조건 위반으로 FAILED한다.
+
+### 1-33. 시험 주입의 가속도 처방이 생산 경로에서만 유실됐다
+
+`inject_init_state_`는 PVA를 통째로 주입하는데, `StartHead`를 조립할 때
+`acc_prescribed`를 **메시지 플래그**에서 가져왔다. 메시지가 가속도를 주장하지 않으면
+주입된 가속도가 `acc_prescribed=false`가 되어 속도만으로 판정된다.
+
+내 단위 테스트는 `acc_prescribed=true`로 **손수 만든 객체**만 검사했으므로 이 경로를
+보지 못했다.
+
+### 1-34. 회귀가 보정 대신 "비행 여부"를 봤다
+
+`headsrc` 변형이 `TRAJECTORY_DERIVED` 저속 head에 대해 `rd.hasTrajectory()`만 단정했다.
+**변이(출처 재유도 복원)를 걸었는데 안 죽었다** — 최적화기가 하한 아래 head로도 곧잘
+계획하기 때문이다. 즉 "보정이 적용됐다"를 "계획이 성공했다"로 대신 본 것이다.
+
+`lastHeadPolicy()` 접근자를 만들어 **결정 자체를 관측 가능하게** 하고 `floored`를 직접
+단정하니 변이가 죽는다 `[재현]`.
+
+§1-18, §1-21, §1-31에 이은 **네 번째** 같은 종류다: 검사 대상이 아니라 그 대리물을 본다.
+
 ### 1-30. `str.replace`가 대상을 못 찾았는데 성공을 인쇄했다
 
 `path_manager.h`에 `start_state.h` include를 넣는다면서 `planning_result.h`를 앵커로

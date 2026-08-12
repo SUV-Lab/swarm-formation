@@ -771,6 +771,22 @@ std::string PathManager::stateEnvelopeProblem(
         const Eigen::Vector3d &start_pos = head.pos_u;
         const Eigen::Vector3d &start_vel = head.vel_u;
         const Eigen::Vector3d &start_acc = head.acc_u;
+        // Same fail-closed entry as SegmentChainPlanner::plan: a
+        // default-constructed head is UNSPECIFIED, and planning from a state
+        // nobody described is what this contract exists to stop.
+        if (head.src == StartStateSource::UNSPECIFIED) {
+            log_manager_->errorf(
+                "[HEAD-POLICY] planGlobalTraj called with an UNSPECIFIED "
+                "start-state source — refusing");
+            return false;
+        }
+        if (!start_pos.allFinite() || !start_vel.allFinite() ||
+            !start_acc.allFinite()) {
+            log_manager_->errorf(
+                "[HEAD-POLICY] planGlobalTraj called with a non-finite start "
+                "state — refusing");
+            return false;
+        }
         log_manager_->infof("Planning global trajectory with %zu waypoints", waypoints.size());
         auto t_total_start = std::chrono::steady_clock::now();
 

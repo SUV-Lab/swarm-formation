@@ -181,6 +181,7 @@ int main(int argc, char **argv)
        with_standoffpen = false, with_wpzone = false,
        with_nophasedirect = false, with_baserefuse = false,
        with_reststart = false, with_capstart = false,
+       with_headsrc = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -340,6 +341,7 @@ int main(int argc, char **argv)
     if (v == "baserefuse") { with_autosmall = true; with_baserefuse = true; }
     if (v == "reststart") { with_route = true; with_reststart = true; }
     if (v == "capstart") { with_route = true; with_capstart = true; }
+    if (v == "headsrc") { with_route = true; with_headsrc = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -1786,6 +1788,76 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_headsrc) {
+    // The PLUMBING, not the pure function. The policy matrix in
+    // start_claim_test asserts applyHeadPolicy on hand-built objects and
+    // passed while production re-derived the source from a boolean at the
+    // far end of the call chain — TRAJECTORY_DERIVED arrived as
+    // CHAIN_JUNCTION and silently lost its floor correction. These drive
+    // the real entry points.
+    const double floor_u = pm->cruiseFloorUnits();
+    expect(floor_u > 0.0, "the cruise floor is available");
+    const Eigen::Vector3d slow =
+        Eigen::Vector3d(1.0, 0.0, 0.0) * (0.5 * floor_u);
+
+    // 1. In ROUTE mode a TRAJECTORY_DERIVED head below the floor IS raised.
+    //    This is the case the re-derivation broke: it is our own product,
+    //    so it may be repaired, and the repaired plan must fly.
+    const path_manager::PlanResult rd =
+        chain.plan(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED,
+                          start_pos, slow, start_acc),
+                   goal, {});
+    expect(rd.hasTrajectory(),
+           "a TRAJECTORY_DERIVED head below the floor flies");
+    // The RAISE itself, not a proxy for it. Asserting only that the plan
+    // flew cannot detect a lost correction — the solver copes with a
+    // sub-floor head often enough that re-deriving the source at the far
+    // end of the call chain went unnoticed.
+    expect(chain.lastHeadPolicy().floored,
+           "...and the floor correction was actually APPLIED");
+
+    // 2. The SAME state stated by an operator is refused, never raised.
+    const path_manager::PlanResult sv =
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR,
+                          start_pos, slow, start_acc),
+                   goal, {});
+    expect(!sv.hasTrajectory(),
+           "the same speed STATED is refused, not raised");
+    // Which refusal depends on where the speed sits relative to the
+    // transition model — 0.5x the floor is above the activation speed, so it
+    // classifies TRANSITION_REQUIRED and the coordinator answers. Pinning a
+    // particular reason here would pin that unrelated fact. The contract is
+    // the ASYMMETRY: the identical state is repaired when we authored it and
+    // refused when an operator stated it.
+    expect(rd.hasTrajectory() && !sv.hasTrajectory(),
+           "...and that asymmetry is the contract: same state, repaired as "
+           "ours, refused as theirs");
+    expect(!chain.lastHeadPolicy().floored,
+           "...the stated one was NOT raised");
+
+    // 3. A default-constructed head is refused rather than planned from.
+    //    StartHead{} is UNSPECIFIED, so "required parameter" guarantees the
+    //    CALL, not the VALUE.
+    const path_manager::PlanResult un =
+        chain.plan(path_manager::StartHead{}, goal, {});
+    expect(!un.hasTrajectory(), "an UNSPECIFIED head is refused");
+    expect(un.reason == path_manager::PlanReason::INITIAL_STATE_UNSPECIFIED,
+           "...as INITIAL_STATE_UNSPECIFIED");
+
+    // 4. A non-finite head is refused too.
+    path_manager::StartHead nan_head =
+        mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos,
+               Eigen::Vector3d(std::nan(""), 0.0, 0.0), start_acc);
+    const path_manager::PlanResult nn = chain.plan(nan_head, goal, {});
+    expect(!nn.hasTrajectory(), "a non-finite head is refused");
+    expect(nn.reason == path_manager::PlanReason::INITIAL_STATE_MALFORMED,
+           "...as INITIAL_STATE_MALFORMED");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_capstart) {
     // A start speed stated EXACTLY at the planning cap must be CRUISE_VALID.
     // Eight of the ten shipped missions state exactly optimization/max_vel *
@@ -2433,8 +2505,16 @@ int main(int argc, char **argv)
   if (with_initnan) {
     const path_manager::PlanResult r = chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR, start_pos, Eigen::Vector3d(1.8, 0.0, 0.0), Eigen::Vector3d(0.0, std::nan(""), 0.0), false), goal, {});
     expect(!r.hasTrajectory(), "NaN commanded acceleration FAILED");
-    expect(r.reason == path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
-           "reason is INITIAL_MODE_UNSUPPORTED");
+    // The reason moved from INITIAL_MODE_UNSUPPORTED to
+    // INITIAL_STATE_MALFORMED, and that is more accurate rather than a
+    // regression: the head's fail-closed entry check now catches a
+    // non-finite PVA before classifyStartState runs. "Unsupported mode" is a
+    // statement about the flight regime; a NaN is a statement about the
+    // command being unreadable, which is exactly what MALFORMED names.
+    // Still refused before any planning work — the third check below.
+    expect(r.reason == path_manager::PlanReason::INITIAL_STATE_MALFORMED,
+           "reason is INITIAL_STATE_MALFORMED — a NaN is unreadable input, "
+           "not an unsupported regime");
     expect(node->get_parameter("chain/jitter/fail_segment").as_int() == -1,
            "fault injection still armed — no front-end/optimizer work ran");
     rclcpp::shutdown();

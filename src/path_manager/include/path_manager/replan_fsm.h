@@ -150,10 +150,12 @@ private:
     // [INITIAL-STATE] The validated claim from the last accepted command.
     // Parsed at the top of the callback, before any state is consumed.
     path_manager::MissionStartClaim mission_start_claim_{};
-    // [HEAD-POLICY] What the resolved start state IS. The three booleans
-    // beside it are on their way out; this is the value the planner reads.
-    path_manager::StartStateSource start_state_source_{
-        path_manager::StartStateSource::UNSPECIFIED};
+    // [HEAD-POLICY] The resolved start state, as ONE value. It replaced a
+    // source plus start_state_stated_ plus start_vel_commanded_ — three
+    // members encoding overlapping facts, assembled into a StartHead
+    // separately on the chain and direct paths, with a chance to disagree at
+    // each site. Every branch sets this object; both paths pass this object.
+    path_manager::StartHead start_head_{};
     double initial_speed_unit_m_{100.0};
     bool use_commanded_initial_velocity_{false};
     bool use_commanded_initial_acceleration_{false};
@@ -167,7 +169,6 @@ private:
     // validity region -> FAILED(INITIAL_MODE_UNSUPPORTED), never clamped);
     // synthesized and trajectory-derived starts are not inputs and keep the
     // [STALL-FLOOR] clamp doctrine.
-    bool start_vel_commanded_{false};
     // True when the START STATE HAS A STATED ORIGIN — the mission gave a
     // velocity vector or an initial speed, or the state was read off a
     // trajectory this stack itself authored (replan / formation change).
@@ -175,7 +176,6 @@ private:
     // which this planner treats as an incomplete mission rather than a
     // request to start at cruise: the initial phase is part of the product,
     // so an initial state is part of the input.
-    bool start_state_stated_{false};
     Eigen::Vector3d commanded_initial_velocity_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d commanded_initial_acceleration_{Eigen::Vector3d::Zero()};
 
