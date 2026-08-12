@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "path_manager/start_state.h"
 
@@ -239,6 +240,88 @@ int main()
                                ": raising a stated speed answers a different "
                                "question than the one asked");
     }
+  }
+
+  // --- the per-source policy matrix, directly -----------------------------
+  // applyHeadPolicy is the single owner of [VEL-ALIGN] and [STALL-FLOOR].
+  // Before it existed the two rules were implemented twice and had drifted;
+  // this table is the contract, one row per source, asserted rather than
+  // described in a comment.
+  {
+    using path_manager::applyHeadPolicy;
+    using path_manager::StartHead;
+    const std::vector<Eigen::Vector3d> route = {
+        Eigen::Vector3d(0.0, 0.0, 1.0), Eigen::Vector3d(10.0, 0.0, 1.0)};
+    const double floor_u = 1.3176;                  // 131.76 m/s at 100 m/u
+    const double eps_u = kUnit > 0.0 ? 1e-6 / kUnit : 0.0;
+
+    struct Row {
+      StartStateSource src;
+      const char *name;
+      bool expect_reaim;
+      bool expect_floor;
+    };
+    const Row rows[] = {
+        {StartStateSource::STATED_SPEED,       "STATED_SPEED",       true,  false},
+        {StartStateSource::STATED_VECTOR,      "STATED_VECTOR",      false, false},
+        {StartStateSource::TEST_INJECTED,      "TEST_INJECTED",      false, false},
+        {StartStateSource::CHAIN_JUNCTION,     "CHAIN_JUNCTION",     false, false},
+        {StartStateSource::TRAJECTORY_DERIVED, "TRAJECTORY_DERIVED", false, true},
+    };
+    for (const auto &r : rows) {
+      // Aimed ACROSS the route and BELOW the floor, so both rules would fire
+      // if the source allowed them.
+      StartHead h;
+      h.src = r.src;
+      h.vel_u = Eigen::Vector3d(0.0, 0.5, 0.0);
+      const auto out = applyHeadPolicy(h, route, floor_u, true, eps_u);
+      expect(out.reaimed == r.expect_reaim,
+             std::string(r.name) + (r.expect_reaim ? " IS re-aimed onto the route"
+                                                   : " is NOT re-aimed"));
+      expect(out.floored == r.expect_floor,
+             std::string(r.name) +
+                 (r.expect_floor ? " IS raised to the cruise floor"
+                                 : " is NOT raised — it may not be rewritten"));
+      if (!r.expect_floor)
+        expect(out.floor_declined,
+               std::string(r.name) +
+                   ": the declined correction is REPORTED, not silent");
+    }
+
+    // A prescribed acceleration pins the frame: even the one re-aimable
+    // source stops being re-aimable.
+    StartHead pinned;
+    pinned.src = StartStateSource::STATED_SPEED;
+    pinned.acc_prescribed = true;
+    pinned.vel_u = Eigen::Vector3d(0.0, 2.0, 0.0);
+    expect(!applyHeadPolicy(pinned, route, floor_u, true, eps_u).reaimed,
+           "a prescribed acceleration stops the re-aim");
+
+    // The numeric-equality rule reaches this path too. Asserting only
+    // "exactly at the floor is not raised" pins nothing: an axis-aligned
+    // magnitude divides exactly, so it passes with or without the epsilon —
+    // the same way capstart's first version picked a direction that rounded
+    // the harmless way. The load-bearing point is HALF AN EPSILON UNDER,
+    // which is direction-independent and is precisely what the tolerance
+    // exists to accept.
+    StartHead at_floor;
+    at_floor.src = StartStateSource::TRAJECTORY_DERIVED;
+    at_floor.vel_u = Eigen::Vector3d(1.0, 0.0, 0.0) * floor_u;
+    expect(!applyHeadPolicy(at_floor, route, floor_u, true, eps_u).floored,
+           "a head exactly AT the floor is not raised");
+    at_floor.vel_u = Eigen::Vector3d(1.0, 0.0, 0.0) * (floor_u - 0.5 * eps_u);
+    expect(!applyHeadPolicy(at_floor, route, floor_u, true, eps_u).floored,
+           "half an epsilon under it is not raised either — that is rounding");
+    at_floor.vel_u = Eigen::Vector3d(1.0, 0.0, 0.0) * (floor_u - 2.0 * eps_u);
+    expect(applyHeadPolicy(at_floor, route, floor_u, true, eps_u).floored,
+           "...and two epsilons under it IS raised");
+
+    // align disabled = no re-aim for anyone.
+    StartHead sp;
+    sp.src = StartStateSource::STATED_SPEED;
+    sp.vel_u = Eigen::Vector3d(0.0, 2.0, 0.0);
+    expect(!applyHeadPolicy(sp, route, floor_u, false, eps_u).reaimed,
+           "align disabled suppresses the re-aim");
   }
 
   if (failures == 0) {

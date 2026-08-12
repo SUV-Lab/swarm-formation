@@ -7,6 +7,7 @@
 #include "path_optimizer/poly_traj_optimizer.h"
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
+#include "path_manager/start_state.h"
 #include <Eigen/Eigen>
 #include <algorithm>
 #include <cmath>
@@ -316,9 +317,9 @@ namespace path_manager
     // [PHASE] margin-backed CRUISE FLOOR (planner units) for tail-boundary.
     // Not the raw dynamics_speed_min_mps (122.0): this is that value with
     // dynamics_margin applied, 131.76 m/s on the shipped configuration.
-    // "stall floor" names the wrong number and is being retired.
+    // "margin-backed cruise floor" names the wrong number and is being retired.
     // validation — same floor the [STALL-FLOOR] start guard uses.
-    double stallFloorUnits() const
+    double cruiseFloorUnits() const
     {
         return poly_traj_opt_ ? poly_traj_opt_->dynamicsMinSpeedFloorUnits()
                               : 0.0;
@@ -326,7 +327,7 @@ namespace path_manager
     // [ENVELOPE] Contract 1 (2026-08-08): is this VELOCITY (planner units)
     // inside the cruise model's validity region? Empty string = yes;
     // otherwise a human-readable problem in m/s / degrees. ONE region
-    // definition — speed within [stall floor, model max], flight-path angle
+    // definition — speed within [margin-backed cruise floor, model max], flight-path angle
     // within the model's cone — shared by the explicit-initial-state gate
     // and the final-boundary validation, so "outside the envelope" cannot
     // mean two different things at the two ends of the mission. Dynamics
@@ -379,7 +380,7 @@ namespace path_manager
 
     // NOTE: statedStartSpeedProblem is DELETED. It was a second validator
     // for the same quantity, and two validators for one quantity always
-    // drift: it tested the stall floor alone, so a scalar-stated 400 m/s
+    // drift: it tested the margin-backed cruise floor alone, so a scalar-stated 400 m/s
     // planned while the identical vector was refused for exceeding the
     // handoff ceiling; it returned empty on a non-positive floor while its
     // sibling returns empty on !dynamicsEnabled(), so the two forms

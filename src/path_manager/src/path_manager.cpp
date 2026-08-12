@@ -1085,74 +1085,67 @@ std::string PathManager::stateEnvelopeProblem(
             return true;
         }
 
-        // [VEL-ALIGN] A SYNTHESIZED start velocity (default speed x first-leg
-        // chord — the FSM knows no route before the front-end runs) is only a
-        // proxy for "already cruising along the route". Re-aim it onto the
-        // route's ACTUAL initial direction so the head boundary condition
-        // agrees with the path the optimizer is about to follow — otherwise
-        // the head piece launches down the chord at cruise speed and S-bends
-        // onto the route. Explicitly commanded / trajectory-derived
-        // velocities are never touched (start_vel_synthesized_ false).
-        Eigen::Vector3d start_vel_eff = start_vel;
-        if (align_start_vel_to_route_ && start_vel_synthesized_ &&
-            clean_path.size() >= 2) {
-            Eigen::Vector3d dir = clean_path[1] - clean_path[0];
-            dir.z() = 0.0;  // same LEVEL contract as the chord synthesis
-            if (dir.head<2>().norm() > 1.0e-9) {
-                dir.normalize();
-                const Eigen::Vector3d re_aimed = dir * start_vel.norm();
-                if ((re_aimed - start_vel).norm() > 1.0e-9) {
-                    log_manager_->infof(
-                        "[VEL-ALIGN] synthesized start vel re-aimed to the "
-                        "route's initial direction: (%.3f, %.3f, %.3f) -> "
-                        "(%.3f, %.3f, %.3f) u/s",
-                        start_vel.x(), start_vel.y(), start_vel.z(),
-                        re_aimed.x(), re_aimed.y(), re_aimed.z());
-                }
-                start_vel_eff = re_aimed;
-            }
-        }
-
-        // [STALL-FLOOR] A fixed-wing platform cannot fly below stall, so a
-        // commanded start speed under speed_min gives the optimizer an
-        // unsatisfiable head boundary: the dynamics min-speed hinge then
-        // out-pushes every soft spatial term and digs a "recovery dive"
-        // straight through terrain (rest start: dynamics_cost 62M, 4x -1005,
-        // audit clearance -0.79 -> nothing published). Assume the launch
-        // system delivers at least stall speed: raise the commanded speed
-        // onto the margin-backed floor — along the commanded direction when
-        // one exists, else along the route's initial direction (level).
+        // [HEAD-POLICY] One implementation, in start_state.h. This block
+        // and its twin in SegmentChainPlanner::planOverRoute were the same
+        // two rules written twice, and they had already drifted — the
+        // numeric-equality rule at the speed boundaries reached this copy
+        // and not the other. The DECISION now has one owner; the log tags
+        // stay here because the two callers report differently.
+        //
+        // The source is derived from the booleans this signature still
+        // carries. Threading StartHead through plan/planImpl/
+        // planRouteParallel/planOverRoute/commitRoute is the next step; the
+        // mapping is exact in the meantime:
+        //   junction_head            -> CHAIN_JUNCTION (never touched)
+        //   start_vel_synthesized_   -> STATED_SPEED   (re-aim, never floor)
+        //   otherwise                -> TRAJECTORY_DERIVED (floor, no re-aim)
+        StartHead head;
+        head.src = junction_head
+                       ? StartStateSource::CHAIN_JUNCTION
+                       : (start_vel_synthesized_
+                              ? StartStateSource::STATED_SPEED
+                              : StartStateSource::TRAJECTORY_DERIVED);
+        head.pos_u = start_pos;
+        head.vel_u = start_vel;
+        head.acc_u = start_acc;
+        head.acc_prescribed = false;
         const double v_floor = poly_traj_opt_
             ? poly_traj_opt_->dynamicsMinSpeedFloorUnits() : 0.0;
-        // [CHAIN] A contract head is a state the baseline ALREADY FLEW —
-        // the floor is margin-backed (~8% above hard stall), so a converged
-        // baseline legitimately dips below it. Flooring one side of the seam
-        // while the neighbour's tail pins the contract verbatim would put a
-        // velocity step in the published trajectory; leave the state alone
-        // and let the min-speed hinge price it like the baseline did.
-        if (junction_head && v_floor > 0.0 && start_vel_eff.norm() < v_floor) {
+        double um_xy_head = 100.0;
+        if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+            node_->get_parameter("optimization/dynamics_unit_xy_m",
+                                 um_xy_head);
+        const double head_eps_u =
+            um_xy_head > 1e-9 ? kSpeedBoundaryEpsMps / um_xy_head : 0.0;
+        const HeadPolicy hp = applyHeadPolicy(
+            head, clean_path, v_floor, align_start_vel_to_route_,
+            head_eps_u);
+        Eigen::Vector3d start_vel_eff = hp.vel_u;
+        if (hp.reaimed) {
             log_manager_->infof(
-                "[CHAIN] contract head speed %.3f u/s is below the stall "
-                "floor %.3f u/s — kept verbatim (baseline flew it; the seam "
-                "must pin the same state on both sides)",
-                start_vel_eff.norm(), v_floor);
+                "[VEL-ALIGN] synthesized start vel re-aimed to the route's "
+                "initial direction: (%.3f, %.3f, %.3f) -> (%.3f, %.3f, %.3f) "
+                "u/s",
+                start_vel.x(), start_vel.y(), start_vel.z(),
+                start_vel_eff.x(), start_vel_eff.y(), start_vel_eff.z());
         }
-        if (!junction_head && v_floor > 0.0 && start_vel_eff.norm() < v_floor) {
-            Eigen::Vector3d dir = start_vel_eff;
-            if (dir.norm() < 1.0e-9 && clean_path.size() >= 2) {
-                dir = clean_path[1] - clean_path[0];
-                dir.z() = 0.0;
-            }
-            if (dir.norm() < 1.0e-9) dir = Eigen::Vector3d::UnitX();
-            dir.normalize();
+        if (hp.floored) {
             log_manager_->warnf(
-                "[STALL-FLOOR] commanded start speed %.3f u/s is below the "
-                "platform stall floor %.3f u/s (%.0f m/s) — planning from "
-                "stall speed along (%.2f, %.2f, %.2f); the launch phase is "
-                "outside the planner's envelope",
-                start_vel_eff.norm(), v_floor,
-                v_floor * 100.0, dir.x(), dir.y(), dir.z());
-            start_vel_eff = dir * v_floor;
+                "[STALL-FLOOR] start speed %.3f u/s is below the platform "
+                "margin-backed cruise floor %.3f u/s (%.0f m/s) — planning "
+                "from the floor along (%.2f, %.2f, %.2f); the launch phase "
+                "is outside the planner's envelope",
+                start_vel.norm(), hp.floor_u, hp.floor_u * 100.0,
+                start_vel_eff.normalized().x(),
+                start_vel_eff.normalized().y(),
+                start_vel_eff.normalized().z());
+        }
+        if (hp.floor_declined) {
+            log_manager_->infof(
+                "[HEAD-POLICY] head speed %.3f u/s is below the "
+                "margin-backed cruise floor %.3f u/s and was KEPT — source "
+                "%s may not be rewritten",
+                start_vel_eff.norm(), hp.floor_u, sourceName(head.src));
         }
 
         // === STEP 4~5: trajectory optimization (MINCO + L-BFGS) ===

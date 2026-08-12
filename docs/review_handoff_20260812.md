@@ -220,6 +220,26 @@ ceiling, transition activation speed, transition model maximum. 상수 하나
 **이름도 틀렸다.** 이 값은 raw `speed_min` 122 m/s가 아니라 margin이 적용된 131.76이므로
 "stall floor"가 아니라 **margin-backed cruise floor**다. 메시지와 주석을 고쳤다.
 
+### 1-30. `str.replace`가 대상을 못 찾았는데 성공을 인쇄했다
+
+`path_manager.h`에 `start_state.h` include를 넣는다면서 `planning_result.h`를 앵커로
+썼는데 **그 파일에는 그 include가 없다.** `str.replace`는 조용히 no-op이고, 나는
+`print('start_state.h included')`를 조건 없이 찍었다. 빌드가 실패해서 알았다.
+
+이 세션 대부분의 편집에는 `assert old in s`를 붙였는데 이 하나에 빠졌다. §1-26(문서 편집
+미반영)과 같은 뿌리다 — **명령의 성공을 확인하지 않고 다음 단계로 넘어간다.**
+
+### 1-31. 정책 행렬 회귀의 한 줄이 방향 운에 의존했다
+
+`applyHeadPolicy`의 하한 검사를 `(1,0,0) * floor_u`로 단정했는데, 축 정렬 크기는
+정확히 나눠떨어져서 **허용오차를 빼도 통과한다.** 변이(경계 epsilon 제거)가 안 죽어서
+알았다.
+
+`floor_u - 0.5 * eps`로 바꿨다 — 방향과 무관하고, 허용오차가 존재하는 이유 그 자체다.
+이제 변이가 죽는다 `[재현]`.
+
+`capstart` 첫 버전(§1-21)과 **정확히 같은 실수**다. 그때 배운 것을 다른 파일에서 반복했다.
+
 ### 1-29. `git checkout`으로 커밋 안 한 변경을 날렸다
 
 변이 실험 사이에 `git checkout src/path_manager/src/path_manager.cpp`로 되돌렸는데,

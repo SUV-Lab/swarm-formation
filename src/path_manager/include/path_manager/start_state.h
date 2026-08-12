@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 #include <Eigen/Eigen>
 
@@ -76,7 +77,7 @@ inline bool mayReaim(StartStateSource s, bool acc_prescribed)
   return s == StartStateSource::STATED_SPEED && !acc_prescribed;
 }
 
-// The head magnitude may be raised to the stall floor. Exactly one source
+// The head magnitude may be raised to the margin-backed cruise floor. Exactly one source
 // qualifies: our own in-flight trajectory. Raising an operator's stated
 // speed would answer a different question than the one they asked, which is
 // the fabrication this contract exists to stop.
@@ -112,11 +113,91 @@ struct MissionStartClaim {
   bool malformed() const { return !problem.empty(); }
 };
 
-// The value threaded through the planners in place of the three booleans.
+// The value threaded through the planners in place of the three booleans:
+// the state itself, plus what is known about how it came to be.
 struct StartHead {
   StartStateSource src{StartStateSource::UNSPECIFIED};
+  Eigen::Vector3d pos_u{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d vel_u{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d acc_u{Eigen::Vector3d::Zero()};
   bool acc_prescribed{false};
 };
+
+// What the head policy did, and why. Returned rather than logged inside, so
+// the two callers keep their own log tags while the DECISION has one owner.
+struct HeadPolicy {
+  Eigen::Vector3d vel_u{Eigen::Vector3d::Zero()};  // the effective head
+  bool reaimed{false};
+  bool floored{false};
+  bool floor_declined{false};  // below the floor and deliberately kept
+  double floor_u{0.0};
+};
+
+// [HEAD-POLICY] The single implementation of [VEL-ALIGN] and [STALL-FLOOR].
+//
+// Both rules existed twice — once in PathManager::planGlobalTraj and once in
+// SegmentChainPlanner::planOverRoute, which re-derived the floor arithmetic
+// by hand instead of calling the accessor. They had already drifted: the
+// numeric-equality rule added to the boundary comparisons landed in one copy
+// and not the other, so the duplicate still refused a head commanded exactly
+// at the floor. Two implementations of one policy always drift; this is the
+// one.
+//
+// Keyed on the SOURCE, never on a caller's local flag:
+//   re-aim  only mayReaim() — a stated SPEED whose direction we invented,
+//           and only when no acceleration pins the frame.
+//   floor   only mayClamp() — a trajectory we authored ourselves. An
+//           operator's stated speed is refused upstream instead of being
+//           rewritten, and a chain junction is a state the neighbouring
+//           segment already flew: flooring one side of a seam while the
+//           other pins it verbatim puts a velocity step in the published
+//           trajectory.
+//
+// `floor_u` is the margin-backed cruise floor in planner units; pass 0 when
+// the dynamics model is off. `route` supplies the aim direction and may be
+// empty.
+inline HeadPolicy applyHeadPolicy(const StartHead &head,
+                                  const std::vector<Eigen::Vector3d> &route,
+                                  double floor_u, bool align_enabled,
+                                  double boundary_eps_u = 0.0)
+{
+  HeadPolicy out;
+  out.vel_u = head.vel_u;
+  out.floor_u = floor_u;
+
+  const auto route_dir = [&]() -> Eigen::Vector3d {
+    if (route.size() < 2) return Eigen::Vector3d::Zero();
+    Eigen::Vector3d d = route[1] - route[0];
+    d.z() = 0.0;  // the same LEVEL contract the chord synthesis uses
+    return d.head<2>().norm() > 1.0e-9 ? d.normalized()
+                                       : Eigen::Vector3d::Zero();
+  };
+
+  if (align_enabled && mayReaim(head.src, head.acc_prescribed)) {
+    const Eigen::Vector3d dir = route_dir();
+    if (!dir.isZero()) {
+      const Eigen::Vector3d re_aimed = dir * out.vel_u.norm();
+      out.reaimed = (re_aimed - out.vel_u).norm() > 1.0e-9;
+      out.vel_u = re_aimed;
+    }
+  }
+
+  // Numeric equality at the boundary, same rule as every other speed limit:
+  // a head exactly AT the floor is not below it, whatever the direction's
+  // last bits say.
+  if (floor_u > 0.0 && out.vel_u.norm() < floor_u - boundary_eps_u) {
+    if (mayClamp(head.src)) {
+      Eigen::Vector3d dir = out.vel_u;
+      if (dir.norm() < 1.0e-9) dir = route_dir();
+      if (dir.isZero()) dir = Eigen::Vector3d::UnitX();
+      out.vel_u = dir.normalized() * floor_u;
+      out.floored = true;
+    } else {
+      out.floor_declined = true;
+    }
+  }
+  return out;
+}
 
 namespace start_state_detail {
 
@@ -180,7 +261,7 @@ MissionStartClaim parseStartClaim(const CommandT &m, double unit_m)
   if (S) {
     // Includes v == 0: a stated REST start is legal to SAY. It is refused
     // later by the envelope gate as INITIAL_MODE_UNSUPPORTED, never
-    // silently raised to the stall floor — a clamped rest start is
+    // silently raised to the margin-backed cruise floor — a clamped rest start is
     // indistinguishable from a speed the operator chose.
     c.src = StartStateSource::STATED_SPEED;
     c.speed_u = v * inv;

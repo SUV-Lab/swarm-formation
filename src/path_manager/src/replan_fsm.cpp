@@ -827,7 +827,7 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     // how the flight BEGINS is mission input — not something to invent. A
     // mission that states neither an initial velocity vector nor an initial
     // speed used to be completed on its behalf: the derived rest state fell
-    // below the platform stall floor and [STALL-FLOOR] / [CHAIN-PAR] raised
+    // below the platform margin-backed cruise floor and [STALL-FLOOR] / [CHAIN-PAR] raised
     // it to ~132 m/s along the first leg, logging "commanded start speed
     // 0.000" for a speed nothing had commanded. The published flight then
     // began at cruise for a mission that never said so.
@@ -881,7 +881,7 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         // to prevent.
         // The scalar form is judged by the SAME validator as the vector
         // form, minus the acceleration it did not state. It used to get
-        // statedStartSpeedProblem, which tested the stall floor alone — no
+        // statedStartSpeedProblem, which tested the margin-backed cruise floor alone — no
         // handoff ceiling, no flight-path cone — so the two forms disagreed
         // about the identical physical state, and disagreed differently
         // again with the dynamics model off (one returns {} on a

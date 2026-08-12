@@ -1819,10 +1819,18 @@ int main(int argc, char **argv)
     // floor commanded exactly, and (-18.3, -199.2, 0) — r5's real first-leg
     // aim — with it.
     {
-      const double eps_u = 1e-8;   // 1 um/s expressed in u/s (100 m per unit)
+      // Derived, never assumed: the test's unit and epsilon must be the ones
+      // the RUNTIME uses, or the assertion drifts from the code the moment
+      // either is retuned. That is the same class as the harness reading its
+      // scenarios from a different tree than the binary.
+      double um_xy = 100.0;
+      if (node->has_parameter("optimization/dynamics_unit_xy_m"))
+        node->get_parameter("optimization/dynamics_unit_xy_m", um_xy);
+      const double eps_u =
+          path_manager::PathManager::kSpeedBoundaryEpsMps / um_xy;
       const Eigen::Vector3d diag =
           Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
-      const double floor_u = pm->stallFloorUnits();
+      const double floor_u = pm->cruiseFloorUnits();
       expect(floor_u > 0.0, "the cruise floor is available to test against");
 
       // FLOOR. The diagonal is the direction that actually rounds under.
@@ -1884,8 +1892,11 @@ int main(int argc, char **argv)
       const auto *dyn = pm->dynamicsParams();
       expect(dyn != nullptr, "the dynamics model is available");
       if (dyn) {
-        const double UM = 100.0;
-        const double eps_u = 1e-8;                       // 1 um/s in u/s
+        double UM = 100.0;
+        if (node->has_parameter("optimization/dynamics_unit_xy_m"))
+          node->get_parameter("optimization/dynamics_unit_xy_m", UM);
+        const double eps_u =
+            path_manager::PathManager::kSpeedBoundaryEpsMps / UM;
         const double act_u = dyn->model_activation_speed_mps / UM;
         const Eigen::Vector3d diag =
             Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
@@ -1921,7 +1932,7 @@ int main(int argc, char **argv)
   if (with_reststart) {
     // A STATED rest start. Legal to say (parseStartClaim accepts it, so the
     // operator's words survive intact); refused here, BY NAME, and never
-    // raised to the stall floor — a clamped rest start publishes a flight
+    // raised to the margin-backed cruise floor — a clamped rest start publishes a flight
     // that begins at 131.8 m/s when the mission asked for 0.
     //
     // The refusal must be model-INDEPENDENT. Justifying it with the stall
@@ -2498,7 +2509,7 @@ int main(int argc, char **argv)
     // rather than a regression. 50 m/s sits above the model activation speed
     // (40) and below the cruise floor (131.8): it is the TRANSITION regime.
     // The scalar form used to be judged by statedStartSpeedProblem, which
-    // tested the stall floor and refused outright, so classifyStartState was
+    // tested the margin-backed cruise floor and refused outright, so classifyStartState was
     // unreachable from it and a launch-regime start stated as a scalar could
     // never dispatch to the coordinator — while the identical speed stated
     // as a vector did. Now both reach it.

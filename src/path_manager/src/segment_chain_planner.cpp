@@ -307,7 +307,7 @@ PlanResult SegmentChainPlanner::plan(const Eigen::Vector3d &start_pos,
   std::string regime_why;
   // ONE gate for BOTH stated forms. A scalar-stated head used to take a
   // different branch below and be judged by statedStartSpeedProblem, which
-  // checked the stall floor and nothing else — so initial_speed 400 m/s
+  // checked the margin-backed cruise floor and nothing else — so initial_speed 400 m/s
   // planned while initial_velocity [400,0,0] was refused for exceeding the
   // handoff ceiling, the flight-path cone was never applied to the scalar
   // form at all, and TRANSITION_REQUIRED was unreachable from it: a level
@@ -1499,7 +1499,7 @@ SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
   // model-independent on purpose: a zero head has no direction, the
   // first-leg synthesis and every downstream normalization divide by it,
   // and no parameter set makes it flyable. Justifying rest-refusal with the
-  // stall floor instead would leave it unrefused under
+  // margin-backed cruise floor instead would leave it unrefused under
   // optimization/dynamics_enable: false, where the floor does not exist.
   // Legal to STATE — parseStartClaim accepts it — and refused here, by
   // name, rather than silently raised to the floor.
@@ -2147,18 +2147,44 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // merge decrement still restores to this confirmed value.
   segments_restore.saved = segments_;
 
-  // [VEL-ALIGN] resolved BEFORE authoring: the departure handoff screening
-  // measures the turn the EFFECTIVE start velocity needs. A transition-
-  // prescribed head is exempt STRUCTURALLY: it already passed the handoff
-  // gate and must never be re-aimed.
-  Eigen::Vector3d v0 = start_vel;
-  if (transition == nullptr && pm_->alignStartVelToRoute() &&
-      start_vel_synthesized && route.size() >= 2) {
-    Eigen::Vector3d dir = route[1] - route[0];
-    dir.z() = 0.0;
-    if (dir.head<2>().norm() > 1e-9)
-      v0 = dir.normalized() * start_vel.norm();
-  }
+  // [HEAD-POLICY] resolved BEFORE authoring: the departure handoff
+  // screening measures the turn the EFFECTIVE start velocity needs. The
+  // rule itself lives in start_state.h — this block used to re-implement
+  // both [VEL-ALIGN] and [STALL-FLOOR], re-deriving the floor arithmetic by
+  // hand instead of calling the accessor, and the two copies had drifted:
+  // the numeric-equality rule at the speed boundaries reached the other one
+  // and not this. A transition-prescribed head is exempt STRUCTURALLY — it
+  // already passed the handoff gate — and that exemption is now a SOURCE
+  // rather than a local pointer test.
+  StartHead head0;
+  head0.src = transition != nullptr
+                  ? StartStateSource::TRAJECTORY_DERIVED
+                  : (start_vel_synthesized ? StartStateSource::STATED_SPEED
+                                           : StartStateSource::CHAIN_JUNCTION);
+  head0.pos_u = start_pos;
+  head0.vel_u = start_vel;
+  head0.acc_u = start_acc;
+  head0.acc_prescribed = false;
+  double um_head = 100.0;
+  if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
+    um_head = node_->get_parameter("optimization/dynamics_unit_xy_m")
+                  .as_double();
+  const double floor_head =
+      transition != nullptr ? 0.0 : pm_->cruiseFloorUnits();
+  const double eps_head =
+      um_head > 1e-9 ? PathManager::kSpeedBoundaryEpsMps / um_head : 0.0;
+  const HeadPolicy hp0 = applyHeadPolicy(
+      head0, route, floor_head, pm_->alignStartVelToRoute(), eps_head);
+  Eigen::Vector3d v0 = hp0.vel_u;
+  if (hp0.floored)
+    log_->warnf("[CHAIN-PAR] start speed %.3f below the margin-backed cruise "
+                "floor %.3f — raised (same contract as [STALL-FLOOR])",
+                start_vel.norm(), hp0.floor_u);
+  if (hp0.floor_declined)
+    log_->infof("[HEAD-POLICY] head speed %.3f u/s is below the "
+                "margin-backed cruise floor %.3f u/s and was KEPT — source "
+                "%s may not be rewritten",
+                v0.norm(), hp0.floor_u, sourceName(head0.src));
 
   // === 2. author contracts + slices on the route ===
   std::vector<Contract> contracts;
@@ -2170,38 +2196,6 @@ PlanResult SegmentChainPlanner::planOverRoute(
   if (slices.size() != static_cast<size_t>(segments_))
     return fallback("committed route did not slice cleanly");
 
-  // Segment 1's head is the MISSION start: replicate [VEL-ALIGN] (the
-  // route is known here) and the [STALL-FLOOR] the bypassed planGlobalTraj
-  // path would have applied. Never on a transition-prescribed head: a
-  // trajectory-derived state that passed the handoff gate must not be
-  // speed-floored into a different one (the guard is structural, not a
-  // numeric coincidence).
-  if (const auto *dyn = transition == nullptr ? pm_->dynamicsParams()
-                                              : nullptr) {
-    double um = 100.0;
-    if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-      um = node_->get_parameter("optimization/dynamics_unit_xy_m")
-               .as_double();
-    // Same degenerate-unit guard as dynamicsMinSpeedFloorUnits(): an
-    // unguarded division turned dynamics_unit_xy_m=0 into an INFINITE
-    // stall floor (audit find).
-    const double floor =
-        um <= 1e-9
-            ? 0.0
-            : dyn->speed_min_mps * (1.0 + dyn->constraint_margin) / um;
-    if (floor > 0.0 && v0.norm() < floor) {
-      Eigen::Vector3d dir = v0;
-      if (dir.norm() < 1e-9 && route.size() >= 2) {
-        dir = route[1] - route[0];
-        dir.z() = 0.0;
-      }
-      if (dir.norm() < 1e-9) dir = Eigen::Vector3d::UnitX();
-      log_->warnf("[CHAIN-PAR] start speed %.3f below stall floor %.3f — "
-                  "raised (same contract as [STALL-FLOOR])",
-                  v0.norm(), floor);
-      v0 = dir.normalized() * floor;
-    }
-  }
   const double author_ms = ms_since(t_wall);
 
   // === 3. per-worker optimizer instances (serial: setParam snapshots
