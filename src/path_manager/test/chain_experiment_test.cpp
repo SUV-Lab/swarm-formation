@@ -184,7 +184,7 @@ int main(int argc, char **argv)
        with_headsrc = false, with_legpolicy = false, with_legtags = false,
        with_legleadin = false, with_legchain = false, with_legaudit = false,
        with_wpzonepass0 = false, with_legmid = false,
-       with_cutarc = false,
+       with_cutarc = false, with_transwp = false, with_legseam = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -352,6 +352,8 @@ int main(int argc, char **argv)
     if (v == "legaudit") { with_legaudit = true; }
     if (v == "legmid") { with_legmid = true; }
     if (v == "cutarc") { with_cutarc = true; }
+    if (v == "legseam") { with_legseam = true; }
+    if (v == "transwp") { with_transwp = true; with_route = true; }
     if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
@@ -405,7 +407,7 @@ int main(int argc, char **argv)
     // zonewall: block the OVER-THE-TOP escape (default vertical ratio
     // 0.35 leaves a ~12 u ceiling the front end can climb past) so the
     // wall is genuinely unavoidable and the soft passes must run.
-    if (with_transition || with_waypoints)
+    if (with_transition || with_waypoints || with_transwp)
       ovr.emplace_back("transition/enable", true);
     // These four pin the flag OFF because that is the contract they test:
     // with no transition planner behind it, a commanded start outside the
@@ -1877,6 +1879,176 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_legseam) {
+    using ZD = path_manager::PathManager::ZoneDisposition;
+    // [LEG-POLICY] The REFUSING half of the handover rule, and the only place
+    // the stricter-of-two merge can be made to matter.
+    //
+    // Why it needs a synthesised flight: a seam is a mission waypoint, i.e.
+    // the outgoing leg's goal AND the incoming leg's start, and the front end
+    // grants a containment exemption on either (dyn_a_star.h prepareBarrier,
+    // `if (s_in || g_in)`). So any zone covering a real seam exempts BOTH
+    // adjoining legs and the two sides can never disagree there. Planning
+    // cannot produce the case; the evaluator still has to get it right.
+    //
+    // A zone on the MISSION START gives the asymmetry the merge exists for —
+    // leg 0 holds it as SOFT_ENDPOINT, leg 1 calls it HARD_AVOID — and the
+    // map handed to the audit puts leg 1 BEFORE leg 0, so the merge has to
+    // reach backwards for the HARD_AVOID rather than find it on the piece it
+    // is standing on. Delete the merge and the seam reads soft.
+    path_manager::RiskZone z;
+    z.center = start_pos;
+    // 20 u, not something small enough for the 0.1 s grid to step over. Those
+    // two wishes are incompatible: the containment exemption is only granted
+    // for a zone the front end can resolve (measured — at 0.05 u both legs
+    // came back HARD_AVOID, at 2 u leg 0 fell to SOFT_FALLBACK, and only at
+    // 20 u does leg 0 read SOFT_ENDPOINT), while stepping over a zone at the
+    // 2.0 u/s speed cap needs it under 0.2 u. So this pins the seam COUNTER
+    // and the merge DIRECTION; it does not pin a refusal that only the seam
+    // could have produced.
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+    const Eigen::Vector3d mid(180.0, 80.0, 3.0);
+    expect(pm->planGlobalTraj(
+               mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                      start_vel, start_acc),
+               {mid, goal[0]}),
+           "the two-leg mission plans, capturing both legs");
+    const auto &legs = pm->legPolicySnapshots();
+    expect(legs.size() == 2 && !legs[0].policy.zones.empty() &&
+               !legs[1].policy.zones.empty(),
+           "both legs captured a policy for the zone");
+    if (legs.size() != 2 || legs[0].policy.zones.empty() ||
+        legs[1].policy.zones.empty()) {
+      std::cout << "FAIL: " << failures << " failed check(s)\n";
+      return 1;
+    }
+    std::cout << "[LEG-SEAM] dispositions leg0="
+              << (int)legs[0].policy.zones[0].disposition << " leg1="
+              << (int)legs[1].policy.zones[0].disposition << "\n";
+    expect(legs[0].policy.zones[0].disposition == ZD::SOFT_ENDPOINT &&
+               legs[1].policy.zones[0].disposition == ZD::HARD_AVOID,
+           "leg 0 is exempt at its own start, leg 1 is not");
+
+    // Straight and level THROUGH the zone centre, with the piece seam exactly
+    // on it. 25 u per 16 s piece is 1.5625 u/s = 156 m/s — inside the cruise
+    // band, so no_cruise cannot stand in for the cause under test.
+    const Eigen::Vector3d a(z.center.x() - 25.0, z.center.y(), z.center.z());
+    const Eigen::Vector3d b(z.center.x() + 25.0, z.center.y(), z.center.z());
+    const auto seg = [&](const Eigen::Vector3d &p0, const Eigen::Vector3d &p1) {
+      Eigen::Matrix<double, 3, 6> c = Eigen::Matrix<double, 3, 6>::Zero();
+      c.col(5) = p0;
+      c.col(4) = (p1 - p0) / 16.0;
+      return c;
+    };
+    const poly_traj::Trajectory seam(
+        std::vector<double>{16.0, 16.0},
+        std::vector<poly_traj::CoefficientMat>{seg(a, z.center),
+                                               seg(z.center, b)});
+    const std::vector<size_t> map = {1, 0};   // leg 1 first, then leg 0
+    const auto fv = chain.evaluateFlightForTest(
+        seam, {{seam.getTotalDuration(),
+                path_manager::SegmentChainPlanner::PhaseKind::CRUISE,
+                "synthetic"}},
+        &map);
+    std::cout << "[LEG-SEAM] hard=" << fv.zone_hard_n
+              << " junctions=" << fv.zone_junction_n
+              << " junction_hard=" << fv.zone_junction_hard_n
+              << " measurable=" << (fv.policy_measurable ? 1 : 0)
+              << " no_cruise=" << (fv.no_cruise ? 1 : 0) << "\n";
+    expect(fv.evaluated, "the synthetic flight was evaluated");
+    expect(fv.policy_measurable, "...with per-piece attribution engaged");
+    expect(!fv.no_cruise && !fv.underground,
+           "...and no other unflyable cause standing");
+    expect(fv.zone_junction_n == 1, "the one handover was examined");
+    expect(fv.zone_junction_hard_n == 1,
+           "and it is inside the authored volume under the STRICTER of the "
+           "two policies — the piece it sits on says SOFT_ENDPOINT, and the "
+           "merge has to reach back to the other leg to find HARD_AVOID");
+    expect(fv.unflyable(), "which refuses the flight");
+
+    // Control: the natural order. Here the piece the seam sits on already
+    // says HARD_AVOID, so the count comes out the same whether the merge
+    // runs or not — which is why the reversed map above is the one that
+    // pins it.
+    const std::vector<size_t> natural = {0, 1};
+    const auto fv2 = chain.evaluateFlightForTest(
+        seam, {{seam.getTotalDuration(),
+                path_manager::SegmentChainPlanner::PhaseKind::CRUISE,
+                "synthetic"}},
+        &natural);
+    expect(fv2.zone_junction_hard_n == 1,
+           "...and the same seam under the natural order is hard either way");
+    const path_manager::PlanResult pr = chain.verdictResultForTest(fv);
+    expect(!pr.hasTrajectory(),
+           "the refusal reaches the caller, not just the counter");
+    expect(pr.detail.find("leg handover") != std::string::npos,
+           "...and it SAYS which hazard, instead of an empty parenthesis");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_transwp) {
+    // [LEG-POLICY] The scope contract for transition + multi-waypoint.
+    //
+    // plan() dispatches TRANSITION_REQUIRED at :426, BEFORE planImpl's
+    // single-goal guard, so the coordinator really does see the full
+    // waypoint list — the earlier claim that multi-leg missions cannot
+    // reach a stitched flight was simply wrong, and this variant is the
+    // measurement that settles it.
+    const Eigen::Vector3d v32(1.6, 0.0, 1.0);  // 188.7 m/s at 32 deg
+    std::vector<Eigen::Vector3d> legs;
+    legs.push_back(0.5 * (start_pos + goal[0]));
+    legs.push_back(goal[0]);
+    const auto fly = [&]() {
+      return chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR,
+                               start_pos, v32, start_acc, false), legs, {});
+    };
+
+    // ZONE-FREE: supported, and it flies. Nothing to attribute means the
+    // plan-wide snapshot is valid and is the right answer, so refusing this
+    // would be removing working behaviour to make a comment true.
+    const path_manager::PlanResult r0 = fly();
+    std::cout << "[TRANS-WP] no zones: outcome=" << (int)r0.outcome
+              << " reason=" << (int)r0.reason
+              << " legs=" << pm->legPolicySnapshots().size()
+              << " pieces=" << pm->traj_.local_traj.traj.getPieceNum() << "\n";
+    expect(r0.hasTrajectory(),
+           "a multi-waypoint TRANSITION mission with no zones flies — it "
+           "reaches the stitched path that planImpl's guard hides");
+    expect(pm->legPolicySnapshots().size() == 2,
+           "...over a genuinely multi-leg committed route");
+
+    // WITH A ZONE: refused, and refused for the RIGHT reason. The
+    // coordinator screens its entry against one plan-wide policy and a
+    // multi-leg front end has none; the stitched product has no
+    // piece-to-leg map either, so nothing downstream could attribute a
+    // contact. That is a scope statement, and it used to be reported as
+    // TRANSITION_GENERATION_FAILED — a stage that had not run.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(600.0, 600.0, 3.0);   // far off the route
+    z.reach = 20.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+    const path_manager::PlanResult r1 = fly();
+    std::cout << "[TRANS-WP] with zone: outcome=" << (int)r1.outcome
+              << " reason=" << (int)r1.reason << " detail=" << r1.detail
+              << "\n";
+    expect(!r1.hasTrajectory(), "add a zone and the same mission is refused");
+    expect(r1.reason ==
+               path_manager::PlanReason::TRANSITION_MULTI_LEG_UNSUPPORTED,
+           "...as an explicit SCOPE refusal, not as a generation failure");
+    expect(r1.detail.find("not supported") != std::string::npos,
+           "...and the detail says so in words a caller can act on");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_cutarc) {
     // [LEG-POLICY] cutAtArc's tag rule, pinned as a PURE FUNCTION. Its only
     // production consumer is the transition path, which does not read the
@@ -2296,6 +2468,24 @@ int main(int argc, char **argv)
     expect(pm->lastCommittedRouteEdgeLeg().empty(),
            "a route that arrived from outside has NO provenance — not leg 0 "
            "by default");
+
+    // A plan that is REFUSED at the entry gate must not leave the previous
+    // plan's products standing behind the accessors. Those returns fire
+    // before anything is written, so without a reset at the top the audit
+    // would size a stale map against a trajectory it never came from — and
+    // both halves would be individually well-formed, so no size check could
+    // catch it. A default-constructed head is UNSPECIFIED, which is the
+    // cheapest of those refusals to reach.
+    expect(!pm->planGlobalTraj(path_manager::StartHead{}, {goal[0]}),
+           "an UNSPECIFIED head is refused at the entry gate");
+    expect(pm->lastPieceLeg().empty() &&
+               pm->lastCommittedRouteEdgeLeg().empty() &&
+               pm->lastCommittedRouteEpoch() == 0,
+           "...and the refused call leaves NO provenance from the plan before "
+           "it");
+    expect(pm->lastCommittedRoute().empty() &&
+               pm->lastCommittedCapRef().empty(),
+           "...nor the committed route it never produced");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -2961,22 +3151,23 @@ int main(int argc, char **argv)
     using PK = path_manager::SegmentChainPlanner::PhaseKind;
     using Span = path_manager::SegmentChainPlanner::PhaseSpan;
     // Each span-contract violation must yield UNEVALUATED.
-    expect(!chain.evaluateFlight(traj, {{T * 0.5, PK::CRUISE, "short"}})
+    expect(!chain.evaluateFlight(traj, {{T * 0.5, PK::CRUISE, "short"}},
+                                 nullptr)
                 .evaluated,
            "last span not covering the flight -> UNEVALUATED");
     expect(!chain.evaluateFlight(
                   traj, {{T * 0.6, PK::CRUISE, "a"}, {T * 0.4, PK::CRUISE,
-                                                      "b"}})
+                                                      "b"}}, nullptr)
                 .evaluated,
            "non-increasing t_end -> UNEVALUATED");
     expect(!chain.evaluateFlight(
                   traj, {{T * 0.5, PK::CRUISE, "cruise"},
-                         {T, PK::TRANSITION, "late-transition"}})
+                         {T, PK::TRANSITION, "late-transition"}}, nullptr)
                 .evaluated,
            "TRANSITION after cruise -> UNEVALUATED");
     expect(!chain.evaluateFlight(
                   traj, {{T * 0.5, PK::TERMINAL, "terminal"},
-                         {T, PK::CRUISE, "tail"}})
+                         {T, PK::CRUISE, "tail"}}, nullptr)
                 .evaluated,
            "TERMINAL not last -> UNEVALUATED");
     // The UNEVALUATED -> FAILED(+storage invalidated) verdict mapping is

@@ -791,6 +791,12 @@ std::string PathManager::stateEnvelopeProblem(
         last_route_edge_leg_.clear();
         last_route_epoch_ = 0;
         last_piece_leg_.clear();
+        // Same argument, same call: the committed route and its cap are
+        // products of THIS plan. Their two production readers run only after
+        // a success, but "nobody reads it wrong today" is not the property —
+        // "it cannot be read wrong" is.
+        last_clean_path_.clear();
+        last_cap_ref_.clear();
         if (head.src == StartStateSource::UNSPECIFIED) {
             log_manager_->errorf(
                 "[HEAD-POLICY] planGlobalTraj called with an UNSPECIFIED "
@@ -1145,12 +1151,12 @@ std::string PathManager::stateEnvelopeProblem(
         // [LEG-POLICY] Tags and epoch travel together or not at all: a tag
         // set without the epoch that minted it cannot be checked for
         // staleness, and an epoch without tags indexes nothing.
+        // Only the positive case assigns: anything else leaves them as the
+        // entry reset above left them, which is empty. A second clear here
+        // would be a branch no test can kill.
         if (edge_leg.size() + 1 == clean_path.size() && !clean_path.empty()) {
             last_route_edge_leg_ = edge_leg;
             last_route_epoch_ = zone_policy_epoch_;
-        } else {
-            last_route_edge_leg_.clear();
-            last_route_epoch_ = 0;
         }
         if (front_end_only) {
             // [CHAIN-PAR] route-based contract authoring needs only the

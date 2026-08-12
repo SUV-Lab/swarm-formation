@@ -452,7 +452,8 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
     log_->infof("[PLAN-MODE] direct");
     const poly_traj::Trajectory &mw = pm_->traj_.local_traj.traj;
     const FlightVerdict mv = evaluateFlight(
-        mw, {{mw.getTotalDuration(), PhaseKind::CRUISE, "direct"}});
+        mw, {{mw.getTotalDuration(), PhaseKind::CRUISE, "direct"}},
+        &pm_->lastPieceLeg());
     // A multi-leg front end runs one zone search PER LEG and
     // zonePolicySnapshot is plan-wide-or-nothing (path_manager.cpp), so
     // every multi-waypoint mission with a zone ANYWHERE reports
@@ -472,11 +473,13 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
     if (!mv.evaluated || mv.unflyableMeasured() || unmeasured_blocks) {
       char why[256];
       snprintf(why, sizeof why,
-               "multi-waypoint single-shot flight is unflyable (%s%s%s%s%s)",
+               "multi-waypoint single-shot flight is unflyable (%s%s%s%s%s%s)",
                !mv.evaluated ? "not evaluated" : "",
                mv.underground ? "terrain overlap; " : "",
                mv.no_cruise ? "never reaches cruise; " : "",
                mv.zone_hard_n > 0 ? "authored zone entered; " : "",
+               mv.zone_junction_hard_n > 0
+                   ? "leg handover inside an authored zone; " : "",
                unmeasured_blocks
                    ? "zone policy could not be evaluated on a multi-leg "
                      "mission — set manager/allow_unmeasured_zone_policy to "
@@ -561,7 +564,8 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   const auto baseline_gate = [&](const poly_traj::Trajectory &b)
       -> std::optional<PlanResult> {
     const auto bv = evaluateFlight(
-        b, {{b.getTotalDuration(), PhaseKind::CRUISE, "baseline"}});
+        b, {{b.getTotalDuration(), PhaseKind::CRUISE, "baseline"}},
+        &pm_->lastPieceLeg());
     baseline_verdict = bv;
     // !evaluated must fail too. unflyable() is false when nothing was
     // judged, so testing it alone lets a flight the evaluator could not
@@ -569,12 +573,14 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
     if (bv.evaluated && !bv.unflyable()) return std::nullopt;
     char why[176];
     snprintf(why, sizeof why,
-             "baseline flight is unflyable (%s%s%s%s%s) — whole-flight "
+             "baseline flight is unflyable (%s%s%s%s%s%s) — whole-flight "
              "evaluation",
              !bv.evaluated ? "not evaluated" : "",
              bv.underground ? "terrain overlap; " : "",
              bv.no_cruise ? "never reaches cruise; " : "",
              bv.zone_hard_n > 0 ? "authored zone entered; " : "",
+             bv.zone_junction_hard_n > 0
+                 ? "leg handover inside an authored zone; " : "",
              !bv.evaluated ? "" :
                  (!bv.policy_measurable ? "zone policy unevaluated" : ""));
     log_->errorf("[STITCH-GATE] %s", why);
@@ -901,7 +907,10 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   // and flown"), so an unflyable STITCH degrades onto the baseline instead
   // of failing (review find). Route mode has no baseline, so there FAILED
   // is the only honest answer.
-  const FlightVerdict fv = evaluateFlight(chained, spans);
+  // Stitched: the manager's map describes ONE segment solve, not this
+  // concatenation. Saying so is the contract; letting a size comparison
+  // decide it was a coincidence that held only while the counts differed.
+  const FlightVerdict fv = evaluateFlight(chained, spans, nullptr);
   if (!fv.evaluated || fv.unflyable()) {
     // UNEVALUATED joins unflyable here too (fail-closed): the baseline is
     // still the honest repair — a judged-good baseline beats refusing the
@@ -1702,10 +1711,29 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   // [2] zone policy snapshot — fail-closed precondition. INVALID (pass 0,
   // stale data, multi-leg search) means the transition cannot be judged.
   const auto snap = pm_->zonePolicySnapshot();
-  if (!snap.valid)
+  if (!snap.valid) {
+    // [LEG-POLICY] Say WHICH of the two this is. A multi-leg mission with a
+    // zone has no plan-wide policy by construction — that is a statement
+    // about scope, and reporting it as TRANSITION_GENERATION_FAILED named a
+    // stage 150 lines below that had not run. Everything else here really is
+    // a generation precondition that failed.
+    //
+    // Note what is NOT refused: a multi-waypoint transition mission with no
+    // zones. The snapshot is valid then (risk_zones_.empty() short-circuits),
+    // there is nothing to attribute, and the flight is judged whole exactly
+    // as a single-goal one is. Refusing it would remove working behaviour to
+    // make a comment true.
+    if (waypoints.size() > 1 && pm_->numRiskZones() > 0)
+      return fail(PlanReason::TRANSITION_MULTI_LEG_UNSUPPORTED,
+                  "a transition mission with " +
+                      std::to_string(waypoints.size()) +
+                      " waypoints and a risk zone is not supported: the "
+                      "coordinator judges its entry against ONE plan-wide "
+                      "zone policy, and a multi-leg front end has none");
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "zone policy snapshot invalid — transition cannot be "
                 "judged against the committed policy");
+  }
 
   // [3] entry screening — the SAME frozen [PHASE] predicates plus the
   // speed-change arc a cruise-to-cruise screen never needed.
@@ -2201,7 +2229,8 @@ PlanResult SegmentChainPlanner::planOverRoute(
       // seed would gate on a trajectory nobody flies — review find.
       const poly_traj::Trajectory &fly = pm_->traj_.local_traj.traj;
       const FlightVerdict fv = evaluateFlight(
-          fly, {{fly.getTotalDuration(), PhaseKind::CRUISE, "direct"}});
+          fly, {{fly.getTotalDuration(), PhaseKind::CRUISE, "direct"}},
+          &pm_->lastPieceLeg());
       direct_verdict = fv;
       // Fail-CLOSED (review find): a flight the evaluator could not judge
       // is as unflyable as one it condemned — "no verdict" must never read
@@ -2216,11 +2245,13 @@ PlanResult SegmentChainPlanner::planOverRoute(
                    "fitness gate (degenerate product)");
         } else {
           snprintf(why2, sizeof why2,
-                   "direct fallback failed the flight fitness gate (%s%s%s%senv "
+                   "direct fallback failed the flight fitness gate (%s%s%s%s%senv "
                    "viol %.1f%%, peak %.1f%%)",
                    fv.underground ? "terrain overlap, " : "",
                    fv.no_cruise ? "never reaches cruise, " : "",
                    fv.zone_hard_n > 0 ? "authored zone entered, " : "",
+                   fv.zone_junction_hard_n > 0
+                       ? "leg handover inside an authored zone, " : "",
                    !fv.policy_measurable ? "zone policy unevaluated, " : "",
                    fv.viol_pct, 100.0 * fv.util_peak);
         }
@@ -2880,7 +2911,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // in RViz tells the operator it was accepted. FAILED leaves both untouched.
   last_spans_ = spans;
   const FlightVerdict stitched_fv =
-      evaluateFlight(chained, spans);
+      evaluateFlight(chained, spans, nullptr);   // stitched: see planImpl
   if (!stitched_fv.evaluated || stitched_fv.unflyable())
     return stitchedVerdictResult(stitched_fv, PlanResult::success());
 
@@ -2959,11 +2990,13 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
   if (fv.unflyable()) {
     char why[176];
     snprintf(why, sizeof why,
-             "stitched flight is unflyable (%s%s%s%s) — whole-flight "
+             "stitched flight is unflyable (%s%s%s%s%s) — whole-flight "
              "evaluation, which no per-solve audit performs",
              fv.underground ? "terrain overlap; " : "",
              fv.no_cruise ? "never reaches cruise; " : "",
              fv.zone_hard_n > 0 ? "authored zone entered; " : "",
+             fv.zone_junction_hard_n > 0
+                 ? "leg handover inside an authored zone; " : "",
              !fv.policy_measurable ? "zone policy unevaluated" : "");
     log_->errorf("[STITCH-GATE] %s", why);
     // Nothing stored on this path today, but the guarantee has to hold for
@@ -3000,7 +3033,8 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
 
 SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     const poly_traj::Trajectory &flight,
-    const std::vector<PhaseSpan> &spans) const
+    const std::vector<PhaseSpan> &spans,
+    const std::vector<size_t> *piece_leg_in) const
 {
   // Clear FIRST, so an early return can never leave the PREVIOUS flight's
   // verdict readable through lastFlightVerdict(). A regression that asserts
@@ -3133,7 +3167,8 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   // then refuses in the usual way. Notably a STITCHED flight lands here — the
   // manager's map describes the last segment only, and the piece counts
   // disagree, which is exactly the disagreement that must not be papered over.
-  const auto &piece_leg = pm_->lastPieceLeg();
+  static const std::vector<size_t> kNoPieceLeg;
+  const auto &piece_leg = piece_leg_in ? *piece_leg_in : kNoPieceLeg;
   const auto &leg_pols = pm_->legPolicySnapshots();
   bool per_piece = !piece_leg.empty() && !leg_pols.empty() &&
                    piece_leg.size() ==
@@ -3184,10 +3219,13 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
       [&](double t) -> const PathManager::ZonePolicySnapshot & {
     if (!per_piece) return eval_snap;
     double rem = t;
-    int pi = flight.locatePieceIdx(rem);
-    if (pi < 0) pi = 0;
-    if (pi >= static_cast<int>(piece_leg.size()))
-      pi = static_cast<int>(piece_leg.size()) - 1;
+    const int pi = flight.locatePieceIdx(rem);
+    // Out of range is a refusal, not a clamp. Pinning it to 0 or to the last
+    // index hands those samples leg 0's or the LAST leg's policy — which is
+    // the exact failure this whole mechanism exists to prevent, arriving
+    // through the back door. eval_snap is INVALID for a multi-leg mission, so
+    // returning it here refuses in the usual way.
+    if (pi < 0 || pi >= static_cast<int>(piece_leg.size())) return eval_snap;
     return leg_pols[piece_leg[static_cast<size_t>(pi)]].policy;
   };
   // Same counting doctrine as the solver's [CONV-REJECT] audit, latch
@@ -3509,12 +3547,13 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
                 tot.risk_int, tot.zone_standoff_n, tot.zone_standoff_s,
                 tot.zone_soft_n, tot.zone_soft_s);
   } else {
-    log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s%s%s(AGL min %.3f u "
+    log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s%s%s%s(AGL min %.3f u "
                 "@%.0fs, env viol %.1f%%) — the stitched flight carries "
                 "hazards no per-solve audit saw",
                 tot.n_below_ground ? "TERRAIN OVERLAP " : "",
                 no_cruise ? "NEVER REACHES CRUISE " : "",
                 tot.zone_hard_n > 0 ? "AUTHORED ZONE ENTERED " : "",
+                tot.zone_junction_hard_n > 0 ? "LEG HANDOVER IN ZONE " : "",
                 !tot.zone_contact_measurable ? "ZONE POLICY UNEVALUATED " : "",
                 !no_cruise && viol_pct >= viol_max_pct ? "ENVELOPE " : "",
                 tot.min_agl, tot.min_agl_t, viol_pct);

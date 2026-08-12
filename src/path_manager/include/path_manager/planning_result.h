@@ -67,6 +67,20 @@ enum class PlanReason {
   // needs a transition planner (contract 2), not a clamp: rewriting the
   // operator's stated start into a different flyable one is a lie.
   INITIAL_MODE_UNSUPPORTED,
+  // A transition mission with more than one waypoint AND a risk zone. The
+  // transition coordinator screens entry candidates and judges its arc
+  // against ONE plan-wide zone policy, and a multi-leg front end does not
+  // have one — the same zone can be HARD_AVOID on one leg and SOFT_ENDPOINT
+  // on the next. Per-leg policy exists for the single-shot audit, but the
+  // coordinator's product is a STITCHED flight whose piece-to-leg map is not
+  // built, so nothing downstream could attribute a contact either.
+  //
+  // This is a SCOPE statement, not a hazard report. It used to arrive as
+  // TRANSITION_GENERATION_FAILED, which named a stage that had not run and
+  // read as "the generator tried and could not" when the truth is "this
+  // combination is not supported yet". Lifting it means building the
+  // stitched map — see the leg-policy handoff doc.
+  TRANSITION_MULTI_LEG_UNSUPPORTED,
   // The command could not be READ: two stated initial-state sources at once,
   // a non-finite or negative speed, a value with no claim bit. Distinct from
   // INITIAL_STATE_UNSPECIFIED, which means the command was read and said

@@ -207,8 +207,18 @@ public:
                            zone_junction_hard_n > 0);
     }
   };
+  // [LEG-POLICY] `piece_leg` is the caller's statement about what it is
+  // handing over: one leg per MINCO piece of THIS trajectory, or nullptr for
+  // "no per-piece attribution exists here". It is a parameter rather than a
+  // read of PathManager::lastPieceLeg() because that member is a global with
+  // respect to this function: whether attribution engaged was decided by a
+  // size comparison alone, so a stitched flight that happened to have as many
+  // pieces as the last single solve would have been judged under that solve's
+  // map. Single-solve callers pass the manager's map; stitch sites pass
+  // nullptr and are refused in the usual way when zones make that matter.
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
-                               const std::vector<PhaseSpan> &spans) const;
+                               const std::vector<PhaseSpan> &spans,
+                               const std::vector<size_t> *piece_leg) const;
   // [S13] The span list of the LAST stored flight (recorded just before
   // the whole-flight evaluation) — audit/harness observability for the
   // phase semantics; empty when the last plan stored nothing.
@@ -231,8 +241,9 @@ public:
   // prevent exactly that trajectory — so the regression has to supply one.
   FlightVerdict evaluateFlightForTest(
       const poly_traj::Trajectory &flight,
-      const std::vector<PhaseSpan> &spans) const {
-    return evaluateFlight(flight, spans);
+      const std::vector<PhaseSpan> &spans,
+      const std::vector<size_t> *piece_leg = nullptr) const {
+    return evaluateFlight(flight, spans, piece_leg);
   }
   // ...and the mapping from that verdict to what the caller receives, so a
   // regression can pin BOTH halves: that a hard contact is detected, and
