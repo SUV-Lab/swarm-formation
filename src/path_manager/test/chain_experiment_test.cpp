@@ -161,7 +161,7 @@ int main(int argc, char **argv)
        with_zonewall = false, with_zonepass0 = false, with_hardpen = false,
        with_standoffpen = false, with_wpzone = false,
        with_nophasedirect = false, with_baserefuse = false,
-       with_reststart = false,
+       with_reststart = false, with_capstart = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -320,6 +320,7 @@ int main(int argc, char **argv)
     if (v == "nophasedirect") { with_route = true; with_autosmall = true; with_nophasedirect = true; }
     if (v == "baserefuse") { with_autosmall = true; with_baserefuse = true; }
     if (v == "reststart") { with_route = true; with_reststart = true; }
+    if (v == "capstart") { with_route = true; with_capstart = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -1772,6 +1773,66 @@ int main(int argc, char **argv)
     expect(pm->traj_.local_traj.duration == 0.0 &&
                pm->traj_.local_traj.start_time == 0.0,
            "...and the stored trajectory stops being executable");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_capstart) {
+    // A start speed stated EXACTLY at the planning cap must be CRUISE_VALID.
+    // Eight of the ten shipped missions state exactly optimization/max_vel *
+    // unit = 200.0 m/s, and the handoff ceiling comparison was a strict
+    // vm > vmax with no tolerance — so those missions sat on the last bits
+    // of the first-leg direction normalization (|dir| = 1 +- 1e-16 puts vm
+    // at 200.0 +- 2e-14) and passed or classified TRANSITION_REQUIRED by
+    // rounding. Nothing flipped that coin while the scalar form bypassed the
+    // validator; unifying the two forms started flipping it, and
+    // r5_extended_corridor came up tails in a live sweep.
+    double mv = 2.0;
+    if (node->has_parameter("optimization/max_vel"))
+      node->get_parameter("optimization/max_vel", mv);
+    const Eigen::Vector3d dir =
+        Eigen::Vector3d(-0.0916, -0.9958, 0.0).normalized();
+    const Eigen::Vector3d at_cap = dir * mv;
+
+    // The VALIDATOR directly, because going through plan() only exercises
+    // whichever way this particular direction happens to round — the first
+    // attempt at this variant picked a direction that rounds DOWN, so it
+    // passed with the strict comparison too and pinned nothing.
+    //
+    // The contract is: exactly at the cap passes, one ULP above the cap
+    // still passes (that is arithmetic noise, not a faster aircraft), and a
+    // real overspeed is still refused.
+    expect(pm->stateEnvelopeProblem(at_cap).empty(),
+           "a state exactly AT the handoff ceiling is accepted");
+    const double one_ulp_over = std::nextafter(mv, 1e9);
+    expect(pm->stateEnvelopeProblem(dir * one_ulp_over).empty(),
+           "...and one ULP above it too — that is rounding, not overspeed");
+    const std::string over = pm->stateEnvelopeProblem(dir * (mv * 1.01));
+    expect(!over.empty(),
+           "...while a genuine 1% overspeed is still refused");
+    expect(over.find("maximum") != std::string::npos ||
+               over.find("cap") != std::string::npos,
+           "...for the ceiling, by name");
+
+    for (int form = 0; form < 2; ++form) {
+      const bool as_vector = (form == 1);
+      const path_manager::PlanResult r =
+          as_vector
+              ? chain.plan(start_pos, at_cap, start_acc, goal, false, {},
+                           /*start_vel_commanded=*/true,
+                           /*start_acc_commanded=*/false)
+              : chain.plan(start_pos, at_cap, start_acc, goal, true, {});
+      const std::string tag = as_vector ? " (vector form)" : " (scalar form)";
+      expect(r.hasTrajectory(),
+             "a start stated exactly AT the planning cap plans" + tag);
+      expect(r.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED &&
+                 r.reason !=
+                     path_manager::PlanReason::TRANSITION_GENERATION_FAILED,
+             "...and is not pushed into the transition regime by rounding" +
+                 tag);
+    }
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
