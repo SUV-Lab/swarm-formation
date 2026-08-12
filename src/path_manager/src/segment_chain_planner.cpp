@@ -3106,6 +3106,11 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     Eigen::Vector3d zone_hard_qmin_p{Eigen::Vector3d::Zero()};
     double zone_hard_qmin_vis{-1.0};
     int zone_hard_qmin_zone{-1};
+    // [LEG-POLICY] Piece boundaries where the leg changes hands, audited
+    // EXHAUSTIVELY and separately from the 0.1 s grid. They are instants,
+    // not dwell: they contribute counts and the refusal, never seconds.
+    int zone_junction_n{0};        // leg-change boundaries examined
+    int zone_junction_hard_n{0};   // ...of which entered an authored volume
   };
   std::vector<PhaseStat> st(spans.size());
 
@@ -3135,12 +3140,16 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
                        static_cast<size_t>(flight.getPieceNum());
   if (per_piece) {
     for (size_t i = 0; i < leg_pols.size() && per_piece; ++i) {
-      // leg i at index i, serials strictly increasing: a hole or a
-      // double-write in the capture sequence is a programming error, and
-      // "some legs" is not a set this may average over.
+      // leg i at index i, and serial exactly i + 1. The searcher increments
+      // its per-epoch counter once per leg search and captures with the new
+      // value, so a clean run is 1, 2, 3, ... — CONTIGUOUS. Testing only that
+      // serials increase accepts [1, 3], which is a set with a hole in the
+      // middle, and this code's whole promise is that it refuses those. A
+      // hole or a double-write is a programming error, and "some legs" is not
+      // a set this may average over.
       if (leg_pols[i].leg != i || !leg_pols[i].policy.valid ||
           leg_pols[i].policy.zones.size() != nz ||
-          (i > 0 && leg_pols[i].search_serial <= leg_pols[i - 1].search_serial))
+          leg_pols[i].search_serial != i + 1)
         per_piece = false;
     }
     for (size_t leg : piece_leg)
@@ -3159,13 +3168,18 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     log_->infof("[LEG-POLICY] audit reads policy per piece: %zu pieces over "
                 "%zu legs", piece_leg.size(), leg_pols.size());
 
-  // The policy in force at time t. A sample landing exactly on a piece
-  // boundary belongs to both pieces, so it takes the STRICTER of the two:
-  // an exemption earned on one leg does not extend across the junction into
-  // a leg that never had it. Stricter here means HARD_AVOID and nothing
-  // else — that is the only distinction the audit draws below, and inventing
-  // an order among the SOFT_* kinds would be an ordering no consumer reads.
-  PathManager::ZonePolicySnapshot junction_buf;
+  // The policy in force at time t, for the ordinary 0.1 s samples: whichever
+  // piece the sample falls in.
+  //
+  // This deliberately does NOT try to detect boundaries. locatePieceIdx
+  // advances only while `t > duration` (poly_traj_utils.hpp), so at exactly a
+  // seam it returns the PREVIOUS piece with the remainder equal to that
+  // piece's whole duration — not the next piece at remainder zero. A boundary
+  // test written against the second (wrong) reading is dead code, which is
+  // what the first version of this was: `rem <= 1e-9` never held. And a
+  // 0.1 s grid lands on an exact seam only by coincidence, so even a correct
+  // test here would go unexercised. Seams are handled exhaustively below
+  // instead, where their times are known exactly rather than sampled for.
   const auto policyAt =
       [&](double t) -> const PathManager::ZonePolicySnapshot & {
     if (!per_piece) return eval_snap;
@@ -3174,22 +3188,7 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     if (pi < 0) pi = 0;
     if (pi >= static_cast<int>(piece_leg.size()))
       pi = static_cast<int>(piece_leg.size()) - 1;
-    const size_t leg = piece_leg[static_cast<size_t>(pi)];
-    // locatePieceIdx leaves `rem` as the offset into the piece it chose, so
-    // a sample sitting on the seam shows up as rem ~ 0 with a previous piece
-    // to compare against.
-    if (rem > 1e-9 || pi == 0) return leg_pols[leg].policy;
-    const size_t prev = piece_leg[static_cast<size_t>(pi) - 1];
-    if (prev == leg) return leg_pols[leg].policy;
-    junction_buf = leg_pols[leg].policy;
-    const auto &other = leg_pols[prev].policy;
-    for (size_t zi = 0;
-         zi < junction_buf.zones.size() && zi < other.zones.size(); ++zi) {
-      if (other.zones[zi].disposition == PathManager::ZoneDisposition::HARD_AVOID)
-        junction_buf.zones[zi].disposition =
-            PathManager::ZoneDisposition::HARD_AVOID;
-    }
-    return junction_buf;
+    return leg_pols[piece_leg[static_cast<size_t>(pi)]].policy;
   };
   // Same counting doctrine as the solver's [CONV-REJECT] audit, latch
   // included: the pre-cruise ramp (a rest-start mission legitimately
@@ -3320,6 +3319,74 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     }
   }
 
+  // [LEG-POLICY] Leg handovers, audited exhaustively and off the grid.
+  //
+  // A seam between two legs is one instant. The 0.1 s sampler will land on it
+  // only by coincidence, so the sampler cannot be the thing that enforces the
+  // handover rule — the times have to be enumerated. They are known exactly:
+  // the cumulative duration at every piece i where piece_leg[i-1] differs
+  // from piece_leg[i].
+  //
+  // At that instant the point belongs to both legs, so it is judged under the
+  // STRICTER of the two policies. Stricter means HARD_AVOID and nothing else:
+  // that is the only distinction drawn below, and inventing an order among
+  // the SOFT_* kinds would be an ordering no consumer reads. The effect is
+  // that an exemption earned on one leg — a start or goal containment — stops
+  // at the junction instead of leaking into a leg that never had it.
+  //
+  // These feed their own counters. Folding them into the 0.1 s totals would
+  // add dwell seconds to an instant and make `n` mean two different things.
+  if (per_piece && nz > 0) {
+    PathManager::ZonePolicySnapshot merged;
+    double t_seam = 0.0;
+    for (size_t i = 0; i + 1 < piece_leg.size(); ++i) {
+      t_seam += flight[static_cast<int>(i)].getDuration();
+      const size_t a = piece_leg[i], b = piece_leg[i + 1];
+      if (a == b) continue;
+      size_t ph = 0;
+      while (ph + 1 < spans.size() && t_seam >= spans[ph].t_end) ++ph;
+      PhaseStat &s = st[ph];
+      ++s.zone_junction_n;
+
+      merged = leg_pols[b].policy;
+      const auto &other = leg_pols[a].policy;
+      for (size_t zi = 0; zi < merged.zones.size() && zi < other.zones.size();
+           ++zi) {
+        if (other.zones[zi].disposition ==
+            PathManager::ZoneDisposition::HARD_AVOID)
+          merged.zones[zi].disposition =
+              PathManager::ZoneDisposition::HARD_AVOID;
+      }
+
+      const Eigen::Vector3d p = flight.getPos(t_seam);
+      bool jhard = false;
+      for (size_t zi = 0; zi < nz; ++zi) {
+        switch (pm_->zoneContact(merged, zi, p)) {
+          case PathManager::ZoneContactResult::CONTACT:
+            if (zi < merged.zones.size() &&
+                merged.zones[zi].disposition ==
+                    PathManager::ZoneDisposition::HARD_AVOID &&
+                pm_->zoneContactAuthored(merged, zi, p))
+              jhard = true;
+            break;
+          case PathManager::ZoneContactResult::STALE:
+          case PathManager::ZoneContactResult::INVALID:
+            s.zone_contact_measurable = false;
+            break;
+          case PathManager::ZoneContactResult::CLEAR:
+            break;
+        }
+      }
+      if (jhard) {
+        ++s.zone_junction_hard_n;
+        log_->warnf("[LEG-POLICY] leg %zu -> %zu handover at t=%.3f s is "
+                    "inside an authored volume under the stricter of the two "
+                    "policies",
+                    a, b, t_seam);
+      }
+    }
+  }
+
   log_->infof("[FINAL-EVAL] ===== whole-flight evaluation: %.1f s, %d "
               "pieces, %zu phase(s) =====",
               T, flight.getPieceNum(), spans.size());
@@ -3392,6 +3459,8 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     }
     tot.zone_soft_n += s.zone_soft_n;
     tot.zone_soft_s += s.zone_soft_s;
+    tot.zone_junction_n += s.zone_junction_n;
+    tot.zone_junction_hard_n += s.zone_junction_hard_n;
     tot.zone_contact_measurable &= s.zone_contact_measurable;
     if (s.util_peak > tot.util_peak) {
       tot.util_peak = s.util_peak;
@@ -3419,7 +3488,12 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   // had no influence over — the number was reported, not enforced. An
   // unjudgeable snapshot is treated like a contact rather than like clear:
   // "we could not check" is not evidence of safety.
-  const bool zone_bad = tot.zone_hard_n > 0 || !tot.zone_contact_measurable;
+  // [LEG-POLICY] A handover that sits inside an authored volume under the
+  // stricter of the two policies refuses the flight exactly as a sampled
+  // contact does. It is one instant rather than 0.1 s of dwell, which is why
+  // it is counted apart — not why it is treated more leniently.
+  const bool zone_bad = tot.zone_hard_n > 0 || tot.zone_junction_hard_n > 0 ||
+                        !tot.zone_contact_measurable;
   // Envelope alone, kept apart from the zone reasons: a caller that has to
   // NAME the cause cannot recover it from `clean`.
   const bool envelope_bad = viol_pct >= viol_max_pct || peak_bad;
@@ -3454,6 +3528,8 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   v.zone_hard_n = tot.zone_hard_n;
   v.zone_standoff_n = tot.zone_standoff_n;
   v.zone_soft_n = tot.zone_soft_n;
+  v.zone_junction_n = tot.zone_junction_n;
+  v.zone_junction_hard_n = tot.zone_junction_hard_n;
   v.policy_measurable = tot.zone_contact_measurable;
   v.viol_pct = viol_pct;
   v.util_peak = tot.util_peak;
@@ -3463,12 +3539,14 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   // dropped call both read as "measurable, no contact".
   log_->infof("[ZONE-AUDIT] hard=%d hard_s=%.1f standoff=%d standoff_s=%.1f "
               "soft=%d soft_s=%.1f measurable=%s sample_dt=%.2f "
-              "risk_max=%.4f risk_exposure_s=%.1f",
+              "risk_max=%.4f risk_exposure_s=%.1f junctions=%d "
+              "junction_hard=%d",
               v.zone_hard_n, tot.zone_hard_s,
               v.zone_standoff_n, tot.zone_standoff_s,
               v.zone_soft_n, tot.zone_soft_s,
               v.policy_measurable ? "true" : "false", dt,
-              tot.risk_max, tot.risk_int);
+              tot.risk_max, tot.risk_int, tot.zone_junction_n,
+              tot.zone_junction_hard_n);
   // The count above says a breach happened; this says WHICH breach. Without
   // it, a 2 m graze of the 1.05x standoff shell and a traverse of the
   // authored volume are the same line — and they are not the same event.

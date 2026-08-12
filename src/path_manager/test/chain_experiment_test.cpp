@@ -184,6 +184,7 @@ int main(int argc, char **argv)
        with_headsrc = false, with_legpolicy = false, with_legtags = false,
        with_legleadin = false, with_legchain = false, with_legaudit = false,
        with_wpzonepass0 = false, with_legmid = false,
+       with_cutarc = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -350,6 +351,7 @@ int main(int argc, char **argv)
     if (v == "legchain") { with_legchain = true; }
     if (v == "legaudit") { with_legaudit = true; }
     if (v == "legmid") { with_legmid = true; }
+    if (v == "cutarc") { with_cutarc = true; }
     if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
@@ -1875,6 +1877,70 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_cutarc) {
+    // [LEG-POLICY] cutAtArc's tag rule, pinned as a PURE FUNCTION. Its only
+    // production consumer is the transition path, which does not read the
+    // tags yet, so an off-by-one in the suffix would have sat here unnoticed
+    // — a mutation was tried against the transition variants and neither
+    // died. Nothing about that rule needs a mission to check it.
+    //
+    // A straight 4-vertex route, 3 edges, arc lengths 0/10/20/30, with the
+    // last edge on a different leg so a shifted suffix is visible in the
+    // VALUES and not only in the length.
+    const std::vector<Eigen::Vector3d> route = {
+        {0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {20.0, 0.0, 0.0}, {30.0, 0.0, 0.0}};
+    const std::vector<double> cap = {1.0, 2.0, 3.0, 4.0};
+    const std::vector<size_t> tags = {0, 0, 1};   // edge i -> leg
+    std::vector<Eigen::Vector3d> out;
+    std::vector<double> ocap;
+    std::vector<size_t> oleg;
+    const auto cut = [&](double s_cut, const std::vector<size_t> &in) {
+      out.clear(); ocap.clear(); oleg.clear();
+      return chain.cutAtArc(route, cap, s_cut, &out, &ocap, in, &oleg);
+    };
+    const auto shows = [&](const std::vector<size_t> &want) {
+      if (oleg.size() != want.size()) return false;
+      for (size_t i = 0; i < want.size(); ++i)
+        if (oleg[i] != want[i]) return false;
+      return true;
+    };
+
+    // (1) inside an edge: the cut splits edge 0 and BOTH halves keep it, so
+    // the surviving tail still starts on edge 0.
+    expect(cut(5.0, tags), "a cut inside the first edge succeeds");
+    expect(out.size() == 4 && oleg.size() + 1 == out.size(),
+           "...one tag per surviving edge");
+    expect(shows({0, 0, 1}), "...and the tail is the whole tag list");
+
+    // (2) exactly on a vertex: nothing of edge 0 survives, so the tail starts
+    // on edge 1. This is the boundary an off-by-one lands on either side of.
+    expect(cut(10.0, tags), "a cut exactly on a vertex succeeds");
+    expect(out.size() == 3 && shows({0, 1}),
+           "...and the tail starts on the edge LEAVING that vertex");
+
+    // (3) the coincident branch: the cut lands within the dedup tolerance of
+    // the next vertex, so the code advances past the edge it consumed.
+    expect(cut(19.9995, tags), "a cut a hair short of a vertex succeeds");
+    expect(out.size() == 2 && shows({1}),
+           "...and lands on the same tail as landing on the vertex would");
+
+    // (4) near the end: one edge left, and it is the last one.
+    expect(cut(29.0, tags), "a cut inside the last edge succeeds");
+    expect(out.size() == 2 && shows({1}), "...leaving only that edge's tag");
+
+    // (5) tags that do not describe this route are refused whole. Not
+    // truncated, not padded — a wrong-length tag list is not evidence.
+    expect(cut(5.0, {0, 0}), "a cut with a short tag list still cuts");
+    expect(oleg.empty(), "...but publishes NO provenance for it");
+
+    // (6) past the end there is nothing to chain over.
+    expect(!cut(30.0, tags), "a cut at or past the total arc length fails");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_legmid) {
     // [LEG-POLICY] The optimizer's OTHER clean_path insertion. A route short
     // enough not to be subdivided arrives as two vertices, which is one MINCO
@@ -1950,6 +2016,29 @@ int main(int argc, char **argv)
            "...and it was measured, not excused: the policy was evaluated");
     expect(r.detail.find("allow_unmeasured_zone_policy") == std::string::npos,
            "...without the unmeasured-policy escape being involved at all");
+
+    // The leg handover is audited EXHAUSTIVELY, off the 0.1 s grid. A seam is
+    // one instant: the sampler lands on it only by coincidence, so the times
+    // have to be enumerated from the piece durations instead of sampled for.
+    // The first version of this did neither — it tried to detect seams inside
+    // the sampler using a locatePieceIdx reading that never occurs (that
+    // function advances only while t > duration, so AT a seam it returns the
+    // previous piece with the remainder equal to that piece's whole duration,
+    // not the next piece at remainder zero). The branch was dead.
+    const auto &fv = chain.lastFlightVerdict();
+    const auto &pl = pm->lastPieceLeg();
+    size_t changes = 0;
+    for (size_t i = 1; i < pl.size(); ++i)
+      if (pl[i] != pl[i - 1]) ++changes;
+    std::cout << "[LEG-AUDIT] leg changes=" << changes
+              << " junctions audited=" << fv.zone_junction_n
+              << " junction_hard=" << fv.zone_junction_hard_n << "\n";
+    expect(changes >= 1, "the flight really does change legs");
+    expect(fv.zone_junction_n == static_cast<int>(changes),
+           "...and EVERY handover was examined, not the ones a 0.1 s grid "
+           "happened to hit");
+    expect(fv.zone_junction_hard_n == 0,
+           "this flight hands over clear of any authored volume");
 
     const auto &legs = pm->legPolicySnapshots();
     expect(legs.size() == 2, "both legs were captured");

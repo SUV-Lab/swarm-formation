@@ -776,6 +776,21 @@ std::string PathManager::stateEnvelopeProblem(
         // default-constructed head is UNSPECIFIED, and planning from a state
         // nobody described is what this contract exists to stop.
         last_head_policy_ = HeadPolicy{};
+        // [LEG-POLICY] Provenance describes THIS call's products. Every
+        // refusal below returns before they are written, so leaving them
+        // standing would have the accessors describe the last plan that
+        // SUCCEEDED while the caller is handling a failure — and the audit
+        // reads them by size against a trajectory that is no longer the one
+        // they came from. Cleared here, before the first return, rather than
+        // at each of them.
+        //
+        // leg_policies_ is deliberately NOT cleared with them. It belongs to
+        // the front-end epoch, not to a call: the inherited-route branch runs
+        // no search and relies on the capture surviving from the run that
+        // committed the route it is re-solving.
+        last_route_edge_leg_.clear();
+        last_route_epoch_ = 0;
+        last_piece_leg_.clear();
         if (head.src == StartStateSource::UNSPECIFIED) {
             log_manager_->errorf(
                 "[HEAD-POLICY] planGlobalTraj called with an UNSPECIFIED "

@@ -176,6 +176,12 @@ public:
     int zone_hard_n{0};
     int zone_standoff_n{0};
     int zone_soft_n{0};
+    // [LEG-POLICY] Leg handovers examined, and how many of them sat inside an
+    // authored volume under the stricter of the two adjoining policies. A
+    // handover is an instant, so it is counted rather than timed — but it
+    // refuses the flight exactly as a sampled contact does.
+    int zone_junction_n{0};
+    int zone_junction_hard_n{0};
     bool policy_measurable{true};
     // The conditions no trajectory may ever fly with, whatever produced it.
     // Envelope over-utilization is graded separately: it is a margin the
@@ -186,7 +192,7 @@ public:
     // terrain map does: the flight was not checked, so it is not cleared.
     bool unflyable() const {
       return evaluated && (underground || no_cruise || zone_hard_n > 0 ||
-                           !policy_measurable);
+                           zone_junction_hard_n > 0 || !policy_measurable);
     }
     // The unflyable conditions this verdict actually MEASURED, without the
     // "could not check" one. For callers whose mission shape puts zone
@@ -197,7 +203,8 @@ public:
     // degrade on the missing scope, so "we did not check" still never reads
     // as "it is clear".
     bool unflyableMeasured() const {
-      return evaluated && (underground || no_cruise || zone_hard_n > 0);
+      return evaluated && (underground || no_cruise || zone_hard_n > 0 ||
+                           zone_junction_hard_n > 0);
     }
   };
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
@@ -257,21 +264,11 @@ public:
   // plan() entry; the coordinator re-asserts it after entry.
   void setTransitionActive(bool on) { transition_active_ = on; }
 
-private:
-  // [AUTO-N] chain/segments option interpretation — ONE shared step, run
-  // right after resetPlanState() so EVERY mission shape (plain chain and
-  // the transition coordinator alike) sees the same N policy. Leaving it
-  // inside planImpl let the transition branch run on the reset defaults:
-  // the live smoke chained 2 segments with no cruise span while the
-  // config said auto-sized (review find).
-  void readSegmentsOption();
-  // [S13] The ONE coordinator function owning the section-13 sequence:
-  // commit -> snapshot -> entry screening -> generate -> cut -> chain with
-  // the transition prefix. transition_active_ is asserted for its whole
-  // scope, so every fallback inside returns FAILED.
-  PlanResult planTransitionMission(const StartHead &head,
-                                   const std::vector<Eigen::Vector3d> &waypoints,
-                                   const ego_planner::TailBoundary &mission_tail);
+  // Clip the head of a committed route at an arc length. PUBLIC only so the
+  // tag-suffix rule can be pinned by a pure-function regression: it is const,
+  // reads no member state that a caller could disturb, and returns everything
+  // it computes. The alternative was to leave that rule verified solely
+  // through a consumer that does not exist yet.
   // [S13] Materialize the sub-route from an arc coordinate ONCE — the cut
   // vertex uses the same lerp arithmetic that produced the entry point, so
   // the sub-route head matches the prescribed head to machine precision.
@@ -287,6 +284,22 @@ private:
                 // arc interval is the only one clamped.
                 const std::vector<size_t> &edge_leg = {},
                 std::vector<size_t> *out_edge_leg = nullptr) const;
+
+private:
+  // [AUTO-N] chain/segments option interpretation — ONE shared step, run
+  // right after resetPlanState() so EVERY mission shape (plain chain and
+  // the transition coordinator alike) sees the same N policy. Leaving it
+  // inside planImpl let the transition branch run on the reset defaults:
+  // the live smoke chained 2 segments with no cruise span while the
+  // config said auto-sized (review find).
+  void readSegmentsOption();
+  // [S13] The ONE coordinator function owning the section-13 sequence:
+  // commit -> snapshot -> entry screening -> generate -> cut -> chain with
+  // the transition prefix. transition_active_ is asserted for its whole
+  // scope, so every fallback inside returns FAILED.
+  PlanResult planTransitionMission(const StartHead &head,
+                                   const std::vector<Eigen::Vector3d> &waypoints,
+                                   const ego_planner::TailBoundary &mission_tail);
   // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
   // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
   // budget exceeded -> the given result degraded, otherwise unchanged.
