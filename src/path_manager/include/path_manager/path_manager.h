@@ -405,6 +405,18 @@ namespace path_manager
     // BEFORE its midpoint/lead-in insertions, with its paired cap_ref).
     const std::vector<Eigen::Vector3d>& lastCommittedRoute() const { return last_clean_path_; }
     const std::vector<double>& lastCommittedCapRef() const { return last_cap_ref_; }
+    // [LEG-POLICY] Which leg authored each EDGE of that route: edge i runs
+    // from vertex i to vertex i+1, so this is exactly one shorter than the
+    // route. Empty means the route has no provenance (an inherited-route
+    // plan that skipped the front end), which downstream must treat as
+    // "unknown", never as "leg 0".
+    const std::vector<size_t>& lastCommittedRouteEdgeLeg() const {
+        return last_route_edge_leg_;
+    }
+    // The policy epoch these tags index into. A slice carries it back so
+    // PathManager can refuse tags minted against a different front-end run
+    // rather than indexing this epoch's leg_policies_ with last epoch's legs.
+    uint64_t lastCommittedRouteEpoch() const { return last_route_epoch_; }
 
     void deliverTrajToOptimizer(void) {
         if (isOptimizerInitialized()) {
@@ -851,6 +863,11 @@ namespace path_manager
     // [CHAIN] see lastCommittedRoute().
     std::vector<Eigen::Vector3d> last_clean_path_;
     std::vector<double> last_cap_ref_;
+    // [LEG-POLICY] see lastCommittedRouteEdgeLeg(). Kept only when it is
+    // exactly one shorter than last_clean_path_; any other size is a
+    // provenance bug and both this and the epoch stamp are dropped.
+    std::vector<size_t> last_route_edge_leg_;
+    uint64_t last_route_epoch_{0};
     Eigen::Vector3d map_lower_bound_;
     Eigen::Vector3d map_upper_bound_;
     std::vector<LocalTrajData> swarm_traj_;
@@ -924,7 +941,11 @@ namespace path_manager
                       const std::vector<Eigen::Vector3d> &waypoints,
                       std::vector<Eigen::Vector3d> &full_route,
                       std::vector<Eigen::Vector3d> &clean_path,
-                      std::vector<double> &cap_ref);
+                      std::vector<double> &cap_ref,
+                      // [LEG-POLICY] edge provenance, built alongside the
+                      // geometry through concatenation, corner fillets and
+                      // densification — never re-derived afterwards.
+                      std::vector<size_t> &edge_leg);
 
     // Stage 2 (trajectory optimization): MINCO initial trajectory + L-BFGS.
     // Takes the front-end path; sets traj_ global/local. Returns true on

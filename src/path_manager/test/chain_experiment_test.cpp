@@ -181,7 +181,7 @@ int main(int argc, char **argv)
        with_standoffpen = false, with_wpzone = false,
        with_nophasedirect = false, with_baserefuse = false,
        with_reststart = false, with_capstart = false,
-       with_headsrc = false, with_legpolicy = false,
+       with_headsrc = false, with_legpolicy = false, with_legtags = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -343,6 +343,7 @@ int main(int argc, char **argv)
     if (v == "capstart") { with_route = true; with_capstart = true; }
     if (v == "headsrc") { with_route = true; with_headsrc = true; }
     if (v == "legpolicy") { with_route = true; with_legpolicy = true; }
+    if (v == "legtags") { with_route = true; with_legtags = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
       with_route = true; with_phase = true; with_transition = true;
@@ -419,6 +420,12 @@ int main(int argc, char **argv)
       // airtight.
       ovr.emplace_back("manager/risk_terrain_mask_enable", false);
     }
+    // [LEG-POLICY] The leg-junction split only exists where a corner fillet
+    // is placed, and manager/corner_fillet_radius ships as 0.0 — fillets are
+    // OFF by default. The first draft of `legtags` asserted the handover
+    // vertex without turning them on, and a mutation deleting the split
+    // survived: the branch was never entered at all.
+    if (with_legtags) ovr.emplace_back("manager/corner_fillet_radius", 12.0);
     if (!ovr.empty()) options.parameter_overrides(ovr);
   }
   auto node = std::make_shared<rclcpp::Node>("chain_experiment", options);
@@ -1849,6 +1856,109 @@ int main(int argc, char **argv)
     // not relaxed by the existence of per-leg capture.
     expect(!pm->zonePolicySnapshot().valid,
            "the plan-wide snapshot is still INVALID for a multi-leg epoch");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_legtags) {
+    // [LEG-POLICY] step 2: edge provenance survives the two transforms that
+    // rewrite the route's point list after the search — corner fillets and
+    // the piece-boundary subdivision. Tags are carried through both; nothing
+    // is re-derived by projecting the final geometry back onto the legs.
+    //
+    // A corner at `mid` guarantees the fillet actually fires at the leg
+    // junction, which is the one place a tag can be attributed to the wrong
+    // leg: the fillet DELETES the junction vertex and replaces it with an arc
+    // belonging to neither leg alone.
+    // Several corner geometries, not one. The arc's sample count is
+    // ceil(|P1-P2| / 3), so the corner angle decides whether it comes out odd
+    // or even — and the even-N forcing that puts the split exactly on the
+    // apex is invisible at a corner that was already even. One `mid` tested
+    // the split's existence but not its placement.
+    const std::vector<Eigen::Vector3d> mids = {
+        {180.0, 80.0, 3.0},   {180.0, 40.0, 3.0},
+        {150.0, 100.0, 3.0},  {200.0, 60.0, 4.0},
+    };
+    for (const auto &mid : mids) {
+      const std::string at_mid =
+          " [mid " + std::to_string((int)mid.x()) + "," +
+          std::to_string((int)mid.y()) + "]";
+      const bool ok = pm->planGlobalTraj(
+          mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                 start_vel, start_acc),
+          {mid, goal[0]});
+      expect(ok, "the two-leg mission plans" + at_mid);
+      if (!ok) continue;
+
+      const auto &route = pm->lastCommittedRoute();
+      const auto &tags = pm->lastCommittedRouteEdgeLeg();
+      expect(!tags.empty() && tags.size() + 1 == route.size(),
+             "every route EDGE carries a leg, so tags are one shorter than "
+             "vertices" + at_mid);
+      expect(pm->lastCommittedRouteEpoch() != 0,
+             "...stamped with the epoch they index into" + at_mid);
+      if (tags.empty() || tags.size() + 1 != route.size()) continue;
+
+      size_t transitions = 0, at = 0;
+      bool monotone = true;
+      for (size_t i = 0; i + 1 < tags.size(); ++i) {
+        if (tags[i + 1] < tags[i]) monotone = false;
+        if (tags[i + 1] != tags[i]) { ++transitions; at = i + 1; }
+      }
+      expect(monotone,
+             "legs appear in flight order along the route (never backwards)" +
+                 at_mid);
+      expect(tags.front() == 0, "the route leaves on leg 0" + at_mid);
+      expect(tags.back() == 1, "and arrives on leg 1" + at_mid);
+      expect(transitions == 1,
+             "a two-leg route changes hands exactly once — no leg is dropped "
+             "and none reappears" + at_mid);
+
+      // Where it changes hands. The junction vertex is `mid` itself when no
+      // fillet is placed, and the arc apex when one is — either way it is the
+      // route vertex CLOSEST to mid, because the arc is symmetric about the
+      // corner and the apex is its nearest point to it. An off-by-one in the
+      // subdivision, an arc attributed wholly to one side, or a split that
+      // misses the apex all move the handover off that vertex, and none of
+      // them needs the test to know the fillet radius or the edge lengths.
+      size_t closest = 0;
+      double best = std::numeric_limits<double>::max();
+      for (size_t i = 0; i < route.size(); ++i) {
+        const double d = (route[i] - mid).norm();
+        if (d < best) { best = d; closest = i; }
+      }
+      std::cout << "[LEG-TAGS]" << at_mid << " route=" << route.size()
+                << " epoch=" << pm->lastCommittedRouteEpoch()
+                << " hands over at " << at << " (|.-mid|="
+                << (route[at] - mid).norm() << "), nearest is " << closest
+                << " (" << best << ")\n";
+      expect(at == closest,
+             "the handover sits on the vertex nearest the junction "
+             "waypoint" + at_mid);
+    }
+    const Eigen::Vector3d mid = mids.front();
+    const auto &route = pm->lastCommittedRoute();
+
+    // The inherited-route branch runs no search at all, so it never reaches
+    // the epoch reset that clears the per-leg captures. Before this was
+    // handled, a chained re-solve over a supplied route read the PREVIOUS
+    // plan's legs as though they described this one.
+    const auto inherited = route;   // by value: the call overwrites route
+    const auto inherited_cap = pm->lastCommittedCapRef();
+    const bool ok2 = pm->planGlobalTraj(
+        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+               start_vel, start_acc),
+        {mid, goal[0]}, ego_planner::TailBoundary{}, false, &inherited,
+        inherited_cap.size() == inherited.size() ? &inherited_cap : nullptr);
+    expect(ok2, "the same route re-solves as an inherited route");
+    expect(pm->lastCommittedRouteEdgeLeg().empty(),
+           "a route that arrived from outside has NO provenance — not leg 0 "
+           "by default");
+    expect(pm->legPolicySnapshots().empty(),
+           "...and the previous plan's per-leg policies are not left standing "
+           "for it");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

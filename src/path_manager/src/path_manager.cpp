@@ -1073,6 +1073,7 @@ std::string PathManager::stateEnvelopeProblem(
         // === STEP 2~3: front-end search + densification ===
         std::vector<Eigen::Vector3d> full_route, clean_path;
         std::vector<double> cap_ref;
+        std::vector<size_t> edge_leg;
         if (route_override && route_override->size() >= 2) {
             // [CHAIN] Inherited committed route (see the header comment):
             // the optimizer re-solves this exact geometry; no re-litigation
@@ -1088,7 +1089,15 @@ std::string PathManager::stateEnvelopeProblem(
                 "[CHAIN] inherited committed route: %zu vertices, cap_ref "
                 "%zu, committed max z %.2f (front-end search skipped)",
                 clean_path.size(), cap_ref.size(), fe_raw_max_z_);
-        } else if (!planFrontEnd(start_pos, wps, full_route, clean_path, cap_ref)) {
+            // [LEG-POLICY] This branch runs NO search, so it also never runs
+            // the epoch reset at the top of planFrontEnd — leg_policies_ here
+            // still describes whichever plan last searched. The geometry came
+            // from the caller, so its provenance must come from the caller
+            // too; until it does, drop both rather than let a later audit
+            // read this plan's route against another plan's legs.
+            leg_policies_.clear();
+        } else if (!planFrontEnd(start_pos, wps, full_route, clean_path,
+                                 cap_ref, edge_leg)) {
             return false;
         }
         // [CHAIN] retain the committed products for the chain planner to
@@ -1096,6 +1105,16 @@ std::string PathManager::stateEnvelopeProblem(
         // mutate clean_path.
         last_clean_path_ = clean_path;
         last_cap_ref_ = cap_ref;
+        // [LEG-POLICY] Tags and epoch travel together or not at all: a tag
+        // set without the epoch that minted it cannot be checked for
+        // staleness, and an epoch without tags indexes nothing.
+        if (edge_leg.size() + 1 == clean_path.size() && !clean_path.empty()) {
+            last_route_edge_leg_ = edge_leg;
+            last_route_epoch_ = zone_policy_epoch_;
+        } else {
+            last_route_edge_leg_.clear();
+            last_route_epoch_ = 0;
+        }
         if (front_end_only) {
             // [CHAIN-PAR] route-based contract authoring needs only the
             // committed front-end products retained above.
@@ -1175,8 +1194,10 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                                const std::vector<Eigen::Vector3d> &waypoints,
                                std::vector<Eigen::Vector3d> &full_route,
                                std::vector<Eigen::Vector3d> &clean_path,
-                               std::vector<double> &cap_ref)
+                               std::vector<double> &cap_ref,
+                               std::vector<size_t> &edge_leg)
 {
+    edge_leg.clear();
     // [S13] policy epoch: dispositions are per-search state, so every
     // front-end run invalidates outstanding zone-policy snapshots; the
     // recorded generation says WHICH zone data this search saw.
@@ -1334,6 +1355,12 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         auto t_astar_start = std::chrono::steady_clock::now();
         full_route.clear();
         full_route.push_back(start_pos);
+        // [LEG-POLICY] route_leg[i] owns the edge full_route[i] -> [i+1].
+        // Recorded as the geometry is built, not reconstructed later: after
+        // the fillets and the subdivision below, nearest-leg projection would
+        // pick the wrong leg wherever two legs run close or the route doubles
+        // back on itself.
+        std::vector<size_t> route_leg;
         for (size_t seg = 0; seg < all_points.size() - 1; ++seg)
         {
             std::vector<Eigen::Vector3d> seg_path =
@@ -1373,6 +1400,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                     continue;
                 }
                 full_route.push_back(seg_path[i]);
+                route_leg.push_back(seg);   // the edge this push just created
             }
         }
 
@@ -1402,18 +1430,28 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             };
 
             std::vector<Eigen::Vector3d> rounded;
+            std::vector<size_t> rounded_leg;
             rounded.reserve(full_route.size() * 4);
+            rounded_leg.reserve(full_route.size() * 4);
             rounded.push_back(full_route.front());
+            // Every push below adds exactly one edge, so one tag per push
+            // keeps rounded_leg.size() + 1 == rounded.size() by construction.
             for (size_t n = 1; n + 1 < full_route.size(); ++n) {
                 const Eigen::Vector3d &A = full_route[n - 1];
                 const Eigen::Vector3d &B = full_route[n];
                 const Eigen::Vector3d &C = full_route[n + 1];
+                const size_t leg_in = route_leg[n - 1];    // edge A->B
+                const size_t leg_out = route_leg[n];       // edge B->C
                 const double d1 = (A - B).norm(), d2 = (C - B).norm();
-                if (d1 < 1e-6 || d2 < 1e-6) { rounded.push_back(B); continue; }
+                if (d1 < 1e-6 || d2 < 1e-6) {
+                    rounded.push_back(B); rounded_leg.push_back(leg_in); continue;
+                }
                 const Eigen::Vector3d u = (A - B) / d1, w = (C - B) / d2;
                 const double cosphi = std::clamp(u.dot(w), -1.0, 1.0);
                 const double phi = std::acos(cosphi);   // interior angle at B
-                if (phi > M_PI - 0.05) { rounded.push_back(B); continue; }  // ~straight
+                if (phi > M_PI - 0.05) {                // ~straight
+                    rounded.push_back(B); rounded_leg.push_back(leg_in); continue;
+                }
 
                 bool placed = false;
                 for (double R = corner_fillet_radius_; R > 1.0; R *= 0.5) {
@@ -1424,7 +1462,17 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                     const Eigen::Vector3d P1 = B + u * t, P2 = B + w * t;
                     // Quadratic Bezier P1->B->P2 approximates the arc and is
                     // tangent to both segments; sample every ~3 units.
-                    const int N = std::max(3, (int)std::ceil((P1 - P2).norm() / 3.0));
+                    int N = std::max(3, (int)std::ceil((P1 - P2).norm() / 3.0));
+                    // [LEG-POLICY] B is a leg junction when the two edges it
+                    // joins came from different searches. The fillet deletes B
+                    // and replaces it with an arc that belongs to neither leg
+                    // alone, so force an EVEN sample count: a = 0.5 is then a
+                    // real vertex, the arc apex stands in for the junction B
+                    // used to be, and the two halves become separate pieces.
+                    // Without it one piece would straddle two policies and the
+                    // audit would have to pick one of them arbitrarily.
+                    const bool junction = (leg_in != leg_out);
+                    if (junction && (N % 2) != 0) ++N;
                     std::vector<Eigen::Vector3d> arc;
                     bool ok = true;
                     for (int k = 1; k < N; ++k) {
@@ -1434,20 +1482,32 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                         arc.push_back(p);
                     }
                     if (!ok) continue;            // shrink R, retry
-                    rounded.push_back(P1);
-                    rounded.insert(rounded.end(), arc.begin(), arc.end());
-                    rounded.push_back(P2);
+                    rounded.push_back(P1);        // lies on A->B
+                    rounded_leg.push_back(leg_in);
+                    for (int k = 1; k < N; ++k) {
+                        rounded.push_back(arc[k - 1]);
+                        // The edge ARRIVING at the apex (k == N/2) is still
+                        // the incoming leg's; everything past it is outgoing.
+                        rounded_leg.push_back(
+                            (junction && k > N / 2) ? leg_out : leg_in);
+                    }
+                    rounded.push_back(P2);        // lies on B->C
+                    rounded_leg.push_back(leg_out);
                     placed = true;
                     (void)R_eff;
                     break;
                 }
-                if (!placed) rounded.push_back(B);  // keep the kink
+                if (!placed) {                   // keep the kink
+                    rounded.push_back(B); rounded_leg.push_back(leg_in);
+                }
             }
             rounded.push_back(full_route.back());
+            rounded_leg.push_back(route_leg.back());
             log_manager_->infof("corner fillet R=%.1f: %zu -> %zu pts",
                                 corner_fillet_radius_, full_route.size(),
                                 rounded.size());
             full_route.swap(rounded);
+            route_leg.swap(rounded_leg);
         }
 
         auto t_rrt_end = std::chrono::steady_clock::now();
@@ -1647,6 +1707,17 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         cap_ref.clear();
         cap_ref.reserve(full_route.size() * 4);
         cap_ref.push_back(raw_z.empty() ? full_route.front().z() : raw_z.front());
+        // [LEG-POLICY] The subdivision splits an edge; it never merges two, so
+        // every sub-edge inherits its parent's leg unchanged. Refuse to guess
+        // if the tags and the geometry ever disagree on length.
+        const bool leg_tags_ok = (route_leg.size() + 1 == full_route.size());
+        if (!leg_tags_ok)
+            log_manager_->errorf(
+                "[LEG-POLICY] edge tags %zu do not match route %zu — route "
+                "provenance dropped",
+                route_leg.size(), full_route.size());
+        edge_leg.clear();
+        edge_leg.reserve(full_route.size() * 4);
         for (size_t i = 0; i + 1 < full_route.size(); ++i) {
             const Eigen::Vector3d &a = full_route[i];
             const Eigen::Vector3d &b = full_route[i + 1];
@@ -1659,8 +1730,11 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                 const double t = (double)kk / n_sub;
                 clean_path.push_back(a + (b - a) * t);
                 cap_ref.push_back(ra + (rb - ra) * t);
+                if (leg_tags_ok) edge_leg.push_back(route_leg[i]);
             }
         }
+        if (!leg_tags_ok || edge_leg.size() + 1 != clean_path.size())
+            edge_leg.clear();
         log_manager_->infof(
             "A* shortcut %zu pts → sparse pieces %zu pts (max_seg %.1f)",
             full_route.size(), clean_path.size(), max_seg);
