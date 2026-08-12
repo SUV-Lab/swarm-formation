@@ -183,12 +183,24 @@ def main():
             po, pn = pct(offs, 95), pct(ons, 95)
             if mo in (None, 0) and mn in (None, 0):
                 continue
+            # A zero baseline has no percentage. The fallback base of 1.0
+            # printed "0.000 -> 0.300 (+30.0%)", which reads as a 30% move
+            # and is really 0.3/1.0 — the largest-looking safety regression
+            # in the 176-row analysis was this artefact. When the baseline is
+            # zero the ABSOLUTE change is reported and the ratio is not.
+            zero_base = not mo
             base = abs(mo) if mo else 1.0
             delta = (mn - mo) / base
-            bad = (delta < -a.tol) if higher_better else (delta > a.tol)
+            if zero_base:
+                bad = (mn < mo) if higher_better else (mn > mo)
+            else:
+                bad = (delta < -a.tol) if higher_better else (delta > a.tol)
             mark = "  <<< 악화" if (bad and is_safety) else ""
+            shown = ("  abs" + f"{mn - mo:+7.3f}") if zero_base \
+                else f"{delta:+6.1%}"
             print(f"    {c[0][:24]:24s}/{c[1][:16]:16s} n={len(vals)} "
-                  f"median {mo:8.3f} -> {mn:8.3f} ({delta:+6.1%})  p95 {po:8.3f} -> {pn:8.3f}{mark}")
+                  f"median {mo:8.3f} -> {mn:8.3f} ({shown})  "
+                  f"p95 {po:8.3f} -> {pn:8.3f}{mark}")
             if bad and is_safety:
                 worse.append((metric, c, mo, mn))
         verdict_bad.extend(worse)
