@@ -226,12 +226,18 @@ epoch이 쓸모의 근거다 — 그 사이 front end가 안 돌았다는 증명
 ### 2-6. 회귀 상태 [재현]
 
 ```
-61/61 chain variants
+62/62 chain variants
 risk harness 154/0
 start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : PASS
 ```
 
-신규 변형 5종: `legpolicy` `legtags` `legleadin` `legchain` `legaudit` `wpzonepass0`.
+신규 변형 7종: `legpolicy` `legtags` `legleadin` `legmid` `legchain` `legaudit`
+`wpzonepass0`.
+
+`legmid`의 첫 판이 **또 공허하게 통과했다**: 미션이 아예 안 날았는데
+`piece_leg.size() == getPieceNum()`이 `0 == 0`으로 성립했다. `!pl.empty()`를 붙여서
+막았다. §1의 목록에 넣을 만한 같은 종류의 실수이고, 이번에는 출력 숫자를 보고 바로
+잡았다.
 
 ---
 
@@ -276,12 +282,13 @@ Codex의 ④는 "전이 prefix piece는 첫 leg 정책을 명시적으로 상속
   동작하지 않는다. `legtags`가 NodeOptions로 켠다
 - `optimization/lead_in_time = 0.0` — lead-in OFF. 삽입 미러링도 마찬가지.
   `legleadin`이 켠다
-- 퇴화 중점 삽입은 `clean_path.size() < 3`일 때만 — 실제 경로에서는 안 걸린다.
-  **미러링에 회귀가 없다** (§3-3)
+- 퇴화 중점 삽입은 `clean_path.size() < 3`일 때만. 출하 구성에서는 안 걸리지만,
+  `manager/length_per_piece = 6.25` → `max_seg = 25 u`이므로 **25 u보다 짧은 미션**은
+  경로 전체가 나뉘지 않은 edge 하나가 된다. `legmid` 변형이 20 u 미션으로 그 자리를
+  잡는다 (5·8·12 u는 solve가 실패해서 못 쓴다 [재현])
 
 ### 3-3. 회귀가 없는 것
 
-- 퇴화 중점 삽입의 태그 미러링 (위)
 - `cutAtArc`의 태그 suffix — 변이(off-by-one)를 걸었는데 `transition`/`transitionauto`
   변형이 안 죽었다. 전이 경로가 태그를 **아직** 소비하지 않기 때문이다(§3-1).
   ②c에 들어간 이 코드는 소비자가 생길 때까지 검증되지 않은 채로 있다. 지우지 않은

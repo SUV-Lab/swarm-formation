@@ -183,7 +183,7 @@ int main(int argc, char **argv)
        with_reststart = false, with_capstart = false,
        with_headsrc = false, with_legpolicy = false, with_legtags = false,
        with_legleadin = false, with_legchain = false, with_legaudit = false,
-       with_wpzonepass0 = false,
+       with_wpzonepass0 = false, with_legmid = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -349,6 +349,7 @@ int main(int argc, char **argv)
     if (v == "legleadin") { with_route = true; with_legleadin = true; }
     if (v == "legchain") { with_legchain = true; }
     if (v == "legaudit") { with_legaudit = true; }
+    if (v == "legmid") { with_legmid = true; }
     if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
     if (v == "transition") {
@@ -1868,6 +1869,43 @@ int main(int argc, char **argv)
     // not relaxed by the existence of per-leg capture.
     expect(!pm->zonePolicySnapshot().valid,
            "the plan-wide snapshot is still INVALID for a multi-leg epoch");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_legmid) {
+    // [LEG-POLICY] The optimizer's OTHER clean_path insertion. A route short
+    // enough not to be subdivided arrives as two vertices, which is one MINCO
+    // piece — too few — so a midpoint is planted, and the tag vector has to be
+    // grown with it exactly as the lead-in case does. Nothing in the shipped
+    // configuration reaches this: it needs a mission short enough that the
+    // whole route is one undivided edge.
+    const Eigen::Vector3d near_goal = start_pos + Eigen::Vector3d(20.0, 0.0, 0.0);
+    const bool ok = pm->planGlobalTraj(
+        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+               start_vel, start_acc),
+        {near_goal});
+    expect(ok, "the short mission plans");
+    const poly_traj::Trajectory &flight = pm->traj_.local_traj.traj;
+    const auto &route = pm->lastCommittedRoute();
+    const auto &pl = pm->lastPieceLeg();
+    std::cout << "[LEG-MID] route=" << route.size()
+              << " pieces=" << flight.getPieceNum()
+              << " piece_leg=" << pl.size() << "\n";
+    expect(route.size() == 2,
+           "the route really is a single undivided edge — the premise");
+    expect(flight.getPieceNum() == 2,
+           "...so a midpoint was planted and the trajectory has two pieces");
+    // Not just "the sizes agree": 0 == 0 agrees too, and the first draft of
+    // this variant reported that as a pass while the mission was not flying
+    // at all.
+    expect(!pl.empty() && pl.size() == static_cast<size_t>(flight.getPieceNum()),
+           "the tag vector grew with it");
+    if (pl.size() == 2)
+      expect(pl[0] == 0 && pl[1] == 0,
+             "...both halves of the split edge on the one leg there is");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
