@@ -1809,12 +1809,15 @@ int main(int argc, char **argv)
                    goal, {});
     expect(rd.hasTrajectory(),
            "a TRAJECTORY_DERIVED head below the floor flies");
-    // The RAISE itself, not a proxy for it. Asserting only that the plan
-    // flew cannot detect a lost correction — the solver copes with a
-    // sub-floor head often enough that re-deriving the source at the far
-    // end of the call chain went unnoticed.
+    // The DECISION, and that it was reached at all. "!floored" alone is
+    // ambiguous between "decided not to" and "never ran".
+    expect(chain.lastHeadPolicy().evaluated,
+           "...the head policy actually RAN");
+    expect(chain.lastHeadPolicy().source ==
+               path_manager::StartStateSource::TRAJECTORY_DERIVED,
+           "...on the source it was given, not a re-derived one");
     expect(chain.lastHeadPolicy().floored,
-           "...and the floor correction was actually APPLIED");
+           "...and the floor correction was APPLIED");
 
     // 2. The SAME state stated by an operator is refused, never raised.
     const path_manager::PlanResult sv =
@@ -1832,17 +1835,50 @@ int main(int argc, char **argv)
     expect(rd.hasTrajectory() && !sv.hasTrajectory(),
            "...and that asymmetry is the contract: same state, repaired as "
            "ours, refused as theirs");
-    expect(!chain.lastHeadPolicy().floored,
-           "...the stated one was NOT raised");
+    // NOT "!floored" — that state is refused by the classifier before the
+    // head policy is ever reached, so !floored would pass because nothing
+    // ran. The honest assertion is that nothing ran.
+    expect(!chain.lastHeadPolicy().evaluated,
+           "...and it was refused UPSTREAM: the head policy never ran");
+
+    // A stated vector INSIDE the cruise band does reach the policy, and is
+    // left alone there. This is the row that pins "stated is not touched".
+    const Eigen::Vector3d cruising =
+        Eigen::Vector3d(0.0, 1.0, 0.0) * (1.05 * floor_u);
+    const path_manager::PlanResult svc =
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR,
+                          start_pos, cruising, start_acc),
+                   goal, {});
+    (void)svc;
+    expect(chain.lastHeadPolicy().evaluated,
+           "an in-band STATED_VECTOR reaches the head policy");
+    expect(chain.lastHeadPolicy().source ==
+               path_manager::StartStateSource::STATED_VECTOR,
+           "...with its own source");
+    expect(!chain.lastHeadPolicy().floored &&
+               !chain.lastHeadPolicy().reaimed,
+           "...and is neither floored nor re-aimed");
 
     // 3. A default-constructed head is refused rather than planned from.
     //    StartHead{} is UNSPECIFIED, so "required parameter" guarantees the
     //    CALL, not the VALUE.
+    // Ordering matters here: the plan immediately above SUCCEEDED and left
+    // evaluated=true behind. If resetPlanState() does not precede the
+    // fail-closed entry checks, this refusal returns while the audit still
+    // shows the PREVIOUS plan's answer — which is how a reader concludes a
+    // refused mission had its head policy applied.
+    expect(chain.lastHeadPolicy().evaluated,
+           "the previous plan left an evaluated policy behind");
     const path_manager::PlanResult un =
         chain.plan(path_manager::StartHead{}, goal, {});
     expect(!un.hasTrajectory(), "an UNSPECIFIED head is refused");
     expect(un.reason == path_manager::PlanReason::INITIAL_STATE_UNSPECIFIED,
            "...as INITIAL_STATE_UNSPECIFIED");
+    expect(!chain.lastHeadPolicy().evaluated,
+           "...and the audit shows NOTHING RAN — not the previous plan's "
+           "answer");
+    expect(!chain.lastFlightVerdict().evaluated,
+           "...the flight verdict is cleared too");
 
     // 4. A non-finite head is refused too.
     path_manager::StartHead nan_head =

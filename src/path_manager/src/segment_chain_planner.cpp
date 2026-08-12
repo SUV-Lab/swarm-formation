@@ -294,12 +294,19 @@ PlanResult SegmentChainPlanner::plan(const StartHead &head,
       head.src == StartStateSource::TEST_INJECTED;
   const bool start_acc_commanded = head.acc_prescribed;
   (void)start_vel_synthesized;
+  // [PLAN-STATE] FIRST, before any early return. No member may carry a
+  // previous mission's value into this one — and I put the fail-closed head
+  // checks ABOVE this, so a malformed head returned while
+  // lastHeadPolicy(), lastFlightVerdict() and the span/candidate state still
+  // held the PREVIOUS plan's answers. The comment right here said the reset
+  // has to precede every early return; the code stopped obeying it the
+  // moment a new early return was added above it.
+  resetPlanState();
   // [HEAD-POLICY] fail-CLOSED at the entry. StartHead{} default-constructs
   // to UNSPECIFIED, so "the provenance is a required parameter" is a
   // compile-time guarantee about the CALL and not about the VALUE — a
   // caller can still pass a default-constructed head. Refuse it here rather
-  // than plan from a state nobody described, which is the whole point of
-  // the contract.
+  // than plan from a state nobody described.
   if (head.src == StartStateSource::UNSPECIFIED)
     return PlanResult::failedBecause(
         PlanReason::INITIAL_STATE_UNSPECIFIED,
@@ -309,10 +316,6 @@ PlanResult SegmentChainPlanner::plan(const StartHead &head,
     return PlanResult::failedBecause(
         PlanReason::INITIAL_STATE_MALFORMED,
         "start state is not finite");
-  // [PLAN-STATE] First statement of the only public entry: no member may
-  // carry a previous mission's value into this one. The envelope rejection
-  // below returns early, so the reset has to precede it.
-  resetPlanState();
   // [AUTO-N] the segment-count option is interpreted HERE, before any
   // mission-shape branch, so the transition coordinator and the plain
   // chain see the same N policy (review find: the transition branch ran

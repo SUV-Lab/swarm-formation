@@ -220,6 +220,36 @@ ceiling, transition activation speed, transition model maximum. 상수 하나
 **이름도 틀렸다.** 이 값은 raw `speed_min` 122 m/s가 아니라 margin이 적용된 131.76이므로
 "stall floor"가 아니라 **margin-backed cruise floor**다. 메시지와 주석을 고쳤다.
 
+### 1-35. 내가 쓴 주석의 계약을 내가 깼다
+
+`resetPlanState()` 바로 위 주석이 **"reset은 모든 조기 반환보다 먼저"** 라고 적혀 있는데,
+fail-closed 입구 검사를 그 **위에** 넣었다. 그래서 정상 계획 직후 잘못된 head가 들어오면
+`lastHeadPolicy()`·`lastFlightVerdict()`·span·후보 상태가 **이전 계획의 값을 그대로
+노출**한다. 거부된 미션이 head 정책을 적용받은 것처럼 읽힌다.
+
+주석이 규칙을 적어두는 것만으로는 부족하다 — 새 조기 반환이 추가되는 순간 조용히
+깨진다. 이제 회귀가 그것을 잡는다: 성공한 계획 뒤에 UNSPECIFIED head를 넣고
+`!evaluated`를 단정한다. reset을 다시 아래로 내리면 2개가 죽는다 `[재현]`.
+
+### 1-36. `lastHeadPolicy()`가 "실행 안 됨"과 "안 바꾸기로 함"을 구분 못 했다
+
+`HeadPolicy`에 `evaluated`가 없어서 **전부 false인 기본값이 정상적인 무변경 결정처럼
+보였다.** `headsrc`의 저속 `STATED_VECTOR`는 앞단 분류기에서 거부되어 정책에 도달조차
+하지 않는데, `!floored` 단정이 **"보정하지 않기로 결정했다"가 아니라 "정책이 실행되지
+않았다"를 보고** 통과했다.
+
+`evaluated`와 `source`를 추가하고, 회귀를 다음으로 나눴다:
+- `TRAJECTORY_DERIVED` → evaluated, source 일치, floored
+- 순항 영역 안의 `STATED_VECTOR` → evaluated, source 일치, 무변경
+- 앞단에서 거부된 입력 → **not evaluated**
+
+그리고 `lastHeadPolicy()`가 route 경로에만 있었다. 실제 호출 지점은 둘이므로
+`PathManager`에도 같은 접근자를 뒀다.
+
+**같은 종류의 다섯 번째다** (§1-18, §1-21, §1-31, §1-34, 그리고 이것). 이 프로젝트는
+`FlightVerdict::evaluated`와 구역 스냅샷의 `valid`를 정확히 같은 이유로 이미 갖고
+있는데, 새 구조체를 만들면서 그 교훈을 다시 빠뜨렸다.
+
 ### 1-32. 관통시킨 값을 도착지에서 다시 만들었다
 
 `StartHead`를 전 구간에 관통시켜 놓고, `planOverRoute`가 **받은 head를 버리고 boolean

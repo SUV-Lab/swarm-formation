@@ -145,6 +145,14 @@ struct StartHead {
 // What the head policy did, and why. Returned rather than logged inside, so
 // the two callers keep their own log tags while the DECISION has one owner.
 struct HeadPolicy {
+  // evaluated separates "the policy RAN and changed nothing" from "the
+  // policy never ran". Without it every field is false in both cases, so a
+  // regression asserting !floored passes when the input was refused
+  // upstream and the policy was never reached — a false positive of exactly
+  // the shape this project keeps finding (FlightVerdict::evaluated and the
+  // zone snapshot's valid exist for the same reason).
+  bool evaluated{false};
+  StartStateSource source{StartStateSource::UNSPECIFIED};
   Eigen::Vector3d vel_u{Eigen::Vector3d::Zero()};  // the effective head
   bool reaimed{false};
   bool floored{false};
@@ -181,6 +189,8 @@ inline HeadPolicy applyHeadPolicy(const StartHead &head,
                                   double boundary_eps_u = 0.0)
 {
   HeadPolicy out;
+  out.evaluated = true;
+  out.source = head.src;
   out.vel_u = head.vel_u;
   out.floor_u = floor_u;
 

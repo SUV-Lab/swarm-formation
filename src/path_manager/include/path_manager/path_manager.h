@@ -545,6 +545,12 @@ namespace path_manager
     // answers WHICH BAND a known contact is in, not whether one occurred.
     bool zoneContactAuthored(const ZonePolicySnapshot &snap, size_t idx,
                              const Eigen::Vector3d &p) const;
+    // [HEAD-POLICY] What the head policy did on the last planGlobalTraj.
+    // There are TWO real call sites — here and SegmentChainPlanner's route
+    // path — and a regression that reads only one of them pins only one of
+    // them. evaluated tells "never ran" from "ran and changed nothing".
+    const HeadPolicy &lastHeadPolicy() const { return last_head_policy_; }
+
     // Erase the latched trajectory visualisation. Paired with a refusal:
     // the tube channels are transient_local, so a rejected flight otherwise
     // stays on screen as the current plan and is replayed to any RViz that
@@ -776,6 +782,7 @@ namespace path_manager
     double min_goal_agl_{1.0};            // waypoints get z >= terrain elevation + this (frame z units); kills underground goals from fixed-z mission sources
     // [VEL-ALIGN] see setStartVelSynthesized().
     bool align_start_vel_to_route_{true};
+    HeadPolicy last_head_policy_{};
     // [ZONE-AVOID] lexicographic zone policy (see dyn_a_star.h).
     bool zone_avoid_lexico_{true};
     double corner_fillet_radius_{0.0};    // legacy geometric fallback; 0 = off

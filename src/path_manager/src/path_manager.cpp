@@ -774,6 +774,7 @@ std::string PathManager::stateEnvelopeProblem(
         // Same fail-closed entry as SegmentChainPlanner::plan: a
         // default-constructed head is UNSPECIFIED, and planning from a state
         // nobody described is what this contract exists to stop.
+        last_head_policy_ = HeadPolicy{};
         if (head.src == StartStateSource::UNSPECIFIED) {
             log_manager_->errorf(
                 "[HEAD-POLICY] planGlobalTraj called with an UNSPECIFIED "
@@ -1129,6 +1130,7 @@ std::string PathManager::stateEnvelopeProblem(
         const HeadPolicy hp = applyHeadPolicy(
             head, clean_path, v_floor, align_start_vel_to_route_,
             head_eps_u);
+        last_head_policy_ = hp;
         Eigen::Vector3d start_vel_eff = hp.vel_u;
         if (hp.reaimed) {
             log_manager_->infof(
