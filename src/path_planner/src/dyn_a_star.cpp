@@ -703,7 +703,24 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         }
         fm2_path.front() = start_pt;
         fm2_path.back()  = end_pt;
-        fm2_done = true;
+        // [FM2-OCCUPANCY] The wave is allowed to burrow (kFMin porosity, see
+        // fm2BuildSpeedMap); the ROUTE is not. If what came out touches
+        // anything, throw the whole geodesic away. What follows is the A*
+        // block, which in FM2 mode has no pool — it fails, and now returns
+        // NO path rather than a straight line, so the mission is refused.
+        // That ordering matters: while the search still answered a failure
+        // with { start, end }, discarding here turned a burrowed detour into
+        // a straight segment through the same wall, which is worse.
+        Eigen::Vector3d hit;
+        if (polylineClear(fm2_path, &hit)) {
+            fm2_done = true;
+        } else if (log_manager_) {
+            log_manager_->errorf(
+                "[FM2] extracted geodesic is OCCUPIED at (%.2f, %.2f, %.2f) "
+                "— discarding it; the speed map is porous by design, the "
+                "route may not be",
+                hit.x(), hit.y(), hit.z());
+        }
     }
 
     bool search_success = false;

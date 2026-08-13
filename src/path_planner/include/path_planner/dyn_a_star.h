@@ -267,6 +267,51 @@ private:
     inline bool Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) const;
 
     // Collision / risk queries backed by SDF.
+    // [FM2-OCCUPANCY] Is every point of this polyline free, by the SAME
+    // predicate the search uses to call a cell blocked? First offender via
+    // `hit`.
+    //
+    // FM2 needs this and A* does not. The eikonal speed map marks an
+    // obstacle cell with a small but FINITE speed (kFMin) rather than zero,
+    // on purpose: a true wall at coarse resolution disconnects the
+    // terrain-following seam corridors the planner depends on, and every
+    // terrain-following mission fell back to the soft pass when that was
+    // tried. Only hard risk zones get F = 0. The documented price is that the
+    // wave can burrow through an obstacle, and the geodesic that follows the
+    // wave comes out the other side. In the [ZONE-AVOID] passes that leak is
+    // caught after extraction by the below-terrain probe; on the plain path —
+    // no risk zones — nothing looked.
+    //
+    // Measured, with a wall that genuinely seals the corridor (12 boxes with
+    // equal x/y extents so the inscribed cylinder is yaw-invariant, 200 u
+    // tall so grounding still spans the whole map column): the committed
+    // route came back with 10 of its 34 vertices inside the wall, closest
+    // approach 4.14 u from a box axis. The mission is genuinely infeasible
+    // there; the defect is shipping a route through the obstacle instead of
+    // saying so.
+    bool polylineClear(const std::vector<Eigen::Vector3d> &pts,
+                       Eigen::Vector3d *hit = nullptr) {
+        if (pts.size() < 2) return false;
+        // Half the finest step the occupancy predicate can resolve, so a thin
+        // slab between two widely spaced geodesic vertices cannot be stepped
+        // over. Floored so a degenerate resolution cannot spin.
+        const double pitch =
+            std::max(0.02, 0.5 * std::min(map_resolution_, map_resolution_z_));
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            const Eigen::Vector3d &a = pts[i], &b = pts[i + 1];
+            const double len = (b - a).norm();
+            const int n = std::max(1, static_cast<int>(std::ceil(len / pitch)));
+            for (int k = 0; k <= n; ++k) {
+                const Eigen::Vector3d p = a + (b - a) * (double(k) / n);
+                if (checkOccupancy_esdf(p)) {
+                    if (hit) *hit = p;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     inline bool checkOccupancy_esdf(const Eigen::Vector3d &pos) {
         // 2.5D TERRAIN via the DEM heightmap (exact z). The SDF's voxelised
         // terrain is z-quantised (~10 m) and under-sees it, so the FM2 speed

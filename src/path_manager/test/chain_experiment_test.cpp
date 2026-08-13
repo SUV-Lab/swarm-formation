@@ -1952,7 +1952,65 @@ int main(int argc, char **argv)
       pm->clearDynamicObstacles();
     }
 
-    // A SEALED corridor: ten grounded spheres across the full map width.
+    // A GENUINELY SEALED corridor. Getting this right needs both traps
+    // accounted for at once:
+    //   - grounding lifts a sphere to z = base + radius, so at flight
+    //     altitude its cross-section is only 2*sqrt(r-1) wide. Ten radius-40
+    //     spheres spaced 40 apart look like a wall and leave ~22 u gaps at
+    //     z = 3. That fixture was never sealed, and its "+1.02 clearance"
+    //     result was the route walking through a gap.
+    //   - addDynamicBox applies a random yaw, so no axis-aligned test is
+    //     valid for a general box.
+    // A box with EQUAL x and y extents defeats both: rotation about z leaves
+    // the inscribed cylinder (radius = half the extent) invariant, so a point
+    // within that radius in xy is inside the box whatever the yaw. Grounding
+    // lifts it by half the z size, and a 200 u tall box then spans the entire
+    // 31.8 u map column from the terrain up. Spaced 30 apart with a 20 u
+    // inscribed radius, every y is within 15 of a centre — so ANY route point
+    // at x = 180 is inside an obstacle, for any yaw and any grounding.
+    {
+      std::vector<Eigen::Vector3d> centres;
+      for (double y = -20.0; y <= 320.0; y += 30.0) {
+        pm->addDynamicBox(Eigen::Vector3d(180.0, y, 3.0),
+                          Eigen::Vector3d(40.0, 40.0, 200.0));
+        centres.emplace_back(180.0, y, 3.0);
+      }
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const auto &rt = pm->lastCommittedRoute();
+      int pen = 0; double worst = 1e9;
+      for (const auto &q : rt) {
+        double best = 1e9;
+        for (const auto &c : centres)
+          best = std::min(best, std::hypot(q.x() - c.x(), q.y() - c.y()));
+        worst = std::min(worst, best);
+        if (best < 20.0) ++pen;
+      }
+      int jpen = 0;
+      const poly_traj::Trajectory &fl = pm->traj_.local_traj.traj;
+      if (ok && fl.getPieceNum() > 0) {
+        const double T = fl.getTotalDuration();
+        for (int k = 0; k <= 4000; ++k) {
+          const Eigen::Vector3d p = fl.getPos(T * k / 4000.0);
+          double best = 1e9;
+          for (const auto &c : centres)
+            best = std::min(best, std::hypot(p.x() - c.x(), p.y() - c.y()));
+          if (best < 20.0) ++jpen;
+        }
+      }
+      std::cout << "[DYN] WALL(" << centres.size() << " cubes): plan="
+                << (ok ? 1 : 0) << " route=" << rt.size()
+                << " route_pts_inside=" << pen
+                << " min_xy_to_axis=" << worst
+                << " traj_pts_inside=" << jpen << "\n";
+      expect(pen == 0,
+             "no committed route vertex is inside the wall — a mission that "
+             "cannot get through must FAIL, not be routed through");
+      expect(jpen == 0, "...and no point of the flown trajectory either");
+      pm->clearDynamicObstacles();
+    }
+
+    // A row of grounded spheres — kept because it is the case that LOOKS
+    // sealed and is not; see the note above.
     // Whatever comes back, it may not be a route through them.
     {
       std::vector<std::pair<Eigen::Vector3d, double>> obs;
@@ -1988,33 +2046,17 @@ int main(int argc, char **argv)
   }
 
   if (with_legfail) {
-    // [LEG-POLICY] What a plan that dies AFTER the front end leaves behind.
+    // [LEG-POLICY] A leg whose SEARCH fails leaves NOTHING behind.
     //
-    // A leg whose SEARCH fails is the case the capture reordering was written
-    // for, and it could not be induced here. Four attempts, measured:
-    //   - a waypoint at (5000, 5000): the field clamps it and the geodesic
-    //     reports reached_goal=yes, both as a leg goal and as a leg start
-    //   - manager/obstacle_clearance = 500 against free_distance 360: the
-    //     front end ignores it
-    //   - addDynamicBox sealing the goal and the intermediate waypoint
-    //   - addDynamicBox as a 40 x 600 x 200 wall across the only corridor
-    // The last one is decisive about WHY: the box registers
-    // (numDynamicObstacles() == 1) and the committed route then puts 2 of its
-    // 15 vertices INSIDE the wall. This harness's static SDF is built empty
-    // ("no occupancy grid materialized", free_distance 360), so there is
-    // nothing for a dynamic patch to be layered onto and collision checking
-    // never bites. With FM2 there is a second reason on top: it solves an
-    // eikonal speed map, so an obstacle slows the wave without making the
-    // arrival time infinite and a geodesic to the goal always exists.
-    //
-    // (An earlier version of this comment said no obstacle API was exposed to
-    // a test. That was wrong — addDynamicSphere/addDynamicBox are public. The
-    // search that missed them looked for the word "obstacle" in the
-    // declaration, which is not in either name.)
-    //
-    // So this pins the reachable neighbour: a plan that gets PAST the front
-    // end and then fails must not leave the previous plan's piece map behind
-    // for an audit to size against a trajectory it never came from.
+    // This is the case the capture reordering was written for, and until the
+    // front end validated its own extracted route it could not be reached
+    // from here at all: out-of-map waypoints clamp and reach the goal, an
+    // obstacle clearance the empty SDF cannot satisfy was ignored, and a
+    // dynamic wall was routed through rather than refused. With
+    // [FM2-OCCUPANCY] in place the clearance demand below is honoured, the
+    // geodesic is discarded, and the search genuinely fails — so the
+    // fail-closed behaviour is finally observable instead of merely written
+    // down.
     path_manager::RiskZone z;
     z.center = Eigen::Vector3d(600.0, 600.0, 3.0);   // off the route
     z.reach = 15.0;
@@ -2026,34 +2068,31 @@ int main(int argc, char **argv)
                     start_vel, start_acc);
     };
 
+    // A good two-leg plan first, so there IS something to be left standing.
     pm->setObstacleClearance(0.7);
     expect(pm->planGlobalTraj(head(), {mid, goal[0]}),
            "a two-leg mission plans");
-    const size_t good_pieces = pm->lastPieceLeg().size();
-    expect(good_pieces > 0, "...leaving a piece map behind it");
+    expect(pm->legPolicySnapshots().size() == 2 &&
+               !pm->lastPieceLeg().empty() &&
+               !pm->lastCommittedRouteEdgeLeg().empty(),
+           "...leaving captures, a piece map and route tags behind it");
 
-    pm->setObstacleClearance(500.0);
+    pm->setObstacleClearance(500.0);   // nothing can satisfy this
     const bool ok = pm->planGlobalTraj(head(), {mid, goal[0]});
-    const auto &tags = pm->lastCommittedRouteEdgeLeg();
-    const auto &route = pm->lastCommittedRoute();
     std::cout << "[LEG-FAIL] plan=" << (ok ? 1 : 0)
               << " legs=" << pm->legPolicySnapshots().size()
-              << " prev_pieces=" << good_pieces
               << " piece_leg=" << pm->lastPieceLeg().size()
-              << " tags=" << tags.size() << " route=" << route.size() << "\n";
-    expect(!ok, "the second plan fails in the back end");
-    expect(pm->lastPieceLeg().empty(),
-           "and NO piece map survives it — not the one the previous plan "
-           "left, which is what an audit would have sized against a "
-           "trajectory it never came from");
-    // The front end did run and did commit a route, so its products are
-    // legitimately there — and they are CONSISTENT: tags exist only with the
-    // geometry they describe, stamped with the epoch that minted them.
-    expect(pm->legPolicySnapshots().size() == 2,
-           "the front end's per-leg captures are real and stay");
-    expect(!route.empty() && tags.size() + 1 == route.size() &&
-               pm->lastCommittedRouteEpoch() != 0,
-           "...and the route provenance matches the route it describes");
+              << " tags=" << pm->lastCommittedRouteEdgeLeg().size()
+              << " route=" << pm->lastCommittedRoute().size() << "\n";
+    expect(!ok, "a front end that cannot honour the clearance fails the plan");
+    expect(pm->legPolicySnapshots().empty(),
+           "and the EPOCH is void — not a prefix of the legs that ran before "
+           "the failing one, and not the previous plan's two either");
+    expect(pm->lastPieceLeg().empty() &&
+               pm->lastCommittedRouteEdgeLeg().empty() &&
+               pm->lastCommittedRoute().empty() &&
+               pm->lastCommittedRouteEpoch() == 0,
+           "...and no provenance or geometry survives from the plan before it");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
