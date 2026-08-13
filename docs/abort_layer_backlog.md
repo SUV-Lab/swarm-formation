@@ -38,6 +38,10 @@ sequence를 합치거나, 메시지에 두 필드로 나눠 싣는다. **외부 
 
 ## 4. 비차단 보완
 
+- **FSM 호출부가 넘기는 reason 인자**는 `fsm_scenarios_test`가 닫았다(지형 → TERRAIN,
+  구역 → POLICY, 장애물 → OBSTACLE). 이 항목은 해결됨 — 이전 설계 문서에 "아직 없음"으로
+  남아 있던 낡은 기록이다
+
 - **`fsm_scenarios_test`는 콜백을 직접 호출한다.** 생산 로직 회귀이지 완전한 배선 회귀는
   아니다. 토픽으로 구동하려면 발행자 QoS가 구독자와 호환되어야 한다(TRANSIENT_LOCAL 구독에
   VOLATILE 발행은 전달되지 않는다)
