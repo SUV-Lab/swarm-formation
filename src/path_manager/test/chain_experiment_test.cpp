@@ -185,6 +185,7 @@ int main(int argc, char **argv)
        with_legleadin = false, with_legchain = false, with_legaudit = false,
        with_wpzonepass0 = false, with_legmid = false,
        with_cutarc = false, with_transwp = false, with_legseam = false,
+       with_dynprobe = false,
        with_legfail = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
@@ -355,6 +356,7 @@ int main(int argc, char **argv)
     if (v == "cutarc") { with_cutarc = true; }
     if (v == "legseam") { with_legseam = true; }
     if (v == "legfail") { with_legfail = true; }
+    if (v == "dynprobe") { with_dynprobe = true; }
     if (v == "transwp") { with_transwp = true; with_route = true; }
     if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
@@ -1875,6 +1877,110 @@ int main(int argc, char **argv)
     // not relaxed by the existence of per-leg capture.
     expect(!pm->zonePolicySnapshot().valid,
            "the plan-wide snapshot is still INVALID for a multi-leg epoch");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_dynprobe) {
+    // [DYN-OBSTACLE] The front end must not route through a registered
+    // dynamic obstacle, and when it cannot get around one it must say so
+    // rather than hand back a straight line.
+    //
+    // MEASURING THIS IS THE HARD PART, and two earlier attempts got it
+    // wrong. addDynamicBox applies a random yaw, so an axis-aligned
+    // inside-test is not testing the box. addDynamicSphere calls
+    // groundedCenter(centre, radius), which moves the sphere to
+    // z = terrain_base + radius — so the collision volume is NOT where it was
+    // asked for, and a distance measured to the requested centre says
+    // nothing. Both errors reported penetration that was not happening.
+    // A sphere has no yaw and its grounded centre is computable here, so
+    // this measures against the volume that actually exists.
+    const auto head = [&]() {
+      return mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                    start_vel, start_acc);
+    };
+    expect(pm->planGlobalTraj(head(), {goal[0]}), "warm-up builds the SDF");
+
+    const auto grounded = [&](const Eigen::Vector3d &c, double r) {
+      double g = 0.0;
+      pm->terrainElevation(c.x(), c.y(), &g);
+      return Eigen::Vector3d(c.x(), c.y(), (g > 0.0 ? g : 0.0) + r);
+    };
+    const auto clearance = [&](const std::vector<Eigen::Vector3d> &pts,
+                               const std::vector<std::pair<Eigen::Vector3d,
+                                                           double>> &obs) {
+      double worst = 1e9;
+      for (const auto &q : pts)
+        for (const auto &o : obs)
+          worst = std::min(worst, (q - o.first).norm() - o.second);
+      return worst;
+    };
+    const auto trajClearance =
+        [&](const std::vector<std::pair<Eigen::Vector3d, double>> &obs) {
+      const poly_traj::Trajectory &fl = pm->traj_.local_traj.traj;
+      if (fl.getPieceNum() == 0) return -1e9;
+      double worst = 1e9;
+      const double T = fl.getTotalDuration();
+      for (int k = 0; k <= 4000; ++k) {
+        const Eigen::Vector3d p = fl.getPos(T * k / 4000.0);
+        for (const auto &o : obs)
+          worst = std::min(worst, (p - o.first).norm() - o.second);
+      }
+      return worst;
+    };
+
+    // ONE sphere on the corridor: there is room around it, so the route must
+    // go around it — not through, and not by refusing the mission.
+    {
+      const double R = 10.0;
+      const Eigen::Vector3d ask(180.0, 150.0, 3.0);
+      const std::vector<std::pair<Eigen::Vector3d, double>> obs{
+          {grounded(ask, R), R}};
+      expect(pm->addDynamicSphere(ask, R) >= 0, "the sphere is registered");
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      const double tc = trajClearance(obs);
+      std::cout << "[DYN] one sphere: plan=" << (ok ? 1 : 0)
+                << " route=" << pm->lastCommittedRoute().size()
+                << " route_clearance=" << rc << " traj_clearance=" << tc
+                << "\n";
+      expect(ok, "a mission with one avoidable obstacle still plans");
+      expect(rc > 0.0, "...and NO committed route vertex is inside it");
+      expect(tc > 0.0, "...nor any point of the flown trajectory");
+      pm->clearDynamicObstacles();
+    }
+
+    // A SEALED corridor: ten grounded spheres across the full map width.
+    // Whatever comes back, it may not be a route through them.
+    {
+      std::vector<std::pair<Eigen::Vector3d, double>> obs;
+      for (double y = -40.0; y <= 340.0; y += 40.0) {
+        pm->addDynamicSphere(Eigen::Vector3d(180.0, y, 3.0), 40.0);
+        obs.emplace_back(grounded(Eigen::Vector3d(180.0, y, 3.0), 40.0), 40.0);
+      }
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      const double tc = ok ? trajClearance(obs) : 1e9;
+      std::cout << "[DYN] sealed(" << obs.size() << "): plan=" << (ok ? 1 : 0)
+                << " route=" << pm->lastCommittedRoute().size()
+                << " route_clearance=" << rc << " traj_clearance=" << tc
+                << "\n";
+      // Either it threads a real gap, or it fails. What it may NOT do is
+      // return a route that passes through the seal — which is what the
+      // search's old "no path found, here is a straight line" answer did.
+      if (ok) {
+        expect(rc > 0.0,
+               "a sealed corridor is threaded with real clearance, not "
+               "crossed");
+        expect(tc > 0.0, "...and the flown trajectory clears it too");
+      } else {
+        expect(pm->lastCommittedRoute().empty(),
+               "or the mission fails outright, leaving no route behind");
+      }
+      pm->clearDynamicObstacles();
+    }
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
