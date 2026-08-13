@@ -1938,27 +1938,54 @@ int main(int argc, char **argv)
     const uint64_t live_id = pm->traj_.local_traj.traj_id;
     expect(live_id > 0, "the stored trajectory has an identity to withdraw");
 
+    // [ABORT] The id must be unique for the life of the node, from the
+    // PRODUCTION path. It used to be reset in setGlobalTraj and incremented in
+    // setLocalTraj, so every normal plan came out as id 1 — and an abort of
+    // one flight would have stopped the next one, the exact confusion the id
+    // exists to prevent. A wire test that publishes hand-made ids cannot see
+    // that: it has to come from a real plan, twice.
+    {
+      const uint64_t id1 = pm->traj_.local_traj.traj_id;
+      expect(pm->planGlobalTraj(head(), {goal[0]}), "the mission plans again");
+      const uint64_t id2 = pm->traj_.local_traj.traj_id;
+      std::cout << "[ENV-CHANGE] production ids: " << id1 << " -> " << id2
+                << "\n";
+      expect(id2 > id1,
+             "a second real plan gets a HIGHER id — not the same one, which "
+             "would make an old abort stop a new flight");
+    }
+    // Re-establish the flight this section is about.
+    expect(pm->planGlobalTraj(head(), {goal[0]}), "and once more");
+    pm->traj_.local_traj.start_time =
+        rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+
+    const double dur_live = pm->traj_.local_traj.duration;
+    const uint64_t id_live = pm->traj_.local_traj.traj_id;
     Eigen::Vector3d hit;
-    expect(pm->revalidateStoredTrajectory(0.0, &hit),
+    expect(pm->revalidateStoredTrajectory(0.0, &hit,
+                                       path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED),
            "an unchanged world leaves the flight alone");
     expect(ann.n == 0, "...and announces nothing");
-    expect(pm->traj_.local_traj.duration == dur, "...untouched, in fact");
+    expect(pm->traj_.local_traj.duration == dur_live, "...untouched, in fact");
 
     // (2) An obstacle far off the route -> still kept.
     expect(pm->addDynamicSphere(Eigen::Vector3d(30.0, 30.0, 3.0), 10.0) >= 0,
            "an off-route obstacle registers");
-    expect(pm->revalidateStoredTrajectory(0.0, &hit),
+    expect(pm->revalidateStoredTrajectory(0.0, &hit,
+                                       path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED),
            "...and does not touch a flight it cannot reach");
-    expect(pm->traj_.local_traj.duration == dur, "...still executable");
+    expect(pm->traj_.local_traj.duration == dur_live, "...still executable");
     expect(ann.n == 0, "...and still announces nothing");
 
     // (3) An obstacle ON the remainder -> the flight is stopped. Placed at
     // the trajectory's own midpoint so it is unambiguously in the way, with a
     // radius that clears the grounding lift (centre z = base + r).
-    const Eigen::Vector3d mid_pt = pm->traj_.local_traj.traj.getPos(0.5 * dur);
+    const Eigen::Vector3d mid_pt =
+        pm->traj_.local_traj.traj.getPos(0.5 * dur_live);
     expect(pm->addDynamicSphere(mid_pt, 12.0) >= 0,
            "an obstacle lands on the remaining route");
-    const bool kept = pm->revalidateStoredTrajectory(0.0, &hit);
+    const bool kept = pm->revalidateStoredTrajectory(0.0, &hit,
+                                       path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED);
     std::cout << "[ENV-CHANGE] kept=" << (kept ? 1 : 0)
               << " dur=" << pm->traj_.local_traj.duration
               << " start_time=" << pm->traj_.local_traj.start_time
@@ -1966,7 +1993,7 @@ int main(int argc, char **argv)
               << ")\n";
     expect(!kept, "a blocked remainder is REFUSED");
     expect(ann.n == 1, "...announced exactly once");
-    expect(ann.id == live_id,
+    expect(ann.id == id_live,
            "...naming the trajectory being withdrawn, read while the slot "
            "still held it");
     expect(ann.reason ==
@@ -1987,7 +2014,8 @@ int main(int argc, char **argv)
     const Eigen::Vector3d behind = pm->traj_.local_traj.traj.getPos(0.1 * dur2);
     expect(pm->addDynamicSphere(behind, 12.0) >= 0,
            "an obstacle appears where the flight has already been");
-    expect(pm->revalidateStoredTrajectory(0.4 * dur2, &hit),
+    expect(pm->revalidateStoredTrajectory(0.4 * dur2, &hit,
+                                       path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED),
            "a hazard the flight has already passed does not ground it — the "
            "prefix cannot be unflown");
     pm->clearDynamicObstacles();
@@ -2003,10 +2031,21 @@ int main(int argc, char **argv)
         rclcpp::Clock(RCL_ROS_TIME).now().seconds();
     const Eigen::Vector3d on_path = pm->traj_.local_traj.traj.getPos(0.5 * dur3);
     expect(pm->addDynamicSphere(on_path, 12.0) >= 0, "an obstacle is placed");
-    pm->revalidateAfterEnvChange("a test-driven environment change");
+    ann.n = 0;
+    pm->revalidateAfterEnvChange(
+        "a test-driven environment change",
+        path_manager::PathManager::EnvChangeReason::TERRAIN_BLOCKED);
     expect(pm->traj_.local_traj.duration <= 0.0,
            "an environment change reported from ANY trigger invalidates a "
            "flight it blocks, not only one that came in on the obstacle topic");
+    // The REASON has to survive the trip. It used to be hardcoded to
+    // OBSTACLE_BLOCKED inside the check, so a terrain block was announced as
+    // an obstacle and TERRAIN_BLOCKED was unreachable on the wire.
+    expect(ann.n == 1 &&
+               ann.reason ==
+                   path_manager::PathManager::EnvChangeReason::TERRAIN_BLOCKED,
+           "...and it is announced with the reason the CALLER gave, not one "
+           "the check picked");
     pm->clearDynamicObstacles();
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }

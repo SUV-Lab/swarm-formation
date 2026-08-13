@@ -1042,6 +1042,20 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
             changeFSMExecState(SEQUENTIAL_START, "startMissionPlan");
         else if (exec_state_ == EXEC_TRAJ)
             changeFSMExecState(SEQUENTIAL_START, "startMissionPlan");  // Single-shot: new global plan already has local_traj
+        else if (exec_state_ == WAIT_EXTERNAL_RECOVERY)
+            // [ABORT] A new mission is how this node leaves the aborted
+            // state. Without this branch WAIT_EXTERNAL_RECOVERY was a trap:
+            // the plan below would succeed and never be published, because
+            // only WAIT_POSITION and EXEC_TRAJ reached SEQUENTIAL_START. The
+            // comment on the state claimed a new mission would move it and
+            // nothing did.
+            //
+            // Commanding a mission is the operator (or the execution layer)
+            // saying the aircraft is under control again — this node cannot
+            // observe that by itself, having no odometry. If a dedicated
+            // resume/ACK is wanted instead, it belongs on the same control
+            // topic as the abort and this branch becomes its handler.
+            changeFSMExecState(SEQUENTIAL_START, "startMissionPlan (recovery)");
 
         // NOTE: Global trajectory publish removed from the mission-plan path to prevent blocking
         // The global trajectory will be published in computeAndPublishPaths instead
@@ -1345,7 +1359,9 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
         FSM_LOG_INFO("Terrain data received and forwarded to PathManager");
         // [ENV-CHANGE] A new DEM can put terrain under a flight that was
         // planned over open air. Same check as the obstacle path.
-        path_manager_->revalidateAfterEnvChange("a new terrain map");
+        path_manager_->revalidateAfterEnvChange(
+            "a new terrain map",
+            path_manager::PathManager::EnvChangeReason::TERRAIN_BLOCKED);
         // [TERRAIN-READY] Ingestion receipt for command gating: the panel's
         // Run flow must not race a corridor the planner is still digesting
         // (LoadMap replying only proves the map was PUBLISHED). Latched
@@ -1462,7 +1478,9 @@ void ReplanFSM::loadObstaclesCallback(
                       path_manager_->traj_.local_traj.start_time
                 : 0.0;
         Eigen::Vector3d hit;
-        if (!path_manager_->revalidateStoredTrajectory(t_cur, &hit)) {
+        if (!path_manager_->revalidateStoredTrajectory(
+                t_cur, &hit,
+                path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED)) {
             FSM_LOG_WARN(
                 "loadObstacles: the flight in progress is blocked from t=%.2f s "
                 "at (%.2f, %.2f, %.2f) — trajectory invalidated",

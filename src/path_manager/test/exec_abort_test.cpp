@@ -117,9 +117,11 @@ int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   auto node = rclcpp::Node::make_shared("exec_abort_test");
 
-  // The QoS the planner publishes with: RELIABLE + TRANSIENT_LOCAL, so a
-  // consumer that joins after the fact still receives both.
-  auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local();
+  // EXACTLY the planner's QoS (replan_fsm.cpp: rclcpp::QoS(5).reliable()
+  // .transient_local()). Depth matters for the late-joiner case: with a
+  // deeper queue than production the latched history a consumer receives is
+  // not the history it would really receive.
+  auto qos = rclcpp::QoS(5).reliable().transient_local();
   auto traj_pub = node->create_publisher<Traj>("/planning/trajectory", qos);
   auto ctl_pub =
       node->create_publisher<Ctl>("/planning/execution_control", qos);
@@ -166,7 +168,28 @@ int main(int argc, char **argv) {
            "stand in for it");
   }
 
-  std::cout << "== consumer joins late (latched) ==\n";
+  std::cout << "== consumer joins late, ONLY an aborted trajectory latched ==\n";
+  {
+    // The dangerous case in isolation: the newest latched trajectory is the
+    // aborted one, so "moved on to a newer id" cannot mask the check. Abort
+    // the CURRENT id (8) and let a fresh consumer connect to exactly that.
+    ctl_pub->publish(makeAbort(8, Ctl::REASON_TERRAIN_BLOCKED));
+    spin(node, 200);
+
+    Follower f;
+    auto s1 = node->create_subscription<Traj>(
+        "/planning/trajectory", qos,
+        [&f](Traj::SharedPtr m) { f.onTraj(*m); });
+    auto s2 = node->create_subscription<Ctl>(
+        "/planning/execution_control", qos,
+        [&f](Ctl::SharedPtr m) { f.onCtl(*m); });
+    spin(node, 500);
+    expect(!f.executing(),
+           "a late consumer whose newest latched trajectory is aborted flies "
+           "NOTHING — there is no newer id to fall back on here");
+  }
+
+  std::cout << "== consumer joins late (mixed history) ==\n";
   {
     // Everything above is still latched on both topics. A follower that
     // connects now receives the last trajectory AND its abort, in an order

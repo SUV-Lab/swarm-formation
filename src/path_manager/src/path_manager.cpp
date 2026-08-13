@@ -3902,7 +3902,8 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
 // against, so "the route was clear when planned" and "the remainder is clear
 // now" are the same question asked twice, not two different standards.
 bool PathManager::revalidateStoredTrajectory(double t_from,
-                                             Eigen::Vector3d *hit)
+                                             Eigen::Vector3d *hit,
+                                             EnvChangeReason reason)
 {
     auto &lt = traj_.local_traj;
     if (!(lt.duration > 0.0) || lt.traj.getPieceNum() == 0) return true;
@@ -3945,7 +3946,7 @@ bool PathManager::revalidateStoredTrajectory(double t_from,
     // Detection lives here; what to say about it belongs to the node that
     // owns the publishers.
     if (env_change_hook_)
-        env_change_hook_(EnvChangeReason::OBSTACLE_BLOCKED, bad, t0);
+        env_change_hook_(reason, bad, t0);
     // The same two fields SegmentChainPlanner::invalidateStoredTrajectory
     // zeroes, and the same fields ReplanFSM gates execution on.
     lt.duration = 0.0;
@@ -4008,7 +4009,8 @@ void PathManager::invalidateStoredTrajectoryForEnvChange()
     clearTrajectoryViz();
 }
 
-void PathManager::revalidateAfterEnvChange(const char *what)
+void PathManager::revalidateAfterEnvChange(const char *what,
+                                           EnvChangeReason reason)
 {
     auto &lt = traj_.local_traj;
     if (!(lt.duration > 0.0)) return;
@@ -4017,7 +4019,7 @@ void PathManager::revalidateAfterEnvChange(const char *what)
                                    lt.start_time
                              : 0.0;
     Eigen::Vector3d hit;
-    if (!revalidateStoredTrajectory(t_cur, &hit)) {
+    if (!revalidateStoredTrajectory(t_cur, &hit, reason)) {
         log_manager_->errorf(
             "[ENV-CHANGE] %s blocked the flight in progress at "
             "(%.2f, %.2f, %.2f) — the stored trajectory is invalidated. NOTE: "
@@ -4039,7 +4041,8 @@ void PathManager::flushPendingObstacles()
     }
     log_manager_->infof("Flushed %zu deferred dynamic obstacle(s) after SDF ready",
                         pend.size());
-    revalidateAfterEnvChange("a deferred obstacle batch");
+    revalidateAfterEnvChange("a deferred obstacle batch",
+                             EnvChangeReason::OBSTACLE_BLOCKED);
 }
 
 bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,

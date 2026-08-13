@@ -525,12 +525,13 @@ namespace path_manager
     // The already-flown prefix is deliberately not judged: it cannot be
     // unflown, and refusing on it would ground a flight over a hazard it has
     // already passed.
-    bool revalidateStoredTrajectory(double t_from, Eigen::Vector3d *hit);
     // Why the stored trajectory was withdrawn. Mirrors
     // TrajectoryExecutionControl's REASON_* so the wire value is not
     // re-derived from a string.
     enum class EnvChangeReason { OBSTACLE_BLOCKED, TERRAIN_BLOCKED,
                                  POLICY_UNEVALUATED };
+    bool revalidateStoredTrajectory(double t_from, Eigen::Vector3d *hit,
+                                    EnvChangeReason reason);
     // Installed by ReplanFSM. PathManager detects; the FSM owns the
     // publishers and the state machine, so it decides what goes on the wire.
     // Called BEFORE the local slot is cleared, so the trajectory id being
@@ -546,7 +547,7 @@ namespace path_manager
     uint64_t riskZoneFingerprint() const;
     // The same check driven from wherever the environment changed, using the
     // flight's own elapsed time. `what` names the trigger in the log.
-    void revalidateAfterEnvChange(const char *what);
+    void revalidateAfterEnvChange(const char *what, EnvChangeReason reason);
     // Drop the stored trajectory because the world changed in a way this node
     // cannot re-judge. Same two fields every other refusal zeroes.
     void invalidateStoredTrajectoryForEnvChange();

@@ -56,6 +56,15 @@ namespace ego_planner
       local_traj.traj_id = 0;
       local_traj.drone_id = -1;  // Initialize to -1, will be set by PathManager
     }
+
+    // [ABORT] The identity counter. Separate from local_traj.traj_id and
+    // NEVER reset, because the id has to be unique for the life of the node:
+    // TrajectoryExecutionControl names a trajectory by it, and a consumer
+    // obeys an abort only for the id it is flying. It used to be reset in
+    // setGlobalTraj and then incremented in setLocalTraj, so every normal
+    // plan came out as id 1 — which means an abort of one flight would have
+    // stopped the NEXT one, the exact confusion the id exists to prevent.
+    uint64_t next_traj_id_ = 0;
     ~TrajContainer() {}
 
     void setGlobalTraj(const poly_traj::Trajectory &trajectory, const double &world_time)
@@ -68,7 +77,7 @@ namespace ego_planner
 
       // Don't reset drone_id to -1 here, keep the existing value
       local_traj.duration = 0.0;
-      local_traj.traj_id = 0;
+      // traj_id is deliberately NOT reset here: see next_traj_id_.
     }
 
     void setLocalTraj(const poly_traj::Trajectory &trajectory, const double &world_time, const int drone_id = -1)
@@ -77,7 +86,7 @@ namespace ego_planner
       if (drone_id >= 0) {
         local_traj.drone_id = drone_id;
       }
-      local_traj.traj_id++;
+      local_traj.traj_id = ++next_traj_id_;
       local_traj.duration = trajectory.getTotalDuration();
       local_traj.start_pos = trajectory.getJuncPos(0);
       local_traj.start_time = world_time;
