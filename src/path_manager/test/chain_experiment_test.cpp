@@ -1968,6 +1968,30 @@ int main(int argc, char **argv)
     expect(ann.n == 0, "...and announces nothing");
     expect(pm->traj_.local_traj.duration == dur_live, "...untouched, in fact");
 
+    // [ENV-CHANGE] The revision on the wire has to move for the changes that
+    // actually cause these aborts. It used to carry the zone policy
+    // generation alone, which an obstacle or a terrain change does not move —
+    // so every obstacle abort reported the same "environment" as the one
+    // before it.
+    {
+      const uint64_t rev0 = pm->environmentRevision();
+      expect(pm->addDynamicSphere(Eigen::Vector3d(20.0, 20.0, 3.0), 5.0) >= 0,
+             "an obstacle registers");
+      const uint64_t rev1 = pm->environmentRevision();
+      expect(rev1 > rev0, "...and the environment revision moves for it");
+      pm->clearDynamicObstacles();
+      const uint64_t rev2 = pm->environmentRevision();
+      expect(rev2 > rev1, "...clearing obstacles moves it too");
+      path_manager::RiskZone zz;
+      zz.center = Eigen::Vector3d(700.0, 700.0, 3.0);
+      zz.reach = 5.0;
+      zz.peak = 0.5;
+      pm->setRiskZonesRuntime({zz});
+      expect(pm->environmentRevision() > rev2,
+             "...and so does a zone change");
+      pm->setRiskZonesRuntime({});
+    }
+
     // (2) An obstacle far off the route -> still kept.
     expect(pm->addDynamicSphere(Eigen::Vector3d(30.0, 30.0, 3.0), 10.0) >= 0,
            "an off-route obstacle registers");

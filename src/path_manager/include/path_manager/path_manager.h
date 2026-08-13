@@ -626,6 +626,20 @@ namespace path_manager
         return leg_policies_;
     }
     uint64_t zonePolicyGeneration() const { return zone_policy_generation_; }
+    // [ENV-CHANGE] One monotone number that moves when ANYTHING the planner
+    // plans against changes: the risk-zone set, the terrain, or the SDF
+    // (which is where dynamic obstacles land). Defined as the SUM of the
+    // three counters that already exist rather than as a fourth counter with
+    // its own increment sites — a counter someone must remember to bump is a
+    // counter that will be missed, and this cannot be: if any component
+    // moves, the sum moves.
+    //
+    // It is an identity, not a count. Consumers use it to tell two decisions
+    // apart, not to measure how many changes happened.
+    uint64_t environmentRevision() const {
+        return zone_policy_generation_ + terrain_data_.generation +
+               sdf_manager_.revision();
+    }
     // The front-end run the current leg_policies_ belong to. A piece map
     // minted in a different epoch names legs from a different search, and
     // nothing in a vector of indices says so.

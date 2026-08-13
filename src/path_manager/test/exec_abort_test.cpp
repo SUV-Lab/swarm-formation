@@ -26,6 +26,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include "mmp_traj_msgs/msg/poly_traj.hpp"
 #include "mmp_traj_msgs/msg/trajectory_execution_control.hpp"
+#include "mmp_vehicle_dynamics/trajectory_abort_state.hpp"
 
 using Ctl = mmp_traj_msgs::msg::TrajectoryExecutionControl;
 using Traj = mmp_traj_msgs::msg::PolyTraj;
@@ -39,44 +40,35 @@ void expect(bool cond, const std::string &label) {
   if (!cond) ++g_failed;
 }
 
-// The consumer contract, as a consumer would implement it. This is the thing
-// under test: given a stream of trajectories and controls, what is it flying?
+// The consumer, wrapping the SHARED state machine — the same header
+// dynamics_sim_node uses. It used to carry its own copy of the logic, which
+// meant this test could pass while the simulator did something else (or
+// nothing). Now a defect in the contract fails here AND changes the
+// simulator's behaviour, because it is one implementation.
+//
+// What this still cannot see is the simulator's WIRING: if it stopped
+// subscribing to the control topic, nothing here would notice. That needs the
+// real node in the loop and is recorded as open.
 class Follower {
  public:
   void onTraj(const Traj &t) {
-    // A trajectory whose id has already been aborted must not start
-    // executing — this is the late-joiner case, where TRANSIENT_LOCAL
-    // delivers the latched trajectory and its abort in the same batch and
-    // the order is not guaranteed.
-    if (aborted_.count(t.trajectory_id)) {
+    if (!state_.acceptTrajectory(t.trajectory_id))
       ignored_on_arrival_.push_back(t.trajectory_id);
-      return;
-    }
-    executing_ = t.trajectory_id;
-    has_traj_ = true;
   }
   void onCtl(const Ctl &c) {
     if (c.action != Ctl::ACTION_ABORT) return;
-    aborted_.insert(c.trajectory_id);
-    // Only stop if it names what is being flown. A late or replayed abort
-    // must never stop a NEWER trajectory.
-    if (has_traj_ && executing_ == c.trajectory_id) {
-      has_traj_ = false;
-      ++stops_;
-    }
+    if (state_.applyAbort(c.trajectory_id)) ++stops_;
   }
-  bool executing() const { return has_traj_; }
-  uint64_t id() const { return executing_; }
+  bool executing() const { return state_.executing(); }
+  uint64_t id() const { return state_.current(); }
   int stops() const { return stops_; }
   const std::vector<uint64_t> &ignoredOnArrival() const {
     return ignored_on_arrival_;
   }
 
  private:
-  std::set<uint64_t> aborted_;
+  mmp_vehicle_dynamics::TrajectoryAbortState state_;
   std::vector<uint64_t> ignored_on_arrival_;
-  uint64_t executing_ = 0;
-  bool has_traj_ = false;
   int stops_ = 0;
 };
 
@@ -125,6 +117,39 @@ int main(int argc, char **argv) {
   auto traj_pub = node->create_publisher<Traj>("/planning/trajectory", qos);
   auto ctl_pub =
       node->create_publisher<Ctl>("/planning/execution_control", qos);
+
+  // The four consumer rules, driven directly so delivery order cannot decide
+  // the outcome. The topic sections below cover the wiring and the QoS; these
+  // cover the decisions, and they are the same code the simulator runs.
+  std::cout << "== the contract itself (shared state machine) ==\n";
+  {
+    mmp_vehicle_dynamics::TrajectoryAbortState st;
+    expect(st.acceptTrajectory(1) && st.executing() && st.current() == 1,
+           "a trajectory is accepted and becomes the one being executed");
+    expect(st.applyAbort(1) && !st.executing(),
+           "an abort naming it stops execution");
+
+    expect(st.acceptTrajectory(2) && st.executing(),
+           "a NEW trajectory after that abort is accepted");
+    expect(!st.applyAbort(1) && st.executing() && st.current() == 2,
+           "a replayed abort for the OLD id does not stop it");
+    expect(!st.applyAbort(1) && st.executing(),
+           "...however many times it is replayed");
+
+    // Abort FIRST, trajectory LATER. Both topics are TRANSIENT_LOCAL, so a
+    // late joiner gets both and the order is not guaranteed — driven here
+    // rather than published, because publishing cannot pin which arrives
+    // first, and this is precisely the ordering the arrival check exists for.
+    mmp_vehicle_dynamics::TrajectoryAbortState st2;
+    expect(!st2.applyAbort(9),
+           "an abort for a trajectory never seen stops nothing");
+    expect(!st2.acceptTrajectory(9) && !st2.executing(),
+           "...and that trajectory is REFUSED when it later arrives — the "
+           "case a published test cannot pin, because it cannot choose the "
+           "delivery order");
+    expect(st2.acceptTrajectory(10) && st2.executing(),
+           "a different id still starts normally");
+  }
 
   std::cout << "== consumer already listening ==\n";
   {

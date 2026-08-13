@@ -1099,7 +1099,10 @@ void ReplanFSM::publishExecutionAbort(
     msg.detected_point.y = hit.y();
     msg.detected_point.z = hit.z();
     msg.detected_trajectory_time = t_detected;
-    msg.environment_generation = path_manager_->zonePolicyGeneration();
+    // The whole environment, not just the zones: an obstacle or terrain
+    // change is exactly what usually causes this abort, and the zone policy
+    // generation does not move for either.
+    msg.environment_generation = path_manager_->environmentRevision();
     msg.detail = (r == R::TERRAIN_BLOCKED)
                      ? "a new terrain map blocks the remaining flight"
                  : (r == R::POLICY_UNEVALUATED)
