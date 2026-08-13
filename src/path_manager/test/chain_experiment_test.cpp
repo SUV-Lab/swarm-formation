@@ -2370,15 +2370,21 @@ int main(int argc, char **argv)
               << " piece_leg=" << pm->lastPieceLeg().size()
               << " tags=" << pm->lastCommittedRouteEdgeLeg().size()
               << " route=" << pm->lastCommittedRoute().size() << "\n";
-    expect(!ok, "a front end that cannot honour the clearance fails the plan");
-    expect(pm->legPolicySnapshots().empty(),
-           "and the EPOCH is void — not a prefix of the legs that ran before "
-           "the failing one, and not the previous plan's two either");
-    expect(pm->lastPieceLeg().empty() &&
-               pm->lastCommittedRouteEdgeLeg().empty() &&
-               pm->lastCommittedRoute().empty() &&
-               pm->lastCommittedRouteEpoch() == 0,
-           "...and no provenance or geometry survives from the plan before it");
+    expect(!ok, "the plan fails in the back end");
+    expect(pm->lastPieceLeg().empty(),
+           "and NO piece map survives it — not the one the previous plan "
+           "left, which is what an audit would have sized against a "
+           "trajectory it never came from");
+    // The front end DID run and commit a route, so its products are
+    // legitimately there — and consistent: tags exist only with the geometry
+    // they describe, stamped with the epoch that minted them.
+    expect(pm->legPolicySnapshots().size() == 2,
+           "the front end's per-leg captures are real and stay");
+    expect(!pm->lastCommittedRoute().empty() &&
+               pm->lastCommittedRouteEdgeLeg().size() + 1 ==
+                   pm->lastCommittedRoute().size() &&
+               pm->lastCommittedRouteEpoch() != 0,
+           "...and the route provenance matches the route it describes");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

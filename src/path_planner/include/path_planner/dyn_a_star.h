@@ -718,12 +718,26 @@ public:
         // over. Floored so a degenerate resolution cannot spin.
         const double pitch =
             std::max(0.02, 0.5 * std::min(map_resolution_, map_resolution_z_));
+        // The two ENDPOINTS are exempt, out to the obstacle margin. They are
+        // where the mission says the aircraft is and where it says to go —
+        // the front end cannot move them, and A* already tolerates a start
+        // cell that is occupied for exactly this reason (rejecting it
+        // "cascades to a straight line through the obstacle", see
+        // astarSearchAndGetSimplePath). Without this a drone sitting 0.15 u
+        // above flat ground, with a 0.60 u clearance margin, fails to plan at
+        // all: its own start reads as occupied, the geodesic is discarded and
+        // there is nothing to fall back to. Measured on the FSM harness.
+        const Eigen::Vector3d &head = pts.front();
+        const Eigen::Vector3d &tail = pts.back();
+        const double exempt = obstacle_margin_;
         for (size_t i = 0; i + 1 < pts.size(); ++i) {
             const Eigen::Vector3d &a = pts[i], &b = pts[i + 1];
             const double len = (b - a).norm();
             const int n = std::max(1, static_cast<int>(std::ceil(len / pitch)));
             for (int k = 0; k <= n; ++k) {
                 const Eigen::Vector3d p = a + (b - a) * (double(k) / n);
+                if ((p - head).norm() <= exempt || (p - tail).norm() <= exempt)
+                    continue;
                 if (checkOccupancy_esdf(p)) {
                     if (hit) *hit = p;
                     return false;

@@ -68,6 +68,28 @@ ZERO, ZERO` — 정지 PVA이고 이 모델에서 실행 불가능하다.
 상태기계를 소유). 사이는 `setEnvChangeHook`이다. 그래서 **PathManager 내부 트리거**
 (지연 장애물 flush)도 같은 배관에 도달한다.
 
+### 생산 배관 회귀 — `fsm_scenarios_test`
+
+실제 `ReplanFSM`을 띄우고 진짜 콜백으로 구동한다. 순서가 중요하고 임의가 아니다:
+구역 집합은 **비어 있는 상태로 시작**하므로 첫 비어있지-않은 배치가 곧 변경이다.
+궤적이 생기기 **전에** 넣어야 no-op 검사가 그 배치 때문에 오염되지 않는다.
+
+1. 평탄 DEM 투입 → 2. 구역 집합 A 투입(아직 비행 없음, abort 없어야) →
+3. 미션 → `/planning/trajectory` 발행 확인, id 기록 → 4. **같은 A 재발행 → abort 0건**
+→ 5. **변경된 집합 → abort 정확히 1회**, `POLICY_UNEVALUATED`, 그 id 지목 →
+6. **abort 뒤 새 미션 → 발행되고 id가 더 큼**(WAIT_EXTERNAL_RECOVERY 탈출) →
+7. **지형을 비행 위로 올림 → abort 1회**, `TERRAIN_BLOCKED`, 현재 id 지목
+
+`drone_id`는 반드시 0이어야 한다 — `SEQUENTIAL_START`가
+`drone_id_ <= 0 || (>=1 && have_recv_pre_agent_)`로 막혀 있고 후자는 이 저장소에서
+아무도 쓰지 않는다. 파라미터는 FSM·PathManager가 생성자에서 ~90개를 declare 하므로
+테스트가 먼저 declare 하면 안 된다(전부 params 파일/NodeOptions로).
+
+**이 테스트가 잡은 실제 결함**: `polylineClear`가 **미션이 지정한 끝점**까지 검사해서,
+지형 0.0 위 z=0.15에 있는 드론이 자기 시작점 때문에(여유 0.15 < margin 0.60) geodesic이
+통째로 폐기되고 **계획 자체가 실패**했다. 끝점 주변 margin 반경을 면제했다 — A*도 같은
+이유로 점유된 시작 셀을 용인한다.
+
 ### 회귀
 
 - `exec_abort_test` (신규, 실제 pub/sub): 발행된 궤적 실행 → 같은 id의 abort로 중단 →
@@ -103,12 +125,12 @@ abort 먼저·궤적 나중이면 시작 거부 / 새 id는 정상)는 토픽이
 - FSM 호출부가 넘기는 reason 인자 자체는 회귀가 없다. 매니저가 **호출자가 준 reason을
   그대로 싣는지**는 고정했지만(`envchange`), 지형 콜백이 `TERRAIN_BLOCKED`를 넘기는지는
   FSM 전체를 띄우는 테스트가 필요하다 — 변이를 걸면 살아남는다
-- **FSM 생산 배관 회귀가 없다.** 지형 콜백이 `TERRAIN_BLOCKED`를, 구역 콜백이
-  `POLICY_UNEVALUATED`를 넘기는지, abort 뒤 새 미션이 실제로 발행되는지, 같은 구역
-  재발행이 abort를 내지 않는지 — 이 다섯은 **실제 FSM을 띄우는 통합 테스트**가 필요하다.
-  지금은 매니저가 받은 reason을 그대로 싣는 것까지만 고정되어 있다
 - **시뮬레이터의 배선**은 여전히 미커버다. 상태기는 공유하므로 로직 결함은 잡히지만,
   시뮬레이터가 제어 토픽 구독을 지워도 테스트는 통과한다. 실제 노드를 루프에 넣어야 한다
+- **`legfail`의 "검색 실패는 epoch을 비운다"**는 이제 `fm2fail`이 덮는다. `legfail`은
+  clearance 500으로 실패를 강제했는데, 끝점 면제가 그 반경으로 커져 경로 전체가
+  면제된다 — 그래서 back-end 실패 쪽으로 되돌렸다. **leg 0 성공 + leg 1 실패의 prefix
+  경우는 여전히 구성 불가**다 (`fm2fail`은 모든 leg가 실패한다)
 
 ## 구역 갱신에 대해
 

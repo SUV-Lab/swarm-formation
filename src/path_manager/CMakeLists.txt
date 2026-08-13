@@ -154,6 +154,14 @@ ament_target_dependencies(chain_experiment_test
 # with the production QoS and drives a consumer implementation against them.
 # Covers what an in-process test cannot — that a second message goes out, that
 # a late joiner gets both, and that an abort binds to one trajectory id.
+# [ENV-CHANGE/ABORT] Production plumbing: stands up a real ReplanFSM and
+# drives its real callbacks. Manual harness (real solves), like
+# chain_experiment_test.
+add_executable(fsm_scenarios_test test/fsm_scenarios_test.cpp)
+target_link_libraries(fsm_scenarios_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(fsm_scenarios_test
+  ${PATH_MANAGER_DEPENDENCIES})
+
 add_executable(exec_abort_test test/exec_abort_test.cpp)
 target_link_libraries(exec_abort_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(exec_abort_test
@@ -226,6 +234,9 @@ install(TARGETS start_claim_test
 )
 
 install(TARGETS exec_abort_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS fsm_scenarios_test
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS risk_scenarios_test
