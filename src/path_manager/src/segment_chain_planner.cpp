@@ -453,7 +453,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
     const poly_traj::Trajectory &mw = pm_->traj_.local_traj.traj;
     const FlightVerdict mv = evaluateFlight(
         mw, {{mw.getTotalDuration(), PhaseKind::CRUISE, "direct"}},
-        &pm_->lastPieceLeg());
+        &pm_->lastPieceLeg(), pm_->lastCommittedRouteEpoch());
     // A multi-leg front end runs one zone search PER LEG and
     // zonePolicySnapshot is plan-wide-or-nothing (path_manager.cpp), so
     // every multi-waypoint mission with a zone ANYWHERE reports
@@ -565,7 +565,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
       -> std::optional<PlanResult> {
     const auto bv = evaluateFlight(
         b, {{b.getTotalDuration(), PhaseKind::CRUISE, "baseline"}},
-        &pm_->lastPieceLeg());
+        &pm_->lastPieceLeg(), pm_->lastCommittedRouteEpoch());
     baseline_verdict = bv;
     // !evaluated must fail too. unflyable() is false when nothing was
     // judged, so testing it alone lets a flight the evaluator could not
@@ -910,7 +910,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   // Stitched: the manager's map describes ONE segment solve, not this
   // concatenation. Saying so is the contract; letting a size comparison
   // decide it was a coincidence that held only while the counts differed.
-  const FlightVerdict fv = evaluateFlight(chained, spans, nullptr);
+  const FlightVerdict fv = evaluateFlight(chained, spans, nullptr, 0);
   if (!fv.evaluated || fv.unflyable()) {
     // UNEVALUATED joins unflyable here too (fail-closed): the baseline is
     // still the honest repair — a judged-good baseline beats refusing the
@@ -1692,6 +1692,27 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   if (um <= 1e-9 || uz <= 1e-9)
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "degenerate dynamics unit scale");
+  // [LEG-POLICY] SCOPE, decided before anything is attempted.
+  //
+  // The coordinator screens its entry candidates and judges its arc against
+  // ONE plan-wide zone policy, and a multi-leg front end does not have one.
+  // That is a property of the REQUEST, not of anything the planner might
+  // discover, so it is settled here rather than after a route commit — a
+  // front end that failed for its own reasons would otherwise report
+  // TRANSITION_GENERATION_FAILED for an input that was never supported, and
+  // the operator would go looking for a geometry problem.
+  //
+  // Zone-free multi-waypoint transitions are NOT refused: the snapshot is
+  // valid then, there is nothing to attribute, and the flight is judged whole
+  // exactly as a single-goal one is.
+  if (waypoints.size() > 1 && pm_->numRiskZones() > 0)
+    return fail(PlanReason::TRANSITION_MULTI_LEG_UNSUPPORTED,
+                "a transition mission with " +
+                    std::to_string(waypoints.size()) +
+                    " waypoints and a risk zone is not supported: the "
+                    "coordinator judges its entry against ONE plan-wide "
+                    "zone policy, and a multi-leg front end has none");
+
   bool run_parallel = false;
   if (!node_->has_parameter("chain/parallel"))
     node_->declare_parameter("chain/parallel", false);
@@ -1711,29 +1732,13 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   // [2] zone policy snapshot — fail-closed precondition. INVALID (pass 0,
   // stale data, multi-leg search) means the transition cannot be judged.
   const auto snap = pm_->zonePolicySnapshot();
-  if (!snap.valid) {
-    // [LEG-POLICY] Say WHICH of the two this is. A multi-leg mission with a
-    // zone has no plan-wide policy by construction — that is a statement
-    // about scope, and reporting it as TRANSITION_GENERATION_FAILED named a
-    // stage 150 lines below that had not run. Everything else here really is
-    // a generation precondition that failed.
-    //
-    // Note what is NOT refused: a multi-waypoint transition mission with no
-    // zones. The snapshot is valid then (risk_zones_.empty() short-circuits),
-    // there is nothing to attribute, and the flight is judged whole exactly
-    // as a single-goal one is. Refusing it would remove working behaviour to
-    // make a comment true.
-    if (waypoints.size() > 1 && pm_->numRiskZones() > 0)
-      return fail(PlanReason::TRANSITION_MULTI_LEG_UNSUPPORTED,
-                  "a transition mission with " +
-                      std::to_string(waypoints.size()) +
-                      " waypoints and a risk zone is not supported: the "
-                      "coordinator judges its entry against ONE plan-wide "
-                      "zone policy, and a multi-leg front end has none");
+  // The multi-leg case was refused at entry, so anything invalid here is a
+  // real generation precondition — pass 0, or a search that ran on stale
+  // zone/terrain data.
+  if (!snap.valid)
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "zone policy snapshot invalid — transition cannot be "
                 "judged against the committed policy");
-  }
 
   // [3] entry screening — the SAME frozen [PHASE] predicates plus the
   // speed-change arc a cruise-to-cruise screen never needed.
@@ -2230,7 +2235,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
       const poly_traj::Trajectory &fly = pm_->traj_.local_traj.traj;
       const FlightVerdict fv = evaluateFlight(
           fly, {{fly.getTotalDuration(), PhaseKind::CRUISE, "direct"}},
-          &pm_->lastPieceLeg());
+          &pm_->lastPieceLeg(), pm_->lastCommittedRouteEpoch());
       direct_verdict = fv;
       // Fail-CLOSED (review find): a flight the evaluator could not judge
       // is as unflyable as one it condemned — "no verdict" must never read
@@ -2911,7 +2916,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // in RViz tells the operator it was accepted. FAILED leaves both untouched.
   last_spans_ = spans;
   const FlightVerdict stitched_fv =
-      evaluateFlight(chained, spans, nullptr);   // stitched: see planImpl
+      evaluateFlight(chained, spans, nullptr, 0);  // stitched: see planImpl
   if (!stitched_fv.evaluated || stitched_fv.unflyable())
     return stitchedVerdictResult(stitched_fv, PlanResult::success());
 
@@ -3034,7 +3039,7 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
 SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     const poly_traj::Trajectory &flight,
     const std::vector<PhaseSpan> &spans,
-    const std::vector<size_t> *piece_leg_in) const
+    const std::vector<size_t> *piece_leg_in, uint64_t piece_epoch) const
 {
   // Clear FIRST, so an early return can never leave the PREVIOUS flight's
   // verdict readable through lastFlightVerdict(). A regression that asserts
@@ -3172,8 +3177,27 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   const auto &leg_pols = pm_->legPolicySnapshots();
   bool per_piece = !piece_leg.empty() && !leg_pols.empty() &&
                    piece_leg.size() ==
-                       static_cast<size_t>(flight.getPieceNum());
+                       static_cast<size_t>(flight.getPieceNum()) &&
+                   // The map and the captures must come from the SAME
+                   // front-end run. Sizes agreeing is not that: a map minted
+                   // one epoch ago names legs of a different search, and
+                   // nothing in a vector of indices says which.
+                   piece_epoch != 0 && piece_epoch == pm_->zonePolicyEpoch();
   if (per_piece) {
+    // ORDER. A route is walked once, front to back, so its legs appear in
+    // flight order and each hands over to the NEXT one. A map that goes
+    // backwards, jumps a leg, or lets a leg reappear after another has taken
+    // over is not a route this planner can have produced — and every one of
+    // those shapes would still pass a size-and-range check while attributing
+    // stretches of the flight to the wrong policy.
+    //
+    // The first entry is NOT required to be leg 0: a slice of a committed
+    // route legitimately starts mid-route, so its tags begin at whichever leg
+    // the cut landed on.
+    for (size_t i = 1; i < piece_leg.size() && per_piece; ++i) {
+      const size_t prev = piece_leg[i - 1], cur = piece_leg[i];
+      if (cur != prev && cur != prev + 1) per_piece = false;
+    }
     for (size_t i = 0; i < leg_pols.size() && per_piece; ++i) {
       // leg i at index i, and serial exactly i + 1. The searcher increments
       // its per-epoch counter once per leg search and captures with the new

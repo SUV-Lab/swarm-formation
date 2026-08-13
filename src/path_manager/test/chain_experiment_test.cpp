@@ -185,6 +185,7 @@ int main(int argc, char **argv)
        with_legleadin = false, with_legchain = false, with_legaudit = false,
        with_wpzonepass0 = false, with_legmid = false,
        with_cutarc = false, with_transwp = false, with_legseam = false,
+       with_legfail = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -353,6 +354,7 @@ int main(int argc, char **argv)
     if (v == "legmid") { with_legmid = true; }
     if (v == "cutarc") { with_cutarc = true; }
     if (v == "legseam") { with_legseam = true; }
+    if (v == "legfail") { with_legfail = true; }
     if (v == "transwp") { with_transwp = true; with_route = true; }
     if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
@@ -1879,33 +1881,95 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_legfail) {
+    // [LEG-POLICY] What a plan that dies AFTER the front end leaves behind.
+    //
+    // This variant runs with an obstacle clearance the empty test SDF cannot
+    // satisfy. The front end ignores it (no occupancy data to test against)
+    // and commits a route; the back end then refuses. So the failing call
+    // gets past the point where provenance is written, which is the case an
+    // entry-only reset would not cover — and the previous successful plan's
+    // piece map must not be what an audit reads afterwards.
+    //
+    // NOTE what this does NOT pin: a leg whose SEARCH fails. The capture now
+    // sits below the `seg_path.size() < 2` check so a failed leg cannot be
+    // recorded, and a failure clears the epoch rather than leaving a prefix —
+    // but the FM2 front end could not be made to fail from this harness at
+    // all. Out-of-map waypoints clamp and reach the goal (measured, both as a
+    // leg goal and as a leg start), the clearance above is ignored with an
+    // empty SDF, and no obstacle-insertion API is exposed to a test.
+    path_manager::RiskZone z;
+    z.center = Eigen::Vector3d(600.0, 600.0, 3.0);   // off the route
+    z.reach = 15.0;
+    z.peak = 0.9;
+    pm->setRiskZonesRuntime({z});
+    const Eigen::Vector3d mid(180.0, 80.0, 3.0);
+
+    // A good two-leg plan first, so there IS a map to be left standing.
+    pm->setObstacleClearance(0.7);
+    expect(pm->planGlobalTraj(
+               mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                      start_vel, start_acc),
+               {mid, goal[0]}),
+           "a two-leg mission plans");
+    const size_t good_pieces = pm->lastPieceLeg().size();
+    expect(good_pieces > 0, "...leaving a piece map behind it");
+
+    pm->setObstacleClearance(500.0);
+    const bool ok = pm->planGlobalTraj(
+        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+               start_vel, start_acc),
+        {mid, goal[0]});
+    const auto &tags = pm->lastCommittedRouteEdgeLeg();
+    const auto &route = pm->lastCommittedRoute();
+    std::cout << "[LEG-FAIL] plan=" << (ok ? 1 : 0)
+              << " legs=" << pm->legPolicySnapshots().size()
+              << " prev_pieces=" << good_pieces
+              << " piece_leg=" << pm->lastPieceLeg().size()
+              << " tags=" << tags.size() << " route=" << route.size() << "\n";
+    expect(!ok, "the second plan fails in the back end");
+    expect(pm->lastPieceLeg().empty(),
+           "and NO piece map survives it — not the one the previous plan "
+           "left, which is what an audit would have sized against a "
+           "trajectory it never came from");
+    // The front end did run and did commit a route, so its products are
+    // legitimately there — and they are CONSISTENT: tags exist only with the
+    // geometry they describe, stamped with the epoch that minted them.
+    expect(pm->legPolicySnapshots().size() == 2,
+           "the front end's per-leg captures are real and stay");
+    expect(!route.empty() && tags.size() + 1 == route.size() &&
+               pm->lastCommittedRouteEpoch() != 0,
+           "...and the route provenance matches the route it describes");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_legseam) {
     using ZD = path_manager::PathManager::ZoneDisposition;
-    // [LEG-POLICY] The REFUSING half of the handover rule, and the only place
-    // the stricter-of-two merge can be made to matter.
+    // [LEG-POLICY] The REFUSING half of the handover rule, on a map that
+    // production could actually have produced.
     //
-    // Why it needs a synthesised flight: a seam is a mission waypoint, i.e.
-    // the outgoing leg's goal AND the incoming leg's start, and the front end
-    // grants a containment exemption on either (dyn_a_star.h prepareBarrier,
-    // `if (s_in || g_in)`). So any zone covering a real seam exempts BOTH
-    // adjoining legs and the two sides can never disagree there. Planning
-    // cannot produce the case; the evaluator still has to get it right.
+    // Why it needs a synthesised flight at all: a seam is a mission waypoint,
+    // i.e. the outgoing leg's goal AND the incoming leg's start, and the front
+    // end grants a containment exemption on either (dyn_a_star.h
+    // prepareBarrier, `if (s_in || g_in)`). So any zone covering a REAL seam
+    // exempts both adjoining legs and the two sides can never disagree there.
+    // Planning cannot produce the case; the evaluator still has to get it
+    // right.
     //
-    // A zone on the MISSION START gives the asymmetry the merge exists for —
-    // leg 0 holds it as SOFT_ENDPOINT, leg 1 calls it HARD_AVOID — and the
-    // map handed to the audit puts leg 1 BEFORE leg 0, so the merge has to
-    // reach backwards for the HARD_AVOID rather than find it on the piece it
-    // is standing on. Delete the merge and the seam reads soft.
+    // The first version of this handed the audit {1, 0} — leg 1 before leg 0 —
+    // to force the merge to reach backwards. That map is not one any route can
+    // produce, and building the only test of the refusal on an input the
+    // contract should reject was the wrong way round. The zone goes on the
+    // MISSION GOAL instead: leg 0 has neither endpoint inside so it stays
+    // HARD_AVOID, leg 1 ends there so it is SOFT_ENDPOINT, and the natural
+    // ascending map {0, 1} then puts the SOFT side on the piece the seam sits
+    // on — the merge still has to reach back to the previous leg for the
+    // HARD_AVOID, and deleting it still reads soft.
     path_manager::RiskZone z;
-    z.center = start_pos;
-    // 20 u, not something small enough for the 0.1 s grid to step over. Those
-    // two wishes are incompatible: the containment exemption is only granted
-    // for a zone the front end can resolve (measured — at 0.05 u both legs
-    // came back HARD_AVOID, at 2 u leg 0 fell to SOFT_FALLBACK, and only at
-    // 20 u does leg 0 read SOFT_ENDPOINT), while stepping over a zone at the
-    // 2.0 u/s speed cap needs it under 0.2 u. So this pins the seam COUNTER
-    // and the merge DIRECTION; it does not pin a refusal that only the seam
-    // could have produced.
+    z.center = goal[0];
     z.reach = 20.0;
     z.peak = 0.9;
     pm->setRiskZonesRuntime({z});
@@ -1927,13 +1991,13 @@ int main(int argc, char **argv)
     std::cout << "[LEG-SEAM] dispositions leg0="
               << (int)legs[0].policy.zones[0].disposition << " leg1="
               << (int)legs[1].policy.zones[0].disposition << "\n";
-    expect(legs[0].policy.zones[0].disposition == ZD::SOFT_ENDPOINT &&
-               legs[1].policy.zones[0].disposition == ZD::HARD_AVOID,
-           "leg 0 is exempt at its own start, leg 1 is not");
+    expect(legs[0].policy.zones[0].disposition == ZD::HARD_AVOID &&
+               legs[1].policy.zones[0].disposition == ZD::SOFT_ENDPOINT,
+           "leg 0 must avoid the zone; leg 1 is told to arrive in it");
 
-    // Straight and level THROUGH the zone centre, with the piece seam exactly
-    // on it. 25 u per 16 s piece is 1.5625 u/s = 156 m/s — inside the cruise
-    // band, so no_cruise cannot stand in for the cause under test.
+    // Straight and level THROUGH the zone centre with the piece seam on it.
+    // 25 u per 16 s piece is 1.5625 u/s = 156 m/s — inside the cruise band, so
+    // no_cruise cannot stand in for the cause under test.
     const Eigen::Vector3d a(z.center.x() - 25.0, z.center.y(), z.center.z());
     const Eigen::Vector3d b(z.center.x() + 25.0, z.center.y(), z.center.z());
     const auto seg = [&](const Eigen::Vector3d &p0, const Eigen::Vector3d &p1) {
@@ -1946,12 +2010,13 @@ int main(int argc, char **argv)
         std::vector<double>{16.0, 16.0},
         std::vector<poly_traj::CoefficientMat>{seg(a, z.center),
                                                seg(z.center, b)});
-    const std::vector<size_t> map = {1, 0};   // leg 1 first, then leg 0
+    const std::vector<size_t> map = {0, 1};   // flight order, contiguous
+    const uint64_t ep = pm->lastCommittedRouteEpoch();
     const auto fv = chain.evaluateFlightForTest(
         seam, {{seam.getTotalDuration(),
                 path_manager::SegmentChainPlanner::PhaseKind::CRUISE,
                 "synthetic"}},
-        &map);
+        &map, ep);
     std::cout << "[LEG-SEAM] hard=" << fv.zone_hard_n
               << " junctions=" << fv.zone_junction_n
               << " junction_hard=" << fv.zone_junction_hard_n
@@ -1964,27 +2029,33 @@ int main(int argc, char **argv)
     expect(fv.zone_junction_n == 1, "the one handover was examined");
     expect(fv.zone_junction_hard_n == 1,
            "and it is inside the authored volume under the STRICTER of the "
-           "two policies — the piece it sits on says SOFT_ENDPOINT, and the "
-           "merge has to reach back to the other leg to find HARD_AVOID");
+           "two policies — the piece it sits on says SOFT_ENDPOINT, so the "
+           "merge has to reach BACK to the previous leg to find HARD_AVOID");
     expect(fv.unflyable(), "which refuses the flight");
-
-    // Control: the natural order. Here the piece the seam sits on already
-    // says HARD_AVOID, so the count comes out the same whether the merge
-    // runs or not — which is why the reversed map above is the one that
-    // pins it.
-    const std::vector<size_t> natural = {0, 1};
-    const auto fv2 = chain.evaluateFlightForTest(
-        seam, {{seam.getTotalDuration(),
-                path_manager::SegmentChainPlanner::PhaseKind::CRUISE,
-                "synthetic"}},
-        &natural);
-    expect(fv2.zone_junction_hard_n == 1,
-           "...and the same seam under the natural order is hard either way");
     const path_manager::PlanResult pr = chain.verdictResultForTest(fv);
     expect(!pr.hasTrajectory(),
            "the refusal reaches the caller, not just the counter");
     expect(pr.detail.find("leg handover") != std::string::npos,
            "...and it SAYS which hazard, instead of an empty parenthesis");
+
+    // The provenance CONTRACT, on the same fixture. Every one of these is a
+    // map that a size-and-range check waves through and that no route can
+    // produce; each must switch attribution off rather than be interpreted.
+    const auto rejects = [&](const std::vector<size_t> &m, uint64_t e,
+                             const char *what) {
+      const auto r = chain.evaluateFlightForTest(
+          seam, {{seam.getTotalDuration(),
+                  path_manager::SegmentChainPlanner::PhaseKind::CRUISE,
+                  "synthetic"}},
+          &m, e);
+      expect(!r.policy_measurable, what);
+    };
+    rejects({1, 0}, ep, "a map that runs BACKWARDS is refused, not read");
+    rejects({0, 2}, ep, "a map that SKIPS a leg is refused");
+    rejects({0, 1}, ep + 1,
+            "a map stamped with another epoch is refused — its indices name "
+            "legs from a different search");
+    rejects({0, 1}, 0, "an unstamped map is refused");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -2043,6 +2114,25 @@ int main(int argc, char **argv)
            "...as an explicit SCOPE refusal, not as a generation failure");
     expect(r1.detail.find("not supported") != std::string::npos,
            "...and the detail says so in words a caller can act on");
+
+    // ...and the refusal is a statement about the REQUEST, so it cannot be
+    // displaced by anything the planner might discover. With a waypoint the
+    // front end cannot reach, the answer must still be the scope refusal —
+    // while the check sat after commitRoute, the same unsupported input came
+    // back as TRANSITION_GENERATION_FAILED and sent the operator looking for
+    // a geometry problem.
+    std::vector<Eigen::Vector3d> unreachable;
+    unreachable.push_back(Eigen::Vector3d(5000.0, 5000.0, 3.0));
+    unreachable.push_back(goal[0]);
+    const path_manager::PlanResult r2 =
+        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR,
+                          start_pos, v32, start_acc, false), unreachable, {});
+    std::cout << "[TRANS-WP] unreachable+zone: outcome=" << (int)r2.outcome
+              << " reason=" << (int)r2.reason << "\n";
+    expect(!r2.hasTrajectory(), "an unreachable waypoint is still refused");
+    expect(r2.reason ==
+               path_manager::PlanReason::TRANSITION_MULTI_LEG_UNSUPPORTED,
+           "...as the SCOPE refusal, decided before any search runs");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -2144,6 +2234,21 @@ int main(int argc, char **argv)
     if (pl.size() == 2)
       expect(pl[0] == 0 && pl[1] == 0,
              "...both halves of the split edge on the one leg there is");
+
+    // A REFUSED plan must not leave this map standing. The entry gate returns
+    // before anything is written, so without a reset at the top the accessor
+    // would still describe the plan above — and both halves would be
+    // individually well-formed, so no size check could catch the mismatch.
+    // This assertion belongs HERE, where a successful plan has just left a
+    // NON-EMPTY map: asserting it after a plan that legitimately produced
+    // none passes without testing anything.
+    expect(!pm->lastPieceLeg().empty(), "the map above is non-empty — the "
+                                        "premise for the check below");
+    expect(!pm->planGlobalTraj(path_manager::StartHead{}, {near_goal}),
+           "an UNSPECIFIED head is refused at the entry gate");
+    expect(pm->lastPieceLeg().empty(),
+           "...and the refused call leaves NO piece map from the plan before "
+           "it");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -3152,22 +3257,22 @@ int main(int argc, char **argv)
     using Span = path_manager::SegmentChainPlanner::PhaseSpan;
     // Each span-contract violation must yield UNEVALUATED.
     expect(!chain.evaluateFlight(traj, {{T * 0.5, PK::CRUISE, "short"}},
-                                 nullptr)
+                                 nullptr, 0)
                 .evaluated,
            "last span not covering the flight -> UNEVALUATED");
     expect(!chain.evaluateFlight(
                   traj, {{T * 0.6, PK::CRUISE, "a"}, {T * 0.4, PK::CRUISE,
-                                                      "b"}}, nullptr)
+                                                      "b"}}, nullptr, 0)
                 .evaluated,
            "non-increasing t_end -> UNEVALUATED");
     expect(!chain.evaluateFlight(
                   traj, {{T * 0.5, PK::CRUISE, "cruise"},
-                         {T, PK::TRANSITION, "late-transition"}}, nullptr)
+                         {T, PK::TRANSITION, "late-transition"}}, nullptr, 0)
                 .evaluated,
            "TRANSITION after cruise -> UNEVALUATED");
     expect(!chain.evaluateFlight(
                   traj, {{T * 0.5, PK::TERMINAL, "terminal"},
-                         {T, PK::CRUISE, "tail"}}, nullptr)
+                         {T, PK::CRUISE, "tail"}}, nullptr, 0)
                 .evaluated,
            "TERMINAL not last -> UNEVALUATED");
     // The UNEVALUATED -> FAILED(+storage invalidated) verdict mapping is

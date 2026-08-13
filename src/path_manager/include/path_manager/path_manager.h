@@ -577,6 +577,10 @@ namespace path_manager
         return leg_policies_;
     }
     uint64_t zonePolicyGeneration() const { return zone_policy_generation_; }
+    // The front-end run the current leg_policies_ belong to. A piece map
+    // minted in a different epoch names legs from a different search, and
+    // nothing in a vector of indices says so.
+    uint64_t zonePolicyEpoch() const { return zone_policy_epoch_; }
     // Structured contact result — STALE/INVALID cannot be mistaken for
     // "no contact" (review find: an optional out-pointer let a caller read
     // a stale snapshot as CLEAR).

@@ -218,7 +218,8 @@ public:
   // nullptr and are refused in the usual way when zones make that matter.
   FlightVerdict evaluateFlight(const poly_traj::Trajectory &flight,
                                const std::vector<PhaseSpan> &spans,
-                               const std::vector<size_t> *piece_leg) const;
+                               const std::vector<size_t> *piece_leg,
+                               uint64_t piece_epoch) const;
   // [S13] The span list of the LAST stored flight (recorded just before
   // the whole-flight evaluation) — audit/harness observability for the
   // phase semantics; empty when the last plan stored nothing.
@@ -242,8 +243,9 @@ public:
   FlightVerdict evaluateFlightForTest(
       const poly_traj::Trajectory &flight,
       const std::vector<PhaseSpan> &spans,
-      const std::vector<size_t> *piece_leg = nullptr) const {
-    return evaluateFlight(flight, spans, piece_leg);
+      const std::vector<size_t> *piece_leg = nullptr,
+      uint64_t piece_epoch = 0) const {
+    return evaluateFlight(flight, spans, piece_leg, piece_epoch);
   }
   // ...and the mapping from that verdict to what the caller receives, so a
   // regression can pin BOTH halves: that a hard contact is detected, and

@@ -1407,6 +1407,9 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         // pick the wrong leg wherever two legs run close or the route doubles
         // back on itself.
         std::vector<size_t> route_leg;
+        // [LEG-POLICY] Latched once any leg fails to yield a snapshot; see
+        // the capture block below.
+        bool leg_capture_voided = false;
         for (size_t seg = 0; seg < all_points.size() - 1; ++seg)
         {
             std::vector<Eigen::Vector3d> seg_path =
@@ -1414,18 +1417,6 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                     astar_step_size_, all_points[seg], all_points[seg + 1],
                     traj_.local_traj.drone_id);
             ++zone_policy_epoch_searches_;
-            // [LEG-POLICY] Captured HERE, while this leg's search still owns
-            // the searcher buffers. One line later the next leg overwrites
-            // them, which is exactly why the plan-wide snapshot refuses a
-            // multi-leg epoch.
-            {
-                LegPolicySnapshot lp;
-                if (captureLegPolicySnapshot(seg, zone_policy_epoch_searches_,
-                                             &lp))
-                    leg_policies_.push_back(lp);
-                else
-                    leg_policies_.clear();  // fail-closed: a hole is not a set
-            }
 
             log_manager_->infof("A* segment %zu: simple_path_size=%zu",
                 seg, seg_path.size());
@@ -1436,7 +1427,45 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                     "A* failed for segment %zu: (%.2f,%.2f,%.2f) -> (%.2f,%.2f,%.2f)",
                     seg, all_points[seg].x(), all_points[seg].y(), all_points[seg].z(),
                     all_points[seg+1].x(), all_points[seg+1].y(), all_points[seg+1].z());
+                // [LEG-POLICY] A leg that produced no path produced no policy
+                // either. Everything captured so far described a route that is
+                // now not going to exist, and the legs after this one will
+                // never run — so the EPOCH is void, not merely incomplete. A
+                // surviving prefix would be a set of snapshots for a plan that
+                // failed, sitting behind an accessor whose only size check is
+                // against a trajectory from some other plan.
+                leg_policies_.clear();
                 return false;
+            }
+
+            // [LEG-POLICY] Captured only now — AFTER this leg is known to have
+            // produced a path, and still while its search owns the searcher
+            // buffers (the next leg overwrites them, which is exactly why the
+            // plan-wide snapshot refuses a multi-leg epoch). Capturing before
+            // the success check recorded a policy for a search that failed.
+            {
+                LegPolicySnapshot lp;
+                if (captureLegPolicySnapshot(seg, zone_policy_epoch_searches_,
+                                             &lp) && !leg_capture_voided) {
+                    leg_policies_.push_back(lp);
+                } else if (!leg_capture_voided) {
+                    // A hole is not a set. Note the LATCH: without it the
+                    // legs after the failure would append and leave a TAIL —
+                    // snapshots whose leg numbers no longer line up with
+                    // anything, and which a per-leg reader would index by
+                    // position. Voided means voided for the epoch, not until
+                    // the next success.
+                    //
+                    // The PLAN is not failed here: a configuration where no
+                    // capture is possible at all (the 3-pass off, with zones
+                    // present) is a supported one, and it is the audit's job
+                    // to refuse what it cannot attribute — see wpzonepass0.
+                    leg_policies_.clear();
+                    leg_capture_voided = true;
+                    log_manager_->warnf(
+                        "[LEG-POLICY] leg %zu could not be captured — the "
+                        "epoch is void, not partial", seg);
+                }
             }
 
             for (size_t i = (seg == 0 ? 0 : 1); i < seg_path.size(); ++i)
@@ -3919,7 +3948,11 @@ bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
         (risk_zones_.empty() || pass != 0) &&
         zone_policy_epoch_generation_ == zone_policy_generation_ &&
         (risk_zones_.empty() ||
-         (nb.size() >= risk_zones_.size() && so.size() >= risk_zones_.size()));
+         // EXACTLY one entry per zone. ">= zone count" accepted a buffer left
+         // over from a search that saw MORE zones; the extra entries are
+         // never read, but their presence means the buffer was not rebuilt
+         // for this zone set and the entries that ARE read may be stale.
+         (nb.size() == risk_zones_.size() && so.size() == risk_zones_.size()));
     if (!ok) {
         if (log_manager_)
             log_manager_->warnf(
