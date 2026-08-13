@@ -185,7 +185,7 @@ int main(int argc, char **argv)
        with_legleadin = false, with_legchain = false, with_legaudit = false,
        with_wpzonepass0 = false, with_legmid = false,
        with_cutarc = false, with_transwp = false, with_legseam = false,
-       with_dynprobe = false, with_fm2fail = false,
+       with_dynprobe = false, with_fm2fail = false, with_envchange = false,
        with_legfail = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
@@ -358,6 +358,7 @@ int main(int argc, char **argv)
     if (v == "legfail") { with_legfail = true; }
     if (v == "dynprobe") { with_dynprobe = true; }
     if (v == "fm2fail") { with_fm2fail = true; }
+    if (v == "envchange") { with_envchange = true; }
     if (v == "transwp") { with_transwp = true; with_route = true; }
     if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
@@ -1883,6 +1884,78 @@ int main(int argc, char **argv)
     // not relaxed by the existence of per-leg capture.
     expect(!pm->zonePolicySnapshot().valid,
            "the plan-wide snapshot is still INVALID for a multi-leg epoch");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_envchange) {
+    // [ENV-CHANGE] An obstacle that arrives AFTER take-off.
+    //
+    // EXEC_TRAJ is single-shot: it does not replan, it waits for the stored
+    // trajectory to finish. So a dynamic obstacle installed mid-flight was
+    // never looked at, and the mission kept flying a route that had been
+    // cleared against a different world. "The caller gates execution on the
+    // planner's return value" does not cover it — no plan is attempted, so
+    // there is no return value to gate on.
+    //
+    // The contract has three cases and this pins all three.
+    const auto head = [&]() {
+      return mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                    start_vel, start_acc);
+    };
+    expect(pm->planGlobalTraj(head(), {goal[0]}), "a mission plans and stores");
+    const double dur = pm->traj_.local_traj.duration;
+    expect(dur > 0.0, "...with an executable trajectory in the slot");
+    // Pretend it is flying: the FSM stamps start_time when it executes.
+    pm->traj_.local_traj.start_time =
+        rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+
+    // (1) Nothing changed -> the flight is kept. A revalidation that refuses
+    // whenever it is asked would ground every mission.
+    Eigen::Vector3d hit;
+    expect(pm->revalidateStoredTrajectory(0.0, &hit),
+           "an unchanged world leaves the flight alone");
+    expect(pm->traj_.local_traj.duration == dur, "...untouched, in fact");
+
+    // (2) An obstacle far off the route -> still kept.
+    expect(pm->addDynamicSphere(Eigen::Vector3d(30.0, 30.0, 3.0), 10.0) >= 0,
+           "an off-route obstacle registers");
+    expect(pm->revalidateStoredTrajectory(0.0, &hit),
+           "...and does not touch a flight it cannot reach");
+    expect(pm->traj_.local_traj.duration == dur, "...still executable");
+
+    // (3) An obstacle ON the remainder -> the flight is stopped. Placed at
+    // the trajectory's own midpoint so it is unambiguously in the way, with a
+    // radius that clears the grounding lift (centre z = base + r).
+    const Eigen::Vector3d mid_pt = pm->traj_.local_traj.traj.getPos(0.5 * dur);
+    expect(pm->addDynamicSphere(mid_pt, 12.0) >= 0,
+           "an obstacle lands on the remaining route");
+    const bool kept = pm->revalidateStoredTrajectory(0.0, &hit);
+    std::cout << "[ENV-CHANGE] kept=" << (kept ? 1 : 0)
+              << " dur=" << pm->traj_.local_traj.duration
+              << " start_time=" << pm->traj_.local_traj.start_time
+              << " hit=(" << hit.x() << ", " << hit.y() << ", " << hit.z()
+              << ")\n";
+    expect(!kept, "a blocked remainder is REFUSED");
+    expect(pm->traj_.local_traj.duration <= 0.0 &&
+               pm->traj_.local_traj.start_time <= 0.0,
+           "...by zeroing the two fields ReplanFSM gates execution on, so "
+           "EXEC_TRAJ parks instead of flying into it");
+
+    // (4) The already-flown prefix is not judged. Re-plan, then put the
+    // obstacle BEHIND the aircraft and ask about the remainder only.
+    pm->clearDynamicObstacles();
+    expect(pm->planGlobalTraj(head(), {goal[0]}), "the mission re-plans");
+    const double dur2 = pm->traj_.local_traj.duration;
+    const Eigen::Vector3d behind = pm->traj_.local_traj.traj.getPos(0.1 * dur2);
+    expect(pm->addDynamicSphere(behind, 12.0) >= 0,
+           "an obstacle appears where the flight has already been");
+    expect(pm->revalidateStoredTrajectory(0.4 * dur2, &hit),
+           "a hazard the flight has already passed does not ground it — the "
+           "prefix cannot be unflown");
+    pm->clearDynamicObstacles();
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

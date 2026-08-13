@@ -502,6 +502,29 @@ namespace path_manager
     int  addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vector3d& size,
                        const std::string& model = "");
     void clearDynamicObstacles();
+
+    // [ENV-CHANGE] Re-check the trajectory currently stored for execution
+    // against the CURRENT obstacle set, from `t_from` seconds into it to its
+    // end, and invalidate it if what remains is no longer flyable.
+    //
+    // Why this exists: dynamic obstacles can be replaced while a flight is in
+    // progress, and EXEC_TRAJ does not replan — it is single-shot, so it only
+    // waits for the stored trajectory to finish. Nothing re-examined the
+    // flight when the world under it changed, so a mission kept flying into
+    // an obstacle that arrived after take-off. A failed re-plan does not
+    // describe this case either: no re-plan is attempted at all.
+    //
+    // The three cases:
+    //   - nothing stored -> nothing to do, true
+    //   - the remainder is still clear -> keep flying it, true
+    //   - the remainder is blocked -> zero duration and start_time, false.
+    //     EXEC_TRAJ already reads that as "the plan was REFUSED, this is not
+    //     arrival" and parks in WAIT_POSITION, so the stop path is the one
+    //     that already exists rather than a second one.
+    // The already-flown prefix is deliberately not judged: it cannot be
+    // unflown, and refusing on it would ground a flight over a hazard it has
+    // already passed.
+    bool revalidateStoredTrajectory(double t_from, Eigen::Vector3d *hit);
     size_t numDynamicObstacles() const { return sdf_manager_.numActiveObstacles(); }
 
     // Runtime risk-zone reset (called when ObstacleScenarioPanel / mission

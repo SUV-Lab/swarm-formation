@@ -3898,6 +3898,56 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
     return id;
 }
 
+// [ENV-CHANGE] see the header. Same occupancy predicate the front end plans
+// against, so "the route was clear when planned" and "the remainder is clear
+// now" are the same question asked twice, not two different standards.
+bool PathManager::revalidateStoredTrajectory(double t_from,
+                                             Eigen::Vector3d *hit)
+{
+    auto &lt = traj_.local_traj;
+    if (!(lt.duration > 0.0) || lt.traj.getPieceNum() == 0) return true;
+    const double t0 = std::clamp(t_from, 0.0, lt.duration);
+    if (lt.duration - t0 <= 1e-9) return true;
+
+    // Sample the REMAINDER to a spatial pitch rather than a fixed count: the
+    // question is how far apart the samples are in metres, and that must not
+    // depend on how long the flight happens to be.
+    std::vector<Eigen::Vector3d> pts;
+    {
+        double len = 0.0;
+        Eigen::Vector3d prev = lt.traj.getPos(t0);
+        for (int k = 1; k <= 512; ++k) {
+            const Eigen::Vector3d p =
+                lt.traj.getPos(t0 + (lt.duration - t0) * k / 512.0);
+            len += (p - prev).norm();
+            prev = p;
+        }
+        const double pitch = 0.05;          // 5 m at 1 unit = 100 m
+        const int n = std::clamp(
+            static_cast<int>(std::ceil(len / pitch)), 64, 200000);
+        pts.reserve(static_cast<size_t>(n) + 1);
+        for (int k = 0; k <= n; ++k)
+            pts.push_back(
+                lt.traj.getPos(t0 + (lt.duration - t0) * k / n));
+    }
+
+    Eigen::Vector3d bad;
+    if (searcher_.polylineClear(pts, &bad)) return true;
+
+    if (hit) *hit = bad;
+    log_manager_->errorf(
+        "[ENV-CHANGE] the remaining trajectory (t=%.2f..%.2f s) is blocked at "
+        "(%.2f, %.2f, %.2f) under the current obstacle set — invalidating it; "
+        "EXEC_TRAJ will park rather than fly into it",
+        t0, lt.duration, bad.x(), bad.y(), bad.z());
+    // The same two fields SegmentChainPlanner::invalidateStoredTrajectory
+    // zeroes, and the same fields ReplanFSM gates execution on.
+    lt.duration = 0.0;
+    lt.start_time = 0.0;
+    clearTrajectoryViz();
+    return false;
+}
+
 void PathManager::clearDynamicObstacles()
 {
     sdf_manager_.clearObstacles();

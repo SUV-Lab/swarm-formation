@@ -1352,6 +1352,33 @@ void ReplanFSM::loadObstaclesCallback(
     }
     FSM_LOG_INFO("loadObstacles: added=%zu deferred=%zu skipped=%zu (total in msg=%zu)",
                  added, deferred, skipped, msg->obstacles.size());
+
+    // [ENV-CHANGE] The world under the flight just changed. EXEC_TRAJ does
+    // not replan — it is single-shot and only waits for the stored trajectory
+    // to finish — so without this the mission would keep flying a route that
+    // was cleared against a different obstacle set. Nothing here re-plans
+    // either: it asks whether what is LEFT of the current trajectory is still
+    // flyable, and if it is not, invalidates it. EXEC_TRAJ already treats an
+    // invalidated trajectory as "the plan was REFUSED, this is not arrival"
+    // and parks in WAIT_POSITION.
+    //
+    // Only when something was actually installed: a batch that added nothing
+    // cannot have blocked anything, and a clear-all (replace with an empty
+    // array) only ever removes obstacles.
+    if (added > 0) {
+        const double t_cur =
+            (path_manager_->traj_.local_traj.start_time > 0.0)
+                ? rclcpp::Clock(RCL_ROS_TIME).now().seconds() -
+                      path_manager_->traj_.local_traj.start_time
+                : 0.0;
+        Eigen::Vector3d hit;
+        if (!path_manager_->revalidateStoredTrajectory(t_cur, &hit)) {
+            FSM_LOG_WARN(
+                "loadObstacles: the flight in progress is blocked from t=%.2f s "
+                "at (%.2f, %.2f, %.2f) — trajectory invalidated",
+                t_cur, hit.x(), hit.y(), hit.z());
+        }
+    }
 }
 
 // Applies a risk-zone batch. msg->replace mirrors DynamicObstacleArray:

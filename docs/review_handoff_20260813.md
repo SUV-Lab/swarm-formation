@@ -486,16 +486,47 @@ fallback이 아니라 명시적 실패다.
 복원하고, 호출자는 슬롯이 아니라 반환값으로 실행을 결정한다. 단언에 맞추려고 동작을
 바꾸지 않았다.
 
+### 2-15. 실행 중 환경이 바뀌면 남은 궤적을 다시 본다 (`[ENV-CHANGE]`)
+
+7차 검토가 제기한 위험은 실재하지만 **설명이 조금 달랐다.** "재계획이 실패하면 이전
+궤적을 계속 실행한다"가 아니라 — `EXEC_TRAJ`는 **재계획을 아예 하지 않는다**
+[읽음: `replan_fsm.cpp:396` "Single-shot execution: no replan"]. 그리고
+`loadObstaclesCallback`은 상태 변경·재계획·무효화를 하나도 하지 않았다. 즉
+**아무 재평가도 없었고**, 이륙 후 도착한 장애물은 누구도 보지 않았다.
+반환값으로 막는다는 말은 시도된 계획이 없으므로 적용되지 않는다.
+
+계약은 지적된 3분기 그대로:
+
+| 상황 | 동작 |
+|---|---|
+| 저장된 궤적 없음 | 그대로 (true) |
+| 남은 구간이 여전히 통과 가능 | 유지 (true) |
+| 남은 구간이 막힘 | `duration`·`start_time` 0으로 → EXEC_TRAJ가 "REFUSED, not arrival"로 읽고 WAIT_POSITION 주차 |
+
+**이미 지나온 구간은 판정하지 않는다** — 되돌아 날 수 없고, 그걸로 거부하면 이미 벗어난
+위험 때문에 비행을 세우는 것이 된다.
+
+무조건 슬롯을 비우지 않는다: `planGlobalTraj`는 성공했을 때만 슬롯을 갱신하므로 실패마다
+비우면 직전 정상 궤적까지 지운다. 발화 조건은 **실제로 장애물이 설치됐을 때**(`added > 0`)
+뿐이다 — 아무것도 안 더한 배치나 clear-all은 막을 수가 없다.
+
+판정에는 전단이 계획할 때 쓰는 **같은 점유 술어**(`polylineClear`)를 쓴다. "계획 시점에
+깨끗했는가"와 "지금 남은 구간이 깨끗한가"가 같은 질문이어야 하기 때문이다.
+
+회귀 `envchange`가 네 경우를 전부 고정한다(무변화 유지 / 항로 밖 장애물 유지 / 남은
+구간 차단 시 거부 / 지나온 구간은 무시). 변이 2종 사망 — 검증이 절대 거부하지 않게 하면
+3번이, 남은 구간이 아니라 전체를 보게 하면 4번이 죽는다.
+
 ### 2-6. 회귀 상태 [재현]
 
 ```
-68/68 chain variants
+69/69 chain variants
 risk harness 154/0
 start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : PASS
 ```
 
-신규 변형 13종: `legpolicy` `legtags` `legleadin` `legmid` `legchain` `legaudit`
-`legseam` `legfail` `cutarc` `transwp` `wpzonepass0` `dynprobe` `fm2fail`.
+신규 변형 15종: `legpolicy` `legtags` `legleadin` `legmid` `legchain` `legaudit`
+`legseam` `legfail` `cutarc` `transwp` `wpzonepass0` `dynprobe` `fm2fail` `envchange`.
 
 `legmid`의 첫 판이 **또 공허하게 통과했다**: 미션이 아예 안 날았는데
 `piece_leg.size() == getPieceNum()`이 `0 == 0`으로 성립했다. `!pl.empty()`를 붙여서

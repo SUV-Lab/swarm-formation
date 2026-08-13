@@ -331,8 +331,10 @@ PlanResult SegmentChainPlanner::plan(const StartHead &head,
   // "SUCCESS". Contract 2 (2026-08-08): the classifier now distinguishes
   // the TRANSITION regime (outside cruise, inside the transition model's
   // own validity) and dispatches it to the coordinator — behind
-  // transition/enable, default off, so the frozen contract-1 outcome is
-  // unchanged until the transition review passes. Synthesized/
+  // transition/enable, which SHIPS ON (optimizer_params.yaml, commit
+  // 37fc51a "transition ships on"). With it off the frozen contract-1
+  // outcome is what remains, and initfail/initaccfail/initceiling/pvaprobe
+  // pin that disabled behaviour explicitly. Synthesized/
   // trajectory-derived starts are our own states and keep the
   // [STALL-FLOOR] clamp doctrine.
   StartRegime regime = StartRegime::CRUISE_VALID;
