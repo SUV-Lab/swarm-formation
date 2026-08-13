@@ -109,7 +109,9 @@
     # ---- Front-end (FM2 / A*) ----
     manager/front_end: fm2              # fm2 | astar(ablation baseline)
     manager/fm2_coarse_k: 3             # eikonal grid downsample; lower = finer/slower
-    manager/fm2_max_cells: 1640000000   # OOM guard; over this -> straight-line fallback
+    manager/fm2_max_cells: 1640000000   # OOM guard; over this the FM2 grid is not built,
+                                        # the search FAILS and the plan is refused (it used
+                                        # to answer with an unchecked straight line)
     manager/risk_weight: 30.0           # alpha: moat cost scale (tie-break when forced into a zone)
     manager/risk_barrier: 100.0         # finite wall added inside non-exempt zones; 0 = off
     manager/risk_goal_taper_radius: 30.0 # [GNRON] 종단점을 품은 존의 moat를 그 종단점 반경

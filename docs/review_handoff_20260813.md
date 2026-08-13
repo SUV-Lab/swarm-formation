@@ -2,8 +2,8 @@
 
 ## 0. 범위와 읽는 법
 
-`review_handoff_20260812.md` 이후, 서브모듈 **`d97f8c4..45b5356`(14커밋)**.
-슈퍼프로젝트는 `af530ed..6de4106`.
+`review_handoff_20260812.md` 이후, 서브모듈 **`d97f8c4..HEAD`(16커밋)**.
+슈퍼프로젝트도 같은 범위.
 
 `review_handoff_20260812.md`가 끝난 지점 = leg 스냅샷 설계를 승인받고 ①포착부터
 짓기로 한 지점. 이 문서는 ①~③ + 검토 지적 반영이다. ④는 **하지 않았고**, 대신
@@ -447,16 +447,38 @@ HARD_AVOID를 찾는다. 병합을 지우면 soft로 읽히고 변이가 죽는�
 정말 실패한다. 그래서 "실패한 leg는 아무것도 남기지 않는다"가 관측 가능해졌다 —
 capture·piece 지도·태그·경로 전부 비고, 이전 계획 것도 남지 않는다.
 
+### 2-14. 새 fail-closed 출구에 회귀를 붙였다
+
+5차 검토 지적: 2-11/2-12는 코드가 맞아도 **회귀가 없었다.** `dynprobe`의 두 arm이 모두
+계획에 성공하던 시점 기준이라 수정 분기가 실행되지 않았다. 실제로는 45b5356 이후
+`WALL` arm이 그 분기를 타지만, **추출 실패 출구**는 여전히 미커버였다.
+
+- **`fm2fail`** (신규): `manager/fm2_max_cells = 1` — 셀 하나는 격자가 아니므로 FM2
+  맵이 안 만들어지고 추출이 실패한다. 계획 실패 + 커밋 경로·provenance·실행 가능한
+  궤적 전부 없음을 단정. 옛 `{start,end}` 복원 변이 → **4개 단언 사망**
+- **`dynprobe`의 `WALL`**: 검증 제거 변이 → 39점 경로 중 10점이 벽 안 → 사망
+- **`dynprobe`의 barrier array**: 이름을 `sealed`에서 낮췄다. **봉쇄가 아니다**(§1-20의
+  3번). either/or 단언도 없앴다 — 지금은 결정적으로 거부되므로 거부를 고정한다.
+  검증 제거 변이 → 여유 +1.00으로 통과 → 사망
+
+**측정도 단단하게 했다**: 경로 여유를 정점이 아니라 **선분**(점–선분 정확 거리)으로,
+궤적은 고정 4000점이 아니라 **공간 간격 0.05 u**로 잰다. 단일 구 여유가
+`+9.85 → +8.86`으로 내려갔다 — chord가 정점보다 1 u 가까웠다는 뜻이고, 정점만 보던
+이전 수치는 그만큼 낙관적이었다.
+
+`optimizer_params.yaml`의 `fm2_max_cells` 주석도 고쳤다 — 더 이상 straight-line
+fallback이 아니라 명시적 실패다.
+
 ### 2-6. 회귀 상태 [재현]
 
 ```
-67/67 chain variants
+68/68 chain variants
 risk harness 154/0
 start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : PASS
 ```
 
-신규 변형 12종: `legpolicy` `legtags` `legleadin` `legmid` `legchain` `legaudit`
-`legseam` `legfail` `cutarc` `transwp` `wpzonepass0` `dynprobe`.
+신규 변형 13종: `legpolicy` `legtags` `legleadin` `legmid` `legchain` `legaudit`
+`legseam` `legfail` `cutarc` `transwp` `wpzonepass0` `dynprobe` `fm2fail`.
 
 `legmid`의 첫 판이 **또 공허하게 통과했다**: 미션이 아예 안 날았는데
 `piece_leg.size() == getPieceNum()`이 `0 == 0`으로 성립했다. `!pl.empty()`를 붙여서
@@ -523,27 +545,13 @@ start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : 
   자체가 값이기 때문이다. **도달 불가이므로 검증되지 않았다**는 사실은 그대로다
 - **seam만이 만들 수 있는 거부.** `legseam`은 seam 카운터와 병합 방향을 고정하지만,
   0.1 s 격자가 못 본 것을 seam만 보는 격리 상황은 만들 수 없다(§2-8의 측정)
-- ~~**leg 검색 실패 자체.**~~ **§2-12 이후 도달 가능해졌다** — `legfail`이 고정한다.
-  아래는 그 전의 시도 기록으로만 남긴다. 시도 4회, 전부 실측:
-  1. 웨이포인트 `(5000, 5000)` — 필드가 클램프해서 `reached_goal=yes`. leg goal로도
-     leg start로도 같다
-  2. `manager/obstacle_clearance = 500` (free_distance 360 대비) — 전단이 무시한다
-  3. `addDynamicBox`로 목표와 중간 웨이포인트를 봉인 — 여전히 도달
-  4. `addDynamicBox`로 유일 통로를 가로지르는 40×600×200 벽 — **커밋된 경로 15점 중
-     2점이 벽 안에 있다**
-
-  4번이 이유를 확정한다: 이 하네스의 정적 SDF가 비어 있어("no occupancy grid
-  materialized", free_distance 360) 동적 패치가 얹힐 대상이 없고 충돌 검사가 물지
-  않는다. FM2에는 이유가 하나 더 있다 — eikonal 속도맵이라 장애물이 파를 늦출 뿐
-  도착시간이 무한이 되지 않아 goal까지의 geodesic이 항상 존재한다.
-
-  **초판 정정**: "테스트에 노출된 장애물 삽입 API가 없다"고 적었는데 **틀렸다.**
-  `addDynamicSphere`/`addDynamicBox`가 public이다 [읽음: `path_manager.h:499,502`].
-  내가 선언부에서 "obstacle"이라는 단어를 찾는 방식으로 뒤져서 놓쳤다 — 두 이름에는
-  그 단어가 없다.
-
-  `legfail`은 도달 가능한 이웃을 고정한다 — **전단 성공 후** 실패한 계획은 piece 지도를
-  남기지 않고, capture는 유지하며, route provenance는 그것이 설명하는 경로와 일치한다
+- ~~**leg 검색 실패 자체.**~~ **§2-12 이후 도달 가능해졌다** — `legfail`과 `fm2fail`이
+  고정한다. 그 전의 시도 기록은 §1-20으로 옮겼고, **거기 적혀 있던 원인 설명 두 개는
+  틀렸으므로 여기서 반복하지 않는다**: "빈 정적 SDF라 동적 패치가 얹힐 대상이 없다"(정적
+  SDF는 기하 장애물을 패치로 담는 것이 설계이고 `getDistance`가 정상 합성한다)와
+  "장애물이 있어도 goal까지의 geodesic이 항상 존재하므로 실패시킬 수 없다"(진짜로 막으면
+  추출은 되지만 그 경로가 벽을 통과한다 — 그것이 결함이었고 §2-12에서 닫았다).
+  회전 박스를 축정렬로 세어 얻은 "15점 중 2점" 같은 수치도 전부 무효다(§1-20)
 - **포착 실패 래치의 꼬리 방지.** 포착 성공/실패는 epoch 내에서 leg마다 달라질 수 없어
   (pass·generation·버퍼 크기가 전부 epoch 상수) 꼬리 상황을 만들 수 없다. 방어로 남겼다
 

@@ -185,7 +185,7 @@ int main(int argc, char **argv)
        with_legleadin = false, with_legchain = false, with_legaudit = false,
        with_wpzonepass0 = false, with_legmid = false,
        with_cutarc = false, with_transwp = false, with_legseam = false,
-       with_dynprobe = false,
+       with_dynprobe = false, with_fm2fail = false,
        with_legfail = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
@@ -357,6 +357,7 @@ int main(int argc, char **argv)
     if (v == "legseam") { with_legseam = true; }
     if (v == "legfail") { with_legfail = true; }
     if (v == "dynprobe") { with_dynprobe = true; }
+    if (v == "fm2fail") { with_fm2fail = true; }
     if (v == "transwp") { with_transwp = true; with_route = true; }
     if (v == "wpzonepass0") { with_wpzonepass0 = true; }
     if (v == "zonemultileg") { with_route = true; with_zonemultileg = true; }
@@ -442,6 +443,11 @@ int main(int argc, char **argv)
     // survived: the branch was never entered at all.
     if (with_legtags || with_legleadin)
       ovr.emplace_back("manager/corner_fillet_radius", 12.0);
+    // [FM2-FAIL] One cell is not a grid. The FM2 map cannot be built, so the
+    // geodesic cannot be extracted — the one exit that the obstacle fixtures
+    // do NOT reach (they fail later, in the search branch). manager/* is read
+    // in the PathManager constructor, so it rides NodeOptions.
+    if (with_fm2fail) ovr.emplace_back("manager/fm2_max_cells", 1);
     // [LEG-POLICY] optimization/lead_in_time ships as 0.0, so the optimizer's
     // lead-in insertion — one of the two places clean_path grows after the
     // tags were built — never fires in the default configuration and its
@@ -1883,6 +1889,42 @@ int main(int argc, char **argv)
     return 1;
   }
 
+  if (with_fm2fail) {
+    // [FM2-FAIL] When FM2 cannot produce a geodesic the search FAILS. It used
+    // to answer with { start_pt, end_pt } — a two-point straight segment
+    // through whatever is in the way — and because the caller treats any
+    // result with >= 2 points as a successful search, the mission planned and
+    // flew on it. The failure lived only in a log line nothing downstream
+    // reads.
+    //
+    // fm2_max_cells = 1 makes that deterministic: no grid, no field, no
+    // geodesic. The obstacle fixtures in `dynprobe` exercise the OTHER exit
+    // (the search branch), so without this the extraction-failure exit had no
+    // regression at all.
+    const auto head = [&]() {
+      return mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                    start_vel, start_acc);
+    };
+    const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+    std::cout << "[FM2-FAIL] plan=" << (ok ? 1 : 0)
+              << " route=" << pm->lastCommittedRoute().size()
+              << " piece_leg=" << pm->lastPieceLeg().size()
+              << " pieces=" << pm->traj_.local_traj.traj.getPieceNum()
+              << " dur=" << pm->traj_.local_traj.duration << "\n";
+    expect(!ok, "an FM2 grid that cannot be built fails the plan");
+    expect(pm->lastCommittedRoute().empty(),
+           "...leaving NO committed route — a straight line nobody checked "
+           "for obstacles is not an answer to a failed search");
+    expect(pm->lastPieceLeg().empty() && pm->legPolicySnapshots().empty(),
+           "...and no provenance");
+    expect(pm->traj_.local_traj.duration <= 0.0,
+           "...and nothing executable in the trajectory slot");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
   if (with_dynprobe) {
     // [DYN-OBSTACLE] The front end must not route through a registered
     // dynamic obstacle, and when it cannot get around one it must say so
@@ -1908,25 +1950,60 @@ int main(int argc, char **argv)
       pm->terrainElevation(c.x(), c.y(), &g);
       return Eigen::Vector3d(c.x(), c.y(), (g > 0.0 ? g : 0.0) + r);
     };
+    // SEGMENT clearance, not vertex clearance. Two vertices can both sit
+    // outside a sphere while the chord between them passes through it, and a
+    // vertex-only test calls that clear. Exact point-to-segment distance, so
+    // no sampling pitch can hide a chord.
+    const auto segDist = [](const Eigen::Vector3d &a, const Eigen::Vector3d &b,
+                            const Eigen::Vector3d &c) {
+      const Eigen::Vector3d ab = b - a;
+      const double L2 = ab.squaredNorm();
+      const double t = (L2 > 1e-12)
+                           ? std::clamp((c - a).dot(ab) / L2, 0.0, 1.0)
+                           : 0.0;
+      return (a + t * ab - c).norm();
+    };
     const auto clearance = [&](const std::vector<Eigen::Vector3d> &pts,
                                const std::vector<std::pair<Eigen::Vector3d,
                                                            double>> &obs) {
       double worst = 1e9;
-      for (const auto &q : pts)
-        for (const auto &o : obs)
+      for (const auto &o : obs) {
+        for (const auto &q : pts)
           worst = std::min(worst, (q - o.first).norm() - o.second);
+        for (size_t i = 0; i + 1 < pts.size(); ++i)
+          worst = std::min(worst, segDist(pts[i], pts[i + 1], o.first) -
+                                      o.second);
+      }
       return worst;
     };
+    // Trajectory sampled to a SPATIAL pitch rather than a fixed count: a
+    // fixed 4000 samples is a different resolution on a 30 u flight than on a
+    // 300 u one, and the number that matters is how far apart the samples are
+    // in metres.
     const auto trajClearance =
         [&](const std::vector<std::pair<Eigen::Vector3d, double>> &obs) {
       const poly_traj::Trajectory &fl = pm->traj_.local_traj.traj;
       if (fl.getPieceNum() == 0) return -1e9;
-      double worst = 1e9;
       const double T = fl.getTotalDuration();
-      for (int k = 0; k <= 4000; ++k) {
-        const Eigen::Vector3d p = fl.getPos(T * k / 4000.0);
-        for (const auto &o : obs)
-          worst = std::min(worst, (p - o.first).norm() - o.second);
+      double len = 0.0;
+      Eigen::Vector3d prev = fl.getPos(0.0);
+      for (int k = 1; k <= 2000; ++k) {
+        const Eigen::Vector3d p = fl.getPos(T * k / 2000.0);
+        len += (p - prev).norm();
+        prev = p;
+      }
+      const double pitch = 0.05;   // 5 m at 1 unit = 100 m
+      const int n = std::clamp(static_cast<int>(std::ceil(len / pitch)),
+                               2000, 400000);
+      double worst = 1e9;
+      Eigen::Vector3d a = fl.getPos(0.0);
+      for (int k = 1; k <= n; ++k) {
+        const Eigen::Vector3d b = fl.getPos(T * k / n);
+        for (const auto &o : obs) {
+          worst = std::min(worst, (b - o.first).norm() - o.second);
+          worst = std::min(worst, segDist(a, b, o.first) - o.second);
+        }
+        a = b;
       }
       return worst;
     };
@@ -2009,8 +2086,13 @@ int main(int argc, char **argv)
       pm->clearDynamicObstacles();
     }
 
-    // A row of grounded spheres — kept because it is the case that LOOKS
-    // sealed and is not; see the note above.
+    // A DENSE BARRIER ARRAY — deliberately NOT called sealed, because it is
+    // not. Grounding lifts each radius-40 sphere to z = base + 40, so at
+    // flight altitude the cross-sections are only 2*sqrt(r-1) wide and ~22 u
+    // gaps remain between centres 40 apart. Before the route was validated
+    // the planner threaded one of those gaps at +1.02, and reading that as
+    // "sealed, and it got through cleanly" is what made me retract a real
+    // defect. It is kept as the case that LOOKS impassable and is not.
     // Whatever comes back, it may not be a route through them.
     {
       std::vector<std::pair<Eigen::Vector3d, double>> obs;
@@ -2025,18 +2107,15 @@ int main(int argc, char **argv)
                 << " route=" << pm->lastCommittedRoute().size()
                 << " route_clearance=" << rc << " traj_clearance=" << tc
                 << "\n";
-      // Either it threads a real gap, or it fails. What it may NOT do is
-      // return a route that passes through the seal — which is what the
-      // search's old "no path found, here is a straight line" answer did.
-      if (ok) {
-        expect(rc > 0.0,
-               "a sealed corridor is threaded with real clearance, not "
-               "crossed");
-        expect(tc > 0.0, "...and the flown trajectory clears it too");
-      } else {
-        expect(pm->lastCommittedRoute().empty(),
-               "or the mission fails outright, leaving no route behind");
-      }
+      // Pinned, not either/or. Threading these gaps costs less than the
+      // dynamic-obstacle berth the system asks for, so the validated front
+      // end refuses — and an "either outcome is fine" assertion would have
+      // let a silent return to threading pass as success.
+      expect(!ok,
+             "a barrier whose gaps cost more berth than dyn_obstacle_margin "
+             "allows is REFUSED, not threaded");
+      expect(pm->lastCommittedRoute().empty(),
+             "...leaving no route behind");
       pm->clearDynamicObstacles();
     }
     rclcpp::shutdown();
