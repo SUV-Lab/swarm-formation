@@ -897,7 +897,17 @@ public:
 
     std::vector<Eigen::Vector3d> getPath();
 
-    std::vector<Eigen::Vector3d> astarSearchAndGetSimplePath(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, int drone_id);
+    // `is_takeoff_leg` says this search begins where the AIRCRAFT IS, not at
+    // a waypoint the route reached on its own. Only then may the extracted
+    // route start closer to the terrain than the clearance margin — the
+    // mission pins the aircraft's position and it has to be allowed to climb
+    // away from it. A multi-waypoint mission calls this once per leg, and
+    // every leg after the first starts at a point the planner chose, which is
+    // not a takeoff and gets no allowance.
+    std::vector<Eigen::Vector3d> astarSearchAndGetSimplePath(
+        const double step_size, Eigen::Vector3d start_pt,
+        Eigen::Vector3d end_pt, int drone_id,
+        bool is_takeoff_leg = false);
 
 
     // Lowest free altitude in the FM2 speed-field column containing world

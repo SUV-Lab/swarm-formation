@@ -415,6 +415,10 @@ namespace path_manager
     // unreachable from the scalar form. Both stated forms now go through
     // stateEnvelopeProblem / pvaEnvelopeProblem and classifyStartState.
     int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
+    // Test seam: the takeoff allowance is an ARGUMENT to the search, so the
+    // only way to pin its scope is to call the search both ways on identical
+    // geometry. Nothing in production reaches the searcher through here.
+    path_planner::search::PathSearcher &searcherForTest() { return searcher_; }
 
     // [CHAIN] committed front-end products of the most recent plan, retained
     // for the chain planner to slice (clean_path as handed to the optimizer,

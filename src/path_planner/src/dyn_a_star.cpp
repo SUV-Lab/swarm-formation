@@ -473,7 +473,7 @@ vector<Vector3d> PathSearcher::getPath()
     return path;
 }
 
-vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_size, Vector3d start_pt, Vector3d end_pt, int drone_id){
+vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_size, Vector3d start_pt, Vector3d end_pt, int drone_id, bool is_takeoff_leg){
 
     if (log_manager_) {
         log_manager_->infof("드론 %d: 3D 경로 검색 및 단순화 시작", drone_id);
@@ -716,7 +716,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         // and it is allowed to be below the terrain margin for a bounded
         // stretch while it climbs away. Obstacles get no relief, the goal
         // gets none, and the shortfall must end inside this arc.
-        if (polylineClear(fm2_path, &hit, startTerrainReliefArc())) {
+        if (polylineClear(fm2_path, &hit,
+                          is_takeoff_leg ? startTerrainReliefArc() : 0.0)) {
             fm2_done = true;
         } else if (log_manager_) {
             log_manager_->errorf(

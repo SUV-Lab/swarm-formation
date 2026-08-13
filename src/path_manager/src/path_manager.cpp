@@ -1415,7 +1415,11 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             std::vector<Eigen::Vector3d> seg_path =
                 searcher_.astarSearchAndGetSimplePath(
                     astar_step_size_, all_points[seg], all_points[seg + 1],
-                    traj_.local_traj.drone_id);
+                    traj_.local_traj.drone_id,
+                    // Only leg 0 starts where the aircraft is. Every later
+                    // leg starts at a waypoint this route already reached,
+                    // so the takeoff allowance does not apply to it.
+                    /*is_takeoff_leg=*/seg == 0);
             ++zone_policy_epoch_searches_;
 
             log_manager_->infof("A* segment %zu: simple_path_size=%zu",

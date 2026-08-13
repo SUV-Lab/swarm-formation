@@ -2316,6 +2316,30 @@ int main(int argc, char **argv)
       pm->clearDynamicObstacles();
     }
 
+    // The takeoff allowance belongs to the FIRST leg only. A multi-waypoint
+    // mission runs one search per leg, and every leg after the first begins
+    // at a waypoint this route already reached — a point the planner chose,
+    // not where the aircraft is. Driven directly on the searcher because the
+    // difference is in the argument, and the two calls are otherwise
+    // identical: the same geometry, low over the terrain, is accepted as a
+    // takeoff and refused as a mid-route leg.
+    {
+      const Eigen::Vector3d a(start_pos.x(), start_pos.y(), 0.15);
+      const Eigen::Vector3d b(start_pos.x() + 30.0, start_pos.y(), 3.0);
+      const auto as_takeoff = pm->searcherForTest().astarSearchAndGetSimplePath(
+          1.0, a, b, 0, /*is_takeoff_leg=*/true);
+      const auto as_midroute = pm->searcherForTest().astarSearchAndGetSimplePath(
+          1.0, a, b, 0, /*is_takeoff_leg=*/false);
+      std::cout << "[TAKEOFF] as takeoff=" << as_takeoff.size()
+                << " as mid-route=" << as_midroute.size() << "\n";
+      expect(as_takeoff.size() >= 2,
+             "a leg that starts where the aircraft is may begin below the "
+             "terrain margin");
+      expect(as_midroute.empty(),
+             "...and the SAME geometry is refused when it is not the takeoff "
+             "leg — a later leg's start is a point the planner chose");
+    }
+
     // NEGATIVE, and the one that isolates the rule: an obstacle small enough
     // to lie ENTIRELY inside the start-relief arc. The big sphere above is
     // refused either way, because it extends far past the allowance — so it
