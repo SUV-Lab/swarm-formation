@@ -2079,10 +2079,28 @@ int main(int argc, char **argv)
                 << " route_pts_inside=" << pen
                 << " min_xy_to_axis=" << worst
                 << " traj_pts_inside=" << jpen << "\n";
+      // Both halves. "Nothing is inside the wall" is satisfied by a route
+      // that does not exist, so it cannot stand alone as the statement that
+      // the mission was REFUSED — and a future change that starts returning
+      // some other unchecked answer would keep pen == 0 while flying it.
+      expect(!ok, "a wall that genuinely blocks the corridor rejects the plan");
+      expect(rt.empty(), "...and leaves no committed route");
+      // NOT asserted here: an empty trajectory slot. A successful plan ran
+      // earlier in this variant and planGlobalTraj does not clear traj_ when
+      // it fails, so the slot still holds THAT flight — which is a real
+      // observation, not a property of this refusal. `fm2fail` asserts the
+      // empty slot instead, where nothing was planned before it and the
+      // assertion therefore means something.
+      //
+      // Whether a failed plan should clear the slot is a separate question
+      // with its own blast radius: SegmentChainPlanner deliberately restores
+      // a baseline into it after a failed segment, and callers gate execution
+      // on the planner's return value rather than on the slot. Left alone
+      // rather than changed under an assertion.
       expect(pen == 0,
-             "no committed route vertex is inside the wall — a mission that "
-             "cannot get through must FAIL, not be routed through");
-      expect(jpen == 0, "...and no point of the flown trajectory either");
+             "...and in particular no committed route vertex is inside the "
+             "wall — being routed through is the failure this replaced");
+      expect(jpen == 0, "...nor any point of a flown trajectory");
       pm->clearDynamicObstacles();
     }
 
@@ -2103,7 +2121,8 @@ int main(int argc, char **argv)
       const bool ok = pm->planGlobalTraj(head(), {goal[0]});
       const double rc = clearance(pm->lastCommittedRoute(), obs);
       const double tc = ok ? trajClearance(obs) : 1e9;
-      std::cout << "[DYN] sealed(" << obs.size() << "): plan=" << (ok ? 1 : 0)
+      std::cout << "[DYN] barrier-array(" << obs.size() << "): plan="
+                << (ok ? 1 : 0)
                 << " route=" << pm->lastCommittedRoute().size()
                 << " route_clearance=" << rc << " traj_clearance=" << tc
                 << "\n";

@@ -65,9 +65,16 @@ UNSUPPORTED           전환 영역까지도 밖
 ```
 
 - 가운데 분기는 **구현 완료** (2026-08-08, `classifyStartState` +
-  `planTransitionMission`): `transition/enable=true`일 때 열리고, 기본
-  false에서는 계약 1의 원래 결과(INITIAL_MODE_UNSUPPORTED, "(transition
-  disabled)" 사유 접미)가 그대로 유지된다.
+  `planTransitionMission`): `transition/enable`이 열어 준다.
+- **기본값은 `true`다** (`optimizer_params.yaml`, 커밋 `37fc51a` "transition ships
+  on: planning the launch phase is the point of the stack"). 이 문서는 한동안
+  "기본 false"라고 적혀 있었는데 출하 설정과 어긋난 상태였다 — 설정이 옳고 문서가
+  낡았다.
+- 끄면(`transition/enable=false`, 세션 단위로는 `launch에 transition:=0`) 계약 1의
+  원래 결과가 그대로 유지된다: `INITIAL_MODE_UNSUPPORTED`, 사유에 "(transition
+  disabled)" 접미. 회귀 `initfail`/`initaccfail`/`initceiling`/`pvaprobe`가 그
+  꺼진 동작을 NodeOptions로 플래그를 내려 고정한다 — 출하 기본값이 무엇이든
+  양쪽 동작이 각각 자기 변형으로 고정되어 있다.
 
 ## 3. 파이프라인 (수렴 구조)
 

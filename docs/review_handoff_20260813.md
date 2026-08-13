@@ -469,6 +469,23 @@ capture·piece 지도·태그·경로 전부 비고, 이전 계획 것도 남지
 `optimizer_params.yaml`의 `fm2_max_cells` 주석도 고쳤다 — 더 이상 straight-line
 fallback이 아니라 명시적 실패다.
 
+**6차 검토 반영**:
+- `WALL` arm이 거부 자체를 단정한다(`!ok`, 커밋 경로 없음). "벽 안에 아무것도 없다"는
+  **존재하지 않는 경로로도 만족되므로** 단독으로는 거부를 뜻하지 못했다
+- 로그 라벨 `sealed(...)` → `barrier-array(...)`. 주석·문서만 낮추고 출력은 그대로 둔
+  상태였다
+- `transition_phase_contract.md`가 "기본 false"라고 했는데 출하 설정은 `true`다
+  (커밋 `37fc51a` "transition ships on"). **설정이 옳고 문서가 낡았다** — 문서를 맞췄고,
+  꺼진 동작은 `initfail`/`initaccfail`/`initceiling`/`pvaprobe`가 각자 고정한다
+
+**단정하지 않은 것 하나**: `WALL`에서 "실행 가능한 궤적 없음"은 넣지 않았다. 그 변형은
+앞서 성공한 계획이 있고 `planGlobalTraj`는 실패해도 `traj_`를 비우지 않는다 — 슬롯에는
+그 이전 비행이 남는다. 이건 이 거부의 성질이 아니라 **별개의 관측**이라
+`fm2fail`(앞선 계획이 없는 자리)에서만 단정한다. 실패한 계획이 슬롯을 비워야 하는가는
+파급이 따로 있다: `SegmentChainPlanner`는 세그먼트 실패 후 baseline을 그 슬롯에 **일부러**
+복원하고, 호출자는 슬롯이 아니라 반환값으로 실행을 결정한다. 단언에 맞추려고 동작을
+바꾸지 않았다.
+
 ### 2-6. 회귀 상태 [재현]
 
 ```
