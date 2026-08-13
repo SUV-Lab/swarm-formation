@@ -11,6 +11,7 @@
 #include <map>
 #include <vector>
 #include "mmp_traj_msgs/msg/poly_traj.hpp"
+#include "mmp_traj_msgs/msg/trajectory_execution_control.hpp"
 #include "mmp_mission_msgs/msg/trajectory_command.hpp"
 #include "mmp_mission_msgs/msg/dynamic_obstacle_array.hpp"
 #include "mmp_mission_msgs/msg/dynamic_obstacle_spec.hpp"
@@ -64,6 +65,13 @@ public:
         GEN_NEW_TRAJ,
         EXEC_TRAJ,
         EMERGENCY_STOP,
+        // [ABORT] The planner withdrew the flight in progress because the
+        // world changed under it. The recovery manoeuvre belongs to the
+        // execution layer — this node has no basis for choosing one for a
+        // given airframe — so this state issues nothing and waits. Distinct
+        // from WAIT_POSITION, which means "idle, ready for a mission": this
+        // means "a flight was aborted and something else is handling it".
+        WAIT_EXTERNAL_RECOVERY,
         SEQUENTIAL_START
     };
 
@@ -114,6 +122,14 @@ private:
     bool chain_enable_{false};
 
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr optimized_path_pub_;
+    // [ABORT] Withdraws a trajectory already published. Same QoS as the
+    // trajectory topic (RELIABLE + TRANSIENT_LOCAL) so a late-joining
+    // consumer receives the latched trajectory AND its abort together, and
+    // discards it instead of starting to fly it.
+    rclcpp::Publisher<mmp_traj_msgs::msg::TrajectoryExecutionControl>::SharedPtr
+        exec_control_pub_;
+    void publishExecutionAbort(path_manager::PathManager::EnvChangeReason r,
+                               const Eigen::Vector3d &hit, double t_detected);
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr global_path_pub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
     rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr terrain_sub_;

@@ -31,7 +31,11 @@ namespace ego_planner
   {
     poly_traj::Trajectory traj;
     int drone_id; // A negative value indicates no received trajectories.
-    int traj_id;
+    // Monotone per node, never reset while a mission runs. On the wire as
+    // PolyTraj.trajectory_id, and TrajectoryExecutionControl names it to say
+    // WHICH trajectory an abort refers to — so it must not wrap during a
+    // flight, hence 64 bits rather than the int it was while nothing read it.
+    uint64_t traj_id;
     double duration;
     double start_time; // world time
     double end_time;   // world time

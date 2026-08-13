@@ -517,10 +517,27 @@ fallback이 아니라 명시적 실패다.
 구간 차단 시 거부 / 지나온 구간은 무시). 변이 2종 사망 — 검증이 절대 거부하지 않게 하면
 3번이, 남은 구간이 아니라 전체를 보게 하면 4번이 죽는다.
 
+### 2-16. 실행 취소 계층 — 명시적 abort
+
+검토 결정: 5번. 플래너는 기동을 만들지 않고 **선언만** 한다. 상세는
+`docs/design/exec_cancel_layer.md`.
+
+- `PolyTraj.trajectory_id`(uint64) + `TrajectoryExecutionControl.msg`
+- `/planning/execution_control`, QoS는 궤적과 동일(RELIABLE + TRANSIENT_LOCAL)
+- 순서: 재검사 → **ABORT 발행(슬롯 비우기 전)** → 로컬 무효화 → `WAIT_EXTERNAL_RECOVERY`
+- `EMERGENCY_STOP` 미사용 — 정지 PVA는 이 모델에서 실행 불가
+- 감지(PathManager)와 발행(ReplanFSM) 분리, 사이는 `setEnvChangeHook`
+- 구역은 **내용 지문**이 바뀔 때만 철회 — 같은 집합 재발행은 no-op
+- 신규 회귀 `exec_abort_test`(실제 pub/sub) 8종 + `envchange`의 생산자 측 5종
+
+**같이 잡은 버그**: `state_str[6]`이 enum 확장으로 범위를 벗어났다. 새 상태를 마지막
+앞에 넣었으므로 마지막 상태가 배열 밖을 읽는다. 길이를 맞추고 `static_assert`를 걸었다.
+
 ### 2-6. 회귀 상태 [재현]
 
 ```
 69/69 chain variants
+exec_abort_test: PASS
 risk harness 154/0
 start_claim / transition_experiment / waypoint_experiment / terrain_risk_mask : PASS
 ```

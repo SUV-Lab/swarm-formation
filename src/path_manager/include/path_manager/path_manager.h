@@ -13,6 +13,7 @@
 #include <cmath>
 #include <limits>
 #include <vector>
+#include <functional>
 #include <map>
 #include <string>
 #include <chrono>
@@ -525,6 +526,24 @@ namespace path_manager
     // unflown, and refusing on it would ground a flight over a hazard it has
     // already passed.
     bool revalidateStoredTrajectory(double t_from, Eigen::Vector3d *hit);
+    // Why the stored trajectory was withdrawn. Mirrors
+    // TrajectoryExecutionControl's REASON_* so the wire value is not
+    // re-derived from a string.
+    enum class EnvChangeReason { OBSTACLE_BLOCKED, TERRAIN_BLOCKED,
+                                 POLICY_UNEVALUATED };
+    // Installed by ReplanFSM. PathManager detects; the FSM owns the
+    // publishers and the state machine, so it decides what goes on the wire.
+    // Called BEFORE the local slot is cleared, so the trajectory id being
+    // withdrawn is still readable.
+    using EnvChangeHook =
+        std::function<void(EnvChangeReason, const Eigen::Vector3d &hit,
+                           double t_detected)>;
+    void setEnvChangeHook(EnvChangeHook hook) { env_change_hook_ = std::move(hook); }
+    // Content fingerprint of the ACTIVE zone set. Republishing the same zones
+    // must not withdraw a flight: the fail-closed rule is about the set
+    // CHANGING, and a periodic re-send that changes nothing would otherwise
+    // ground every mission that had a zone anywhere.
+    uint64_t riskZoneFingerprint() const;
     // The same check driven from wherever the environment changed, using the
     // flight's own elapsed time. `what` names the trigger in the log.
     void revalidateAfterEnvChange(const char *what);
@@ -899,6 +918,7 @@ namespace path_manager
     // piece of the trajectory just stored. Empty whenever the optimizer could
     // not vouch for the mapping.
     std::vector<size_t> last_piece_leg_;
+    EnvChangeHook env_change_hook_;
     Eigen::Vector3d map_lower_bound_;
     Eigen::Vector3d map_upper_bound_;
     std::vector<LocalTrajData> swarm_traj_;

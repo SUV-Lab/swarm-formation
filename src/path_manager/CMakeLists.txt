@@ -150,6 +150,15 @@ ament_target_dependencies(chain_experiment_test
 # transition_phase::generate with synthetic closures. No node, no params.
 # Waypoint extraction + reproduction harness: pure math + a benchmark
 # follower, no node and no solver — fast and hermetic.
+# [ABORT] Wire-contract harness: publishes PolyTraj + TrajectoryExecutionControl
+# with the production QoS and drives a consumer implementation against them.
+# Covers what an in-process test cannot — that a second message goes out, that
+# a late joiner gets both, and that an abort binds to one trajectory id.
+add_executable(exec_abort_test test/exec_abort_test.cpp)
+target_link_libraries(exec_abort_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(exec_abort_test
+  ${PATH_MANAGER_DEPENDENCIES})
+
 add_executable(waypoint_experiment_test test/waypoint_experiment_test.cpp)
 target_link_libraries(waypoint_experiment_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(waypoint_experiment_test
@@ -215,6 +224,9 @@ install(TARGETS load_obstacles_test
 install(TARGETS start_claim_test
   DESTINATION lib/${PROJECT_NAME}
 )
+
+install(TARGETS exec_abort_test
+  DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS risk_scenarios_test
   DESTINATION lib/${PROJECT_NAME}

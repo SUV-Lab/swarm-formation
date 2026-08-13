@@ -3937,9 +3937,15 @@ bool PathManager::revalidateStoredTrajectory(double t_from,
     if (hit) *hit = bad;
     log_manager_->errorf(
         "[ENV-CHANGE] the remaining trajectory (t=%.2f..%.2f s) is blocked at "
-        "(%.2f, %.2f, %.2f) under the current obstacle set — invalidating it; "
-        "EXEC_TRAJ will park rather than fly into it",
+        "(%.2f, %.2f, %.2f) under the current obstacle set — withdrawing it",
         t0, lt.duration, bad.x(), bad.y(), bad.z());
+    // The hook runs FIRST, while traj_id still names the trajectory being
+    // withdrawn: it is what puts the ABORT on the wire, and clearing the slot
+    // first would leave the FSM announcing an id it can no longer read.
+    // Detection lives here; what to say about it belongs to the node that
+    // owns the publishers.
+    if (env_change_hook_)
+        env_change_hook_(EnvChangeReason::OBSTACLE_BLOCKED, bad, t0);
     // The same two fields SegmentChainPlanner::invalidateStoredTrajectory
     // zeroes, and the same fields ReplanFSM gates execution on.
     lt.duration = 0.0;
@@ -3968,8 +3974,35 @@ void PathManager::clearDynamicObstacles()
 // reach revalidateStoredTrajectory, not just the obstacle topic. This one is
 // the deferred queue: obstacles that arrived before the SDF existed are
 // installed HERE, so this is where they first become able to block anything.
+uint64_t PathManager::riskZoneFingerprint() const
+{
+    // Order-sensitive on purpose: a reordered set is a different set to the
+    // searcher, which indexes policy by position. Bit patterns rather than
+    // rounded values, so a change too small to print is still a change.
+    uint64_t h = 1469598103934665603ull;   // FNV-1a
+    const auto mix = [&h](uint64_t v) {
+        h ^= v;
+        h *= 1099511628211ull;
+    };
+    const auto mixd = [&mix](double d) {
+        uint64_t bits;
+        static_assert(sizeof(bits) == sizeof(d), "double must be 64-bit");
+        std::memcpy(&bits, &d, sizeof(bits));
+        mix(bits);
+    };
+    mix(risk_zones_.size());
+    for (const auto &z : risk_zones_) {
+        mixd(z.center.x()); mixd(z.center.y()); mixd(z.center.z());
+        mixd(z.reach); mixd(z.peak);
+    }
+    return h;
+}
+
 void PathManager::invalidateStoredTrajectoryForEnvChange()
 {
+    if (env_change_hook_ && traj_.local_traj.duration > 0.0)
+        env_change_hook_(EnvChangeReason::POLICY_UNEVALUATED,
+                         Eigen::Vector3d::Zero(), 0.0);
     traj_.local_traj.duration = 0.0;
     traj_.local_traj.start_time = 0.0;
     clearTrajectoryViz();

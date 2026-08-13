@@ -1914,9 +1914,34 @@ int main(int argc, char **argv)
 
     // (1) Nothing changed -> the flight is kept. A revalidation that refuses
     // whenever it is asked would ground every mission.
+    // [ABORT] What the FSM would put on the wire. The hook is the seam: the
+    // manager detects, the FSM publishes. Recording it here pins that the
+    // withdrawal is announced with the id of the trajectory being withdrawn
+    // and the right reason — and, just as importantly, that it is NOT
+    // announced when nothing was wrong.
+    struct Announced {
+      int n = 0;
+      uint64_t id = 0;
+      path_manager::PathManager::EnvChangeReason reason{};
+      Eigen::Vector3d at{Eigen::Vector3d::Zero()};
+    } ann;
+    pm->setEnvChangeHook(
+        [&](path_manager::PathManager::EnvChangeReason r,
+            const Eigen::Vector3d &h, double) {
+          ++ann.n;
+          ann.reason = r;
+          ann.at = h;
+          // Read from the slot, as ReplanFSM::publishExecutionAbort does —
+          // which is why the hook must run BEFORE the slot is cleared.
+          ann.id = pm->traj_.local_traj.traj_id;
+        });
+    const uint64_t live_id = pm->traj_.local_traj.traj_id;
+    expect(live_id > 0, "the stored trajectory has an identity to withdraw");
+
     Eigen::Vector3d hit;
     expect(pm->revalidateStoredTrajectory(0.0, &hit),
            "an unchanged world leaves the flight alone");
+    expect(ann.n == 0, "...and announces nothing");
     expect(pm->traj_.local_traj.duration == dur, "...untouched, in fact");
 
     // (2) An obstacle far off the route -> still kept.
@@ -1925,6 +1950,7 @@ int main(int argc, char **argv)
     expect(pm->revalidateStoredTrajectory(0.0, &hit),
            "...and does not touch a flight it cannot reach");
     expect(pm->traj_.local_traj.duration == dur, "...still executable");
+    expect(ann.n == 0, "...and still announces nothing");
 
     // (3) An obstacle ON the remainder -> the flight is stopped. Placed at
     // the trajectory's own midpoint so it is unambiguously in the way, with a
@@ -1939,6 +1965,15 @@ int main(int argc, char **argv)
               << " hit=(" << hit.x() << ", " << hit.y() << ", " << hit.z()
               << ")\n";
     expect(!kept, "a blocked remainder is REFUSED");
+    expect(ann.n == 1, "...announced exactly once");
+    expect(ann.id == live_id,
+           "...naming the trajectory being withdrawn, read while the slot "
+           "still held it");
+    expect(ann.reason ==
+               path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED,
+           "...with the obstacle reason, not a generic one");
+    expect((ann.at - hit).norm() < 1e-9,
+           "...and the point the check actually tripped on");
     expect(pm->traj_.local_traj.duration <= 0.0 &&
                pm->traj_.local_traj.start_time <= 0.0,
            "...by zeroing the two fields ReplanFSM gates execution on, so "

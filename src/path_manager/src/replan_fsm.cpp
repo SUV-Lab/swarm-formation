@@ -201,6 +201,23 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
         topic_prefix + "/planning/trajectory", trajectory_qos);
     global_path_pub_ = node_->create_publisher<mmp_traj_msgs::msg::PolyTraj>(
         topic_prefix + "/planning/initial_trajectory", trajectory_qos);
+    // [ABORT] Same QoS as the trajectory it withdraws — see the msg comment.
+    exec_control_pub_ =
+        node_->create_publisher<mmp_traj_msgs::msg::TrajectoryExecutionControl>(
+            topic_prefix + "/planning/execution_control", trajectory_qos);
+    // Detection lives in PathManager (it owns the SDF and the stored
+    // trajectory); saying so on the wire lives here (this owns the
+    // publishers and the state machine). Every environment-change trigger —
+    // the obstacle topic, the deferred-obstacle flush, a new DEM, a zone
+    // update — reaches the same hook, so none of them can withdraw a flight
+    // quietly.
+    if (path_manager_) {
+        path_manager_->setEnvChangeHook(
+            [this](path_manager::PathManager::EnvChangeReason r,
+                   const Eigen::Vector3d &hit, double t_detected) {
+                publishExecutionAbort(r, hit, t_detected);
+            });
+    }
 
     rclcpp::SubscriptionOptions trajectory_cmd_options;
     trajectory_cmd_options.callback_group = subscription_callback_group_;
@@ -406,6 +423,16 @@ void ReplanFSM::computeAndPublishPaths() {
             break;
         }
 
+        case WAIT_EXTERNAL_RECOVERY: {
+            // [ABORT] Deliberately inert. The planner withdrew the flight and
+            // said so on /planning/execution_control; the execution layer owns
+            // what the aircraft does next. Issuing anything from here would be
+            // this node choosing a manoeuvre it has no basis to choose — the
+            // only one it can build is a stationary hold, which this airframe
+            // cannot fly. A new mission command moves the FSM out of here.
+            break;
+        }
+
         case EMERGENCY_STOP: {
             if (flag_escape_emergency_) {
                 // Entry tick (flag set on the transition): command the hover
@@ -436,6 +463,7 @@ void ReplanFSM::polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
         return;
     }
     auto data = &path_manager_->traj_.local_traj;
+    msg.trajectory_id = data->traj_id;
 
     msg.drone_id = drone_id_;
     msg.order = 5;
@@ -532,7 +560,16 @@ bool ReplanFSM::planFromGlobalTraj(int trial_times) {
 }
 
 void ReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_call) {
-    static std::string state_str[6] = {"INIT", "WAIT_POSITION", "GEN_NEW_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
+    // Order and length MUST match FSM_EXEC_STATE. Adding a state without
+    // extending this indexes past the end — the array was sized 6 while the
+    // enum grew to 7, which reads out of bounds for the last state and
+    // mislabels the one before it.
+    static const std::string state_str[] = {
+        "INIT", "WAIT_POSITION", "GEN_NEW_TRAJ", "EXEC_TRAJ",
+        "EMERGENCY_STOP", "WAIT_EXTERNAL_RECOVERY", "SEQUENTIAL_START"};
+    static_assert(sizeof(state_str) / sizeof(state_str[0]) ==
+                      static_cast<size_t>(SEQUENTIAL_START) + 1,
+                  "state_str must name every FSM_EXEC_STATE, in order");
 
     // Throttle frequent state transitions
     static auto last_log_time = std::chrono::steady_clock::now();
@@ -1019,6 +1056,56 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     }
 }
 
+// [ABORT] Withdraw a trajectory that is already out on the wire.
+//
+// This publishes a DECLARATION, not a manoeuvre: the named trajectory is no
+// longer claimed to be safe to continue. Choosing what the aircraft should do
+// instead belongs to the execution layer, which knows the airframe — the only
+// stop this node can synthesise is a zero-velocity hold, and this platform's
+// cruise minimum is 122 m/s, so building one would be issuing an unflyable
+// command in the name of safety.
+void ReplanFSM::publishExecutionAbort(
+    path_manager::PathManager::EnvChangeReason r, const Eigen::Vector3d &hit,
+    double t_detected)
+{
+    if (!exec_control_pub_ || !path_manager_) return;
+    using Ctl = mmp_traj_msgs::msg::TrajectoryExecutionControl;
+    using R = path_manager::PathManager::EnvChangeReason;
+    Ctl msg;
+    msg.drone_id = drone_id_;
+    // The id of the trajectory being withdrawn — read BEFORE the slot is
+    // cleared. A consumer executing a different id must ignore this.
+    msg.trajectory_id = path_manager_->traj_.local_traj.traj_id;
+    msg.action = Ctl::ACTION_ABORT;
+    msg.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
+    msg.reason = (r == R::TERRAIN_BLOCKED)     ? Ctl::REASON_TERRAIN_BLOCKED
+                 : (r == R::POLICY_UNEVALUATED) ? Ctl::REASON_POLICY_UNEVALUATED
+                                                : Ctl::REASON_OBSTACLE_BLOCKED;
+    msg.detected_point.x = hit.x();
+    msg.detected_point.y = hit.y();
+    msg.detected_point.z = hit.z();
+    msg.detected_trajectory_time = t_detected;
+    msg.environment_generation = path_manager_->zonePolicyGeneration();
+    msg.detail = (r == R::TERRAIN_BLOCKED)
+                     ? "a new terrain map blocks the remaining flight"
+                 : (r == R::POLICY_UNEVALUATED)
+                     ? "risk zones changed; the remaining flight cannot be "
+                       "re-judged against the new set"
+                     : "an obstacle blocks the remaining flight";
+    exec_control_pub_->publish(msg);
+    FSM_LOG_WARN(
+        "[ABORT] trajectory %lu withdrawn (reason %u) at t=%.2f s, point "
+        "(%.2f, %.2f, %.2f) — the execution layer owns the recovery",
+        static_cast<unsigned long>(msg.trajectory_id),
+        static_cast<unsigned>(msg.reason), t_detected, hit.x(), hit.y(),
+        hit.z());
+    // Not EMERGENCY_STOP: that state commands a stationary hold this airframe
+    // cannot fly. Nothing further is issued from here.
+    flag_escape_emergency_ = false;
+    have_local_traj_ = false;
+    changeFSMExecState(WAIT_EXTERNAL_RECOVERY, "ENV-CHANGE");
+}
+
 bool ReplanFSM::callEmergencyStop(const Eigen::Vector3d& stop_pos) {
     if (!path_manager_) {
         RCLCPP_ERROR(node_->get_logger(), "PathManager is not initialized!");
@@ -1404,14 +1491,12 @@ void ReplanFSM::loadRiskZonesCallback(
     // closed: the flight cannot be re-judged against the new set, so it stops
     // being treated as cleared. "We could not check" must not read as "it is
     // still fine" — that is the same rule the whole-flight audit follows.
-    if (path_manager_->traj_.local_traj.duration > 0.0) {
-        path_manager_->invalidateStoredTrajectoryForEnvChange();
-        FSM_LOG_WARN(
-            "loadRiskZones: a zone update arrived while a trajectory was "
-            "executing — it cannot be re-judged against the new zone set "
-            "(per-leg policy, not occupancy), so the stored trajectory is "
-            "invalidated rather than assumed still cleared");
-    }
+    // ...but only if the set actually CHANGES. A periodic republish of the
+    // same zones changes nothing about the flight, and withdrawing on it
+    // would ground every mission that had a zone anywhere — the fail-closed
+    // rule is about the world moving, not about a message arriving. Compared
+    // by content fingerprint after the new set is installed, below.
+    const uint64_t zones_before = path_manager_->riskZoneFingerprint();
     // Convert the wire format to PathManager's internal RiskZone struct.
     std::vector<path_manager::RiskZone> zones;
     zones.reserve(msg->zones.size());
@@ -1447,6 +1532,28 @@ void ReplanFSM::loadRiskZonesCallback(
         "loadRiskZones: %s %zu zones (dropped %zu invalid), active set %zu -> %zu",
         msg->replace ? "replaced with" : "appended", zones.size(), dropped,
         previous, active_risk_zones_.size());
+
+    // [ENV-CHANGE] Zones are NOT obstacles and must not be re-checked with the
+    // obstacle predicate: the same volume is HARD_AVOID on one leg and a
+    // SOFT_ENDPOINT containment exemption on another, so "is this point
+    // occupied" has no answer without the per-leg policy the flight was
+    // planned under. Re-auditing a flight in progress per piece is the right
+    // fix and is not built.
+    //
+    // Until it is, a zone set that CHANGES while a trajectory executes is
+    // fail closed: the remaining flight cannot be re-judged, so it stops
+    // being claimed as cleared and an ABORT goes out. "We could not check"
+    // must not read as "it is still fine" — the same rule the whole-flight
+    // audit follows. An unchanged republish is a no-op, or every periodic
+    // re-send would ground the mission.
+    if (path_manager_->traj_.local_traj.duration > 0.0 &&
+        path_manager_->riskZoneFingerprint() != zones_before) {
+        path_manager_->invalidateStoredTrajectoryForEnvChange();
+        FSM_LOG_WARN(
+            "loadRiskZones: the zone set CHANGED while a trajectory was "
+            "executing — it cannot be re-judged against the new set (per-leg "
+            "policy, not occupancy), so the flight is withdrawn");
+    }
 }
 
 }  // namespace path_manager
