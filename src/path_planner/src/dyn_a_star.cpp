@@ -689,9 +689,17 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                 fm2_zmin, fm2_zmax, start_pt.z(), end_pt.z());
         }
         if (fm2_path.size() < 2) {
+            // NOT a direct line. A two-point straight segment is a path
+            // nobody checked for obstacles, and the caller accepts any
+            // result with >= 2 points as a successful search — so returning
+            // one converts "the search failed" into "here is your route",
+            // precisely when a straight line is least likely to be safe.
+            // Empty means failed, and planFrontEnd refuses the plan.
             if (log_manager_)
-                log_manager_->errorf("[FM2] geodesic failed, returning direct");
-            return { start_pt, end_pt };
+                log_manager_->errorf(
+                    "[FM2] geodesic extraction failed — no path (a straight "
+                    "line through unchecked space is not an answer)");
+            return {};
         }
         fm2_path.front() = start_pt;
         fm2_path.back()  = end_pt;
@@ -768,15 +776,20 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     }
 
     if (!search_success) {
+        // Same rule as the FM2 branch above: no path is the answer when no
+        // path was found. This used to return { start_pt, end_pt } — a
+        // straight segment through whatever the search had just failed to
+        // get around — and because the caller treats any result with >= 2
+        // points as success, the mission planned and flew on it. The failure
+        // was reported only in a log line nobody downstream reads.
         if (log_manager_) {
-            log_manager_->errorf("드론 %d: 3D A* 검색 완전 실패 - 직선 경로 반환", drone_id);
+            log_manager_->errorf(
+                "드론 %d: 3D A* 검색 완전 실패 — 경로 없음 (검사되지 않은 "
+                "직선은 답이 아니다)", drone_id);
         }
-        RCLCPP_ERROR(rclcpp::get_logger("astar"), "3D A* search completely failed, returning direct path");
-
-        vector<Vector3d> fallback_path;
-        fallback_path.push_back(start_pt);
-        fallback_path.push_back(end_pt);
-        return fallback_path;
+        RCLCPP_ERROR(rclcpp::get_logger("astar"),
+                     "3D A* search completely failed, returning NO path");
+        return {};
     }
   }  // end else (A* search branch)
 
