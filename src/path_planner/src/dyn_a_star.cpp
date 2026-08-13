@@ -712,7 +712,11 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         // with { start, end }, discarding here turned a burrowed detour into
         // a straight segment through the same wall, which is worse.
         Eigen::Vector3d hit;
-        if (polylineClear(fm2_path, &hit)) {
+        // Start relief only: the aircraft is where the mission says it is,
+        // and it is allowed to be below the terrain margin for a bounded
+        // stretch while it climbs away. Obstacles get no relief, the goal
+        // gets none, and the shortfall must end inside this arc.
+        if (polylineClear(fm2_path, &hit, startTerrainReliefArc())) {
             fm2_done = true;
         } else if (log_manager_) {
             log_manager_->errorf(

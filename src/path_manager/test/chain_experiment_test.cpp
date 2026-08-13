@@ -2292,6 +2292,74 @@ int main(int argc, char **argv)
       pm->clearDynamicObstacles();
     }
 
+    // NEGATIVE: an obstacle AT THE START gets no relief. The start-terrain
+    // allowance exists because the mission pins where the aircraft is and it
+    // may legitimately begin below the ground-clearance margin. An obstacle
+    // there is a different thing entirely — a real obstruction — and an
+    // earlier version of the exemption waved through everything inside a ball
+    // of the margin around BOTH endpoints, obstacles included.
+    {
+      const double R = 5.0;
+      const std::vector<std::pair<Eigen::Vector3d, double>> obs{
+          {grounded(start_pos, R), R}};
+      expect(pm->addDynamicSphere(start_pos, R) >= 0,
+             "an obstacle is placed on the mission start");
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      std::cout << "[DYN] obstacle at start: plan=" << (ok ? 1 : 0)
+                << " route=" << pm->lastCommittedRoute().size()
+                << " clearance=" << rc << "\n";
+      expect(!ok || rc > 0.0,
+             "either the route leaves it entirely or the mission is refused "
+             "— what it may NOT do is fly through an obstacle because it "
+             "happens to sit where the takeoff allowance applies");
+      pm->clearDynamicObstacles();
+    }
+
+    // NEGATIVE, and the one that isolates the rule: an obstacle small enough
+    // to lie ENTIRELY inside the start-relief arc. The big sphere above is
+    // refused either way, because it extends far past the allowance — so it
+    // cannot tell "obstacles are never exempt" from "the allowance is short".
+    // This one can: r = 1.5 grounds to a centre 1.5 above the terrain, so at
+    // flight altitude it is a ~1.4 u disc over the start, and leaving it
+    // costs less travel than the 5 * 0.60 = 3.0 u allowance.
+    {
+      const double R = 1.5;
+      const std::vector<std::pair<Eigen::Vector3d, double>> obs{
+          {grounded(start_pos, R), R}};
+      expect(pm->addDynamicSphere(start_pos, R) >= 0,
+             "a SMALL obstacle is placed on the mission start");
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      std::cout << "[DYN] small obstacle inside the relief arc: plan="
+                << (ok ? 1 : 0) << " route="
+                << pm->lastCommittedRoute().size() << " clearance=" << rc
+                << "\n";
+      expect(!ok || rc > 0.0,
+             "an obstacle wholly inside the takeoff allowance is still an "
+             "obstacle — the allowance is for TERRAIN clearance only");
+      pm->clearDynamicObstacles();
+    }
+
+    // NEGATIVE: a buried GOAL is refused. The goal gets no allowance at all —
+    // a destination inside an obstacle is a mission that cannot be flown, and
+    // saying so is the answer.
+    {
+      const double R = 5.0;
+      const std::vector<std::pair<Eigen::Vector3d, double>> obs{
+          {grounded(goal[0], R), R}};
+      expect(pm->addDynamicSphere(goal[0], R) >= 0,
+             "an obstacle is placed on the mission goal");
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      std::cout << "[DYN] obstacle at goal: plan=" << (ok ? 1 : 0)
+                << " route=" << pm->lastCommittedRoute().size()
+                << " clearance=" << rc << "\n";
+      expect(!ok || rc > 0.0,
+             "a goal inside an obstacle is refused, not reached through it");
+      pm->clearDynamicObstacles();
+    }
+
     // A DENSE BARRIER ARRAY — deliberately NOT called sealed, because it is
     // not. Grounding lifts each radius-40 sphere to z = base + 40, so at
     // flight altitude the cross-sections are only 2*sqrt(r-1) wide and ~22 u
@@ -2370,21 +2438,15 @@ int main(int argc, char **argv)
               << " piece_leg=" << pm->lastPieceLeg().size()
               << " tags=" << pm->lastCommittedRouteEdgeLeg().size()
               << " route=" << pm->lastCommittedRoute().size() << "\n";
-    expect(!ok, "the plan fails in the back end");
-    expect(pm->lastPieceLeg().empty(),
-           "and NO piece map survives it — not the one the previous plan "
-           "left, which is what an audit would have sized against a "
-           "trajectory it never came from");
-    // The front end DID run and commit a route, so its products are
-    // legitimately there — and consistent: tags exist only with the geometry
-    // they describe, stamped with the epoch that minted them.
-    expect(pm->legPolicySnapshots().size() == 2,
-           "the front end's per-leg captures are real and stay");
-    expect(!pm->lastCommittedRoute().empty() &&
-               pm->lastCommittedRouteEdgeLeg().size() + 1 ==
-                   pm->lastCommittedRoute().size() &&
-               pm->lastCommittedRouteEpoch() != 0,
-           "...and the route provenance matches the route it describes");
+    expect(!ok, "a front end that cannot honour the clearance fails the plan");
+    expect(pm->legPolicySnapshots().empty(),
+           "and the EPOCH is void — not a prefix of the legs that ran before "
+           "the failing one, and not the previous plan's two either");
+    expect(pm->lastPieceLeg().empty() &&
+               pm->lastCommittedRouteEdgeLeg().empty() &&
+               pm->lastCommittedRoute().empty() &&
+               pm->lastCommittedRouteEpoch() == 0,
+           "...and no provenance or geometry survives from the plan before it");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

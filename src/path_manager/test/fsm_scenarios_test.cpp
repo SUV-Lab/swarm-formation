@@ -32,6 +32,8 @@
 #include "mmp_mission_msgs/msg/trajectory_command.hpp"
 #include "mmp_mission_msgs/msg/risk_zone_array.hpp"
 #include "mmp_mission_msgs/msg/risk_zone_spec.hpp"
+#include "mmp_mission_msgs/msg/dynamic_obstacle_array.hpp"
+#include "mmp_mission_msgs/msg/dynamic_obstacle_spec.hpp"
 #include "mmp_traj_msgs/msg/poly_traj.hpp"
 #include "mmp_traj_msgs/msg/trajectory_execution_control.hpp"
 
@@ -219,6 +221,42 @@ int main(int argc, char **argv) {
       expect(c.reason == Ctl::REASON_TERRAIN_BLOCKED,
              "...with the TERRAIN reason — this is the path that used to "
              "report every terrain block as an obstacle");
+    }
+  }
+
+  // (8) An OBSTACLE abort, and the environment revision on the wire. The
+  // field used to carry the zone policy generation alone, which an obstacle
+  // change does not move — so consecutive aborts reported the same
+  // environment. Only a wire assertion catches that: a test of the accessor
+  // alone passes with the old value still being published.
+  if (!ctls.empty()) {
+    const uint64_t gen_before = ctls.back().environment_generation;
+    const size_t ctls_before3 = ctls.size();
+    fsm.trajectoryCommandCallback(makeMission(3, "C", 300.0, 150.0, 1.5));
+    spin(node, 4000);
+    if (trajs.size() > 0 && trajs.back().trajectory_id > 0) {
+      const uint64_t id3 = trajs.back().trajectory_id;
+      auto obstacles = std::make_shared<mmp_mission_msgs::msg::DynamicObstacleArray>();
+      obstacles->replace = true;
+      mmp_mission_msgs::msg::DynamicObstacleSpec sp;
+      sp.kind = mmp_mission_msgs::msg::DynamicObstacleSpec::KIND_SPHERE;
+      sp.center.x = 165.0; sp.center.y = 150.0; sp.center.z = 3.0;
+      sp.radius = 12.0;
+      obstacles->obstacles.push_back(sp);
+      fsm.loadObstaclesCallback(obstacles);
+      spin(node, 600);
+      expect(ctls.size() == ctls_before3 + 1,
+             "an obstacle on the remaining flight aborts it");
+      if (ctls.size() == ctls_before3 + 1) {
+        const auto &c = ctls.back();
+        expect(c.reason == Ctl::REASON_OBSTACLE_BLOCKED,
+               "...with the OBSTACLE reason");
+        expect(c.trajectory_id == id3, "...naming the current trajectory");
+        expect(c.environment_generation > gen_before,
+               "...and an environment revision that MOVED — an obstacle "
+               "change does not touch the zone policy generation, which is "
+               "what this field used to carry");
+      }
     }
   }
 

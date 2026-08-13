@@ -149,6 +149,15 @@ int main(int argc, char **argv) {
            "delivery order");
     expect(st2.acceptTrajectory(10) && st2.executing(),
            "a different id still starts normally");
+
+    // ...and a REDELIVERY of the withdrawn one, while the newer is flying,
+    // must not touch it. TRANSIENT_LOCAL keeps trajectories latched, a
+    // consumer can reconnect, a bag can replay — so an old id arriving late
+    // is normal traffic, not a reason to abandon the current flight. This
+    // used to ground it.
+    expect(!st2.acceptTrajectory(9), "the withdrawn id is still refused");
+    expect(st2.executing() && st2.current() == 10,
+           "...and the flight in progress is UNAFFECTED by refusing it");
   }
 
   std::cout << "== consumer already listening ==\n";
