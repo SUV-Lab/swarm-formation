@@ -97,6 +97,31 @@ inline bool mayClamp(StartStateSource s)
   return s == StartStateSource::TRAJECTORY_DERIVED;
 }
 
+// The route's first leg may begin closer to the TERRAIN than the clearance
+// margin — the takeoff allowance in PathSearcher::polylineClear. Exactly two
+// sources qualify, and the reason is what the source MEANS: an operator
+// stating where the aircraft is puts it there, and the planner has to accept
+// it and climb away. Every other source is a state the planner produced —
+// a chain junction, a transition handoff, a point read off a trajectory in
+// flight — and a route it authored has no business starting inside the
+// margin.
+//
+// `seg == 0` alone is NOT this test, and using it alone was a defect:
+// planGlobalTraj is re-entered for junctions and handoffs, and each of those
+// calls has its own leg 0, so all of them inherited an allowance meant for
+// the aircraft standing at its mission start.
+inline bool allowsTakeoffRelief(StartStateSource s)
+{
+  // Deliberately isStated() and not a second copy of its body. They are the
+  // same question — did something outside the planner say where the aircraft
+  // is — and writing the enum list twice is how two rules that must agree
+  // drift apart. It also cost real time: an identical duplicate body meant a
+  // mutation aimed at this function silently edited isStated instead, and
+  // three rounds of "the mutation does not die" had nothing to do with the
+  // code under test.
+  return isStated(s);
+}
+
 // A state produced by the planner itself rather than stated by an operator,
 // and already validated where it was produced. Neither re-aimed nor floored.
 inline bool isAlreadyValidated(StartStateSource s)

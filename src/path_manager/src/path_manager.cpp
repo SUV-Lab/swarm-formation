@@ -1140,7 +1140,8 @@ std::string PathManager::stateEnvelopeProblem(
                 leg_policies_.clear();
             }
         } else if (!planFrontEnd(start_pos, wps, full_route, clean_path,
-                                 cap_ref, edge_leg)) {
+                                 cap_ref, edge_leg,
+                                 allowsTakeoffRelief(head.src))) {
             return false;
         }
         // [CHAIN] retain the committed products for the chain planner to
@@ -1241,7 +1242,8 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                                std::vector<Eigen::Vector3d> &full_route,
                                std::vector<Eigen::Vector3d> &clean_path,
                                std::vector<double> &cap_ref,
-                               std::vector<size_t> &edge_leg)
+                               std::vector<size_t> &edge_leg,
+                               bool takeoff_start)
 {
     edge_leg.clear();
     // [S13] policy epoch: dispositions are per-search state, so every
@@ -1415,7 +1417,14 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
             std::vector<Eigen::Vector3d> seg_path =
                 searcher_.astarSearchAndGetSimplePath(
                     astar_step_size_, all_points[seg], all_points[seg + 1],
-                    traj_.local_traj.drone_id);
+                    traj_.local_traj.drone_id,
+                    // BOTH conditions. seg == 0 is the route's first leg;
+                    // takeoff_start is whether this call begins where the
+                    // AIRCRAFT is. planGlobalTraj is re-entered for chain
+                    // junctions and transition handoffs, and each of those
+                    // has its own leg 0 — seg == 0 alone would hand them an
+                    // allowance meant for a mission start.
+                    /*is_takeoff_leg=*/seg == 0 && takeoff_start);
             ++zone_policy_epoch_searches_;
 
             log_manager_->infof("A* segment %zu: simple_path_size=%zu",

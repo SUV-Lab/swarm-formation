@@ -947,7 +947,11 @@ namespace path_manager
                       // [LEG-POLICY] edge provenance, built alongside the
                       // geometry through concatenation, corner fillets and
                       // densification — never re-derived afterwards.
-                      std::vector<size_t> &edge_leg);
+                      std::vector<size_t> &edge_leg,
+                      // Whether THIS call starts where the aircraft is (see
+                      // allowsTakeoffRelief). Only leg 0 of such a call may
+                      // begin inside the terrain clearance margin.
+                      bool takeoff_start);
 
     // Stage 2 (trajectory optimization): MINCO initial trajectory + L-BFGS.
     // Takes the front-end path; sets traj_ global/local. Returns true on

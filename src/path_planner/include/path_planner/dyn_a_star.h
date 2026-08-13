@@ -267,49 +267,64 @@ private:
     inline bool Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) const;
 
     // Collision / risk queries backed by SDF.
-    // [FM2-OCCUPANCY] Is every point of this polyline free, by the SAME
-    // predicate the search uses to call a cell blocked? First offender via
-    // `hit`.
-    //
-    // FM2 needs this and A* does not. The eikonal speed map marks an
-    // obstacle cell with a small but FINITE speed (kFMin) rather than zero,
-    // on purpose: a true wall at coarse resolution disconnects the
-    // terrain-following seam corridors the planner depends on, and every
-    // terrain-following mission fell back to the soft pass when that was
-    // tried. Only hard risk zones get F = 0. The documented price is that the
-    // wave can burrow through an obstacle, and the geodesic that follows the
-    // wave comes out the other side. In the [ZONE-AVOID] passes that leak is
-    // caught after extraction by the below-terrain probe; on the plain path —
-    // no risk zones — nothing looked.
-    //
-    // Measured, with a wall that genuinely seals the corridor (12 boxes with
-    // equal x/y extents so the inscribed cylinder is yaw-invariant, 200 u
-    // tall so grounding still spans the whole map column): the committed
-    // route came back with 10 of its 34 vertices inside the wall, closest
-    // approach 4.14 u from a box axis. The mission is genuinely infeasible
-    // there; the defect is shipping a route through the obstacle instead of
-    // saying so.
+    // How far the route may stay inside the terrain margin at its start
+    // before that becomes a refusal. Expressed in the margin itself rather
+    // than as a new tuning knob: the aircraft has to clear obstacle_margin_
+    // of ground, and it is given a few multiples of that distance to do it.
+    // Small on purpose — this is a takeoff allowance, not a corridor.
+    double startTerrainReliefArc() const { return 5.0 * obstacle_margin_; }
+
     bool polylineClear(const std::vector<Eigen::Vector3d> &pts,
-                       Eigen::Vector3d *hit = nullptr) {
+                       Eigen::Vector3d *hit = nullptr,
+                       double start_relief_arc = 0.0) {
         if (pts.size() < 2) return false;
         // Half the finest step the occupancy predicate can resolve, so a thin
-        // slab between two widely spaced geodesic vertices cannot be stepped
-        // over. Floored so a degenerate resolution cannot spin.
+        // slab between two widely spaced vertices cannot be stepped over.
         const double pitch =
             std::max(0.02, 0.5 * std::min(map_resolution_, map_resolution_z_));
+        double arc = 0.0;
         for (size_t i = 0; i + 1 < pts.size(); ++i) {
             const Eigen::Vector3d &a = pts[i], &b = pts[i + 1];
             const double len = (b - a).norm();
             const int n = std::max(1, static_cast<int>(std::ceil(len / pitch)));
             for (int k = 0; k <= n; ++k) {
-                const Eigen::Vector3d p = a + (b - a) * (double(k) / n);
-                if (checkOccupancy_esdf(p)) {
+                const double f = double(k) / n;
+                const Eigen::Vector3d p = a + (b - a) * f;
+                const double arc_here = arc + len * f;
+                // Obstacles: never exempt, anywhere.
+                if (obstacleBlocked(p)) {
+                    if (hit) *hit = p;
+                    return false;
+                }
+                // Terrain: exempt only inside the start relief arc.
+                if (terrainClearanceShort(p) &&
+                    arc_here > start_relief_arc) {
                     if (hit) *hit = p;
                     return false;
                 }
             }
+            arc += len;
         }
         return true;
+    }
+
+    // The two halves of checkOccupancy_esdf, separated so a caller can
+    // tolerate one without tolerating the other. Their disjunction is exactly
+    // checkOccupancy_esdf.
+    inline bool terrainClearanceShort(const Eigen::Vector3d &pos) {
+        if (!terrain_height_) return false;
+        const float h = terrain_height_(pos.x(), pos.y());
+        return std::isfinite(h) &&
+               pos.z() - static_cast<double>(h) < obstacle_margin_;
+    }
+    inline bool obstacleBlocked(const Eigen::Vector3d &pos) {
+        if (!sdf_ || !sdf_->hasData()) return false;
+        float d = sdf_->getDistance(pos);
+        if (!std::isfinite(d)) return true;  // outside map = blocked
+        if (d < obstacle_margin_) return true;
+        if (dyn_obstacle_margin_ > obstacle_margin_ &&
+            sdf_->getDynamicDistance(pos) < dyn_obstacle_margin_) return true;
+        return false;
     }
 
     inline bool checkOccupancy_esdf(const Eigen::Vector3d &pos) {
@@ -845,7 +860,17 @@ public:
 
     std::vector<Eigen::Vector3d> getPath();
 
-    std::vector<Eigen::Vector3d> astarSearchAndGetSimplePath(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt, int drone_id);
+    // `is_takeoff_leg` says this search begins where the AIRCRAFT IS, not at
+    // a waypoint the route reached on its own. Only then may the extracted
+    // route start closer to the terrain than the clearance margin — the
+    // mission pins the aircraft's position and it has to be allowed to climb
+    // away from it. A multi-waypoint mission calls this once per leg, and
+    // every leg after the first starts at a point the planner chose, which is
+    // not a takeoff and gets no allowance.
+    std::vector<Eigen::Vector3d> astarSearchAndGetSimplePath(
+        const double step_size, Eigen::Vector3d start_pt,
+        Eigen::Vector3d end_pt, int drone_id,
+        bool is_takeoff_leg = false);
 
 
     // Lowest free altitude in the FM2 speed-field column containing world

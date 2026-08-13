@@ -2104,6 +2104,143 @@ int main(int argc, char **argv)
       pm->clearDynamicObstacles();
     }
 
+    // NEGATIVE: an obstacle AT THE START gets no relief. The start-terrain
+    // allowance exists because the mission pins where the aircraft is and it
+    // may legitimately begin below the ground-clearance margin. An obstacle
+    // there is a different thing entirely — a real obstruction — and an
+    // earlier version of the exemption waved through everything inside a ball
+    // of the margin around BOTH endpoints, obstacles included.
+    {
+      const double R = 5.0;
+      const std::vector<std::pair<Eigen::Vector3d, double>> obs{
+          {grounded(start_pos, R), R}};
+      expect(pm->addDynamicSphere(start_pos, R) >= 0,
+             "an obstacle is placed on the mission start");
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      std::cout << "[DYN] obstacle at start: plan=" << (ok ? 1 : 0)
+                << " route=" << pm->lastCommittedRoute().size()
+                << " clearance=" << rc << "\n";
+      expect(!ok || rc > 0.0,
+             "either the route leaves it entirely or the mission is refused "
+             "— what it may NOT do is fly through an obstacle because it "
+             "happens to sit where the takeoff allowance applies");
+      pm->clearDynamicObstacles();
+    }
+
+    // The takeoff allowance belongs to a call that starts WHERE THE
+    // AIRCRAFT IS — not to whichever leg happens to be numbered zero.
+    // planGlobalTraj is re-entered for chain junctions and transition
+    // handoffs, and each of those calls has its own leg 0; gating on seg == 0
+    // alone handed all of them an allowance meant for a mission start.
+    //
+    // Driven through the PRODUCTION path, one plan per source over the SAME
+    // low-altitude start. What this pins is the WIRING — that the allowance
+    // is not handed out on seg == 0 alone, which is what it used to do and
+    // what a searcher-level call could never have caught.
+    //
+    // It does NOT isolate the predicate: a low start also meets the re-aim
+    // policy, which differs by source too, so flipping allowsTakeoffRelief
+    // alone does not change these outcomes. The predicate itself is pinned as
+    // a pure function in start_claim_test, where the rest of the per-source
+    // matrix lives.
+    {
+      using SS = path_manager::StartStateSource;
+      double g = 0.0;
+      pm->terrainElevation(start_pos.x(), start_pos.y(), &g);
+      // 0.15 u over the ground, against a 0.60 u clearance margin: inside the
+      // margin, so the route can only be produced under the allowance.
+      const Eigen::Vector3d low(start_pos.x(), start_pos.y(),
+                                (g > 0.0 ? g : 0.0) + 0.15);
+      const auto tryFrom = [&](SS src, bool acc_prescribed) {
+        path_manager::StartHead h;
+        h.src = src;
+        h.pos_u = low;
+        h.vel_u = start_vel;
+        h.acc_u = start_acc;
+        h.acc_prescribed = acc_prescribed;
+        return pm->planGlobalTraj(h, {goal[0]});
+      };
+      // CONTROL: the same sources at a NORMAL altitude. Without it, "the
+      // junction start failed" would not distinguish the missing allowance
+      // from the source simply being unable to plan this mission at all.
+      // They all plan fine up here.
+      const auto tryHigh = [&](SS src, bool acc_prescribed) {
+        path_manager::StartHead h;
+        h.src = src;
+        h.pos_u = start_pos;      // the ordinary mission start altitude
+        h.vel_u = start_vel;
+        h.acc_u = start_acc;
+        h.acc_prescribed = acc_prescribed;
+        return pm->planGlobalTraj(h, {goal[0]});
+      };
+      std::cout << "[TAKEOFF-CTRL] high: chain=" << tryHigh(SS::CHAIN_JUNCTION, true)
+                << " handoff=" << tryHigh(SS::TRANSITION_HANDOFF, true)
+                << " derived=" << tryHigh(SS::TRAJECTORY_DERIVED, false) << "\n";
+      const bool ok_speed  = tryFrom(SS::STATED_SPEED, false);
+      const bool ok_vector = tryFrom(SS::STATED_VECTOR, false);
+      const bool ok_chain  = tryFrom(SS::CHAIN_JUNCTION, true);
+      const bool ok_handoff= tryFrom(SS::TRANSITION_HANDOFF, true);
+      const bool ok_derived= tryFrom(SS::TRAJECTORY_DERIVED, false);
+      std::cout << "[TAKEOFF] stated_speed=" << ok_speed
+                << " stated_vector=" << ok_vector
+                << " chain=" << ok_chain << " handoff=" << ok_handoff
+                << " derived=" << ok_derived << "\n";
+      expect(ok_speed && ok_vector,
+             "a start the OPERATOR stated may begin inside the terrain "
+             "margin — the mission put the aircraft there");
+      expect(!ok_chain,
+             "a CHAIN_JUNCTION start may not: the planner chose that point");
+      expect(!ok_handoff,
+             "...nor a TRANSITION_HANDOFF start");
+      expect(!ok_derived,
+             "...nor one read off a trajectory already in flight");
+    }
+
+    // NEGATIVE, and the one that isolates the rule: an obstacle small enough
+    // to lie ENTIRELY inside the start-relief arc. The big sphere above is
+    // refused either way, because it extends far past the allowance — so it
+    // cannot tell "obstacles are never exempt" from "the allowance is short".
+    // This one can: r = 1.5 grounds to a centre 1.5 above the terrain, so at
+    // flight altitude it is a ~1.4 u disc over the start, and leaving it
+    // costs less travel than the 5 * 0.60 = 3.0 u allowance.
+    {
+      const double R = 1.5;
+      const std::vector<std::pair<Eigen::Vector3d, double>> obs{
+          {grounded(start_pos, R), R}};
+      expect(pm->addDynamicSphere(start_pos, R) >= 0,
+             "a SMALL obstacle is placed on the mission start");
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      std::cout << "[DYN] small obstacle inside the relief arc: plan="
+                << (ok ? 1 : 0) << " route="
+                << pm->lastCommittedRoute().size() << " clearance=" << rc
+                << "\n";
+      expect(!ok || rc > 0.0,
+             "an obstacle wholly inside the takeoff allowance is still an "
+             "obstacle — the allowance is for TERRAIN clearance only");
+      pm->clearDynamicObstacles();
+    }
+
+    // NEGATIVE: a buried GOAL is refused. The goal gets no allowance at all —
+    // a destination inside an obstacle is a mission that cannot be flown, and
+    // saying so is the answer.
+    {
+      const double R = 5.0;
+      const std::vector<std::pair<Eigen::Vector3d, double>> obs{
+          {grounded(goal[0], R), R}};
+      expect(pm->addDynamicSphere(goal[0], R) >= 0,
+             "an obstacle is placed on the mission goal");
+      const bool ok = pm->planGlobalTraj(head(), {goal[0]});
+      const double rc = clearance(pm->lastCommittedRoute(), obs);
+      std::cout << "[DYN] obstacle at goal: plan=" << (ok ? 1 : 0)
+                << " route=" << pm->lastCommittedRoute().size()
+                << " clearance=" << rc << "\n";
+      expect(!ok || rc > 0.0,
+             "a goal inside an obstacle is refused, not reached through it");
+      pm->clearDynamicObstacles();
+    }
+
     // A DENSE BARRIER ARRAY — deliberately NOT called sealed, because it is
     // not. Grounding lifts each radius-40 sphere to z = base + 40, so at
     // flight altitude the cross-sections are only 2*sqrt(r-1) wide and ~22 u
