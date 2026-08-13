@@ -240,6 +240,31 @@ int main()
                                ": raising a stated speed answers a different "
                                "question than the one asked");
     }
+
+    // The takeoff allowance: which sources mean "the aircraft is HERE".
+    //
+    // Pinned as a pure function because the production path cannot isolate
+    // it. A low start also interacts with re-aiming — a stated speed is
+    // turned onto the route, a chain junction is not — so a plan that fails
+    // from a junction at low altitude fails for two reasons at once, and
+    // flipping this predicate alone does not change that outcome. What the
+    // production test (chain_experiment_test `dynprobe`) does pin is that
+    // seg == 0 ALONE is not the rule, which was the defect.
+    using path_manager::allowsTakeoffRelief;
+    expect(allowsTakeoffRelief(StartStateSource::STATED_SPEED) &&
+               allowsTakeoffRelief(StartStateSource::STATED_VECTOR),
+           "a start the operator STATED may begin inside the terrain "
+           "clearance margin — the mission put the aircraft there");
+    for (auto s : {StartStateSource::CHAIN_JUNCTION,
+                   StartStateSource::TRANSITION_HANDOFF,
+                   StartStateSource::TRAJECTORY_DERIVED,
+                   StartStateSource::TEST_INJECTED,
+                   StartStateSource::UNSPECIFIED}) {
+      expect(!allowsTakeoffRelief(s),
+             std::string("...never ") + path_manager::sourceName(s) +
+                 ": that point is one the planner produced, and a route it "
+                 "authored has no business starting inside the margin");
+    }
   }
 
   // --- the per-source policy matrix, directly -----------------------------

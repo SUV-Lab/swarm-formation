@@ -415,10 +415,6 @@ namespace path_manager
     // unreachable from the scalar form. Both stated forms now go through
     // stateEnvelopeProblem / pvaEnvelopeProblem and classifyStartState.
     int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
-    // Test seam: the takeoff allowance is an ARGUMENT to the search, so the
-    // only way to pin its scope is to call the search both ways on identical
-    // geometry. Nothing in production reaches the searcher through here.
-    path_planner::search::PathSearcher &searcherForTest() { return searcher_; }
 
     // [CHAIN] committed front-end products of the most recent plan, retained
     // for the chain planner to slice (clean_path as handed to the optimizer,
@@ -1015,7 +1011,11 @@ namespace path_manager
                       // [LEG-POLICY] edge provenance, built alongside the
                       // geometry through concatenation, corner fillets and
                       // densification — never re-derived afterwards.
-                      std::vector<size_t> &edge_leg);
+                      std::vector<size_t> &edge_leg,
+                      // Whether THIS call starts where the aircraft is (see
+                      // allowsTakeoffRelief). Only leg 0 of such a call may
+                      // begin inside the terrain clearance margin.
+                      bool takeoff_start);
 
     // Stage 2 (trajectory optimization): MINCO initial trajectory + L-BFGS.
     // Takes the front-end path; sets traj_ global/local. Returns true on

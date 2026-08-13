@@ -2316,28 +2316,73 @@ int main(int argc, char **argv)
       pm->clearDynamicObstacles();
     }
 
-    // The takeoff allowance belongs to the FIRST leg only. A multi-waypoint
-    // mission runs one search per leg, and every leg after the first begins
-    // at a waypoint this route already reached — a point the planner chose,
-    // not where the aircraft is. Driven directly on the searcher because the
-    // difference is in the argument, and the two calls are otherwise
-    // identical: the same geometry, low over the terrain, is accepted as a
-    // takeoff and refused as a mid-route leg.
+    // The takeoff allowance belongs to a call that starts WHERE THE
+    // AIRCRAFT IS — not to whichever leg happens to be numbered zero.
+    // planGlobalTraj is re-entered for chain junctions and transition
+    // handoffs, and each of those calls has its own leg 0; gating on seg == 0
+    // alone handed all of them an allowance meant for a mission start.
+    //
+    // Driven through the PRODUCTION path, one plan per source over the SAME
+    // low-altitude start. What this pins is the WIRING — that the allowance
+    // is not handed out on seg == 0 alone, which is what it used to do and
+    // what a searcher-level call could never have caught.
+    //
+    // It does NOT isolate the predicate: a low start also meets the re-aim
+    // policy, which differs by source too, so flipping allowsTakeoffRelief
+    // alone does not change these outcomes. The predicate itself is pinned as
+    // a pure function in start_claim_test, where the rest of the per-source
+    // matrix lives.
     {
-      const Eigen::Vector3d a(start_pos.x(), start_pos.y(), 0.15);
-      const Eigen::Vector3d b(start_pos.x() + 30.0, start_pos.y(), 3.0);
-      const auto as_takeoff = pm->searcherForTest().astarSearchAndGetSimplePath(
-          1.0, a, b, 0, /*is_takeoff_leg=*/true);
-      const auto as_midroute = pm->searcherForTest().astarSearchAndGetSimplePath(
-          1.0, a, b, 0, /*is_takeoff_leg=*/false);
-      std::cout << "[TAKEOFF] as takeoff=" << as_takeoff.size()
-                << " as mid-route=" << as_midroute.size() << "\n";
-      expect(as_takeoff.size() >= 2,
-             "a leg that starts where the aircraft is may begin below the "
-             "terrain margin");
-      expect(as_midroute.empty(),
-             "...and the SAME geometry is refused when it is not the takeoff "
-             "leg — a later leg's start is a point the planner chose");
+      using SS = path_manager::StartStateSource;
+      double g = 0.0;
+      pm->terrainElevation(start_pos.x(), start_pos.y(), &g);
+      // 0.15 u over the ground, against a 0.60 u clearance margin: inside the
+      // margin, so the route can only be produced under the allowance.
+      const Eigen::Vector3d low(start_pos.x(), start_pos.y(),
+                                (g > 0.0 ? g : 0.0) + 0.15);
+      const auto tryFrom = [&](SS src, bool acc_prescribed) {
+        path_manager::StartHead h;
+        h.src = src;
+        h.pos_u = low;
+        h.vel_u = start_vel;
+        h.acc_u = start_acc;
+        h.acc_prescribed = acc_prescribed;
+        return pm->planGlobalTraj(h, {goal[0]});
+      };
+      // CONTROL: the same sources at a NORMAL altitude. Without it, "the
+      // junction start failed" would not distinguish the missing allowance
+      // from the source simply being unable to plan this mission at all.
+      // They all plan fine up here.
+      const auto tryHigh = [&](SS src, bool acc_prescribed) {
+        path_manager::StartHead h;
+        h.src = src;
+        h.pos_u = start_pos;      // the ordinary mission start altitude
+        h.vel_u = start_vel;
+        h.acc_u = start_acc;
+        h.acc_prescribed = acc_prescribed;
+        return pm->planGlobalTraj(h, {goal[0]});
+      };
+      std::cout << "[TAKEOFF-CTRL] high: chain=" << tryHigh(SS::CHAIN_JUNCTION, true)
+                << " handoff=" << tryHigh(SS::TRANSITION_HANDOFF, true)
+                << " derived=" << tryHigh(SS::TRAJECTORY_DERIVED, false) << "\n";
+      const bool ok_speed  = tryFrom(SS::STATED_SPEED, false);
+      const bool ok_vector = tryFrom(SS::STATED_VECTOR, false);
+      const bool ok_chain  = tryFrom(SS::CHAIN_JUNCTION, true);
+      const bool ok_handoff= tryFrom(SS::TRANSITION_HANDOFF, true);
+      const bool ok_derived= tryFrom(SS::TRAJECTORY_DERIVED, false);
+      std::cout << "[TAKEOFF] stated_speed=" << ok_speed
+                << " stated_vector=" << ok_vector
+                << " chain=" << ok_chain << " handoff=" << ok_handoff
+                << " derived=" << ok_derived << "\n";
+      expect(ok_speed && ok_vector,
+             "a start the OPERATOR stated may begin inside the terrain "
+             "margin — the mission put the aircraft there");
+      expect(!ok_chain,
+             "a CHAIN_JUNCTION start may not: the planner chose that point");
+      expect(!ok_handoff,
+             "...nor a TRANSITION_HANDOFF start");
+      expect(!ok_derived,
+             "...nor one read off a trajectory already in flight");
     }
 
     // NEGATIVE, and the one that isolates the rule: an obstacle small enough
