@@ -1884,42 +1884,50 @@ int main(int argc, char **argv)
   if (with_legfail) {
     // [LEG-POLICY] What a plan that dies AFTER the front end leaves behind.
     //
-    // This variant runs with an obstacle clearance the empty test SDF cannot
-    // satisfy. The front end ignores it (no occupancy data to test against)
-    // and commits a route; the back end then refuses. So the failing call
-    // gets past the point where provenance is written, which is the case an
-    // entry-only reset would not cover — and the previous successful plan's
-    // piece map must not be what an audit reads afterwards.
+    // A leg whose SEARCH fails is the case the capture reordering was written
+    // for, and it could not be induced here. Four attempts, measured:
+    //   - a waypoint at (5000, 5000): the field clamps it and the geodesic
+    //     reports reached_goal=yes, both as a leg goal and as a leg start
+    //   - manager/obstacle_clearance = 500 against free_distance 360: the
+    //     front end ignores it
+    //   - addDynamicBox sealing the goal and the intermediate waypoint
+    //   - addDynamicBox as a 40 x 600 x 200 wall across the only corridor
+    // The last one is decisive about WHY: the box registers
+    // (numDynamicObstacles() == 1) and the committed route then puts 2 of its
+    // 15 vertices INSIDE the wall. This harness's static SDF is built empty
+    // ("no occupancy grid materialized", free_distance 360), so there is
+    // nothing for a dynamic patch to be layered onto and collision checking
+    // never bites. With FM2 there is a second reason on top: it solves an
+    // eikonal speed map, so an obstacle slows the wave without making the
+    // arrival time infinite and a geodesic to the goal always exists.
     //
-    // NOTE what this does NOT pin: a leg whose SEARCH fails. The capture now
-    // sits below the `seg_path.size() < 2` check so a failed leg cannot be
-    // recorded, and a failure clears the epoch rather than leaving a prefix —
-    // but the FM2 front end could not be made to fail from this harness at
-    // all. Out-of-map waypoints clamp and reach the goal (measured, both as a
-    // leg goal and as a leg start), the clearance above is ignored with an
-    // empty SDF, and no obstacle-insertion API is exposed to a test.
+    // (An earlier version of this comment said no obstacle API was exposed to
+    // a test. That was wrong — addDynamicSphere/addDynamicBox are public. The
+    // search that missed them looked for the word "obstacle" in the
+    // declaration, which is not in either name.)
+    //
+    // So this pins the reachable neighbour: a plan that gets PAST the front
+    // end and then fails must not leave the previous plan's piece map behind
+    // for an audit to size against a trajectory it never came from.
     path_manager::RiskZone z;
     z.center = Eigen::Vector3d(600.0, 600.0, 3.0);   // off the route
     z.reach = 15.0;
     z.peak = 0.9;
     pm->setRiskZonesRuntime({z});
     const Eigen::Vector3d mid(180.0, 80.0, 3.0);
+    const auto head = [&]() {
+      return mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
+                    start_vel, start_acc);
+    };
 
-    // A good two-leg plan first, so there IS a map to be left standing.
     pm->setObstacleClearance(0.7);
-    expect(pm->planGlobalTraj(
-               mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
-                      start_vel, start_acc),
-               {mid, goal[0]}),
+    expect(pm->planGlobalTraj(head(), {mid, goal[0]}),
            "a two-leg mission plans");
     const size_t good_pieces = pm->lastPieceLeg().size();
     expect(good_pieces > 0, "...leaving a piece map behind it");
 
     pm->setObstacleClearance(500.0);
-    const bool ok = pm->planGlobalTraj(
-        mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
-               start_vel, start_acc),
-        {mid, goal[0]});
+    const bool ok = pm->planGlobalTraj(head(), {mid, goal[0]});
     const auto &tags = pm->lastCommittedRouteEdgeLeg();
     const auto &route = pm->lastCommittedRoute();
     std::cout << "[LEG-FAIL] plan=" << (ok ? 1 : 0)
@@ -2115,24 +2123,25 @@ int main(int argc, char **argv)
     expect(r1.detail.find("not supported") != std::string::npos,
            "...and the detail says so in words a caller can act on");
 
-    // ...and the refusal is a statement about the REQUEST, so it cannot be
-    // displaced by anything the planner might discover. With a waypoint the
-    // front end cannot reach, the answer must still be the scope refusal —
-    // while the check sat after commitRoute, the same unsupported input came
-    // back as TRANSITION_GENERATION_FAILED and sent the operator looking for
-    // a geometry problem.
-    std::vector<Eigen::Vector3d> unreachable;
-    unreachable.push_back(Eigen::Vector3d(5000.0, 5000.0, 3.0));
-    unreachable.push_back(goal[0]);
-    const path_manager::PlanResult r2 =
-        chain.plan(mkHead(path_manager::StartStateSource::STATED_VECTOR,
-                          start_pos, v32, start_acc, false), unreachable, {});
-    std::cout << "[TRANS-WP] unreachable+zone: outcome=" << (int)r2.outcome
+    // ...and it is decided BEFORE anything is attempted. Not "the reason
+    // looked right on one input" — the front-end epoch is incremented on
+    // entry to planFrontEnd, once per run, so an unchanged epoch across the
+    // call is direct evidence that no search was started at all. While the
+    // check sat after commitRoute a route was committed first, and any
+    // front-end failure then displaced the scope answer with a
+    // geometry-shaped one.
+    const uint64_t ep_before = pm->zonePolicyEpoch();
+    const path_manager::PlanResult r2 = fly();
+    const uint64_t ep_after = pm->zonePolicyEpoch();
+    std::cout << "[TRANS-WP] epoch " << ep_before << " -> " << ep_after
               << " reason=" << (int)r2.reason << "\n";
-    expect(!r2.hasTrajectory(), "an unreachable waypoint is still refused");
-    expect(r2.reason ==
-               path_manager::PlanReason::TRANSITION_MULTI_LEG_UNSUPPORTED,
-           "...as the SCOPE refusal, decided before any search runs");
+    expect(!r2.hasTrajectory() &&
+               r2.reason ==
+                   path_manager::PlanReason::TRANSITION_MULTI_LEG_UNSUPPORTED,
+           "the refusal repeats");
+    expect(ep_after == ep_before,
+           "...and NO front end ran for it — the policy epoch is untouched, "
+           "which is what 'decided before anything is attempted' means");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
