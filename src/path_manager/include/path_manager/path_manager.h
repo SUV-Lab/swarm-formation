@@ -525,6 +525,12 @@ namespace path_manager
     // unflown, and refusing on it would ground a flight over a hazard it has
     // already passed.
     bool revalidateStoredTrajectory(double t_from, Eigen::Vector3d *hit);
+    // The same check driven from wherever the environment changed, using the
+    // flight's own elapsed time. `what` names the trigger in the log.
+    void revalidateAfterEnvChange(const char *what);
+    // Drop the stored trajectory because the world changed in a way this node
+    // cannot re-judge. Same two fields every other refusal zeroes.
+    void invalidateStoredTrajectoryForEnvChange();
     size_t numDynamicObstacles() const { return sdf_manager_.numActiveObstacles(); }
 
     // Runtime risk-zone reset (called when ObstacleScenarioPanel / mission

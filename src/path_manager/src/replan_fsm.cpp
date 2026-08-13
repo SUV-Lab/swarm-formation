@@ -1256,6 +1256,9 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
     if (path_manager_) {
         path_manager_->setTerrainData(msg);
         FSM_LOG_INFO("Terrain data received and forwarded to PathManager");
+        // [ENV-CHANGE] A new DEM can put terrain under a flight that was
+        // planned over open air. Same check as the obstacle path.
+        path_manager_->revalidateAfterEnvChange("a new terrain map");
         // [TERRAIN-READY] Ingestion receipt for command gating: the panel's
         // Run flow must not race a corridor the planner is still digesting
         // (LoadMap replying only proves the map was PUBLISHED). Latched
@@ -1390,6 +1393,25 @@ void ReplanFSM::loadRiskZonesCallback(
     const mmp_mission_msgs::msg::RiskZoneArray::SharedPtr msg)
 {
     if (!path_manager_) return;
+    // [ENV-CHANGE] Zones are NOT obstacles and must not be re-checked with the
+    // obstacle predicate: the same volume is HARD_AVOID on one leg and a
+    // SOFT_ENDPOINT containment exemption on another, so "is this point
+    // occupied" has no answer without the per-leg policy the flight was
+    // planned under. Re-auditing a flight in progress per piece is the right
+    // fix and is not built.
+    //
+    // Until it is, a zone update while a trajectory is executing is fail
+    // closed: the flight cannot be re-judged against the new set, so it stops
+    // being treated as cleared. "We could not check" must not read as "it is
+    // still fine" — that is the same rule the whole-flight audit follows.
+    if (path_manager_->traj_.local_traj.duration > 0.0) {
+        path_manager_->invalidateStoredTrajectoryForEnvChange();
+        FSM_LOG_WARN(
+            "loadRiskZones: a zone update arrived while a trajectory was "
+            "executing — it cannot be re-judged against the new zone set "
+            "(per-leg policy, not occupancy), so the stored trajectory is "
+            "invalidated rather than assumed still cleared");
+    }
     // Convert the wire format to PathManager's internal RiskZone struct.
     std::vector<path_manager::RiskZone> zones;
     zones.reserve(msg->zones.size());

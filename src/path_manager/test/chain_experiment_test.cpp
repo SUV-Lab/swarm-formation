@@ -1956,6 +1956,23 @@ int main(int argc, char **argv)
            "a hazard the flight has already passed does not ground it — the "
            "prefix cannot be unflown");
     pm->clearDynamicObstacles();
+
+    // (5) The trigger that does NOT go through the obstacle topic: obstacles
+    // that arrived before the SDF existed are installed by
+    // flushPendingObstacles, so that is where they first become able to block
+    // anything. revalidateAfterEnvChange drives the same check from there and
+    // from the terrain path.
+    expect(pm->planGlobalTraj(head(), {goal[0]}), "the mission re-plans again");
+    const double dur3 = pm->traj_.local_traj.duration;
+    pm->traj_.local_traj.start_time =
+        rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+    const Eigen::Vector3d on_path = pm->traj_.local_traj.traj.getPos(0.5 * dur3);
+    expect(pm->addDynamicSphere(on_path, 12.0) >= 0, "an obstacle is placed");
+    pm->revalidateAfterEnvChange("a test-driven environment change");
+    expect(pm->traj_.local_traj.duration <= 0.0,
+           "an environment change reported from ANY trigger invalidates a "
+           "flight it blocks, not only one that came in on the obstacle topic");
+    pm->clearDynamicObstacles();
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";

@@ -3964,6 +3964,37 @@ void PathManager::clearDynamicObstacles()
 
 // Add obstacles that were requested before the SDF existed. Called right after
 // the SDF is built/loaded, so they make it into the very first plan.
+// [ENV-CHANGE] Every path by which the world under a flight can change has to
+// reach revalidateStoredTrajectory, not just the obstacle topic. This one is
+// the deferred queue: obstacles that arrived before the SDF existed are
+// installed HERE, so this is where they first become able to block anything.
+void PathManager::invalidateStoredTrajectoryForEnvChange()
+{
+    traj_.local_traj.duration = 0.0;
+    traj_.local_traj.start_time = 0.0;
+    clearTrajectoryViz();
+}
+
+void PathManager::revalidateAfterEnvChange(const char *what)
+{
+    auto &lt = traj_.local_traj;
+    if (!(lt.duration > 0.0)) return;
+    const double t_cur = (lt.start_time > 0.0)
+                             ? rclcpp::Clock(RCL_ROS_TIME).now().seconds() -
+                                   lt.start_time
+                             : 0.0;
+    Eigen::Vector3d hit;
+    if (!revalidateStoredTrajectory(t_cur, &hit)) {
+        log_manager_->errorf(
+            "[ENV-CHANGE] %s blocked the flight in progress at "
+            "(%.2f, %.2f, %.2f) — the stored trajectory is invalidated. NOTE: "
+            "this stops THIS node from continuing to treat it as flyable; it "
+            "does not recall a trajectory already published to a consumer "
+            "(see docs — the cancel layer is an open decision)",
+            what, hit.x(), hit.y(), hit.z());
+    }
+}
+
 void PathManager::flushPendingObstacles()
 {
     if (pending_obstacles_.empty() || !sdf_manager_.hasData()) return;
@@ -3975,6 +4006,7 @@ void PathManager::flushPendingObstacles()
     }
     log_manager_->infof("Flushed %zu deferred dynamic obstacle(s) after SDF ready",
                         pend.size());
+    revalidateAfterEnvChange("a deferred obstacle batch");
 }
 
 bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
