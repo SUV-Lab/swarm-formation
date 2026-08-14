@@ -15,6 +15,25 @@ T="${1:-6}"; DT="${2:-0.001}"
 # 계산되면 순위가 바뀐다 (측정). 생성기도 out_dt != dt 를 거절한다.
 ODT="$DT"
 BIN="$HERE/.build/candidate_acc02"
+JSB="$HERE/../jsbsim_probe/.jsbsim/inst-v1.3.1"
+# .build/ 와 .jsbsim/ 은 gitignore 이므로 새 환경에는 없다. 조용히
+# "command not found" 로 죽지 않게 선행조건을 여기서 말한다.
+if [ ! -d "$JSB" ]; then
+  cat >&2 <<MSG
+FAIL: JSBSim 설치 트리가 없다 — $JSB
+  먼저: cd $HERE/../jsbsim_probe && ./run.sh
+  (고정 버전 v1.3.1 을 받아 빌드한다)
+MSG
+  exit 3
+fi
+if [ ! -x "$BIN" ]; then
+  cat >&2 <<MSG
+FAIL: 생성기가 빌드돼 있지 않다 — $BIN
+  먼저: cmake -S "$HERE" -B "$HERE/.build" -DJSBSIM_ROOT="$JSB"
+        cmake --build "$HERE/.build" -j
+MSG
+  exit 3
+fi
 export LD_LIBRARY_PATH="$HERE/../jsbsim_probe/.jsbsim/inst-v1.3.1/lib:${LD_LIBRARY_PATH:-}"
 cd "$HERE"
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
