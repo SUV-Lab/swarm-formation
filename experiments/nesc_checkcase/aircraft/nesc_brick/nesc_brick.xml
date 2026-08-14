@@ -9,8 +9,9 @@
    published values (NASA/TM-2015-218675 Vol. II, appendix Table 4, about
    the CM, products of inertia zero).
 
-   Written here rather than taken from any bundled aircraft: this file
-   carries no third-party data. Aerodynamic coefficients are all zero,
+   No external aircraft file is used; the values are transcribed from
+   public reference material with the source stated. That is not "no
+   third-party data" -- mass and inertia come from the published report. Aerodynamic coefficients are all zero,
    which is what check-case 2 specifies ("no rotational damping, no lift,
    and no drag ... setting all the aerodynamic coefficient values to zero").
    Check-case 3 adds damping and is a separate configuration.

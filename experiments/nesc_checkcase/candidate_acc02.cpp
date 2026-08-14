@@ -70,9 +70,18 @@ int main(int argc, char **argv)
   //   Buss1=6 Buss2=7 LocalLinearization=8 AB5=9
   const int int_rate = argc > 6 ? std::atoi(argv[6]) : 1;   // 기본 = 현재 동작
   const int int_att  = argc > 7 ? std::atoi(argv[7]) : 1;
-  // 사례 3 은 감쇠 모델을 쓰므로 기체와 공력 검사가 달라진다.
-  const std::string model = argc > 8 ? argv[8] : "nesc_brick";
-  const bool damped = (model != "nesc_brick");
+  // 사례를 **명시적으로** 분류한다. model != "nesc_brick" 같은 간접
+  // 분류는 오타 하나로 조용히 다른 계약을 적용한다.
+  const std::string caseid = argc > 8 ? argv[8] : "acc02";
+  std::string model;
+  if (caseid == "acc02")      model = "nesc_brick";
+  else if (caseid == "acc03") model = "nesc_brick_damped";
+  else {
+    std::fprintf(stderr, "FAIL: 사례 '%s' 는 acc02/acc03 이 아니다\n",
+                 caseid.c_str());
+    return 3;
+  }
+  const bool damped = (caseid == "acc03");
   // fail-open 제거: readback 은 지원하지 않는 값도 그대로 돌려주므로
   // 검사가 되지 않는다. JSBSim 의 switch 가 default 로 빠지면 적분이
   // 조용히 멈춘다. 종류별 허용 집합을 여기서 못 박는다.
@@ -236,6 +245,35 @@ int main(int argc, char **argv)
       worst_force = std::max(worst_force, std::fabs(air->GetForces(i)));
       worst_moment = std::max(worst_moment, std::fabs(air->GetMoments(i)));
     }
+    if (damped) {
+      // 감쇠 모멘트를 해석식으로 재폐쇄한다. 모델이 "0이 아니다"만으로는
+      // 계수나 축이 틀려도 통과한다.
+      //   L = qbar S b  Clp (p b / 2V),  M = qbar S c Cmq (q c / 2V),
+      //   N = qbar S b  Cnr (r b / 2V),  Clp=Cmq=Cnr=-1
+      const double qbar = fdm.GetPropertyValue("aero/qbar-psf");
+      const double S = fdm.GetPropertyValue("metrics/Sw-sqft");
+      const double b = fdm.GetPropertyValue("metrics/bw-ft");
+      const double c = fdm.GetPropertyValue("metrics/cbarw-ft");
+      const double b2v = fdm.GetPropertyValue("aero/bi2vel");
+      const double c2v = fdm.GetPropertyValue("aero/ci2vel");
+      const double pa = fdm.GetPropertyValue("velocities/p-aero-rad_sec");
+      const double qa = fdm.GetPropertyValue("velocities/q-aero-rad_sec");
+      const double ra = fdm.GetPropertyValue("velocities/r-aero-rad_sec");
+      const double want[3] = {-qbar * S * b * b2v * pa,
+                              -qbar * S * c * c2v * qa,
+                              -qbar * S * b * b2v * ra};
+      for (int i = 0; i < 3; ++i) {
+        const double got = air->GetMoments(i + 1);
+        const double scale = std::max(1e-12, std::fabs(want[i]));
+        if (std::fabs(got - want[i]) > 1e-9 * scale) {
+          std::fprintf(stderr,
+                       "FAIL: t=%.4f 축%d 감쇠 모멘트 재폐쇄 실패 — "
+                       "모델 %.12g, 해석식 %.12g\n", k * dt, i + 1, got,
+                       want[i]);
+          return 3;
+        }
+      }
+    }
     if (k < steps && !fdm.Run()) {
       std::fprintf(stderr, "FAIL: Run() 이 t=%.4f 에서 중단\n", k * dt);
       return 2;
@@ -252,12 +290,20 @@ int main(int argc, char **argv)
       return 3;
     }
   } else {
-    // 사례 3 은 반대다 — 감쇠가 실제로 작동해야 한다. 0 이면 모델이
-    // 안 붙은 것이고, 그때 불변량이 "잘 보존"되는 것은 착시다.
-    if (worst_moment <= 0.0) {
+    // 사례 3 은 "Dragless Brick with Aerodynamic Damping" 이다.
+    //   공력 힘   전 구간 0        (CD 를 사례가 0 으로 덮어쓴다)
+    //   공력 모멘트 유의미하게 0 아님 + 축별 해석식 재폐쇄 (위 루프)
+    if (worst_force > 1e-12) {
       std::fprintf(stderr,
-                   "FAIL: 사례 3 은 감쇠 모멘트가 0이 아니어야 한다 — "
-                   "모델이 붙지 않았다\n");
+                   "FAIL: 사례 3 도 무항력이다 — 공력 힘 최대 %.3e lbf. "
+                   "기준 표의 CD 0.01 을 사례가 0 으로 덮어쓴다\n",
+                   worst_force);
+      return 3;
+    }
+    if (worst_moment <= 1e-9) {
+      std::fprintf(stderr,
+                   "FAIL: 감쇠 모멘트 최대 %.3e — 모델이 붙지 않았다\n",
+                   worst_moment);
       return 3;
     }
     std::fprintf(stderr, "[검사] 감쇠 사례 — 불변량(KE·H)은 여기서 "

@@ -9,9 +9,22 @@
    published values (NASA/TM-2015-218675 Vol. II, appendix Table 4, about
    the CM, products of inertia zero).
 
-   Written here rather than taken from any bundled aircraft: this file
-   carries no third-party data. Coefficients are the published Table 5
-   values: CD 0.01, Clp = Cmq = Cnr = -1.0, everything else zero.
+   No external aircraft file is used; the values are transcribed from
+   public reference material with the source stated. That is not the same
+   as "no third-party data" -- mass, inertia and coefficients all come from
+   the published report.
+
+   IMPORTANT: the case OVERRIDES the base brick table. Table 5 lists
+   CD 0.01, but atmospheric case 3 is titled "Dragless Brick with
+   Aerodynamic Damping" and sets CD = 0.0. Only the damping derivatives
+   are active:
+
+       CL = CD = CY = Cl = Cm = Cn = 0
+       Clp = Cmq = Cnr = -1.0,  Clr = Cnp = 0
+
+   Drag would change the fall speed, hence dynamic pressure, hence the
+   damping moments -- so getting this wrong contaminates the attitude
+   result, not just the trajectory.
 
    Check-case 3 is NOT a "no aerodynamics" case -- the damping derivatives
    are explicitly used, so rotational kinetic energy and angular momentum
@@ -48,19 +61,7 @@
  <flight_control name="none"/>
 
  <aerodynamics>
-  <!-- Table 5: CD 0.01, Clp = Cmq = Cnr = -1.0. Standard damping form,
-       qbar S b (Clp p b / 2V) etc. -->
-  <axis name="DRAG">
-   <function name="aero/force/drag">
-    <description>CD 0.01, constant</description>
-    <product>
-     <property>aero/qbar-psf</property>
-     <property>metrics/Sw-sqft</property>
-     <value>0.01</value>
-    </product>
-   </function>
-  </axis>
-
+  <!-- Damping only. No drag axis: the case sets CD = 0. -->
   <axis name="ROLL">
    <function name="aero/moment/roll_damp">
     <description>Clp = -1.0</description>
