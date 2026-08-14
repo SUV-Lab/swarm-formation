@@ -22,9 +22,6 @@ import sys
 import numpy as np
 from scipy.integrate import solve_ivp
 
-sys.path.insert(0, __file__.rsplit("/", 1)[0])
-import forced_profile as FP
-
 # 부록 표 4 (slug·ft²). 대각이므로 역행렬이 자명하다.
 I_DIAG = np.array([0.001894220, 0.006211019, 0.007194665])
 FT_LB_TO_SI = 1.0  # 전부 같은 단위계(slug·ft²·ft·lbf)로 닫으므로 변환 없음
@@ -121,10 +118,10 @@ def run(hex_path, mom_path, dt, rtol=1e-13, atol=1e-15):
         if tn in want:
             ref[tn] = y.copy()
     Y = np.array([ref[round(t, 9)] for t in ts]).T
-    return rows, type("S", (), {"y": Y})()
+    return rows, type("S", (), {"y": Y})(), mom
 
 
-def metrics(rows, sol, profile, T):
+def metrics(rows, sol, mom, dt_step, T):
     ang, dw = [], []
     for k in range(len(rows)):
         qj = rows[k][1:5]
@@ -145,22 +142,39 @@ def metrics(rows, sol, profile, T):
         if m.any():
             exc = max(exc, ang[m].max())
 
-    # 일-에너지 폐쇄: ΔKE − ∫ M·ω dt (JSBSim 궤적으로)
+    # 일-에너지 폐쇄 — **실제 적용 모멘트**로 계산한다. 앞선 판은
+    # 여기서만 FP.moment() 를 다시 계산해, 고쳤다고 한 결함이 이 지표에
+    # 그대로 남아 있었다 (정규화도 반영되지 않았다).
     ke = np.array([0.5 * float(np.dot(I_DIAG * np.array(r[5:8]),
                                       np.array(r[5:8]))) for r in rows])
-    p = np.array([float(np.dot(np.array(FP.moment(profile, t, T)),
-                               np.array(r[5:8]))) for t, r in zip(ts, rows)])
+    # mom 은 매 적분 스텝, rows 는 출력 주기다. 시각으로 맞춘다.
+    mmap = {round(t, 9): M for t, M in mom}
+    p = []
+    for t, r in zip(ts, rows):
+        M = mmap.get(round(t, 9))
+        if M is None:
+            # 마지막 출력 시각 T 에는 적용 구간이 없다 (ZOH 는 [t_k, t_k+dt)
+            # 에 상수이고 로그는 k < steps 까지다). 직전 구간 값을 쓴다 —
+            # 사다리꼴의 마지막 조각에만 영향을 준다.
+            if abs(t - ts[-1]) < 1e-9 and mom:
+                M = mom[-1][1]
+            else:
+                raise SystemExit(f"FAIL: t={t} 의 실제 모멘트 기록 없음")
+        p.append(float(np.dot(M, np.array(r[5:8]))))
+    p = np.array(p)
     work = np.trapz(p, ts)
     # 분모는 순 일이 아니라 ∫|M·ω|dt 다. 프로파일이 반대칭이라 순 일이
-    # 0 에 가까워, |W| 로 나누면 잔차가 작아도 비가 폭발한다 (측정:
-    # T=1 c2ramp 에서 순 일 −1.9e-06, 잔차 3.4e-06 → 비 1.73).
+    # 0 에 가까워, |W| 로 나누면 잔차가 작아도 비가 폭발한다.
     scale = np.trapz(np.abs(p), ts)
     closure = abs((ke[-1] - ke[0]) - work) / max(scale, 1e-30)
+
+    # ② 실측 ZOH 임펄스 — 정규화가 실제로 맞았는지 여기서 보고한다.
+    zoh_imp = float(sum(np.linalg.norm(M) for _, M in mom) * dt_step)
 
     return dict(ang_max=ang.max(), ang_rms=float(np.sqrt((ang ** 2).mean())),
                 ang_end=ang[-1], dw_max=dw.max(),
                 dw_rms=float(np.sqrt((dw ** 2).mean())),
-                exc=exc, closure=closure)
+                exc=exc, closure=closure, zoh_impulse=zoh_imp)
 
 
 def main():
@@ -171,8 +185,8 @@ def main():
     ap.add_argument("profile", choices=("step", "c0ramp", "c1ramp", "c2ramp"))
     ap.add_argument("duration", type=float)
     a = ap.parse_args()
-    rows, sol = run(a.hex_path, a.mom_path, a.dt)
-    m = metrics(rows, sol, a.profile, a.duration)
+    rows, sol, mom = run(a.hex_path, a.mom_path, a.dt)
+    m = metrics(rows, sol, mom, a.dt, a.duration)
     print(" ".join(f"{k}={v:.6e}" for k, v in m.items()))
     return 0
 

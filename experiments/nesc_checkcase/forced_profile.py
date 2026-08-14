@@ -86,10 +86,14 @@ def moment(profile, t, T):
     return tuple(a * s for a in AMP_FTLBF)
 
 
-def abs_impulse(profile, T, n=200000):
-    """∫|s(t)| dt — 자극량 척도. 정규화 기준."""
-    h = T / n
-    return sum(abs(shape(profile, (i + 0.5) * h, T)) for i in range(n)) * h
+def zoh_impulse(profile, T, dt):
+    """**실측 ZOH** 스칼라 임펄스 Σ|s(t_k)|·dt.
+
+    연속 적분 ∫|s|dt 로 정규화하면 실제 입력(ZOH)과 어긋난다. 측정하면
+    약 5 ppm 차이라 8~16% 결과를 설명하진 못하지만, 정규화 기준은 실제
+    입력이어야 한다."""
+    n = int(round(T / dt))
+    return sum(abs(shape(profile, k * dt, T)) for k in range(n + 1)) * dt
 
 
 def schedule(profile, T, dt, normalize=None):
@@ -99,7 +103,8 @@ def schedule(profile, T, dt, normalize=None):
     비례 조정한다 — 매끄러움과 자극량을 분리하기 위한 것."""
     g = 1.0
     if normalize:
-        g = abs_impulse(normalize, T) / max(abs_impulse(profile, T), 1e-30)
+        g = (zoh_impulse(normalize, T, dt)
+             / max(zoh_impulse(profile, T, dt), 1e-30))
     n = int(round(T / dt))
     return [(k * dt, ) + tuple(g * v for v in moment(profile, k * dt, T))
             for k in range(n + 1)]

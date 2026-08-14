@@ -145,9 +145,28 @@ int main(int argc, char **argv)
                        &row[3]) == 4)
       sched.push_back(row);
     std::fclose(sf);
-    if (sched.empty()) {
-      std::fprintf(stderr, "FAIL: 스케줄이 비었다\n");
+    // 입력 계약 fail-closed. 시각 열을 읽고도 검사하지 않으면 스케줄이
+    // 어긋나도 조용히 다른 입력을 푼다. NaN 은 상대오차 비교를 빠져나갈
+    // 수 있으므로 유한성부터 본다.
+    const size_t want_rows = static_cast<size_t>(std::llround(duration / dt)) + 1;
+    if (sched.size() != want_rows) {
+      std::fprintf(stderr, "FAIL: 스케줄 %zu 행, %zu 기대 (T=%g, dt=%g)\n",
+                   sched.size(), want_rows, duration, dt);
       return 3;
+    }
+    for (size_t i = 0; i < sched.size(); ++i) {
+      for (int c = 0; c < 4; ++c) {
+        if (!std::isfinite(sched[i][c])) {
+          std::fprintf(stderr, "FAIL: 스케줄 %zu행 %d열 비유한값\n", i, c);
+          return 3;
+        }
+      }
+      const double want_t = static_cast<double>(i) * dt;
+      if (std::fabs(sched[i][0] - want_t) > 1e-9 * std::max(1.0, want_t)) {
+        std::fprintf(stderr, "FAIL: 스케줄 %zu행 시각 %.12g, %.12g 기대\n",
+                     i, sched[i][0], want_t);
+        return 3;
+      }
     }
     fdm.SetPropertyValue("forced/moment-l", 0.0);
     fdm.SetPropertyValue("forced/moment-m", 0.0);
@@ -274,27 +293,6 @@ int main(int argc, char **argv)
       const auto vi_ = prop->GetInertialVelocity();
       const auto wi_ = prop->GetPQRi();
       const auto vned_k = prop->GetVel();
-      if (false) {  // (아래 매-스텝 블록으로 옮김)
-        const double ax = fdm.GetPropertyValue("moments/l-external-lbsft");
-        const double ay = fdm.GetPropertyValue("moments/m-external-lbsft");
-        const double az = fdm.GetPropertyValue("moments/n-external-lbsft");
-        std::fprintf(mf, "%a %a %a %a\n", k * dt, ax, ay, az);
-        // 명령값과 축·부호·크기를 매 스텝 재폐쇄한다.
-        // 지연 없음. Run() 뒤에 읽는 값은 방금 쓴 명령 그대로다 — 앞서
-      // "한 스텝 지연"으로 보였던 것은 모멘트 적용 코드가 편집 중
-      // 사라진 탓이었고, 재폐쇄가 그것을 잡았다.
-      const double cmd[3] = {sched[k][1], sched[k][2], sched[k][3]};
-        const double act[3] = {ax, ay, az};
-        for (int i = 0; i < 3; ++i) {
-          const double sc = std::max(1e-12, std::fabs(cmd[i]));
-          if (std::fabs(act[i] - cmd[i]) > 1e-9 * sc) {
-            std::fprintf(stderr, "FAIL: t=%.4f 축%d 외부 모멘트 재폐쇄 "
-                         "실패 — 명령 %.12g, 실제 %.12g\n",
-                         k * dt, i + 1, cmd[i], act[i]);
-            return 3;
-          }
-        }
-      }
       std::fprintf(hexf,
                    "%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a\n",
                    k * dt,
@@ -364,6 +362,11 @@ int main(int argc, char **argv)
       const double cmd[3] = {sched[k][1], sched[k][2], sched[k][3]};
       const double act[3] = {ax, ay, az};
       for (int i = 0; i < 3; ++i) {
+        if (!std::isfinite(act[i])) {
+          std::fprintf(stderr, "FAIL: t=%.4f 축%d 실제 모멘트 비유한값\n",
+                       k * dt, i + 1);
+          return 3;
+        }
         const double sc = std::max(1e-12, std::fabs(cmd[i]));
         if (std::fabs(act[i] - cmd[i]) > 1e-9 * sc) {
           std::fprintf(stderr, "FAIL: t=%.4f 축%d 외부 모멘트 재폐쇄 실패 "
