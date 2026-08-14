@@ -226,6 +226,14 @@ def main():
     refuses(lambda: flow_angles((100.0, 1.0, 0), 340.0,
                                 phi_rel_eps=float('nan')),
             "NaN phi_rel_eps 거절")
+    for bad in (1.0, 2.0, 1e308):
+        refuses(lambda b=bad: flow_angles((100.0, 1.0, 0), 340.0,
+                                          phi_rel_eps=b),
+                f"phi_rel_eps = {bad:g} 거절 (1 이상이면 수직 횡류까지 삼킨다)")
+    _, p_perp, _, _ = flow_angles((0.0, 100.0, 0.0), 340.0,
+                                  phi_rel_eps=0.999)
+    check(abs(p_perp - math.pi / 2) < 1e-12,
+          "허용 상한 바로 아래(0.999)에서도 수직 횡류는 φ_A = 90°")
 
     print("\n[공급자 계약] φ_A 가 실제로 전달되는가")
     seen = []

@@ -98,7 +98,11 @@ class CoefficientSupplier(Protocol):
 
 
 def flow_angles(v_r_b, v_sound, phi_rel_eps=DEFAULT_PHI_REL_EPS):
-    """식 (1)–(3). `v_r_b` 는 B 프레임 V⃗_R 성분 (MRP 로 옮긴 것).
+    """식 (1)–(3).
+
+    `v_r_b` 는 **무게중심에서의 상대속도 벡터를 B 축 성분으로** 나타낸
+    것이다. 원문의 "translated to the MRP" 는 좌표 **원점**을 옮긴다는
+    뜻이고, `ω × r` 을 적용한 MRP 지점의 속도가 아니다.
 
     반환 (α_tot, φ_A, Mach, V_R) — 각은 radian.
 
@@ -114,8 +118,13 @@ def flow_angles(v_r_b, v_sound, phi_rel_eps=DEFAULT_PHI_REL_EPS):
     if not math.isfinite(v_sound) or v_sound <= 0.0:
         raise AeroError(f"v_sound 가 유한 양수가 아니다: {v_sound!r}")
 
-    if not math.isfinite(phi_rel_eps) or phi_rel_eps < 0.0:
-        raise AeroError(f"phi_rel_eps 가 유한 비음수가 아니다: {phi_rel_eps!r}")
+    # 상한이 있어야 한다. hypot(vy, vz) / V_R 는 sin(α_tot) 이므로 1 을
+    # 넘을 수 없다 — phi_rel_eps >= 1 이면 **수직 횡류까지 특이점으로
+    # 삼켜** φ_A = 0 을 낸다 (측정: α_tot = 90° 가 φ_A = 0 이 됐다).
+    # "특이점 근방 허용오차"라면 반드시 1 미만이다.
+    if not math.isfinite(phi_rel_eps) or not 0.0 <= phi_rel_eps < 1.0:
+        raise AeroError(
+            f"phi_rel_eps 는 [0, 1) 이어야 한다: {phi_rel_eps!r}")
 
     vx, vy, vz = v_r_b
     # hypot 는 중간 제곱에서 오버플로하지 않는다. sqrt(Σv²) 는 1e308
