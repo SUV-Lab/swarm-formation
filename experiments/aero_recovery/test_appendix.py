@@ -40,16 +40,30 @@ def main():
     # ── 부록 A: A.1–A.12 대수 재폐쇄 ────────────────────────────
     print("[A] A.1–A.12 항등식 재폐쇄 (C_fin 은 외부 입력)")
     rho, v_r, q_m = 1.0, 100.0, 0.3
-    s_ref, d_ref, c_fin = 2.0, 0.5, 1.7
+    # 원문 정의대로 S_ref = πD²/4. 임의 조합은 대수가 우연히 닫혀도
+    # 출처 충실성 시험이 아니다.
+    d_ref = 0.5
+    s_ref = math.pi * d_ref ** 2 / 4.0
+    c_fin = 1.7
 
-    # A.1 → A.2: q_m² 항을 버린다
-    q_a1 = 0.5 * rho * (v_r ** 2 + 2 * v_r * d_ref * q_m
-                        + d_ref ** 2 * q_m ** 2)
-    q_a2 = 0.5 * rho * (v_r ** 2 + 2 * v_r * d_ref * q_m)
-    check(q_a1 > q_a2 and (q_a1 - q_a2) / q_a2 < 0.01,
-          "A.1 → A.2: 버린 q_m² 항이 1% 미만 (원문 근거)")
+    # A.1 → A.2: 원문 조건은 **3항 대 2항** 이다. Q 전체와 비교하면
+    # 훨씬 느슨해져 전제가 깨진 경우도 통과한다 (첫 판이 그랬다).
+    #     |D²q²| / |2 V D q| = |D q| / (2V) < 0.01
+    ratio_a = abs(d_ref * q_m) / (2 * v_r)
+    check(ratio_a < 0.01, f"A.1 → A.2: |Dq|/(2V) = {ratio_a:.3e} < 0.01")
+    bad_q = 2 * v_r / d_ref * 0.02          # 비를 0.02 로 만드는 q_m
+    check(abs(d_ref * bad_q) / (2 * v_r) >= 0.01,
+          "  전제를 깨는 q_m 은 이 조건에 걸린다")
+
+    # B.1 → B.2 도 같은 조건. 원통 전 구간의 **최대 |X|** 에서 본다.
+    length, cg = 4.0, 0.4
+    x_max = length * max(cg, 1.0 - cg)
+    ratio_b = abs(q_m * x_max) / (2 * v_r)
+    check(ratio_b < 0.01,
+          f"B.1 → B.2: max|X| 에서 |qX|/(2V) = {ratio_b:.3e} < 0.01")
 
     # A.5 = A.4 with S_fin = S_ref/4
+    q_a2 = 0.5 * rho * (v_r ** 2 + 2 * v_r * d_ref * q_m)   # 식 (A.2)
     s_fin = s_ref / 4.0
     m_a4 = -q_a2 * c_fin * s_fin * d_ref
     m_a5 = -0.25 * q_a2 * c_fin * s_ref * d_ref
@@ -70,7 +84,8 @@ def main():
 
     # A.11 · A.12 ⇒ C_mqm = −C_fin, 그리고 식 (8) 과 일관
     sup_a = AppendixASupplier(c_fin)
-    dmp = sup_a.damping(0.0, 0.0, 0.3)
+    # **교차류 전제 안에서** 호출한다. 첫 판은 α = 0 (축방향)으로 불렀다.
+    dmp = sup_a.damping(math.pi / 2, 0.0, 0.3)
     check(rel(dmp.c_mq, -c_fin), "A.11·A.12 ⇒ C_mqm = −C_fin")
     c_mmd_eq8 = (q_m * d_ref / (2 * v_r)) * dmp.c_mq
     check(rel(c_mmd_eq8, c_mmd_a9),
@@ -78,32 +93,45 @@ def main():
 
     # ── 부록 B: 두 경로 동등성 ─────────────────────────────────
     print("\n[B] B.6 직접 M_d 와 파생 C_mqm → 조립기 경로")
-    c_cf, length, cg = 1.2, 4.0, 0.4
+    c_cf = 1.2
     sup_b = AppendixBSupplier(c_cf, length, cg, d_ref, s_ref)
     ref = Reference(s_ref=s_ref, d_ref=d_ref, mrp_b=(0.0, 0.0, 0.0))
 
-    ok_all = True
+    ok_all, worst = True, 0.0
+    inv = []
     for rho_, v_, q_ in ((1.0, 100.0, 0.3), (0.4, 250.0, -0.7),
                          (1.225, 80.0, 1.1)):
         direct = sup_b.moment_direct(rho_, v_, q_)
-        # 조립기 경로: Q = ½ρV² 를 **독립 입력**으로 준다
-        q_bar = 0.5 * rho_ * v_ ** 2
-        # V⃗_R 은 +X, 그러면 φ_A 규약이 걸리지 않도록 vz 를 조금 준다.
-        # α_tot 은 계수에 영향이 없다 (공급자가 상수).
-        _, m_b = assemble((v_, 0.0, 1e-9), (0.0, q_, 0.0), q_bar, 340.0,
+        q_bar = 0.5 * rho_ * v_ ** 2          # 독립 입력
+        # **교차류**: V⃗_R 을 +Z 로 준다 ⇒ α_tot = 90°, φ_A = 0.
+        _, m_b = assemble((0.0, 0.0, v_), (0.0, q_, 0.0), q_bar, 340.0,
                           ref, sup_b)
-        ok_all &= abs(m_b[1] - direct) <= 1e-9 * max(abs(direct), 1e-30)
-    check(ok_all, "세 (ρ, V_R, q_m) 조합에서 두 경로가 일치")
+        e = abs(m_b[1] - direct) / max(abs(direct), 1e-300)
+        worst = max(worst, e)
+        ok_all &= e <= 1e-12
+        # 각 상태의 **직접 모멘트에서 C_mqm 을 역산**한다.
+        # C_mqm = 4 M_d / (ρ V_R q_m S_ref D_ref²)
+        inv.append(4.0 * direct / (rho_ * v_ * q_ * s_ref * d_ref ** 2))
+    check(ok_all, f"세 (ρ, V_R, q_m) 조합에서 두 경로 일치 "
+                  f"(최대 상대차 {worst:.2e} ≤ 1e-12)")
 
-    # C_mqm 이 상태에 무관한가 — 유도의 결과
-    a = sup_b.c_mqm()
-    check(rel(a, sup_b.c_mqm()), "C_mqm 은 ρ·V_R·q_m 에 무관")
+    # "상태 무관" 을 동어반복이 아니라 **역산 값의 일치**로 검사한다.
+    check(all(rel(x, inv[0]) for x in inv) and rel(inv[0], sup_b.c_mqm()),
+          "직접 모멘트에서 역산한 C_mqm 이 세 상태에서 동일하고 파생식과 일치")
+
+    # 잘못된 Q 를 넣으면 깨져야 한다
+    _, m_badq = assemble((0.0, 0.0, 100.0), (0.0, 0.3, 0.0),
+                         0.5 * 1.0 * 100.0 ** 2 * 1.5, 340.0, ref, sup_b)
+    check(abs(m_badq[1] - sup_b.moment_direct(1.0, 100.0, 0.3)) > 1e-12,
+          "Q 를 1.5배로 틀리게 주면 두 경로가 갈린다")
 
     # 무차원화 정의를 **독립 입력**으로 검사
     print("\n[B] 정의를 하나씩 틀리게 넣으면 동등성이 깨지는가")
-    d_bad = AppendixBSupplier(c_cf, length, cg, d_ref * 2.0, s_ref)
+    d2 = d_ref * 2.0
+    d_bad = AppendixBSupplier(c_cf, length, cg, d2,
+                              math.pi * d2 ** 2 / 4.0)
     m_dir = d_bad.moment_direct(1.0, 100.0, 0.3)
-    _, m_asm = assemble((100.0, 0.0, 1e-9), (0.0, 0.3, 0.0), 0.5 * 1.0 * 1e4,
+    _, m_asm = assemble((0.0, 0.0, 100.0), (0.0, 0.3, 0.0), 0.5 * 1.0 * 1e4,
                         340.0, ref, d_bad)   # ref 는 여전히 d_ref
     check(abs(m_asm[1] - m_dir) > 1e-12,
           "D ≠ D_ref 이면 두 경로가 갈린다 (D = D_ref 전제가 실재한다)")
@@ -118,10 +146,21 @@ def main():
     # ── fail-closed ────────────────────────────────────────────
     print("\n[fail-closed]")
     refuses(lambda: AppendixASupplier(float('nan')), "C_fin NaN 거절")
-    refuses(lambda: AppendixBSupplier(1.0, -1.0, 0.5, 0.5, 2.0), "L <= 0 거절")
-    refuses(lambda: AppendixBSupplier(1.0, 4.0, 1.5, 0.5, 2.0),
+    S = lambda d: math.pi * d ** 2 / 4.0
+    refuses(lambda: AppendixBSupplier(1.0, -1.0, 0.5, 0.5, S(0.5)),
+            "L <= 0 거절")
+    refuses(lambda: AppendixBSupplier(1.0, 4.0, 1.5, 0.5, S(0.5)),
             "cg 가 [0,1] 밖이면 거절")
-    refuses(lambda: AppendixBSupplier(1.0, 4.0, 0.5, 0.0, 2.0), "D <= 0 거절")
+    refuses(lambda: AppendixBSupplier(1.0, 4.0, 0.5, 0.0, 0.0), "D <= 0 거절")
+    refuses(lambda: AppendixBSupplier(1.0, 4.0, 0.5, 0.5, 2.0),
+            "S_ref ≠ πD²/4 거절 (원통 형상 불일치)")
+    refuses(lambda: sup_a.damping(0.0, 0.0, 0.3),
+            "부록 A 를 축방향 흐름(α=0)으로 부르면 거절")
+    refuses(lambda: sup_b.damping(0.0, 0.0, 0.3),
+            "부록 B 를 축방향 흐름으로 부르면 거절")
+    refuses(lambda: assemble((100.0, 0.0, 0.0), (0, 0, 0), 10.0, 340.0,
+                             ref, sup_b),
+            "  조립기를 통해도 비교차류면 거절")
     refuses(lambda: sup_b.moment_direct(float('inf'), 100.0, 0.3),
             "비유한 ρ 거절")
 
