@@ -712,15 +712,16 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         // with { start, end }, discarding here turned a burrowed detour into
         // a straight segment through the same wall, which is worse.
         Eigen::Vector3d hit;
-        // Start relief only, and only when this search begins where the
-        // AIRCRAFT is. Obstacles get none, the goal gets none, and the
-        // shortfall must end inside the arc.
-        if (polylineClear(fm2_path, &hit,
-                          is_takeoff_leg ? startTerrainReliefArc() : 0.0)) {
+        // RAW SEED: geometry only. Terrain clearance is judged on the FINAL
+        // path, after the simplification and the terrain-lift sweep have had
+        // their chance to fix it — see polylineObstacleClear and the
+        // whole-path check before this function returns.
+        if (polylineObstacleClear(fm2_path, &hit)) {
             fm2_done = true;
         } else if (log_manager_) {
             log_manager_->errorf(
-                "[FM2] extracted geodesic is OCCUPIED at (%.2f, %.2f, %.2f) "
+                "[FM2] extracted geodesic passes through an OBSTACLE at "
+                "(%.2f, %.2f, %.2f) "
                 "— discarding it; the speed map is porous by design, the "
                 "route may not be",
                 hit.x(), hit.y(), hit.z());
@@ -1226,6 +1227,7 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         constexpr int kLiftCap = 512;
         constexpr int kRoundSafety = 256;
         bool clean_exit = false;
+        dbg_lift_cap_ = kLiftCap;
         for (int round = 0; round < kRoundSafety && lifted < kLiftCap; ++round) {
             bool changed = false;
             // (0) Lift KEPT interior vertices that themselves overlap terrain.
@@ -1307,6 +1309,14 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
             }
             if (!changed) { clean_exit = true; break; }
         }
+        // [FM2-FINAL-CLEAR] carried to the whole-path gate below, which is the
+        // only place that can say whether the sweep's outcome was enough.
+        dbg_lifted_ = lifted;
+        dbg_sweep_clean_ = clean_exit;
+        RCLCPP_INFO(rclcpp::get_logger("astar"),
+                    "[FM2-SWEEP] lifted=%d cap=%d clean_exit=%s pts=%zu",
+                     lifted, kLiftCap, clean_exit ? "true" : "false",
+                     simple_path.size());
         if (log_manager_) {
             if (!clean_exit && lifted > 0) {
                 // Exited via the round cap or kLiftCap while still finding
@@ -1417,6 +1427,61 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                            drone_id, min_z, max_z, max_z - min_z);
     }
 
+    // [FM2-OCCUPANCY] THE FINAL PATH, judged whole. Everything that could
+    // repair it has run by now: the shortcut, and the terrain-lift sweep that
+    // raises and inserts vertices to recover ground clearance. What is left
+    // is what the optimizer will be seeded with and what the aircraft will
+    // approximately fly, so this is where "is it clear" is a fair question.
+    //
+    // Both kinds are refused here — terrain proximity and obstacles — with
+    // the takeoff allowance applying only to a search that begins where the
+    // aircraft is. The sweep above can hit its own caps and give up with a
+    // warning; this is what turns that warning into a refusal instead of a
+    // route nobody checked.
+    {
+        Eigen::Vector3d bad;
+        if (!polylineClear(simple_path, &bad,
+                           is_takeoff_leg ? startTerrainReliefArc() : 0.0)) {
+            // [FM2-FINAL-CLEAR] Quantified, and on a channel this environment
+            // actually shows. "The final route is not clear" is not
+            // actionable; which KIND, how far along, and by how much is.
+            {
+                const bool terr = terrainClearanceShort(bad);
+                const bool obst = obstacleBlocked(bad);
+                double arc = 0.0;
+                for (size_t i = 0; i + 1 < simple_path.size(); ++i) {
+                    const double L = (simple_path[i + 1] - simple_path[i]).norm();
+                    if ((simple_path[i] - bad).norm() +
+                            (simple_path[i + 1] - bad).norm() <= L + 1e-6) {
+                        arc += (simple_path[i] - bad).norm();
+                        break;
+                    }
+                    arc += L;
+                }
+                const float th = terrain_height_ ? terrain_height_(bad.x(), bad.y())
+                                                 : -1e30f;
+                const double agl = bad.z() - static_cast<double>(th);
+                RCLCPP_ERROR(rclcpp::get_logger("astar"),
+                    "[FM2-FINAL-CLEAR] kind=%s arc=%.3f relief_end=%.3f "
+                    "point=(%.2f,%.2f,%.3f) terrain_z=%.3f agl=%.3f "
+                    "required=%.3f deficit=%.3f terrain_pitch=%.3f "
+                    "lifted=%d sweep_clean=%s pts=%zu",
+                    terr ? "TERRAIN" : (obst ? "OBSTACLE" : "OUTSIDE"),
+                    arc, is_takeoff_leg ? startTerrainReliefArc() : 0.0,
+                    bad.x(), bad.y(), bad.z(), (double)th, agl,
+                    obstacle_margin_, obstacle_margin_ - agl,
+                    terrain_stride_floor_, dbg_lifted_, 
+                    dbg_sweep_clean_ ? "true" : "false", simple_path.size());
+            }
+            if (log_manager_)
+                log_manager_->errorf(
+                    "[FM2] the FINAL route is not clear at (%.2f, %.2f, %.2f) "
+                    "— terrain lift could not recover it, or it meets an "
+                    "obstacle; returning NO path",
+                    bad.x(), bad.y(), bad.z());
+            return {};
+        }
+    }
     return simple_path;
 }
 

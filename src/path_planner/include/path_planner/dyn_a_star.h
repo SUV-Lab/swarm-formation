@@ -247,6 +247,11 @@ private:
     // 1-voxel-step A* path without shortcut/visibility-thinning. Used to
     // verify front-end behavior independent of the shortcut filter.
     bool bypass_shortcut_ = false;
+    // [FM2-FINAL-CLEAR] the terrain sweep's outcome, read by the whole-path
+    // gate so a refusal can say whether the repair ran out of budget.
+    int dbg_lifted_ = 0;
+    int dbg_lift_cap_ = 0;
+    bool dbg_sweep_clean_ = false;
     double map_resolution_ = 1.0;
     double map_resolution_z_ = 1.0;  // vertical grid spacing (anisotropic)
     Eigen::Vector3d map_origin_ = Eigen::Vector3d::Zero();
@@ -273,6 +278,34 @@ private:
     // of ground, and it is given a few multiples of that distance to do it.
     // Small on purpose — this is a takeoff allowance, not a corridor.
     double startTerrainReliefArc() const { return 5.0 * obstacle_margin_; }
+
+    // Obstacles ONLY. This is what a RAW FM2 geodesic may be judged on: it
+    // is a seed, not a route — the simplification and the terrain-lift sweep
+    // that follow it exist precisely to raise vertices that sit too close to
+    // the ground. Refusing the seed for terrain proximity throws away a path
+    // the pipeline was about to fix, and on a real 40 m corridor that is
+    // every descent (measured: the r5 probe stopped planning entirely).
+    // Geometry is different — a box or a sphere cannot be lifted out of, so
+    // a seed that goes through one is refused here and now.
+    bool polylineObstacleClear(const std::vector<Eigen::Vector3d> &pts,
+                               Eigen::Vector3d *hit = nullptr) {
+        if (pts.size() < 2) return false;
+        const double pitch =
+            std::max(0.02, 0.5 * std::min(map_resolution_, map_resolution_z_));
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            const Eigen::Vector3d &a = pts[i], &b = pts[i + 1];
+            const double len = (b - a).norm();
+            const int n = std::max(1, static_cast<int>(std::ceil(len / pitch)));
+            for (int k = 0; k <= n; ++k) {
+                const Eigen::Vector3d p = a + (b - a) * (double(k) / n);
+                if (obstacleBlocked(p)) {
+                    if (hit) *hit = p;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
     bool polylineClear(const std::vector<Eigen::Vector3d> &pts,
                        Eigen::Vector3d *hit = nullptr,
