@@ -25,15 +25,65 @@ for p in bodies datum_coordinate_system gravity atmosphere output_specs; do
        -o "$OUT/spec/$p.html" && echo "  $p"
 done
 
-echo "[3/3] 대기권 사례 페이지 (초기조건 포함)"
+echo "[3/4] 대기권 사례 페이지 (초기조건 포함)"
 for c in acc01 acc02 acc03 acc04 acc05 acc06 acc07 acc08 acc09 acc10; do
   curl -fsSL --max-time 60 "$BASE/flightsim/2015/atmospheric/$c" \
        -o "$OUT/cases/$c.html" && echo "  $c"
 done
 
-cat <<'NOTE'
+echo "[4/4] 참여 도구 기준 시계열 CSV"
+# 경로는 사이트의 매니페스트에서 뽑는다 — 손으로 적으면 조용히 낡는다.
+DATES="$OUT/spec/dates.js"
+curl -fsSL --max-time 60 "$BASE/workshop/FlightSim/js/2015/dates.js" -o "$DATES"
 
-받지 않은 것: 기준 시계열 CSV.
-사례 페이지의 "Latest Results" 표가 JS 번들로 채워지므로 정적 URL이
-없다. README의 "남은 것"을 참조.
+# acc02 = 회전 직육면체(무항력), acc03 = 공력 감쇠 추가. 자세 전파 검증용.
+CSV_BASE="$BASE/workshop/FlightSim/2015"
+: > "$OUT/manifest.txt"
+total=0
+for scn in 02 03; do
+  mkdir -p "$OUT/ref/atmos_scn_$scn"
+  paths=$(grep -oE "/atmos_scn_${scn}/Atmos_${scn}_sim_[0-9]+\.csv" "$DATES" | sort -u)
+  n=$(printf '%s\n' "$paths" | grep -c . || true)
+  # fail-closed: 매니페스트가 5개를 주지 않으면 멈춘다
+  if [ "$n" -ne 5 ]; then
+    echo "FAIL: atmos_scn_$scn 경로 $n개 (5개 기대)" >&2; exit 3
+  fi
+  for rel in $paths; do
+    f="$OUT/ref$rel"
+    curl -fsSL --max-time 120 "$CSV_BASE$rel" -o "$f"
+    sz=$(wc -c < "$f")
+    if [ "$sz" -lt 1000 ]; then
+      echo "FAIL: $rel 가 $sz 바이트 — 내용 없음" >&2; exit 3
+    fi
+    # 필수 열: 참여 도구 5종의 열 구성이 서로 다르다 (27~38열). 아래는
+    # 실측한 공통 부분집합 중 자세 전파 검증에 필요한 것들이며, 위치는
+    # 공통이 아니라 altitudeMsl/latitude/longitude 로만 존재한다.
+    hdr=$(head -1 "$f")
+    for col in time feVelocity_ft_s_X altitudeMsl_ft latitude_deg longitude_deg \
+               eulerAngle_deg_Roll eulerAngle_deg_Pitch eulerAngle_deg_Yaw \
+               bodyAngularRateWrtEi_deg_s_Roll bodyAngularRateWrtEi_deg_s_Pitch \
+               bodyAngularRateWrtEi_deg_s_Yaw; do
+      case "$hdr" in
+        *"$col"*) : ;;
+        *) echo "FAIL: $rel 에 필수 열 '$col' 없음" >&2; exit 3 ;;
+      esac
+    done
+    sha=$(sha256sum "$f" | cut -d" " -f1)
+    printf '%s  %s  %s\n' "$sha" "$CSV_BASE$rel" "$rel" >> "$OUT/manifest.txt"
+    echo "  $(basename "$rel")  ${sz}B"
+    total=$((total + 1))
+  done
+done
+[ "$total" -eq 10 ] || { echo "FAIL: CSV $total개 (10개 기대)" >&2; exit 3; }
+
+cat <<NOTE
+
+기준 시계열 $total개 확보. URL과 SHA-256은 $OUT/manifest.txt 에 있고
+원시 CSV는 커밋하지 않는다 (.gitignore).
+
+주의 — 비교기가 다뤄야 하는 실측 사실:
+  * 참여 도구 5종의 열 구성이 다르다 (27~38열). 공통은 25열이며 위치는
+    지구고정 직교좌표가 아니라 고도·위경도로만 공통이다.
+  * 출력 주기가 다르다 (대부분 302 표본, 하나는 3002). 공통 시각에서
+    비교하거나 재표본해야 한다.
 NOTE
