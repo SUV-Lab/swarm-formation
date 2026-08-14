@@ -10,8 +10,12 @@
 - `V_R = 0`, 비유한 입력, 계수 미제공은 **fail-closed**
 
 **이 파일은 공력 계수를 만들어내지 않는다.** 계수는 전부 주입된 공급자가
-낸다. 부록 A/B 의 해석식은 `appendix_suppliers.py` 에 있고 **제한 조건용
-시험 공급자**이며 기본 공력 모델이 아니다.
+낸다. 부록 A/B 의 해석식으로 만들 시험 공급자는 **아직 없다** — 만들면
+**제한 조건용**이며 기본 공력 모델이 아니다.
+
+`V_R` 은 **무게중심에서의 상대속도 벡터를 B 축 성분으로** 나타낸 것이다.
+원문의 "translated to the MRP" 는 좌표 원점을 옮긴다는 뜻이고, `ω × r` 을
+적용한 **MRP 지점의 속도가 아니다.**
 
 식 출처: NASA/CR—2012–217475 (NTRS 20130003336). 전사·전제·입력 등급은
 `RECOVERY_AUDIT.md` 가 한 곳에서 정의한다.
@@ -29,9 +33,13 @@ class AeroError(Exception):
 # 못 박고 0° 를 예로 든다 (3쪽). 그 규약을 여기 한 번만 둔다.
 PHI_A_AT_SINGULARITY_RAD = 0.0
 
-# V_Ry, V_Rz 가 이 값 아래면 φ_A 를 특이점 규약으로 처리한다.
-# 임계값 자체는 **동결하지 않는다** — 호출자가 바꿀 수 있게 인자로 둔다.
-DEFAULT_PHI_EPS = 1e-12
+# 특이점 근방 정책. 원문 그대로면 `hypot(vy, vz) == 0` 에서만 규약값을
+# 쓴다. 수치 근방을 포함하려면 **무차원**이어야 한다 —
+#     hypot(vy, vz) / V_R <= phi_rel_eps
+# 절대값과 비교하면 같은 물리 상태가 속도 단위에 따라 다르게 판정된다
+# (측정: m/s 와 ft/s 에서 갈린다). 기본값 0 = 원문 그대로.
+# 임계값은 **동결하지 않는다** — 호출자가 정한다.
+DEFAULT_PHI_REL_EPS = 0.0
 
 
 @dataclass(frozen=True)
@@ -69,14 +77,27 @@ class Damping:
 
 
 class CoefficientSupplier(Protocol):
-    """**주입되는** 계수 공급자. 조립기는 이것을 구현하지 않는다."""
+    """**주입되는** 계수 공급자. 조립기는 이것을 구현하지 않는다.
 
-    def static(self, alpha_tot_rad: float, mach: float) -> Static: ...
+    **일반 조립기 계약**: 정적 계수는 일반적으로 (α_tot, φ_A, Mach) 의
+    함수다(감사 §4-2). 그러므로 `φ_A` 를 넘긴다 — 넘기지 않으면 같은
+    α_tot·Mach 에서 φ_A 만 다른 두 상태를 공급자가 구분할 수 없는데,
+    조립기는 `C_Ym`·`C_lm`·`C_yawm` 의 비영 값을 허용하므로 축대칭
+    전용이라고도 볼 수 없다. 두 계약 사이에 걸치지 않게 **일반 쪽으로
+    확정**한다.
 
-    def damping(self, alpha_tot_rad: float, mach: float) -> Damping: ...
+    축대칭 형상을 쓰려면 **공급자가** φ_A 를 무시하고 정적 횡계수 3개를
+    0 으로 내면 된다 — 그 선택은 공급자의 것이지 조립기의 것이 아니다.
+    """
+
+    def static(self, alpha_tot_rad: float, phi_a_rad: float,
+               mach: float) -> Static: ...
+
+    def damping(self, alpha_tot_rad: float, phi_a_rad: float,
+                mach: float) -> Damping: ...
 
 
-def flow_angles(v_r_b, v_sound, phi_eps=DEFAULT_PHI_EPS):
+def flow_angles(v_r_b, v_sound, phi_rel_eps=DEFAULT_PHI_REL_EPS):
     """식 (1)–(3). `v_r_b` 는 B 프레임 V⃗_R 성분 (MRP 로 옮긴 것).
 
     반환 (α_tot, φ_A, Mach, V_R) — 각은 radian.
@@ -93,8 +114,18 @@ def flow_angles(v_r_b, v_sound, phi_eps=DEFAULT_PHI_EPS):
     if not math.isfinite(v_sound) or v_sound <= 0.0:
         raise AeroError(f"v_sound 가 유한 양수가 아니다: {v_sound!r}")
 
+    if not math.isfinite(phi_rel_eps) or phi_rel_eps < 0.0:
+        raise AeroError(f"phi_rel_eps 가 유한 비음수가 아니다: {phi_rel_eps!r}")
+
     vx, vy, vz = v_r_b
-    v_r = math.sqrt(vx * vx + vy * vy + vz * vz)
+    # hypot 는 중간 제곱에서 오버플로하지 않는다. sqrt(Σv²) 는 1e308
+    # 성분에서 inf 를 내고 그대로 통과했다 (측정).
+    v_r = math.hypot(math.hypot(vx, vy), vz)
+    if not math.isfinite(v_r):
+        # 방어. `v_sound` 가 유한 양수인 한 V_R = inf 는 Mach = inf 를
+        # 낳으므로 아래 Mach 검사에 **포섭된다** — 이 조항만 위반하는
+        # 입력이 없어 변이가 살아남는다. 남기되 독립 고정은 불가능하다.
+        raise AeroError(f"V_R 이 유한하지 않다: {v_r!r}")
     if v_r <= 0.0:
         raise AeroError(
             "V_R = 0 — 식 (1) 의 α_tot 이 정의되지 않는다. 속도 하한은 "
@@ -108,12 +139,15 @@ def flow_angles(v_r_b, v_sound, phi_eps=DEFAULT_PHI_EPS):
     alpha_tot = math.acos(min(1.0, max(-1.0, c)))
 
     # 식 (2). 범위가 ±180° 이므로 atan2 여야 한다. 끝점에서는 원문 규약.
-    if abs(vy) <= phi_eps and abs(vz) <= phi_eps:
+    if math.hypot(vy, vz) <= phi_rel_eps * v_r:
         phi_a = PHI_A_AT_SINGULARITY_RAD
     else:
         phi_a = math.atan2(vy, vz)
 
-    return alpha_tot, phi_a, v_r / v_sound, v_r
+    mach = v_r / v_sound
+    if not math.isfinite(mach):
+        raise AeroError(f"Mach 가 유한하지 않다: {mach!r} (V_R={v_r!r})")
+    return alpha_tot, phi_a, mach, v_r
 
 
 def damping_moment_coeffs(damp, pqr_m, d_ref, v_r):
@@ -127,7 +161,7 @@ def damping_moment_coeffs(damp, pqr_m, d_ref, v_r):
 
 
 def assemble(v_r_b, pqr_b, q_bar, v_sound, ref, supplier,
-             phi_eps=DEFAULT_PHI_EPS):
+             phi_rel_eps=DEFAULT_PHI_REL_EPS):
     """식 (1)–(18) 전체 조립. 반환 (F⃗_b, M⃗_b).
 
     `pqr_b` 는 **B 프레임** 몸체 각속도. M 프레임 각속도는 중심선 둘레로
@@ -139,16 +173,20 @@ def assemble(v_r_b, pqr_b, q_bar, v_sound, ref, supplier,
     if len(pqr_b) != 3 or not all(math.isfinite(c) for c in pqr_b):
         raise AeroError(f"pqr_b 가 유한한 3벡터가 아니다: {pqr_b!r}")
 
-    alpha_tot, phi_a, mach, v_r = flow_angles(v_r_b, v_sound, phi_eps)
+    alpha_tot, phi_a, mach, v_r = flow_angles(v_r_b, v_sound, phi_rel_eps)
 
-    st = supplier.static(alpha_tot, mach)
-    dp = supplier.damping(alpha_tot, mach)
-    for name, obj in (("static", st), ("damping", dp)):
+    st = supplier.static(alpha_tot, phi_a, mach)
+    dp = supplier.damping(alpha_tot, phi_a, mach)
+    for name, obj, want in (("static", st, Static), ("damping", dp, Damping)):
         if obj is None:
             raise AeroError(f"공급자가 {name} 계수를 주지 않았다")
+        if not isinstance(obj, want):
+            raise AeroError(
+                f"공급자의 {name} 반환형이 {want.__name__} 이 아니다: "
+                f"{type(obj).__name__}")
         for f, v in vars(obj).items():
-            if not math.isfinite(v):
-                raise AeroError(f"{name}.{f} 가 유한하지 않다: {v!r}")
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise AeroError(f"{name}.{f} 가 유한한 수가 아니다: {v!r}")
 
     # B → M: 중심선 둘레 −φ_A 회전
     c, s = math.cos(-phi_a), math.sin(-phi_a)
@@ -181,4 +219,9 @@ def assemble(v_r_b, pqr_b, q_bar, v_sound, ref, supplier,
     m_b = (m_p[0] + ry * f_p[2] - rz * f_p[1],
            m_p[1] + rz * f_p[0] - rx * f_p[2],
            m_p[2] + rx * f_p[1] - ry * f_p[0])
+    # 입력이 전부 유한해도 곱에서 오버플로할 수 있다 (측정: Q·S_ref 가
+    # 유한한데 힘이 −inf). 출력까지 검사해야 fail-closed 다.
+    for nm, v in (("F_b", f_b), ("M_b", m_b)):
+        if not all(math.isfinite(c) for c in v):
+            raise AeroError(f"{nm} 가 유한하지 않다: {v!r}")
     return f_b, m_b

@@ -35,10 +35,10 @@ class Const:
     def __init__(self, st, dp):
         self._s, self._d = st, dp
 
-    def static(self, a, m):
+    def static(self, a, phi, m):
         return self._s
 
-    def damping(self, a, m):
+    def damping(self, a, phi, m):
         return self._d
 
 
@@ -159,24 +159,105 @@ def main():
             "S_ref <= 0 거절")
 
     class NoStatic:
-        def static(self, a, m):
+        def static(self, a, phi, m):
             return None
 
-        def damping(self, a, m):
+        def damping(self, a, phi, m):
             return ZERO_D
 
     refuses(lambda: assemble((100.0, 0, 0), (0, 0, 0), 10.0, 340.0, REF,
                              NoStatic()), "계수 미제공 거절")
 
     class NanStatic:
-        def static(self, a, m):
+        def static(self, a, phi, m):
             return Static(float('nan'), 0, 0, 0, 0, 0)
 
-        def damping(self, a, m):
+        def damping(self, a, phi, m):
             return ZERO_D
 
     refuses(lambda: assemble((100.0, 0, 0), (0, 0, 0), 10.0, 340.0, REF,
                              NanStatic()), "공급자가 NaN 을 내면 거절")
+
+    class NoDamping:
+        def static(self, a, phi, m):
+            return Static(0, 0, 0, 0, 0, 0)
+
+        def damping(self, a, phi, m):
+            return None
+
+    refuses(lambda: assemble((100.0, 0, 0), (0, 0, 0), 10.0, 340.0, REF,
+                             NoDamping()), "감쇠 계수 미제공 거절")
+
+    class NanDamping:
+        def static(self, a, phi, m):
+            return Static(0, 0, 0, 0, 0, 0)
+
+        def damping(self, a, phi, m):
+            return Damping(0.0, float('nan'), 0.0)
+
+    refuses(lambda: assemble((100.0, 0, 0), (0, 0, 0), 10.0, 340.0, REF,
+                             NanDamping()), "감쇠에 NaN 이면 거절")
+
+    class WrongType:
+        def static(self, a, phi, m):
+            return (0, 0, 0, 0, 0, 0)      # tuple, Static 아님
+
+        def damping(self, a, phi, m):
+            return ZERO_D
+
+    refuses(lambda: assemble((100.0, 0, 0), (0, 0, 0), 10.0, 340.0, REF,
+                             WrongType()), "잘못된 반환형 거절")
+
+    # hypot 로 바꾼 뒤 1e308 성분은 오버플로하지 않는다 — sqrt(Σv²) 는
+    # inf 였다. 그 개선 자체를 검사하고, 진짜 넘치는 입력은 거절한다.
+    _, _, _, vr_big = flow_angles((1e308, 1e308, 0.0), 340.0)
+    check(math.isfinite(vr_big),
+          "1e308 성분에서 V_R 이 유한 (sqrt(Σv²) 였다면 inf)")
+    refuses(lambda: flow_angles((1.5e308, 1.5e308, 0.0), 340.0),
+            "정말 넘치는 속도는 거절 (V_R 이 inf)")
+    refuses(lambda: assemble((100.0, 0, 0), (0, 0, 0), 1e308, 340.0,
+                             Reference(1e308, 0.5, (0, 0, 0)),
+                             Const(Static(1.0, 0, 0, 0, 0, 0), ZERO_D)),
+            "Q·S_ref 오버플로 → 출력 비유한 거절")
+    refuses(lambda: flow_angles((100.0, 0, 0), 1e-320),
+            "Mach 오버플로 거절")
+    refuses(lambda: flow_angles((100.0, 1.0, 0), 340.0, phi_rel_eps=-1.0),
+            "음수 phi_rel_eps 거절")
+    refuses(lambda: flow_angles((100.0, 1.0, 0), 340.0,
+                                phi_rel_eps=float('nan')),
+            "NaN phi_rel_eps 거절")
+
+    print("\n[공급자 계약] φ_A 가 실제로 전달되는가")
+    seen = []
+
+    class Recorder:
+        def static(self, a, phi, m):
+            seen.append(("static", a, phi, m))
+            return Static(0, 0, 0, 0, 0, 0)
+
+        def damping(self, a, phi, m):
+            seen.append(("damping", a, phi, m))
+            return ZERO_D
+
+    assemble((100.0, 50.0, 50.0), (0, 0, 0), 10.0, 340.0, REF, Recorder())
+    want_phi = math.atan2(50.0, 50.0)
+    check(len(seen) == 2, "static·damping 이 각각 한 번씩 호출된다")
+    check(all(abs(r[2] - want_phi) < 1e-12 for r in seen),
+          f"공급자가 받은 φ_A 가 atan2(V_Ry, V_Rz) = {want_phi:.6f}")
+    check(all(abs(r[1] - math.acos(100.0 / math.hypot(100.0, math.hypot(50.0, 50.0)))) < 1e-12
+              for r in seen), "  같은 호출에서 α_tot 도 맞다")
+    seen.clear()
+    assemble((100.0, -50.0, 50.0), (0, 0, 0), 10.0, 340.0, REF, Recorder())
+    check(all(r[2] < 0 for r in seen),
+          "  V_Ry 부호를 뒤집으면 공급자가 받는 φ_A 부호도 뒤집힌다")
+
+    print("\n[단위 무관] phi_rel_eps 는 무차원이어야 한다")
+    _, p1, _, _ = flow_angles((100.0, 1e-3, 0.0), 340.0, phi_rel_eps=1e-4)
+    _, p2, _, _ = flow_angles((328.084, 3.28084e-3, 0.0), 1115.5,
+                              phi_rel_eps=1e-4)
+    check(p1 == p2, "같은 물리 상태면 속도 단위를 바꿔도 같은 판정")
+    _, p3, _, _ = flow_angles((100.0, 1e-3, 0.0), 340.0, phi_rel_eps=1e-6)
+    check(p3 != p1, "  임계값을 낮추면 규약이 아니라 atan2 가 쓰인다")
 
     print()
     if fails:
