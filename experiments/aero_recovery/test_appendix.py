@@ -7,7 +7,8 @@
 import math
 import sys
 
-from appendix_suppliers import AppendixASupplier, AppendixBSupplier
+from appendix_suppliers import (AppendixASupplier, AppendixBSupplier,
+                                require_assembly_premises)
 from assembler import AeroError, Reference, assemble
 
 fails = []
@@ -61,6 +62,14 @@ def main():
     ratio_b = abs(q_m * x_max) / (2 * v_r)
     check(ratio_b < 0.01,
           f"B.1 → B.2: max|X| 에서 |qX|/(2V) = {ratio_b:.3e} < 0.01")
+    # 음성 대조군 — 없으면 max|X| 계산 변이가 죽지 않는다.
+    q_break = 2 * v_r / x_max * 0.02
+    check(abs(q_break * x_max) / (2 * v_r) >= 0.01,
+          "  전제를 깨는 q_m 은 B 조건에도 걸린다")
+    # cg 를 한쪽 끝으로 몰면 max|X| 가 L 이 되어 조건이 더 빡세진다
+    x_end = length * max(0.95, 1.0 - 0.95)
+    check(x_end > x_max,
+          "  cg 가 끝으로 갈수록 max|X| 가 커진다 (max(cg, 1−cg)·L)")
 
     # A.5 = A.4 with S_fin = S_ref/4
     q_a2 = 0.5 * rho * (v_r ** 2 + 2 * v_r * d_ref * q_m)   # 식 (A.2)
@@ -161,6 +170,28 @@ def main():
     refuses(lambda: assemble((100.0, 0.0, 0.0), (0, 0, 0), 10.0, 340.0,
                              ref, sup_b),
             "  조립기를 통해도 비교차류면 거절")
+    refuses(lambda: sup_b.damping(math.pi / 2, math.pi / 2, 0.3),
+            "α=90° 라도 φ_A ≠ 0 이면 거절 (M·P·B 일치 전제)")
+    refuses(lambda: assemble((0.0, 100.0, 0.0), (0.0, 0.3, 0.0),
+                             0.5 * 1e4, 340.0, ref, sup_b),
+            "  조립기 경로에서도 φ_A = 90° 는 거절")
+    for bad in (math.pi / 2, math.pi, float('nan'), -1.0):
+        refuses(lambda b=bad: AppendixBSupplier(1.0, 4.0, 0.5, d_ref, s_ref,
+                                                crossflow_tol_rad=b),
+                f"crossflow_tol_rad = {bad!r} 거절")
+    refuses(lambda: require_assembly_premises(
+        Reference(s_ref, d_ref, (0.1, 0.0, 0.0)), sup_b),
+        "MRP ≠ 무게중심이면 거절")
+    refuses(lambda: require_assembly_premises(
+        Reference(math.pi * 1.0 ** 2 / 4, 1.0, (0, 0, 0)), sup_b),
+        "공급자와 Reference 의 D/S 가 다르면 거절")
+    check(require_assembly_premises(ref, sup_b) is None,
+          "일치하는 Reference 는 통과")
+    refuses(lambda: sup_b.moment_direct(-1.0, 100.0, 0.3), "음수 밀도 거절")
+    refuses(lambda: sup_b.moment_direct(1.0, 0.0, 0.3), "V_R <= 0 거절")
+    big = AppendixBSupplier(1e300, 1e100, 0.4, d_ref, s_ref)
+    refuses(lambda: big.moment_direct(1e300, 1e300, 1e300),
+            "유한 입력의 곱 오버플로 거절")
     refuses(lambda: sup_b.moment_direct(float('inf'), 100.0, 0.3),
             "비유한 ρ 거절")
 

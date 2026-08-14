@@ -20,13 +20,52 @@ CROSSFLOW_RAD = math.pi / 2
 DEFAULT_CROSSFLOW_TOL_RAD = 1e-9
 
 
-def _require_crossflow(alpha_tot_rad, tol, who):
-    if not math.isfinite(alpha_tot_rad):
-        raise AeroError(f"{who}: α_tot 이 유한하지 않다: {alpha_tot_rad!r}")
+def _check_tol(tol):
+    """허용오차에 **상한**이 없으면 전제를 다시 우회한다 — `tol = π` 를
+    주면 α_tot = 0 축방향 흐름도 승인된다 (재현). π/2 이상이면 전 범위를
+    덮으므로 반드시 그 미만이다."""
+    if not math.isfinite(tol) or not 0.0 <= tol < math.pi / 2:
+        raise AeroError(f"crossflow_tol_rad 는 [0, π/2) 이어야 한다: {tol!r}")
+
+
+def _require_premises(alpha_tot_rad, phi_a_rad, tol, who):
+    """부록 전제 중 **공급자가 볼 수 있는** 것: 교차류이고 φ_A = 0.
+
+    φ_A ≠ 0 이면 B→M 회전 때문에 몸체 피치율이 M 프레임 피치율이 아니게
+    되고, 조립 결과가 B.6 직접 모멘트와 갈린다 (측정: φ_A = 90° 에서
+    조립기 −0.000, 직접 −107.520). 교차류만 보면 이 경우가 통과한다.
+    """
+    for n, v in (("α_tot", alpha_tot_rad), ("φ_A", phi_a_rad)):
+        if not math.isfinite(v):
+            raise AeroError(f"{who}: {n} 이 유한하지 않다: {v!r}")
     if abs(alpha_tot_rad - CROSSFLOW_RAD) > tol:
         raise AeroError(
             f"{who} 는 교차류(α_tot = 90°) 전제에서만 유효하다 — "
             f"α_tot = {math.degrees(alpha_tot_rad):.4f}° 로 호출됐다")
+    if abs(phi_a_rad) > tol:
+        raise AeroError(
+            f"{who} 는 M·P·B 프레임 일치를 전제하므로 φ_A = 0 이어야 한다 — "
+            f"φ_A = {math.degrees(phi_a_rad):.4f}° 로 호출됐다")
+
+
+def require_assembly_premises(ref, supplier):
+    """조립 경로에서만 볼 수 있는 전제. **공급자 인터페이스가 `Reference`
+    를 받지 않으므로** 별도 함수로 둔다.
+
+    - MRP = 무게중심 (부록은 무게중심 둘레 모멘트를 준다)
+    - 공급자와 `Reference` 의 `D_ref`·`S_ref` 가 같아야 한다
+    """
+    if any(c != 0.0 for c in ref.mrp_b):
+        raise AeroError(
+            f"부록 공급자는 MRP = 무게중심을 전제한다 — mrp_b = {ref.mrp_b!r}")
+    for attr, name, want in (("d", "D_ref", ref.d_ref),
+                             ("s", "S_ref", ref.s_ref)):
+        got = getattr(supplier, attr, None)
+        if got is None:
+            continue
+        if abs(got - want) > 1e-12 * max(abs(want), 1.0):
+            raise AeroError(
+                f"공급자의 {name} = {got!r} 가 Reference 의 {want!r} 와 다르다")
 
 
 class AppendixASupplier:
@@ -49,18 +88,16 @@ class AppendixASupplier:
     def __init__(self, c_fin, crossflow_tol_rad=DEFAULT_CROSSFLOW_TOL_RAD):
         if not isinstance(c_fin, (int, float)) or not math.isfinite(c_fin):
             raise AeroError(f"C_fin 이 유한한 수가 아니다: {c_fin!r}")
-        if not math.isfinite(crossflow_tol_rad) or crossflow_tol_rad < 0.0:
-            raise AeroError(f"허용오차가 유한 비음수가 아니다: "
-                            f"{crossflow_tol_rad!r}")
+        _check_tol(crossflow_tol_rad)
         self.c_fin = float(c_fin)
         self.tol = float(crossflow_tol_rad)
 
     def static(self, alpha_tot_rad, phi_a_rad, mach):
-        _require_crossflow(alpha_tot_rad, self.tol, "부록 A")
+        _require_premises(alpha_tot_rad, phi_a_rad, self.tol, "부록 A")
         return Static(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
     def damping(self, alpha_tot_rad, phi_a_rad, mach):
-        _require_crossflow(alpha_tot_rad, self.tol, "부록 A")
+        _require_premises(alpha_tot_rad, phi_a_rad, self.tol, "부록 A")
         # A.11 · A.12 의 우변이 부호만 다르다 ⇒ C_mqm = −C_fin.
         # 롤·요 감쇠는 부록 A 의 범위가 아니다 — 0 을 내되 그것이
         # "감쇠가 없다"는 물리 주장이 아니라 **범위 밖**이라는 뜻이다.
@@ -121,9 +158,7 @@ class AppendixBSupplier:
         self.cg = float(cg_frac)
         self.d = float(d_ref)
         self.s = float(s_ref)
-        if not math.isfinite(crossflow_tol_rad) or crossflow_tol_rad < 0.0:
-            raise AeroError(f"허용오차가 유한 비음수가 아니다: "
-                            f"{crossflow_tol_rad!r}")
+        _check_tol(crossflow_tol_rad)
         self.tol = float(crossflow_tol_rad)
         # 원문 정의: 교차류에서 총 투영면적 = L·D, 기준면적은 원통 단면적.
         # 형상이 일관되지 않으면 대수는 닫혀도 출처 충실성 시험이 아니다.
@@ -136,21 +171,33 @@ class AppendixBSupplier:
     def moment_direct(self, rho, v_r, q_m):
         """B.6 을 **그대로** — 파생 경로를 거치지 않는다."""
         for n, v in (("rho", rho), ("V_R", v_r), ("q_m", q_m)):
-            if not math.isfinite(v):
-                raise AeroError(f"{n} 이 유한하지 않다: {v!r}")
-        return (-(1.0 / 3.0) * rho * v_r * q_m * self.c * self.d
-                * self.l ** 3 * (1.0 - 3.0 * self.cg + 3.0 * self.cg ** 2))
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise AeroError(f"{n} 이 유한한 수가 아니다: {v!r}")
+        if rho <= 0.0:
+            raise AeroError(f"밀도는 양수여야 한다: {rho!r}")
+        if v_r <= 0.0:
+            raise AeroError(f"V_R 은 양수여야 한다: {v_r!r}")
+        m_d = (-(1.0 / 3.0) * rho * v_r * q_m * self.c * self.d
+               * self.l ** 3 * (1.0 - 3.0 * self.cg + 3.0 * self.cg ** 2))
+        # 입력이 전부 유한해도 곱에서 넘칠 수 있다.
+        if not math.isfinite(m_d):
+            raise AeroError(f"M_d 가 유한하지 않다: {m_d!r}")
+        return m_d
 
     def c_mqm(self):
-        """파생 경로. ρ·V_R·q_m 이 약분돼 상태에 무관하다."""
+        """파생 경로.
+
+        `ρ`·`V_R`·`q_m` **만** 약분된다. 외부 `C` 와 `cg` 는 조건·질량특성에
+        따라 변하므로, 이 값은 **고정 `C`·`cg` 조건에서만** 상수다.
+        """
         return (-(4.0 / 3.0) * self.c * self.d * self.l ** 3
                 * (1.0 - 3.0 * self.cg + 3.0 * self.cg ** 2)
                 / (self.s * self.d ** 2))
 
     def static(self, alpha_tot_rad, phi_a_rad, mach):
-        _require_crossflow(alpha_tot_rad, self.tol, "부록 B")
+        _require_premises(alpha_tot_rad, phi_a_rad, self.tol, "부록 B")
         return Static(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
     def damping(self, alpha_tot_rad, phi_a_rad, mach):
-        _require_crossflow(alpha_tot_rad, self.tol, "부록 B")
+        _require_premises(alpha_tot_rad, phi_a_rad, self.tol, "부록 B")
         return Damping(0.0, self.c_mqm(), 0.0)
