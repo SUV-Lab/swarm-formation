@@ -154,19 +154,29 @@ def momentum_drift(H):
     return mrel, worst
 
 
-def contract_check(name, rows, ts):
-    """시간축·유한성·단조성·301점 일대일 대응을 fail-closed로."""
+def contract_check(name, rows, picked_idx, raw_ts):
+    """**원본 CSV 단계**에서 fail-closed. 앞선 판은 load() 가 이미 골라낸
+    301개를 다시 301개인지 세고 있었다 — 구성상 항상 참이라 공허했다."""
     bad = []
-    if len(rows) != len(GRID):
-        bad.append(f"표본 {len(rows)}개 (301 기대)")
-    if any(b - a <= 0 for a, b in zip(ts, ts[1:])):
-        bad.append("시간축이 단조 증가가 아님")
-    if len(set(ts)) != len(ts):
-        bad.append("중복 시각 — 격자 일대일 대응 실패")
+    if not all(math.isfinite(t) for t in raw_ts):
+        bad.append("원본 시각에 비유한값")
+    if any(b - a <= 0 for a, b in zip(raw_ts, raw_ts[1:])):
+        bad.append("원본 시간축이 엄격 증가가 아님")
+    if len(set(raw_ts)) != len(raw_ts):
+        bad.append(f"원본에 중복 시각 {len(raw_ts) - len(set(raw_ts))}개")
+    # 격자 301점이 서로 다른 원본 행에 일대일 대응하는가
+    if len(picked_idx) != len(GRID):
+        bad.append(f"격자 대응 {len(picked_idx)}개 (301 기대)")
+    if len(set(picked_idx)) != len(picked_idx):
+        bad.append("격자 두 점이 같은 원본 행에 대응 — 일대일 아님")
+    for k, j in enumerate(picked_idx):
+        e = abs(raw_ts[j] - GRID[k])
+        if e > TIME_TOL_S:
+            bad.append(f"t={GRID[k]}s 대응 오차 {e:.3e} s > {TIME_TOL_S:.0e}")
+            break
     for k, (q, w, _t, la, lo) in enumerate(rows):
-        vals = list(q) + list(w) + [la, lo]
-        if not all(math.isfinite(v) for v in vals):
-            bad.append(f"t={GRID[k]}s 에 비유한값")
+        if not all(math.isfinite(v) for v in list(q) + list(w) + [la, lo]):
+            bad.append(f"t={GRID[k]}s 표본에 비유한값")
             break
         if abs(math.sqrt(sum(c * c for c in q)) - 1.0) > 1e-9:
             bad.append(f"t={GRID[k]}s 쿼터니언 노름 이탈")
@@ -197,14 +207,14 @@ def load(path):
         if c not in idx:
             raise SystemExit(f"FAIL: {path} 에 열 '{c}' 없음")
     ts = [float(r[idx["time"]]) for r in rows[1:]]
-    out, picked = [], []
+    out, picked_idx = [], []
     for g in GRID:
         j = min(range(len(ts)), key=lambda k: abs(ts[k] - g))
         if abs(ts[j] - g) > TIME_TOL_S:
             raise SystemExit(
                 f"FAIL: {os.path.basename(path)} t={g}s 최근접 오차 "
                 f"{abs(ts[j]-g):.3e} s > {TIME_TOL_S:.0e} — 재표본 필요")
-        picked.append(ts[j])
+        picked_idx.append(j)
         r = rows[1 + j]
         out.append((
             quat_from_euler_deg(*[float(r[idx[c]]) for c in EUL]),
@@ -213,7 +223,74 @@ def load(path):
             float(r[idx["latitude_deg"]]),
             float(r[idx["longitude_deg"]]),
         ))
-    return out, picked
+    return out, picked_idx, ts
+
+
+def selftest():
+    """계약 검사가 실제로 거절하는지 — **나쁜 입력으로** 확인한다.
+
+    정상 자료만으로는 임계값을 고정할 수 없다. 시각 허용오차를 무한대로
+    풀어도 좋은 자료는 여전히 통과하므로, 검사가 살아 있는지 알 수 없다.
+    아래는 각 조항마다 그 조항만 위반하는 입력을 만들어 거절을 요구한다."""
+    good_q = quat_from_euler_deg(0.0, 0.0, 0.0)
+    rows = [(good_q, (0.0, 0.0, 0.0), t, 0.0, 0.0) for t in GRID]
+    idx = list(range(len(GRID)))
+    raw = list(GRID)
+
+    # 각 픽스처는 **그 조항만** 위반해야 한다. 여러 조항을 동시에
+    # 위반하면 먼저 걸리는 검사가 나머지를 가려, 변이를 걸어도 죽지 않는다
+    # (실제로 처음 판이 그랬다: 시각을 흐트러뜨린 픽스처가 전부 허용오차
+    # 조항에 먼저 걸렸다).
+    cases = []
+    cases.append(("정상 입력", rows, idx, raw, True))
+
+    # 단조성만: 격자가 쓰지 않는 꼬리 행을 뒤로 어긋나게 붙인다.
+    # 대응 301점은 그대로 정확히 맞으므로 허용오차 조항은 건드리지 않는다.
+    # 29.95 는 0.1 격자에 없으므로 중복 조항을 건드리지 않는다.
+    cases.append(("원본 시간축 비단조", rows, idx, raw + [raw[-1] - 0.05], False))
+
+    # 중복 시각 · 일대일 — 아래 두 조항은 **논리적으로 포섭된다.**
+    #   엄격 증가 ⟹ 중복 없음
+    #   엄격 증가 + 격자간격 0.1 ≫ 2·허용오차 ⟹ 격자점마다 최근접이 유일
+    # 그래서 이 조항만 위반하는 입력을 만들 수 없고, 변이를 걸어도 앞선
+    # 조항이 먼저 잡는다. 방어를 위해 남기되 **독립 고정은 불가능**하다는
+    # 것을 여기 적어둔다 — 살아남는 변이를 "검사가 약하다"로 오해하지
+    # 않도록.
+    cases.append(("중복+비단조 (포섭 확인)", rows, idx, raw + [raw[-1]], False))
+    raw_dup = raw + [raw[10]]
+    idx_dup = list(idx); idx_dup[11] = 10
+    cases.append(("일대일 위반 (포섭 확인)", rows, idx_dup, raw_dup, False))
+
+    # 허용오차만: 대응 시각 하나를 1e-4 s 어긋나게 한다.
+    bad = list(raw); bad[10] += 1e-4
+    cases.append(("대응 오차 1e-4 s", rows, idx, bad, False))
+
+    # 값 조항 둘
+    bad_r = list(rows); bad_r[5] = (good_q, (float("nan"), 0.0, 0.0),
+                                    GRID[5], 0.0, 0.0)
+    cases.append(("표본에 NaN", bad_r, idx, raw, False))
+    bad_r = list(rows); bad_r[5] = ((1.0, 1.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                                    GRID[5], 0.0, 0.0)
+    cases.append(("쿼터니언 비정규", bad_r, idx, raw, False))
+
+    fails = 0
+    print("계약 검사 자기시험 — 각 조항을 위반하는 입력이 거절되는가\n")
+    for name, r, i_, t_, want in cases:
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            got = contract_check("selftest", r, i_, t_)
+        ok = (got == want)
+        fails += 0 if ok else 1
+        print(f"  {'OK  ' if ok else 'FAIL'}  {name:<24}"
+              f"{'통과 기대' if want else '거절 기대'} → "
+              f"{'통과' if got else '거절'}")
+    if fails:
+        print(f"\nFAIL: 자기시험 {fails}건", file=sys.stderr)
+        return 1
+    print(f"\nOK: {len(cases)}개 조항 전부 의도대로 동작")
+    return 0
 
 
 def main():
@@ -223,7 +300,12 @@ def main():
     ap.add_argument("--candidate", metavar="CSV",
                     help="우리 결과. 족의 여섯 번째 구성원으로 섞지 않고 "
                          "참여 5종 각각과 따로 대조한다")
+    ap.add_argument("--selftest", action="store_true",
+                    help="계약 검사를 나쁜 입력으로 시험 (자료 불필요)")
     a = ap.parse_args()
+
+    if a.selftest:
+        return selftest()
 
     d = os.path.join(a.data, f"atmos_scn_{a.scenario}")
     sims = ["01", "02", "04", "05", "06"]
@@ -235,8 +317,8 @@ def main():
 
     series, ok = {}, True
     for s_, p in paths.items():
-        rows, ts = load(p)
-        ok &= contract_check(f"sim {s_}", rows, ts)
+        rows, pidx, raw = load(p)
+        ok &= contract_check(f"sim {s_}", rows, pidx, raw)
         series[s_] = rows
     if not ok:
         return 3
@@ -285,25 +367,35 @@ def main():
             dmag, ddir = momentum_drift(Lm)
             print(f"{s_:<10}{dke:>14.3e}{dmag:>16.3e}{ddir:>24.7f}")
         print()
-        # 회귀: 지구 자전 변환을 빼면 좋은 결과들이 30초치 자전각으로
-        # 악화돼야 한다. 악화되지 않으면 변환이 실제로 적용되지 않은 것.
+        # 회귀 — 양팔이어야 한다. false 팔만 보면 정상 경로에서
+        # ecef_to_eci() 를 지워도 통과한다 (false 팔은 원래 자전을 안 뺀다).
         spin = math.degrees(OMEGA_EARTH * GRID[-1])
-        worst_ok = 0.0
-        for s_ in ("01", "04", "05"):
-            _, Hn = invariants(series[s_], earth_rotation=False)
-            worst_ok = max(worst_ok, momentum_drift(Hn)[1])
-        status = "OK" if abs(worst_ok - spin) < 0.01 else "FAIL"
-        print(f"  [회귀] 지구 자전 변환 제거 시 sim 01·04·05 방향 드리프트 "
-              f"{worst_ok:.4f}° (30초 자전각 {spin:.4f}°) … {status}")
-        if status == "FAIL":
-            print("FAIL: 자전 변환이 실제로 적용되지 않았다", file=sys.stderr)
+        on = max(momentum_drift(invariants(series[s_], True)[1])[1]
+                 for s_ in ("01", "04", "05"))
+        off = max(momentum_drift(invariants(series[s_], False)[1])[1]
+                  for s_ in ("01", "04", "05"))
+        fails = []
+        if on >= 1e-3:
+            fails.append(f"자전 보정 ON 에서 {on:.6f}° >= 0.001°")
+        if abs(off - spin) > 0.01:
+            fails.append(f"OFF 에서 {off:.4f}° 가 자전각 {spin:.4f}° 와 "
+                         f"0.01° 넘게 다름")
+        if on > 0 and off / on < 100.0:
+            fails.append(f"개선 비율 {off/on:.1f}배 < 100배 — 보정이 "
+                         f"실제로 효과를 내지 않음")
+        print(f"  [회귀] 자전 보정 ON {on:.7f}° / OFF {off:.4f}° "
+              f"(30초 자전각 {spin:.4f}°, 개선 {off/max(on,1e-30):.0f}배) … "
+              f"{'OK' if not fails else 'FAIL'}")
+        for f_ in fails:
+            print(f"FAIL: {f_}", file=sys.stderr)
+        if fails:
             return 3
         print()
 
     # ── 우리 결과: 여섯 번째 구성원이 아니라 별도 후보 ──
     if a.candidate:
-        cand, cts = load(a.candidate)
-        if not contract_check("candidate", cand, cts):
+        cand, cpidx, craw = load(a.candidate)
+        if not contract_check("candidate", cand, cpidx, craw):
             return 3
         print("[후보] 우리 결과 대 참여 5종 — 족에 섞지 않고 각각과 대조")
         print(f"{'대상':<10}{'자세 최대':>11}{'RMS':>9}{'종단':>9}{'t_max':>8}"
