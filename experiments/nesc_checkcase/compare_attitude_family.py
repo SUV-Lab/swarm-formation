@@ -53,6 +53,11 @@ EUL = ("eulerAngle_deg_Roll", "eulerAngle_deg_Pitch", "eulerAngle_deg_Yaw")
 RATE = ("bodyAngularRateWrtEi_deg_s_Roll",
         "bodyAngularRateWrtEi_deg_s_Pitch",
         "bodyAngularRateWrtEi_deg_s_Yaw")
+GEO = ("latitude_deg", "longitude_deg")
+
+# WGS-84 / NESC 사양값. NED 는 지구와 함께 돌므로 이 값이 없으면
+# 각운동량 "보존"이 지구 자전을 그대로 재는 검사가 된다.
+OMEGA_EARTH = 7.292115e-5   # rad/s
 
 
 def quat_from_euler_deg(roll, pitch, yaw):
@@ -87,33 +92,63 @@ def quat_to_matrix(q):
             (2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)))
 
 
-def invariants(series):
+def ned_to_ecef(h_ned, lat_deg, lon_deg):
+    """NED 성분을 ECEF 로. NED 기저의 ECEF 표현을 열로 세운 행렬."""
+    la, lo = math.radians(lat_deg), math.radians(lon_deg)
+    sla, cla, slo, clo = math.sin(la), math.cos(la), math.sin(lo), math.cos(lo)
+    N = (-sla * clo, -sla * slo, cla)
+    E = (-slo, clo, 0.0)
+    D = (-cla * clo, -cla * slo, -sla)
+    return tuple(N[i] * h_ned[0] + E[i] * h_ned[1] + D[i] * h_ned[2]
+                 for i in range(3))
+
+
+def ecef_to_eci(h_ecef, t_s, omega=OMEGA_EARTH):
+    """ECEF → ECI. z축 둘레 지구 자전각만큼 되돌린다.
+
+    초기 GAST 의 상수 오프셋은 한 실행 안의 방향 드리프트만 볼 때 상쇄된다
+    (모든 표본에 같은 회전이 곱해진다). 서로 다른 절대 방향을 직접 비교할
+    때에만 공통 시각 기준이 추가로 필요하다."""
+    th = omega * t_s
+    c, sn = math.cos(th), math.sin(th)
+    return (c * h_ecef[0] - sn * h_ecef[1],
+            sn * h_ecef[0] + c * h_ecef[1],
+            h_ecef[2])
+
+
+def invariants(series, earth_rotation=True):
     """acc02 전용. 감쇠 없는 강체이고 중력만 작용하므로 CM 둘레의 외부
-    모멘트가 0이다. 따라서 **회전 운동에너지**와 **관성계 각운동량**이
-    보존된다. 이것은 참여 결과의 산포에서 만든 합격선이 아니라 해석적
-    불변량이므로, 비교기 자신에 대한 강한 자기검사가 된다."""
-    ke, Lm = [], []
-    for q, w_deg in series:
-        w = [math.radians(c) for c in w_deg]              # 몸체축 각속도
+    모멘트가 0이다. 따라서 **회전 운동에너지**와 **관성계(ECI) 각운동량
+    벡터**가 보존된다. 참여 결과의 산포에서 만든 합격선이 아니라 해석적
+    불변량이므로 비교기 자신에 대한 자기검사가 된다.
+
+    earth_rotation=False 는 ECEF→ECI 변환을 빼는 회귀용이다 — 그러면
+    NED 기준이 되어 좋은 결과들이 30초치 지구 자전각(약 0.125°)으로
+    악화돼야 한다."""
+    ke, H = [], []
+    for q, w_deg, t_s, lat, lon in series:
+        w = [math.radians(c) for c in w_deg]
         ke.append(0.5 * sum(I * c * c for I, c in zip(BRICK_I, w)))
-        h_body = [I * c for I, c in zip(BRICK_I, w)]      # 몸체축 각운동량
-        R = quat_to_matrix(q)                             # 몸체 → NED
+        h_body = [I * c for I, c in zip(BRICK_I, w)]
+        R = quat_to_matrix(q)                                   # 몸체 → NED
         h_ned = [sum(R[r][c] * h_body[c] for c in range(3)) for r in range(3)]
-        Lm.append(h_ned)
-    return ke, Lm
+        h = ned_to_ecef(h_ned, lat, lon)
+        if earth_rotation:
+            h = ecef_to_eci(h, t_s)
+        H.append(h)
+    return ke, H
 
 
-def momentum_drift(Lm):
-    """관성계 각운동량 벡터의 크기 상대변동과 **방향 드리프트**.
+def momentum_drift(H):
+    """각운동량 벡터의 크기 상대변동과 **방향 드리프트**.
 
     크기만 보면 자세 적분 오류를 놓친다 — 몸체축 각속도가 맞고 자세만
-    틀리면 |H| 는 거의 유지되면서 방향이 돈다. 방향이 더 날카로운 검사다."""
-    mag = [math.sqrt(sum(v * v for v in h)) for h in Lm]
+    틀리면 |H| 는 거의 유지되면서 방향이 돈다. 방향이 더 날카롭다."""
+    mag = [math.sqrt(sum(v * v for v in h)) for h in H]
     mrel = (max(mag) - min(mag)) / max(sum(mag) / len(mag), 1e-30)
-    h0 = Lm[0]
-    n0 = math.sqrt(sum(v * v for v in h0)) or 1e-30
+    h0, n0 = H[0], math.sqrt(sum(v * v for v in H[0])) or 1e-30
     worst = 0.0
-    for h, m in zip(Lm, mag):
+    for h, m in zip(H, mag):
         c = sum(a * b for a, b in zip(h, h0)) / (max(m, 1e-30) * n0)
         worst = max(worst, math.degrees(math.acos(min(1.0, max(-1.0, c)))))
     return mrel, worst
@@ -128,8 +163,8 @@ def contract_check(name, rows, ts):
         bad.append("시간축이 단조 증가가 아님")
     if len(set(ts)) != len(ts):
         bad.append("중복 시각 — 격자 일대일 대응 실패")
-    for k, (q, w) in enumerate(rows):
-        vals = list(q) + list(w)
+    for k, (q, w, _t, la, lo) in enumerate(rows):
+        vals = list(q) + list(w) + [la, lo]
         if not all(math.isfinite(v) for v in vals):
             bad.append(f"t={GRID[k]}s 에 비유한값")
             break
@@ -158,7 +193,7 @@ def load(path):
         rows = list(csv.reader(fh))
     hdr = [c.strip() for c in rows[0]]
     idx = {c: i for i, c in enumerate(hdr)}
-    for c in ("time",) + EUL + RATE:
+    for c in ("time",) + EUL + RATE + GEO:
         if c not in idx:
             raise SystemExit(f"FAIL: {path} 에 열 '{c}' 없음")
     ts = [float(r[idx["time"]]) for r in rows[1:]]
@@ -174,6 +209,9 @@ def load(path):
         out.append((
             quat_from_euler_deg(*[float(r[idx[c]]) for c in EUL]),
             tuple(float(r[idx[c]]) for c in RATE),
+            ts[j],
+            float(r[idx["latitude_deg"]]),
+            float(r[idx["longitude_deg"]]),
         ))
     return out, picked
 
@@ -240,12 +278,26 @@ def main():
         print("[불변량] 감쇠 없는 강체 — 회전 운동에너지와 관성계 각운동량 보존")
         print("  (참여 결과에서 만든 합격선이 아니라 해석적 불변량)")
         print(f"{'sim':<10}{'KE 상대변동':>14}{'‖H‖ 상대변동':>16}"
-              f"{'H 방향드리프트[deg]':>22}")
+              f"{'H_eci 방향드리프트[deg]':>24}")
         for s_ in sims:
             ke, Lm = invariants(series[s_])
             dke = (max(ke) - min(ke)) / max(abs(sum(ke) / len(ke)), 1e-30)
             dmag, ddir = momentum_drift(Lm)
-            print(f"{s_:<10}{dke:>14.3e}{dmag:>16.3e}{ddir:>22.4f}")
+            print(f"{s_:<10}{dke:>14.3e}{dmag:>16.3e}{ddir:>24.7f}")
+        print()
+        # 회귀: 지구 자전 변환을 빼면 좋은 결과들이 30초치 자전각으로
+        # 악화돼야 한다. 악화되지 않으면 변환이 실제로 적용되지 않은 것.
+        spin = math.degrees(OMEGA_EARTH * GRID[-1])
+        worst_ok = 0.0
+        for s_ in ("01", "04", "05"):
+            _, Hn = invariants(series[s_], earth_rotation=False)
+            worst_ok = max(worst_ok, momentum_drift(Hn)[1])
+        status = "OK" if abs(worst_ok - spin) < 0.01 else "FAIL"
+        print(f"  [회귀] 지구 자전 변환 제거 시 sim 01·04·05 방향 드리프트 "
+              f"{worst_ok:.4f}° (30초 자전각 {spin:.4f}°) … {status}")
+        if status == "FAIL":
+            print("FAIL: 자전 변환이 실제로 적용되지 않았다", file=sys.stderr)
+            return 3
         print()
 
     # ── 우리 결과: 여섯 번째 구성원이 아니라 별도 후보 ──
