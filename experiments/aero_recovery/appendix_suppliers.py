@@ -10,7 +10,7 @@
 """
 import math
 
-from assembler import AeroError, Damping, Static
+from assembler import AeroError, Damping, Static, assemble, flow_angles
 
 
 # 부록 A·B 모두 **교차류 조건**을 전제한다. 공급자가 각도를 무시하면
@@ -68,6 +68,35 @@ def require_assembly_premises(ref, supplier):
                 f"공급자의 {name} = {got!r} 가 Reference 의 {want!r} 와 다르다")
 
 
+MAX_TRUNCATION_RATIO = 0.01     # 원문의 "약 1%" 조건
+
+
+def assemble_appendix(v_r_b, pqr_b, q_bar, v_sound, ref, supplier, **kw):
+    """부록 공급자 전용 조립 진입점.
+
+    **적용성 검사 → 일반 assemble** 순서를 **구조적으로** 강제한다.
+    검사 함수를 따로 두기만 하면 호출자가 빠뜨릴 수 있고, 실제로 빠져
+    있었다 — MRP 가 1 m 어긋난 `Reference` 로도 raw `assemble()` 이
+    정상 반환했다.
+
+    행마다 폐기항 조건도 본다. 두 경로가 **같은 근사식에서 출발**하므로
+    전제 밖에서도 대수적으로 일치한다 — 그래서 일치만으로는 전제 준수의
+    증거가 되지 않는다.
+    """
+    require_assembly_premises(ref, supplier)
+    _, _, _, v_r = flow_angles(v_r_b, v_sound,
+                               kw.get("phi_rel_eps", 0.0))
+    ratio = None
+    fn = getattr(supplier, "truncation_ratio", None)
+    if fn is not None:
+        ratio = fn(v_r, pqr_b[1])          # 피치율
+    if ratio is not None and ratio >= MAX_TRUNCATION_RATIO:
+        raise AeroError(
+            f"폐기항 비 {ratio:.5f} >= {MAX_TRUNCATION_RATIO} — 부록의 "
+            f"1% 근사 전제 밖이다 (V_R = {v_r!r}, q_m = {pqr_b[1]!r})")
+    return assemble(v_r_b, pqr_b, q_bar, v_sound, ref, supplier, **kw)
+
+
 class AppendixASupplier:
     """부록 A — `C_mqm = −C_fin` (A.11·A.12).
 
@@ -85,12 +114,21 @@ class AppendixASupplier:
     정적 계수는 이 공급자의 범위가 아니므로 전부 0 을 낸다.
     """
 
-    def __init__(self, c_fin, crossflow_tol_rad=DEFAULT_CROSSFLOW_TOL_RAD):
+    def __init__(self, c_fin, d_ref=None,
+                 crossflow_tol_rad=DEFAULT_CROSSFLOW_TOL_RAD):
         if not isinstance(c_fin, (int, float)) or not math.isfinite(c_fin):
             raise AeroError(f"C_fin 이 유한한 수가 아니다: {c_fin!r}")
         _check_tol(crossflow_tol_rad)
         self.c_fin = float(c_fin)
         self.tol = float(crossflow_tol_rad)
+        # 폐기항 조건 검사에 D_ref 가 필요하다. 없으면 그 검사를 건너뛴다.
+        self.d_ref = None if d_ref is None else float(d_ref)
+
+    def truncation_ratio(self, v_r, q_m):
+        """A.1 → A.2 에서 버린 `D_ref² q_m²` 항의 비 — |D q|/(2V) < 0.01."""
+        if self.d_ref is None:
+            return None
+        return abs(self.d_ref * q_m) / (2.0 * v_r)
 
     def static(self, alpha_tot_rad, phi_a_rad, mach):
         _require_premises(alpha_tot_rad, phi_a_rad, self.tol, "부록 A")
@@ -151,6 +189,10 @@ class AppendixBSupplier:
                 raise AeroError(f"{n} 이 유한한 수가 아니다: {v!r}")
         if length <= 0.0 or d_ref <= 0.0 or s_ref <= 0.0:
             raise AeroError(f"L·D·S_ref 는 양수여야 한다: {vals!r}")
+        # C 는 교차류 **항력**계수다 — 음수면 흐름이 물체를 끄는 셈이다.
+        if c_crossflow <= 0.0:
+            raise AeroError(f"교차류 항력계수 C 는 양수여야 한다: "
+                            f"{c_crossflow!r}")
         if not 0.0 <= cg_frac <= 1.0:
             raise AeroError(f"cg 는 [0, 1] 무차원 위치여야 한다: {cg_frac!r}")
         self.c = float(c_crossflow)
@@ -167,6 +209,15 @@ class AppendixBSupplier:
             raise AeroError(
                 f"S_ref 는 원통 단면적 πD²/4 = {want_s!r} 이어야 한다 "
                 f"(받은 값 {s_ref!r})")
+
+    def truncation_ratio(self, v_r, q_m):
+        """B.1 → B.2 에서 버린 `q_m² X²` 항의 비. 원문 조건은 **3항 대 2항**:
+
+            |q_m X| / (2 V_R) < 0.01,   X 는 원통 전 구간의 최대값
+
+        `max|X| = L · max(cg, 1−cg)` — 무게중심에서 먼 쪽 끝이 지배한다.
+        """
+        return abs(q_m) * self.l * max(self.cg, 1.0 - self.cg) / (2.0 * v_r)
 
     def moment_direct(self, rho, v_r, q_m):
         """B.6 을 **그대로** — 파생 경로를 거치지 않는다."""
@@ -190,9 +241,12 @@ class AppendixBSupplier:
         `ρ`·`V_R`·`q_m` **만** 약분된다. 외부 `C` 와 `cg` 는 조건·질량특성에
         따라 변하므로, 이 값은 **고정 `C`·`cg` 조건에서만** 상수다.
         """
-        return (-(4.0 / 3.0) * self.c * self.d * self.l ** 3
-                * (1.0 - 3.0 * self.cg + 3.0 * self.cg ** 2)
-                / (self.s * self.d ** 2))
+        v = (-(4.0 / 3.0) * self.c * self.d * self.l ** 3
+             * (1.0 - 3.0 * self.cg + 3.0 * self.cg ** 2)
+             / (self.s * self.d ** 2))
+        if not math.isfinite(v):
+            raise AeroError(f"C_mqm 이 유한하지 않다: {v!r}")
+        return v
 
     def static(self, alpha_tot_rad, phi_a_rad, mach):
         _require_premises(alpha_tot_rad, phi_a_rad, self.tol, "부록 B")

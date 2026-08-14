@@ -8,7 +8,7 @@ import math
 import sys
 
 from appendix_suppliers import (AppendixASupplier, AppendixBSupplier,
-                                require_assembly_premises)
+                                assemble_appendix, require_assembly_premises)
 from assembler import AeroError, Reference, assemble
 
 fails = []
@@ -108,13 +108,16 @@ def main():
 
     ok_all, worst = True, 0.0
     inv = []
+    # 세 번째 사례는 첫 판에서 |qX|/(2V) = 0.0165 로 **전제 밖**이었다.
+    # 두 경로가 같은 근사식에서 출발하므로 전제 밖에서도 대수적으로
+    # 일치한다 — 일치만으로는 전제 준수의 증거가 되지 않는다.
     for rho_, v_, q_ in ((1.0, 100.0, 0.3), (0.4, 250.0, -0.7),
-                         (1.225, 80.0, 1.1)):
+                         (1.225, 80.0, 0.5)):
         direct = sup_b.moment_direct(rho_, v_, q_)
         q_bar = 0.5 * rho_ * v_ ** 2          # 독립 입력
         # **교차류**: V⃗_R 을 +Z 로 준다 ⇒ α_tot = 90°, φ_A = 0.
-        _, m_b = assemble((0.0, 0.0, v_), (0.0, q_, 0.0), q_bar, 340.0,
-                          ref, sup_b)
+        _, m_b = assemble_appendix((0.0, 0.0, v_), (0.0, q_, 0.0),
+                                   q_bar, 340.0, ref, sup_b)
         e = abs(m_b[1] - direct) / max(abs(direct), 1e-300)
         worst = max(worst, e)
         ok_all &= e <= 1e-12
@@ -129,8 +132,9 @@ def main():
           "직접 모멘트에서 역산한 C_mqm 이 세 상태에서 동일하고 파생식과 일치")
 
     # 잘못된 Q 를 넣으면 깨져야 한다
-    _, m_badq = assemble((0.0, 0.0, 100.0), (0.0, 0.3, 0.0),
-                         0.5 * 1.0 * 100.0 ** 2 * 1.5, 340.0, ref, sup_b)
+    _, m_badq = assemble_appendix((0.0, 0.0, 100.0), (0.0, 0.3, 0.0),
+                                  0.5 * 1.0 * 100.0 ** 2 * 1.5, 340.0,
+                                  ref, sup_b)
     check(abs(m_badq[1] - sup_b.moment_direct(1.0, 100.0, 0.3)) > 1e-12,
           "Q 를 1.5배로 틀리게 주면 두 경로가 갈린다")
 
@@ -140,8 +144,12 @@ def main():
     d_bad = AppendixBSupplier(c_cf, length, cg, d2,
                               math.pi * d2 ** 2 / 4.0)
     m_dir = d_bad.moment_direct(1.0, 100.0, 0.3)
+    # D 불일치는 **래퍼가 잡는다** — 그것이 검사의 요점이다.
+    refuses(lambda: assemble_appendix((0.0, 0.0, 100.0), (0.0, 0.3, 0.0),
+                                      0.5 * 1.0 * 1e4, 340.0, ref, d_bad),
+            "D ≠ D_ref 이면 래퍼가 거절 (D = D_ref 전제가 실재한다)")
     _, m_asm = assemble((0.0, 0.0, 100.0), (0.0, 0.3, 0.0), 0.5 * 1.0 * 1e4,
-                        340.0, ref, d_bad)   # ref 는 여전히 d_ref
+                        340.0, ref, d_bad)   # raw 로는 갈리는 것만 확인
     check(abs(m_asm[1] - m_dir) > 1e-12,
           "D ≠ D_ref 이면 두 경로가 갈린다 (D = D_ref 전제가 실재한다)")
 
@@ -158,6 +166,8 @@ def main():
     S = lambda d: math.pi * d ** 2 / 4.0
     refuses(lambda: AppendixBSupplier(1.0, -1.0, 0.5, 0.5, S(0.5)),
             "L <= 0 거절")
+    refuses(lambda: AppendixBSupplier(-1.0, 4.0, 0.5, 0.5, S(0.5)),
+            "교차류 항력계수 C <= 0 거절")
     refuses(lambda: AppendixBSupplier(1.0, 4.0, 1.5, 0.5, S(0.5)),
             "cg 가 [0,1] 밖이면 거절")
     refuses(lambda: AppendixBSupplier(1.0, 4.0, 0.5, 0.0, 0.0), "D <= 0 거절")
@@ -182,6 +192,28 @@ def main():
     refuses(lambda: require_assembly_premises(
         Reference(s_ref, d_ref, (0.1, 0.0, 0.0)), sup_b),
         "MRP ≠ 무게중심이면 거절")
+    refuses(lambda: assemble_appendix(
+        (0.0, 0.0, 100.0), (0.0, 0.3, 0.0), 0.5 * 1e4, 340.0,
+        Reference(s_ref, d_ref, (1.0, 0.0, 0.0)), sup_b),
+        "  래퍼가 MRP 어긋남을 **조립 경로에서** 잡는다")
+    refuses(lambda: assemble_appendix(
+        (0.0, 0.0, 80.0), (0.0, 1.1, 0.0), 0.5 * 1.225 * 6400, 340.0,
+        ref, sup_b),
+        "  래퍼가 폐기항 조건 위반을 행마다 잡는다 (|qX|/2V = 0.0165)")
+    check(sup_b.truncation_ratio(100.0, 0.3) < 0.01
+          and sup_b.truncation_ratio(80.0, 1.1) >= 0.01,
+          "truncation_ratio 가 통과·위반을 실제로 가른다")
+    # **먼 쪽 끝**이 지배한다: max(cg, 1−cg) 를 cg 로 바꾸면 위반이
+    # 통과로 뒤집히는 경계 사례. cg = 0.4 이므로 0.6·L 대 0.4·L.
+    check(sup_b.truncation_ratio(80.0, 0.7) >= 0.01,
+          "cg=0.4 에서 q=0.7 은 먼 쪽 끝(0.6L) 기준으로 위반")
+    check(abs(0.7) * length * cg / (2 * 80.0) < 0.01,
+          "  가까운 쪽 끝(0.4L) 로 재면 통과해버린다 — max() 가 필요한 이유")
+    refuses(lambda: assemble_appendix(
+        (0.0, 0.0, 80.0), (0.0, 0.7, 0.0), 0.5 * 1.225 * 6400, 340.0,
+        ref, sup_b), "  래퍼도 그 경계 사례를 거절")
+    huge = AppendixBSupplier(1e300, 1e100, 0.4, d_ref, s_ref)
+    refuses(lambda: huge.c_mqm(), "c_mqm 곱 오버플로 거절")
     refuses(lambda: require_assembly_premises(
         Reference(math.pi * 1.0 ** 2 / 4, 1.0, (0, 0, 0)), sup_b),
         "공급자와 Reference 의 D/S 가 다르면 거절")
