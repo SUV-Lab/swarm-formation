@@ -1,1 +1,3 @@
 .nesc/
+.build/
+*.csv

@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<fdm_config name="nesc_brick" version="2.0" release="ALPHA">
+
+ <fileheader>
+  <author>MMP project — non-production check-case model</author>
+  <description>
+   NESC atmospheric check-case 2/3 body. Homogeneous rectangular solid,
+   8 x 4 x 2.25 in on the body x/y/z axes. Mass and inertia are the
+   published values (NASA/TM-2015-218675 Vol. II, appendix Table 4, about
+   the CM, products of inertia zero).
+
+   Written here rather than taken from any bundled aircraft: this file
+   carries no third-party data. Aerodynamic coefficients are all zero,
+   which is what check-case 2 specifies ("no rotational damping, no lift,
+   and no drag ... setting all the aerodynamic coefficient values to zero").
+   Check-case 3 adds damping and is a separate configuration.
+  </description>
+ </fileheader>
+
+ <metrics>
+  <!-- Reference geometry is unused while every coefficient is zero. Values
+       are the brick's own dimensions so nothing is invented. -->
+  <wingarea  unit="FT2"> 0.2222222 </wingarea>  <!-- 8 in x 4 in -->
+  <wingspan  unit="FT" > 0.3333333 </wingspan>  <!-- 4 in -->
+  <chord     unit="FT" > 0.6666667 </chord>     <!-- 8 in -->
+  <location name="AERORP" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+  <location name="EYEPOINT" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+  <location name="VRP" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+ </metrics>
+
+ <mass_balance>
+  <!-- Appendix Table 4, about the CM. Products of inertia are zero. -->
+  <ixx unit="SLUG*FT2"> 0.001894220 </ixx>
+  <iyy unit="SLUG*FT2"> 0.006211019 </iyy>
+  <izz unit="SLUG*FT2"> 0.007194665 </izz>
+  <ixy unit="SLUG*FT2"> 0.0 </ixy>
+  <ixz unit="SLUG*FT2"> 0.0 </ixz>
+  <iyz unit="SLUG*FT2"> 0.0 </iyz>
+  <!-- 0.155404754 slug x 32.174 ft/s^2 -->
+  <emptywt unit="LBS"> 5.00 </emptywt>
+  <location name="CG" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+ </mass_balance>
+
+ <ground_reactions/>
+ <propulsion/>
+ <flight_control name="none"/>
+
+ <aerodynamics>
+  <!-- Check-case 2: every coefficient zero. Gravitation is the only
+       external force and there is no moment about the CM, which is what
+       makes rotational kinetic energy and inertial angular momentum
+       conserved and therefore checkable. -->
+ </aerodynamics>
+
+</fdm_config>
