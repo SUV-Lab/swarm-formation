@@ -8,7 +8,7 @@ import math
 import sys
 
 from appendix_suppliers import (AppendixASupplier, AppendixBSupplier,
-                                assemble_appendix, require_assembly_premises)
+                                assemble_appendix)
 from assembler import AeroError, Reference, assemble
 
 fails = []
@@ -92,7 +92,7 @@ def main():
           "A.8(C_mmd 경로) = A.7(직접 경로) — 대수 재폐쇄")
 
     # A.11 · A.12 ⇒ C_mqm = −C_fin, 그리고 식 (8) 과 일관
-    sup_a = AppendixASupplier(c_fin)
+    sup_a = AppendixASupplier(c_fin, d_ref, s_ref)
     # **교차류 전제 안에서** 호출한다. 첫 판은 α = 0 (축방향)으로 불렀다.
     dmp = sup_a.damping(math.pi / 2, 0.0, 0.3)
     check(rel(dmp.c_mq, -c_fin), "A.11·A.12 ⇒ C_mqm = −C_fin")
@@ -162,7 +162,7 @@ def main():
 
     # ── fail-closed ────────────────────────────────────────────
     print("\n[fail-closed]")
-    refuses(lambda: AppendixASupplier(float('nan')), "C_fin NaN 거절")
+    refuses(lambda: AppendixASupplier(float("nan"), d_ref, s_ref), "C_fin NaN 거절")
     S = lambda d: math.pi * d ** 2 / 4.0
     refuses(lambda: AppendixBSupplier(1.0, -1.0, 0.5, 0.5, S(0.5)),
             "L <= 0 거절")
@@ -189,9 +189,25 @@ def main():
         refuses(lambda b=bad: AppendixBSupplier(1.0, 4.0, 0.5, d_ref, s_ref,
                                                 crossflow_tol_rad=b),
                 f"crossflow_tol_rad = {bad!r} 거절")
-    refuses(lambda: require_assembly_premises(
-        Reference(s_ref, d_ref, (0.1, 0.0, 0.0)), sup_b),
-        "MRP ≠ 무게중심이면 거절")
+    refuses(lambda: sup_b.validate_reference(
+        Reference(s_ref, d_ref, (0.1, 0.0, 0.0))), "MRP ≠ 무게중심이면 거절")
+    # ── A 도 래퍼로 조립한다. 첫 판은 damping() 만 직접 불러 fail-open
+    #    을 못 봤다.
+    print("\n[A] 래퍼 기반 조립")
+    f_a, m_a = assemble_appendix((0.0, 0.0, 100.0), (0.0, 0.3, 0.0),
+                                 0.5 * 1e4, 340.0, ref, sup_a)
+    want_a = (0.5 * 1e4 * s_ref * d_ref
+              * (0.3 * d_ref / (2 * 100.0)) * (-c_fin))
+    check(rel(m_a[1], want_a), "A 를 래퍼로 조립하면 M_Y = Q·S·D·(qD/2V)·(−C_fin)")
+    refuses(lambda: assemble_appendix((0.0, 0.0, 100.0), (0.0, 1000.0, 0.0),
+                                      0.5 * 1e4, 340.0, ref, sup_a),
+            "  A 도 큰 q_m 이면 폐기항 조건으로 거절")
+    a_bad = AppendixASupplier(c_fin, 1.0, math.pi * 1.0 ** 2 / 4.0)
+    refuses(lambda: assemble_appendix((0.0, 0.0, 100.0), (0.0, 0.3, 0.0),
+                                      0.5 * 1e4, 340.0, ref, a_bad),
+            "  A 의 D 가 Reference 와 다르면 거절")
+    refuses(lambda: AppendixASupplier(c_fin, 0.5, 2.0),
+            "  A 도 S_ref ≠ πD²/4 를 거절")
     refuses(lambda: assemble_appendix(
         (0.0, 0.0, 100.0), (0.0, 0.3, 0.0), 0.5 * 1e4, 340.0,
         Reference(s_ref, d_ref, (1.0, 0.0, 0.0)), sup_b),
@@ -214,11 +230,10 @@ def main():
         ref, sup_b), "  래퍼도 그 경계 사례를 거절")
     huge = AppendixBSupplier(1e300, 1e100, 0.4, d_ref, s_ref)
     refuses(lambda: huge.c_mqm(), "c_mqm 곱 오버플로 거절")
-    refuses(lambda: require_assembly_premises(
-        Reference(math.pi * 1.0 ** 2 / 4, 1.0, (0, 0, 0)), sup_b),
+    refuses(lambda: sup_b.validate_reference(
+        Reference(math.pi * 1.0 ** 2 / 4, 1.0, (0, 0, 0))),
         "공급자와 Reference 의 D/S 가 다르면 거절")
-    check(require_assembly_premises(ref, sup_b) is None,
-          "일치하는 Reference 는 통과")
+    check(sup_b.validate_reference(ref) is None, "일치하는 Reference 는 통과")
     refuses(lambda: sup_b.moment_direct(-1.0, 100.0, 0.3), "음수 밀도 거절")
     refuses(lambda: sup_b.moment_direct(1.0, 0.0, 0.3), "V_R <= 0 거절")
     big = AppendixBSupplier(1e300, 1e100, 0.4, d_ref, s_ref)

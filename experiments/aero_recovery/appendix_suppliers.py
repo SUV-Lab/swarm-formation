@@ -48,24 +48,21 @@ def _require_premises(alpha_tot_rad, phi_a_rad, tol, who):
             f"φ_A = {math.degrees(phi_a_rad):.4f}° 로 호출됐다")
 
 
-def require_assembly_premises(ref, supplier):
-    """조립 경로에서만 볼 수 있는 전제. **공급자 인터페이스가 `Reference`
-    를 받지 않으므로** 별도 함수로 둔다.
+def _validate_reference(ref, d_ref, s_ref, who):
+    """조립 경로에서만 볼 수 있는 전제. 공급자마다 `validate_reference()`
+    로 **필수 구현**한다 — 선택적 속성 탐색은 fail-open 이었다.
 
     - MRP = 무게중심 (부록은 무게중심 둘레 모멘트를 준다)
-    - 공급자와 `Reference` 의 `D_ref`·`S_ref` 가 같아야 한다
+    - 공급자와 `Reference` 의 `D_ref`·`S_ref` 일치
     """
     if any(c != 0.0 for c in ref.mrp_b):
         raise AeroError(
-            f"부록 공급자는 MRP = 무게중심을 전제한다 — mrp_b = {ref.mrp_b!r}")
-    for attr, name, want in (("d", "D_ref", ref.d_ref),
-                             ("s", "S_ref", ref.s_ref)):
-        got = getattr(supplier, attr, None)
-        if got is None:
-            continue
+            f"{who} 는 MRP = 무게중심을 전제한다 — mrp_b = {ref.mrp_b!r}")
+    for name, got, want in (("D_ref", d_ref, ref.d_ref),
+                            ("S_ref", s_ref, ref.s_ref)):
         if abs(got - want) > 1e-12 * max(abs(want), 1.0):
             raise AeroError(
-                f"공급자의 {name} = {got!r} 가 Reference 의 {want!r} 와 다르다")
+                f"{who} 의 {name} = {got!r} 가 Reference 의 {want!r} 와 다르다")
 
 
 MAX_TRUNCATION_RATIO = 0.01     # 원문의 "약 1%" 조건
@@ -83,17 +80,21 @@ def assemble_appendix(v_r_b, pqr_b, q_bar, v_sound, ref, supplier, **kw):
     전제 밖에서도 대수적으로 일치한다 — 그래서 일치만으로는 전제 준수의
     증거가 되지 않는다.
     """
-    require_assembly_premises(ref, supplier)
-    _, _, _, v_r = flow_angles(v_r_b, v_sound,
-                               kw.get("phi_rel_eps", 0.0))
-    ratio = None
-    fn = getattr(supplier, "truncation_ratio", None)
-    if fn is not None:
-        ratio = fn(v_r, pqr_b[1])          # 피치율
-    if ratio is not None and ratio >= MAX_TRUNCATION_RATIO:
+    # 두 메서드를 **조건 없이** 부른다. getattr + continue 로 "있으면
+    # 검사" 하던 구조가 fail-open 이었다 — A 공급자는 `.d` 대신 `.d_ref`
+    # 를 갖고 있어 D 불일치가 통과했고, `truncation_ratio` 가 None 을
+    # 내면 폐기항 검사가 통째로 생략됐다 (실제 비가 1% 의 250배인데도).
+    supplier.validate_reference(ref)
+    alpha_tot, phi_a, _, v_r = flow_angles(v_r_b, v_sound,
+                                           kw.get("phi_rel_eps", 0.0))
+    # q_m 은 조립기와 **같은 정의**로 — B→M 은 중심선 둘레 −φ_A 회전이다.
+    c, sn = math.cos(-phi_a), math.sin(-phi_a)
+    q_m = c * pqr_b[1] + sn * pqr_b[2]
+    ratio = supplier.truncation_ratio(v_r, q_m)
+    if not math.isfinite(ratio) or ratio >= MAX_TRUNCATION_RATIO:
         raise AeroError(
-            f"폐기항 비 {ratio:.5f} >= {MAX_TRUNCATION_RATIO} — 부록의 "
-            f"1% 근사 전제 밖이다 (V_R = {v_r!r}, q_m = {pqr_b[1]!r})")
+            f"폐기항 비 {ratio!r} 가 {MAX_TRUNCATION_RATIO} 미만이 아니다 — "
+            f"부록의 1% 근사 전제 밖이다 (V_R = {v_r!r}, q_m = {q_m!r})")
     return assemble(v_r_b, pqr_b, q_bar, v_sound, ref, supplier, **kw)
 
 
@@ -114,20 +115,31 @@ class AppendixASupplier:
     정적 계수는 이 공급자의 범위가 아니므로 전부 0 을 낸다.
     """
 
-    def __init__(self, c_fin, d_ref=None,
+    def __init__(self, c_fin, d_ref, s_ref,
                  crossflow_tol_rad=DEFAULT_CROSSFLOW_TOL_RAD):
         if not isinstance(c_fin, (int, float)) or not math.isfinite(c_fin):
             raise AeroError(f"C_fin 이 유한한 수가 아니다: {c_fin!r}")
         _check_tol(crossflow_tol_rad)
         self.c_fin = float(c_fin)
         self.tol = float(crossflow_tol_rad)
-        # 폐기항 조건 검사에 D_ref 가 필요하다. 없으면 그 검사를 건너뛴다.
-        self.d_ref = None if d_ref is None else float(d_ref)
+        # **필수**다. 선택적이면 폐기항 검사가 통째로 생략된다.
+        for n_, v_ in (("d_ref", d_ref), ("s_ref", s_ref)):
+            if not isinstance(v_, (int, float)) or not math.isfinite(v_) \
+                    or v_ <= 0.0:
+                raise AeroError(f"{n_} 이 유한 양수가 아니다: {v_!r}")
+        want_s = math.pi * d_ref ** 2 / 4.0
+        if abs(s_ref - want_s) > 1e-9 * want_s:
+            raise AeroError(
+                f"S_ref 는 원통 단면적 πD²/4 = {want_s!r} 이어야 한다 "
+                f"(받은 값 {s_ref!r})")
+        self.d_ref = float(d_ref)
+        self.s_ref = float(s_ref)
+
+    def validate_reference(self, ref):
+        _validate_reference(ref, self.d_ref, self.s_ref, "부록 A")
 
     def truncation_ratio(self, v_r, q_m):
         """A.1 → A.2 에서 버린 `D_ref² q_m²` 항의 비 — |D q|/(2V) < 0.01."""
-        if self.d_ref is None:
-            return None
         return abs(self.d_ref * q_m) / (2.0 * v_r)
 
     def static(self, alpha_tot_rad, phi_a_rad, mach):
@@ -209,6 +221,9 @@ class AppendixBSupplier:
             raise AeroError(
                 f"S_ref 는 원통 단면적 πD²/4 = {want_s!r} 이어야 한다 "
                 f"(받은 값 {s_ref!r})")
+
+    def validate_reference(self, ref):
+        _validate_reference(ref, self.d, self.s, "부록 B")
 
     def truncation_ratio(self, v_r, q_m):
         """B.1 → B.2 에서 버린 `q_m² X²` 항의 비. 원문 조건은 **3항 대 2항**:
