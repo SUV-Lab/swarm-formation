@@ -70,6 +70,27 @@ int main(int argc, char **argv)
   //   Buss1=6 Buss2=7 LocalLinearization=8 AB5=9
   const int int_rate = argc > 6 ? std::atoi(argv[6]) : 1;   // 기본 = 현재 동작
   const int int_att  = argc > 7 ? std::atoi(argv[7]) : 1;
+  // fail-open 제거: readback 은 지원하지 않는 값도 그대로 돌려주므로
+  // 검사가 되지 않는다. JSBSim 의 switch 가 default 로 빠지면 적분이
+  // 조용히 멈춘다. 종류별 허용 집합을 여기서 못 박는다.
+  //   각속도용: RectEuler AB2 AB3 AB4 AB5 (벡터 적분)
+  //   자세용:   RectEuler AB2 AB3 AB4 Buss1 Buss2 LocalLinearization
+  const std::vector<int> kRateOk{1, 3, 4, 5, 9};
+  const std::vector<int> kAttOk{1, 3, 4, 5, 6, 7, 8};
+  auto allowed = [](const std::vector<int> &v, int x) {
+    for (int a : v) if (a == x) return true;
+    return false;
+  };
+  if (!allowed(kRateOk, int_rate)) {
+    std::fprintf(stderr, "FAIL: 각속도 적분기 %d 는 허용 집합에 없다\n",
+                 int_rate);
+    return 3;
+  }
+  if (!allowed(kAttOk, int_att)) {
+    std::fprintf(stderr, "FAIL: 자세 적분기 %d 는 허용 집합에 없다\n",
+                 int_att);
+    return 3;
+  }
   // CSV 는 파일로. stdout 에는 JSBSim 배너가 섞이므로 섞으면 안 된다.
   std::FILE *csv = std::fopen(csv_path.c_str(), "w");
   if (!csv) { std::fprintf(stderr, "FAIL: %s 열기 실패\n", csv_path.c_str()); return 2; }
@@ -183,12 +204,22 @@ int main(int argc, char **argv)
       const auto e = prop->GetEuler();
       const auto w = prop->GetPQRi();
       const auto v = prop->GetVel();
-      std::fprintf(hexf, "%a,%a,%a,%a,%a,%a,%a,%a,%a,%a\n",
-                   k * dt, prop->GetLatitudeDeg(), prop->GetLongitudeDeg(),
-                   prop->GetAltitudeASL(),
-                   prop->GetEuler()(1), prop->GetEuler()(2),
-                   prop->GetEuler()(3),
-                   prop->GetPQRi()(1), prop->GetPQRi()(2), prop->GetPQRi()(3));
+      // 손실 없는 상태 기록. 오일러각은 파생값이므로 **ECI 쿼터니언**을
+      // 직접 쓴다. 관성 위치·속도까지 넣어야 전체 상태 반복성이 된다.
+      // (질량 상태가 생기면 질량·CG 를 여기 추가한다.)
+      const auto &qi = prop->GetQuaternionECI();
+      const auto pi_ = prop->GetInertialPosition();
+      const auto vi_ = prop->GetInertialVelocity();
+      const auto wi_ = prop->GetPQRi();
+      const auto vned_k = prop->GetVel();
+      std::fprintf(hexf,
+                   "%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a\n",
+                   k * dt,
+                   qi(1), qi(2), qi(3), qi(4),
+                   wi_(1), wi_(2), wi_(3),
+                   pi_(1), pi_(2), pi_(3),
+                   vi_(1), vi_(2), vi_(3),
+                   vned_k(1), vned_k(2), vned_k(3));
       std::fprintf(csv, "%.10g,%.12g,%.12g,%.12g,%.12g,%.12g,%.12g,"
                   "%.12g,%.12g,%.12g,%.12g,%.12g,%.12g\n",
                   k * dt, prop->GetLatitudeDeg(), prop->GetLongitudeDeg(),

@@ -72,9 +72,21 @@ def quat_from_euler_deg(roll, pitch, yaw):
 
 
 def attitude_angle_deg(q1, q2):
-    """두 자세 사이의 각거리 [deg]. q 와 −q 가 같은 자세이므로 절댓값."""
-    d = abs(sum(a * b for a, b in zip(q1, q2)))
-    return math.degrees(2.0 * math.acos(min(1.0, max(-1.0, d))))
+    """두 자세 사이의 각거리 [deg].
+
+    acos(dot) 은 작은 각에서 무너진다 — 1e-6° 에서 상대오차 14.6% (측정).
+    dot 이 1 에 붙으면 cos 의 기울기가 0 이라 유효숫자가 통째로 날아간다.
+    상대 쿼터니언 의 벡터부/스칼라부로 atan2 를 쓰면 작은 각에서 안정하다.
+    q 와 −q 가 같은 자세이므로 스칼라부 부호로 정렬한다."""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    # q_rel = conj(q1) * q2
+    w = w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2
+    x = w1 * x2 - x1 * w2 - y1 * z2 + z1 * y2
+    y = w1 * y2 + x1 * z2 - y1 * w2 - z1 * x2
+    z = w1 * z2 - x1 * y2 + y1 * x2 - z1 * w2
+    v = math.sqrt(x * x + y * y + z * z)
+    return math.degrees(2.0 * math.atan2(v, abs(w)))
 
 
 # NESC 부록 표 4: 벽돌의 질량·관성 (CM 기준, 곱관성 0)
@@ -146,11 +158,16 @@ def momentum_drift(H):
     틀리면 |H| 는 거의 유지되면서 방향이 돈다. 방향이 더 날카롭다."""
     mag = [math.sqrt(sum(v * v for v in h)) for h in H]
     mrel = (max(mag) - min(mag)) / max(sum(mag) / len(mag), 1e-30)
-    h0, n0 = H[0], math.sqrt(sum(v * v for v in H[0])) or 1e-30
+    h0 = H[0]
     worst = 0.0
-    for h, m in zip(H, mag):
-        c = sum(a * b for a, b in zip(h, h0)) / (max(m, 1e-30) * n0)
-        worst = max(worst, math.degrees(math.acos(min(1.0, max(-1.0, c)))))
+    for h in H:
+        # atan2(‖a×b‖, a·b) — 작은 각에서 acos 보다 안정하다.
+        cx = (h0[1] * h[2] - h0[2] * h[1],
+              h0[2] * h[0] - h0[0] * h[2],
+              h0[0] * h[1] - h0[1] * h[0])
+        cross = math.sqrt(sum(c * c for c in cx))
+        dot = sum(a * b for a, b in zip(h0, h))
+        worst = max(worst, math.degrees(math.atan2(cross, dot)))
     return mrel, worst
 
 
@@ -406,13 +423,13 @@ def main():
             mx, rms, end, tm = stats(dif)
             nm = max(rate_norm([cand[k][1][c] - series[s_][k][1][c]
                                 for c in range(3)]) for k in range(len(GRID)))
-            print(f"{s_:<10}{mx:>11.4f}{rms:>9.4f}{end:>9.4f}{tm:>8.1f}{nm:>12.4f}")
+            print(f"{s_:<10}{mx:>11.3e}{rms:>9.2e}{end:>9.2e}{tm:>8.1f}{nm:>12.3e}")
         if a.scenario == "02":
             ke, Lm = invariants(cand)
             dke = (max(ke) - min(ke)) / max(abs(sum(ke) / len(ke)), 1e-30)
             dmag, ddir = momentum_drift(Lm)
             print(f"\n  후보 불변량: KE {dke:.3e}, ‖H‖ {dmag:.3e}, "
-                  f"H 방향 드리프트 {ddir:.4f} deg")
+                  f"H 방향 드리프트 {ddir:.4e} deg")
         print()
 
     print("위 숫자는 전부 측정값이다. 참여 결과의 최솟값–최댓값 안에 드는")
