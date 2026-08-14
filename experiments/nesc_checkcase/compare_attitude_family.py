@@ -290,8 +290,40 @@ def selftest():
                                     GRID[5], 0.0, 0.0)
     cases.append(("쿼터니언 비정규", bad_r, idx, raw, False))
 
+    # 작은 각도 공식 고정 — acos 판이 여기서 죽는다.
+    ang_bad = []
+    for want in (1e-3, 1e-6, 1e-9):
+        th = math.radians(want)
+        qa = (1.0, 0.0, 0.0, 0.0)
+        qb = (math.cos(th / 2), math.sin(th / 2), 0.0, 0.0)
+        got = attitude_angle_deg(qa, qb)
+        if abs(got - want) > 1e-6 * max(want, 1e-12):
+            ang_bad.append(f"자세 {want:.0e}° → {got:.6e}° (상대오차 "
+                           f"{abs(got-want)/want:.2e})")
+    # q 와 −q 는 같은 자세다
+    q = quat_from_euler_deg(11.0, 22.0, 33.0)
+    if attitude_angle_deg(q, tuple(-c for c in q)) > 1e-12:
+        ang_bad.append("부호 반전 쿼터니언이 0° 로 나오지 않음")
+    # 180° 근처
+    th = math.radians(179.999)
+    got = attitude_angle_deg((1.0, 0.0, 0.0, 0.0),
+                             (math.cos(th / 2), math.sin(th / 2), 0.0, 0.0))
+    if abs(got - 179.999) > 1e-6:
+        ang_bad.append(f"179.999° → {got:.9f}°")
+    # 벡터 방향도 같은 성질
+    for want in (1e-3, 1e-6, 1e-9):
+        th = math.radians(want)
+        H = [(1.0, 0.0, 0.0), (math.cos(th), math.sin(th), 0.0)]
+        got = momentum_drift(H)[1]
+        if abs(got - want) > 1e-6 * max(want, 1e-12):
+            ang_bad.append(f"벡터 방향 {want:.0e}° → {got:.6e}°")
+    for b in ang_bad:
+        print(f"FAIL: 작은 각도 — {b}", file=sys.stderr)
+
     fails = 0
     print("계약 검사 자기시험 — 각 조항을 위반하는 입력이 거절되는가\n")
+    print(f"  작은 각도 공식: {'OK' if not ang_bad else 'FAIL'} "
+          f"(1e-3·1e-6·1e-9°, 부호 반전, 179.999°, 벡터 방향)\n")
     for name, r, i_, t_, want in cases:
         import io
         import contextlib
@@ -303,8 +335,9 @@ def selftest():
         print(f"  {'OK  ' if ok else 'FAIL'}  {name:<24}"
               f"{'통과 기대' if want else '거절 기대'} → "
               f"{'통과' if got else '거절'}")
-    if fails:
-        print(f"\nFAIL: 자기시험 {fails}건", file=sys.stderr)
+    if fails or ang_bad:
+        print(f"\nFAIL: 계약 {fails}건, 작은 각도 {len(ang_bad)}건",
+              file=sys.stderr)
         return 1
     print(f"\nOK: {len(cases)}개 조항 전부 의도대로 동작")
     return 0

@@ -70,6 +70,9 @@ int main(int argc, char **argv)
   //   Buss1=6 Buss2=7 LocalLinearization=8 AB5=9
   const int int_rate = argc > 6 ? std::atoi(argv[6]) : 1;   // 기본 = 현재 동작
   const int int_att  = argc > 7 ? std::atoi(argv[7]) : 1;
+  // 사례 3 은 감쇠 모델을 쓰므로 기체와 공력 검사가 달라진다.
+  const std::string model = argc > 8 ? argv[8] : "nesc_brick";
+  const bool damped = (model != "nesc_brick");
   // fail-open 제거: readback 은 지원하지 않는 값도 그대로 돌려주므로
   // 검사가 되지 않는다. JSBSim 의 switch 가 default 로 빠지면 적분이
   // 조용히 멈춘다. 종류별 허용 집합을 여기서 못 박는다.
@@ -104,8 +107,8 @@ int main(int argc, char **argv)
   fdm.SetRootDir(SGPath(root));
   fdm.SetAircraftPath(SGPath("aircraft"));
   fdm.SetDebugLevel(0);
-  if (!fdm.LoadModel("nesc_brick")) {
-    std::fprintf(stderr, "FAIL: LoadModel(nesc_brick)\n");
+  if (!fdm.LoadModel(model)) {
+    std::fprintf(stderr, "FAIL: LoadModel(%s)\n", model.c_str());
     return 2;
   }
   fdm.Setdt(dt);
@@ -242,10 +245,23 @@ int main(int argc, char **argv)
   std::fprintf(stderr,
                "[검사] 전 구간 공력 힘 최대 %.3e lbf, 모멘트 최대 %.3e ftlbf\n",
                worst_force, worst_moment);
-  if (worst_force > 1e-12 || worst_moment > 1e-12) {
-    std::fprintf(stderr,
-                 "FAIL: 사례 2 는 공력이 0이어야 한다 — 불변량 검사의 전제\n");
-    return 3;
+  if (!damped) {
+    if (worst_force > 1e-12 || worst_moment > 1e-12) {
+      std::fprintf(stderr,
+                   "FAIL: 사례 2 는 공력이 0이어야 한다 — 불변량의 전제\n");
+      return 3;
+    }
+  } else {
+    // 사례 3 은 반대다 — 감쇠가 실제로 작동해야 한다. 0 이면 모델이
+    // 안 붙은 것이고, 그때 불변량이 "잘 보존"되는 것은 착시다.
+    if (worst_moment <= 0.0) {
+      std::fprintf(stderr,
+                   "FAIL: 사례 3 은 감쇠 모멘트가 0이 아니어야 한다 — "
+                   "모델이 붙지 않았다\n");
+      return 3;
+    }
+    std::fprintf(stderr, "[검사] 감쇠 사례 — 불변량(KE·H)은 여기서 "
+                 "보존되지 않으며 판정에 쓰지 않는다\n");
   }
   std::fclose(csv);
   std::fclose(hexf);
