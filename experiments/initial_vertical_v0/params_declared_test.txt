@@ -1,0 +1,54 @@
+# v0 파라미터 매니페스트 — 항목마다 출처 등급을 붙인다.
+#
+#   DECLARED_TEST  이 실험이 선언한 시험값. **실제 플랫폼 값이 아니다.**
+#   ESTIMATED      공개 방법으로 추정한 값 (방법을 함께 적는다)
+#   UNKNOWN        미상. 필수인데 UNKNOWN 이면 그 실험은 fail-closed.
+#
+# 임의 값을 숨겨 넣지 않는다. 이 파일에 없는 수는 코드에도 없다.
+#
+# name                  value        grade          note
+mass_kg                 1300.0       DECLARED_TEST  ADR-0002 중립 baseline
+ixx_kgm2                900.0        DECLARED_TEST  형상 미정 — 임의 시험값
+iyy_kgm2                4200.0       DECLARED_TEST  〃
+izz_kgm2                4400.0       DECLARED_TEST  〃
+d_ref_m                 0.60         DECLARED_TEST  형상 미정
+s_ref_m2                0.2827       DECLARED_TEST  = pi*d^2/4
+length_m                6.0          DECLARED_TEST  형상 미정
+cg_frac                 0.45         DECLARED_TEST  질량배치 미정
+# 자세 제어 권한. 공력 제어면 효율(Cm_de 등)이 UNKNOWN 이므로 계수를
+# 지어내는 대신 **가용 제어 모멘트**를 직접 선언한다. 정직한 대체다.
+pitch_moment_max_nm     9000.0       DECLARED_TEST  제어면 효율 미상
+# 추력. 공력이 0 이므로 **몸체축 힘은 추력뿐이다** — 자세가 궤적에 영향을
+# 주는 유일한 경로. 이 값이 없으면 자세는 경로 권한이 전혀 없다.
+thrust_max_n            3200.0       DECLARED_TEST  ADR-0002 baseline (T/W=0.25)
+# 자세 제어기 이득 — 설계 선택이므로 선언한다.
+ctrl_alpha_cmd_max_deg  20.0         DECLARED_TEST  받음각 명령 포화
+ctrl_k_gamma            0.5          DECLARED_TEST  gamma 오차 -> alpha 명령
+ctrl_kp_att_nm_per_rad  40000.0      DECLARED_TEST  자세 비례
+ctrl_kd_att_nms_per_rad 20000.0      DECLARED_TEST  각속도 미분 (zeta 0.77)
+# 초기 수직 PVA
+alt_init_m              2000.0       DECLARED_TEST  실험 조건
+speed_init_mps          230.0        DECLARED_TEST  ADR-0003 §3 상한
+# 중기 인계 목표
+gamma_target_deg        20.0         DECLARED_TEST  ADR-0003 §2-1 기동 범위
+cruise_floor_mps        131.76       DECLARED       122.0 * 1.08 (생산 계약)
+# 인계 판정 임계 — **실험 초깃값**. ADR-0001 기각사유 6 에 따라 동결하지 않는다.
+gate_gamma_tol_deg      2.0          DECLARED_TEST  실험 초깃값
+gate_alpha_max_deg      12.0         DECLARED_TEST  〃
+gate_beta_max_deg       3.0          DECLARED_TEST  〃
+gate_att_err_deg        5.0          DECLARED_TEST  〃
+gate_rate_max_dps       5.0          DECLARED_TEST  〃
+gate_ctrl_margin_frac   0.20         DECLARED_TEST  〃
+gate_dwell_s            1.0          DECLARED_TEST  〃
+# 중기 유효영역을 정의하는 값들(wing_area, thrust_max, CL 한계, n_max, q_max,
+# gamma_max)은 **여기에 두지 않는다.** 생산 3DOF 설정이 정의하는 영역에
+# 들어가는지를 묻는 것이므로, 시험 매니페스트로 덮어쓰면 대상이 바뀐다.
+# 하니스는 생산 기본값을 그대로 쓰고 실행할 때 전부 출력한다.
+#
+# s_ref_m2 를 wing_area_m2 로 쓰지 않는다 — 전자는 회수 감사의 원통 단면적,
+# 후자는 양력 기준면적. 서로 다른 양이다.
+#
+# 미상 — 필수가 되면 fail-closed 한다
+cm_alpha                UNKNOWN      UNKNOWN        공개 계수 미회수
+cm_q                    UNKNOWN      UNKNOWN        〃
+cl_alpha                UNKNOWN      UNKNOWN        〃
