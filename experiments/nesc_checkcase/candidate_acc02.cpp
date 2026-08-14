@@ -262,6 +262,14 @@ int main(int argc, char **argv)
               "bodyAngularRateWrtEi_deg_s_Pitch,"
               "bodyAngularRateWrtEi_deg_s_Yaw\n");
 
+  // 강제응답은 **전 스텝 기록**을 강제한다. 상태가 출력 주기로만 남으면
+  // 일-에너지가 10스텝에 한 모멘트만 쓰게 되고, 최악값·RMS 도 성긴
+  // 격자에서 계산돼 순위가 바뀐다 (측정으로 확인).
+  if (forced && std::fabs(out_dt - dt) > 1e-12) {
+    std::fprintf(stderr, "FAIL: 강제응답은 out_dt == dt 여야 한다 "
+                 "(out_dt=%g, dt=%g)\n", out_dt, dt);
+    return 3;
+  }
   const int steps = static_cast<int>(std::llround(duration / dt));
   const int every = static_cast<int>(std::llround(out_dt / dt));
   double worst_force = 0.0, worst_moment = 0.0;

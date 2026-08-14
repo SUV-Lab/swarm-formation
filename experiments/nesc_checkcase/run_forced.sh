@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 강제응답 시험 전체를 재현한다. 비생산.
 #
-#   ./run_forced.sh [T] [dt] [out_dt]
+#   ./run_forced.sh [T] [dt]      (출력 간격 = dt 고정)
 #
 # 표 1  동일 입력에서 AB2 대 AB4 (임펄스 미정규화)
 # 표 2  실측 ZOH 임펄스를 step 에 맞춘 매끄러움 시험
@@ -10,7 +10,10 @@
 # 다시 가를 수 없다.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-T="${1:-6}"; DT="${2:-0.001}"; ODT="${3:-0.01}"
+T="${1:-6}"; DT="${2:-0.001}"
+# 강제응답은 전 스텝 기록을 강제한다 — 일-에너지와 최악값이 성긴 격자에서
+# 계산되면 순위가 바뀐다 (측정). 생성기도 out_dt != dt 를 거절한다.
+ODT="$DT"
 BIN="$HERE/.build/candidate_acc02"
 export LD_LIBRARY_PATH="$HERE/../jsbsim_probe/.jsbsim/inst-v1.3.1/lib:${LD_LIBRARY_PATH:-}"
 cd "$HERE"

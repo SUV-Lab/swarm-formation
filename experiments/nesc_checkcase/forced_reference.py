@@ -147,26 +147,28 @@ def metrics(rows, sol, mom, dt_step, T):
     # 그대로 남아 있었다 (정규화도 반영되지 않았다).
     ke = np.array([0.5 * float(np.dot(I_DIAG * np.array(r[5:8]),
                                       np.array(r[5:8]))) for r in rows])
-    # mom 은 매 적분 스텝, rows 는 출력 주기다. 시각으로 맞춘다.
+    # ZOH 이므로 구간 [t_k, t_{k+1}) 의 모멘트는 M_k 로 **상수**다.
+    # 따라서 그 구간의 일은
+    #     W_k = M_k · (ω_k + ω_{k+1})/2 · dt
+    # 이다. 사다리꼴을 시각 격자에 그대로 적용하면 오른쪽 끝에서 다음
+    # 구간의 모멘트를 쓰게 되고, 마지막 점만 고쳐서는 부족하다.
+    # (생성기가 강제응답에서 out_dt == dt 를 강제하므로 rows 와 mom 의
+    #  격자가 같다.)
     mmap = {round(t, 9): M for t, M in mom}
-    p = []
-    for t, r in zip(ts, rows):
-        M = mmap.get(round(t, 9))
+    w = [np.array(r[5:8]) for r in rows]
+    work = 0.0
+    absw = 0.0
+    for k in range(len(rows) - 1):
+        M = mmap.get(round(ts[k], 9))
         if M is None:
-            # 마지막 출력 시각 T 에는 적용 구간이 없다 (ZOH 는 [t_k, t_k+dt)
-            # 에 상수이고 로그는 k < steps 까지다). 직전 구간 값을 쓴다 —
-            # 사다리꼴의 마지막 조각에만 영향을 준다.
-            if abs(t - ts[-1]) < 1e-9 and mom:
-                M = mom[-1][1]
-            else:
-                raise SystemExit(f"FAIL: t={t} 의 실제 모멘트 기록 없음")
-        p.append(float(np.dot(M, np.array(r[5:8]))))
-    p = np.array(p)
-    work = np.trapz(p, ts)
-    # 분모는 순 일이 아니라 ∫|M·ω|dt 다. 프로파일이 반대칭이라 순 일이
-    # 0 에 가까워, |W| 로 나누면 잔차가 작아도 비가 폭발한다.
-    scale = np.trapz(np.abs(p), ts)
-    closure = abs((ke[-1] - ke[0]) - work) / max(scale, 1e-30)
+            raise SystemExit(f"FAIL: t={ts[k]} 의 실제 모멘트 기록 없음 — "
+                             f"out_dt == dt 로 실행했는가")
+        pk = float(np.dot(M, 0.5 * (w[k] + w[k + 1])))
+        work += pk * dt_step
+        absw += abs(pk) * dt_step
+    # 분모는 순 일이 아니라 Σ|W_k| 다. 프로파일이 반대칭이라 순 일이 0 에
+    # 가까워, |W| 로 나누면 잔차가 작아도 비가 폭발한다.
+    closure = abs((ke[-1] - ke[0]) - work) / max(absw, 1e-30)
 
     # ② 실측 ZOH 임펄스 — 정규화가 실제로 맞았는지 여기서 보고한다.
     zoh_imp = float(sum(np.linalg.norm(M) for _, M in mom) * dt_step)
