@@ -1891,17 +1891,30 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   };
 
   const tp::TransitionResult tr = tp::generate(req);
+  // The per-gate tally is the ONLY thing that says which gate emptied the
+  // candidate set. It used to omit disq_zone_standoff, so a run wiped out
+  // by the 1.05x routing shell alone was indistinguishable from one wiped
+  // out inside the authored volume. Zone count rides along because a
+  // mis-paired scenario (zones that belong to another mission) presents
+  // exactly like a generator regression.
+  char audit_buf[640];
+  std::snprintf(
+      audit_buf, sizeof(audit_buf),
+      "enumerated %d, winner %d, zones %zu | disq fin %d "
+      "pre %d rep %d sat %d ter %d zone %d zone_standoff %d limits %d "
+      "time %d pva %d adapter %d",
+      tr.audit.candidates_enumerated, tr.audit.winner_primitive_id,
+      pm_->numRiskZones(), tr.audit.disq_finiteness, tr.audit.disq_preguard,
+      tr.audit.disq_representable, tr.audit.disq_saturated,
+      tr.audit.disq_terrain, tr.audit.disq_zone,
+      tr.audit.disq_zone_standoff, tr.audit.disq_limits,
+      tr.audit.disq_timeout, tr.audit.disq_end_pva, tr.audit.disq_adapter);
+  const std::string audit_str(audit_buf);
   log_->infof(
-      "[S13] transition audit: enumerated %d, winner %d | disq fin %d "
-      "pre %d rep %d sat %d ter %d zone %d limits %d time %d pva %d "
-      "adapter %d | dwell %.2f s, winner risk max %.3g int %.3g (search "
+      "[S13] transition audit: %s | dwell %.2f s, winner risk max %.3g int %.3g (search "
       "%.3g/%.3g), adapter err p/v/a %.3g/%.3g/%.3g, start acc: "
       "repro err %.3g / model %.3g m/s^2",
-      tr.audit.candidates_enumerated, tr.audit.winner_primitive_id,
-      tr.audit.disq_finiteness, tr.audit.disq_preguard,
-      tr.audit.disq_representable, tr.audit.disq_saturated,
-      tr.audit.disq_terrain, tr.audit.disq_zone, tr.audit.disq_limits,
-      tr.audit.disq_timeout, tr.audit.disq_end_pva, tr.audit.disq_adapter,
+      audit_str.c_str(),
       tr.audit.dwell_achieved_s, tr.audit.risk_max, tr.audit.risk_integral,
       tr.audit.search_risk_max, tr.audit.search_risk_integral,
       tr.audit.adapter_max_pos_err_m, tr.audit.adapter_max_vel_err_mps,
@@ -1911,7 +1924,7 @@ PlanResult SegmentChainPlanner::planTransitionMission(
     return fail(tr.any_candidate_reached_adapter
                     ? PlanReason::TRANSITION_ADAPTER_UNSOUND
                     : PlanReason::TRANSITION_GENERATION_FAILED,
-                tr.reason);
+                tr.reason + " [" + audit_str + "]");
 
   // Coordinator-side re-check of the returned end PVA (belt and braces:
   // the component gated it through the same closure, but the handoff is

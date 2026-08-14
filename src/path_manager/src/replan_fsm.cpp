@@ -972,6 +972,15 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         FSM_LOG_WARN("[PLAN] DEGRADED: %s", plan_res.detail.c_str());
     } else if (plan_res.outcome == PlanOutcome::FAILED &&
                !plan_res.detail.empty()) {
+        // ALWAYS on the ROS console, not only through FSM_LOG_ERROR. With
+        // enable_debug_logs the FSM macros route to the file logger, and the
+        // headless smoke runs with file logging disabled — so the one thing
+        // that says WHY a mission was refused disappeared, leaving only
+        // "Unable to generate global trajectory". The file logger still gets
+        // its copy below.
+        RCLCPP_ERROR(node_->get_logger(), "[PLAN] FAILED reason=%d: %s",
+                     static_cast<int>(plan_res.reason),
+                     plan_res.detail.c_str());
         FSM_LOG_ERROR("[PLAN] FAILED: %s", plan_res.detail.c_str());
     }
     const bool success = plan_res.hasTrajectory();
