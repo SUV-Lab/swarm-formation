@@ -62,9 +62,22 @@ int main(int argc, char **argv)
   const double duration = argc > 3 ? std::atof(argv[3]) : 30.0;
   const double out_dt = argc > 4 ? std::atof(argv[4]) : 0.1;
   const std::string csv_path = argc > 5 ? argv[5] : "candidate_acc02.csv";
+  // 적분기: JSBSim v1.3.1 은 생성자에서 회전 각속도·자세를 **둘 다**
+  // eRectEuler 로 둔다 (FGPropagate.cpp:93,95). 헤더 주석은 AB2/Trapezoidal
+  // 이라 적혀 있어 문서와 구현이 다르다 (FGPropagate.h:143). 그러므로
+  // 기본값에 의존하지 않고 명시적으로 설정하고 실행 시 단정한다.
+  //   eNone=0 RectEuler=1 Trapezoidal=2 AB2=3 AB3=4 AB4=5
+  //   Buss1=6 Buss2=7 LocalLinearization=8 AB5=9
+  const int int_rate = argc > 6 ? std::atoi(argv[6]) : 1;   // 기본 = 현재 동작
+  const int int_att  = argc > 7 ? std::atoi(argv[7]) : 1;
   // CSV 는 파일로. stdout 에는 JSBSim 배너가 섞이므로 섞으면 안 된다.
   std::FILE *csv = std::fopen(csv_path.c_str(), "w");
   if (!csv) { std::fprintf(stderr, "FAIL: %s 열기 실패\n", csv_path.c_str()); return 2; }
+  // %.12g 로 직렬화한 CSV 는 작은 차이를 잘라낸다. 진짜 double 비트
+  // 반복성을 보려면 손실 없는 표기가 따로 필요하다 — %a 16진 부동소수점.
+  const std::string hex_path = csv_path + ".hex";
+  std::FILE *hexf = std::fopen(hex_path.c_str(), "w");
+  if (!hexf) { std::fprintf(stderr, "FAIL: %s 열기 실패\n", hex_path.c_str()); return 2; }
 
   JSBSim::FGFDMExec fdm;
   fdm.SetRootDir(SGPath(root));
@@ -75,6 +88,8 @@ int main(int argc, char **argv)
     return 2;
   }
   fdm.Setdt(dt);
+  fdm.SetPropertyValue("simulation/integrator/rate/rotational", int_rate);
+  fdm.SetPropertyValue("simulation/integrator/position/rotational", int_att);
 
   // ── 초기조건 입력 ───────────────────────────────────────────────
   // NESC: 적도·본초자오선, 30,000 ft, 자세 0/0/0, local velocity 0,
@@ -112,6 +127,17 @@ int main(int argc, char **argv)
 
   Tol tol;
   int bad = 0;
+  // 설정이 실제로 먹었는지 읽어서 단정한다 — 기본값에 의존하지 않는다.
+  const int got_rate =
+      static_cast<int>(fdm.GetPropertyValue("simulation/integrator/rate/rotational"));
+  const int got_att =
+      static_cast<int>(fdm.GetPropertyValue("simulation/integrator/position/rotational"));
+  std::fprintf(stderr, "[적분기] 회전 각속도 %d, 회전 자세 %d "
+               "(요청 %d / %d)\n", got_rate, got_att, int_rate, int_att);
+  if (got_rate != int_rate || got_att != int_att) {
+    std::fprintf(stderr, "FAIL: 적분기 설정이 반영되지 않았다\n");
+    return 3;
+  }
   std::fprintf(stderr, "[IC] getter 로 읽은 실제 상태 (상수 재사용 없음)\n");
   std::fprintf(stderr, "  pqri  %.10f %.10f %.10f deg/s\n",
               pqri(1) * kRad2Deg, pqri(2) * kRad2Deg, pqri(3) * kRad2Deg);
@@ -157,6 +183,12 @@ int main(int argc, char **argv)
       const auto e = prop->GetEuler();
       const auto w = prop->GetPQRi();
       const auto v = prop->GetVel();
+      std::fprintf(hexf, "%a,%a,%a,%a,%a,%a,%a,%a,%a,%a\n",
+                   k * dt, prop->GetLatitudeDeg(), prop->GetLongitudeDeg(),
+                   prop->GetAltitudeASL(),
+                   prop->GetEuler()(1), prop->GetEuler()(2),
+                   prop->GetEuler()(3),
+                   prop->GetPQRi()(1), prop->GetPQRi()(2), prop->GetPQRi()(3));
       std::fprintf(csv, "%.10g,%.12g,%.12g,%.12g,%.12g,%.12g,%.12g,"
                   "%.12g,%.12g,%.12g,%.12g,%.12g,%.12g\n",
                   k * dt, prop->GetLatitudeDeg(), prop->GetLongitudeDeg(),
@@ -185,6 +217,7 @@ int main(int argc, char **argv)
     return 3;
   }
   std::fclose(csv);
+  std::fclose(hexf);
   std::fprintf(stderr, "[검사] 통과 — dt=%g, %d 스텝, 출력 %g s 간격 → %s\n",
                dt, steps, out_dt, csv_path.c_str());
   return 0;
