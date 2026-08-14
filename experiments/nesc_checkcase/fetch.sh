@@ -42,11 +42,12 @@ CSV_BASE="$BASE/workshop/FlightSim/2015"
 total=0
 for scn in 02 03; do
   mkdir -p "$OUT/ref/atmos_scn_$scn"
-  paths=$(grep -oE "/atmos_scn_${scn}/Atmos_${scn}_sim_[0-9]+\.csv" "$DATES" | sort -u)
-  n=$(printf '%s\n' "$paths" | grep -c . || true)
-  # fail-closed: 매니페스트가 5개를 주지 않으면 멈춘다
-  if [ "$n" -ne 5 ]; then
-    echo "FAIL: atmos_scn_$scn 경로 $n개 (5개 기대)" >&2; exit 3
+  paths=$(grep -oE "/atmos_scn_${scn}/Atmos_${scn}_sim_[0-9]+\\.csv" "$DATES" | sort -u)
+  # 개수만 세면 {01,02,04,05,06} 이 아닌 다섯 개도 통과한다. 집합을 고정한다.
+  got=$(printf '%s\n' "$paths" | sed -E 's#.*_sim_([0-9]+)\.csv#\1#' | sort | tr '\n' ',')
+  if [ "$got" != "01,02,04,05,06," ]; then
+    echo "FAIL: atmos_scn_$scn 시뮬레이터 집합이 '$got' — '01,02,04,05,06,' 기대" >&2
+    exit 3
   fi
   for rel in $paths; do
     f="$OUT/ref$rel"
@@ -55,19 +56,24 @@ for scn in 02 03; do
     if [ "$sz" -lt 1000 ]; then
       echo "FAIL: $rel 가 $sz 바이트 — 내용 없음" >&2; exit 3
     fi
-    # 필수 열: 참여 도구 5종의 열 구성이 서로 다르다 (27~38열). 아래는
-    # 실측한 공통 부분집합 중 자세 전파 검증에 필요한 것들이며, 위치는
-    # 공통이 아니라 altitudeMsl/latitude/longitude 로만 존재한다.
-    hdr=$(head -1 "$f")
-    for col in time feVelocity_ft_s_X altitudeMsl_ft latitude_deg longitude_deg \
-               eulerAngle_deg_Roll eulerAngle_deg_Pitch eulerAngle_deg_Yaw \
-               bodyAngularRateWrtEi_deg_s_Roll bodyAngularRateWrtEi_deg_s_Pitch \
-               bodyAngularRateWrtEi_deg_s_Yaw; do
-      case "$hdr" in
-        *"$col"*) : ;;
-        *) echo "FAIL: $rel 에 필수 열 '$col' 없음" >&2; exit 3 ;;
-      esac
-    done
+    # 헤더는 CSV 토큰으로 정확히 대조한다. 부분 문자열 일치는
+    # eulerAngle_deg_Roll 을 찾을 때 eulerAngle_deg_RollRate 도 통과시킨다.
+    # 참여 도구 5종의 열 구성이 27~38열로 서로 다르므로(실측), 아래는
+    # 공통 부분집합 중 자세 전파 검증에 필요한 것만이다.
+    python3 - "$f" <<'PYCHK' || exit 3
+import csv, sys
+need = {"time", "feVelocity_ft_s_X", "altitudeMsl_ft", "latitude_deg",
+        "longitude_deg", "eulerAngle_deg_Roll", "eulerAngle_deg_Pitch",
+        "eulerAngle_deg_Yaw", "bodyAngularRateWrtEi_deg_s_Roll",
+        "bodyAngularRateWrtEi_deg_s_Pitch", "bodyAngularRateWrtEi_deg_s_Yaw"}
+with open(sys.argv[1], newline="") as fh:
+    hdr = next(csv.reader(fh))
+cols = {c.strip() for c in hdr}
+missing = need - cols
+if missing:
+    print(f"FAIL: {sys.argv[1]} 에 필수 열 없음: {sorted(missing)}", file=sys.stderr)
+    raise SystemExit(3)
+PYCHK
     sha=$(sha256sum "$f" | cut -d" " -f1)
     printf '%s  %s  %s\n' "$sha" "$CSV_BASE$rel" "$rel" >> "$OUT/manifest.txt"
     echo "  $(basename "$rel")  ${sz}B"
