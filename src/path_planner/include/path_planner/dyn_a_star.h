@@ -272,6 +272,12 @@ private:
     inline bool Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) const;
 
     // Collision / risk queries backed by SDF.
+ public:
+    // The ROUTE-VALIDATION contract, public so it can be regressed as the
+    // pure predicate it is. The searcher's own fixtures can only reach these
+    // through a full FM2 plan, which pins the call site but not the rule --
+    // a mutation that deleted the obstacle half of polylineClear passed the
+    // whole variant sweep. Everything below is a query: no state changes.
     // How far the route may stay inside the terrain margin at its start
     // before that becomes a refusal. Expressed in the margin itself rather
     // than as a new tuning knob: the aircraft has to clear obstacle_margin_
@@ -360,6 +366,7 @@ private:
         return false;
     }
 
+ private:
     inline bool checkOccupancy_esdf(const Eigen::Vector3d &pos) {
         // 2.5D TERRAIN via the DEM heightmap (exact z). The SDF's voxelised
         // terrain is z-quantised (~10 m) and under-sees it, so the FM2 speed
