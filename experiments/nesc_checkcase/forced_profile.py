@@ -10,8 +10,14 @@ JSBSim 쪽과 독립 기준 쪽이 각자 프로파일을 구현하면, 둘이 �
 
 두 프로파일을 **섞지 않는다**
 -----------------------------
-- `step`   계단 입력. 멀티스텝 이력이 급변할 때의 취약성을 본다.
-- `c2ramp` 매끄러운 C² 램프. 실제로 매끄러운 명령에서 얻는 이점을 본다.
+- `step`   계단. 멀티스텝 이력이 급변할 때의 취약성.
+- `c0ramp` 선형 램프. 값만 이어짐.
+- `c1ramp` 3차. 1차 도함수까지 이어짐.
+- `c2ramp` 5차. 2차 도함수까지 이어짐.
+
+계단과 C² 만 비교하면 "매끄러움 덕분"인지 "자극량이 작아서"인지 갈리지
+않는다. 네 단계를 두어야 **필요한 연속성 차수**를 구분할 수 있고,
+`--normalize` 로 절대 임펄스를 맞춰야 자극량 차이가 제거된다.
 
 둘을 한 표에 섞으면 원인을 다시 가를 수 없으므로 표를 분리한다.
 
@@ -23,6 +29,17 @@ import math
 # 벽돌의 관성(slug·ft²)에 견주어 몇 도/s² 급 각가속도가 나오는 크기.
 # 축마다 다르게 주어 세 축이 함께 시험되도록 한다.
 AMP_FTLBF = (2.0e-3, 4.0e-3, 3.0e-3)
+
+
+def _c0ramp(u):
+    """C⁰ — 선형. 값은 이어지지만 1차 도함수가 끊긴다."""
+    return min(1.0, max(0.0, u))
+
+
+def _c1step(u):
+    """C¹ — 3차 smoothstep. 1차까지 이어지고 2차가 끊긴다."""
+    u = min(1.0, max(0.0, u))
+    return u * u * (3.0 - 2.0 * u)
 
 
 def _c2step(u):
@@ -48,18 +65,19 @@ def shape(profile, t, T):
     u = (t - k * seg) / seg if seg > 0 else 0.0
     if profile == "step":
         return (0.0, 1.0, 1.0, -1.0, -1.0, 0.0)[k]
-    if profile == "c2ramp":
+    ramp = {"c0ramp": _c0ramp, "c1ramp": _c1step, "c2ramp": _c2step}.get(profile)
+    if ramp is not None:
         if k == 0:
             return 0.0
         if k == 1:
-            return _c2step(u)
+            return ramp(u)
         if k == 2:
             return 1.0
         if k == 3:
-            return 1.0 - 2.0 * _c2step(u)
+            return 1.0 - 2.0 * ramp(u)
         if k == 4:
             return -1.0
-        return -1.0 + _c2step(u)
+        return -1.0 + ramp(u)
     raise ValueError(f"알 수 없는 프로파일: {profile}")
 
 
@@ -68,11 +86,33 @@ def moment(profile, t, T):
     return tuple(a * s for a in AMP_FTLBF)
 
 
+def abs_impulse(profile, T, n=200000):
+    """∫|s(t)| dt — 자극량 척도. 정규화 기준."""
+    h = T / n
+    return sum(abs(shape(profile, (i + 0.5) * h, T)) for i in range(n)) * h
+
+
+def schedule(profile, T, dt, normalize=None):
+    """생성기가 그대로 소비할 (t, Mx, My, Mz) 표. **유일한 정의**다.
+
+    normalize 가 주어지면 그 프로파일과 절대 임펄스가 같아지도록 진폭을
+    비례 조정한다 — 매끄러움과 자극량을 분리하기 위한 것."""
+    g = 1.0
+    if normalize:
+        g = abs_impulse(normalize, T) / max(abs_impulse(profile, T), 1e-30)
+    n = int(round(T / dt))
+    return [(k * dt, ) + tuple(g * v for v in moment(profile, k * dt, T))
+            for k in range(n + 1)]
+
+
 if __name__ == "__main__":
-    import sys
-    prof = sys.argv[1] if len(sys.argv) > 1 else "step"
-    T = float(sys.argv[2]) if len(sys.argv) > 2 else 6.0
-    n = int(sys.argv[3]) if len(sys.argv) > 3 else 60
-    for i in range(n + 1):
-        t = T * i / n
-        print(f"{t:.6f} " + " ".join(f"{v:.12g}" for v in moment(prof, t, T)))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("profile")
+    ap.add_argument("duration", type=float)
+    ap.add_argument("dt", type=float)
+    ap.add_argument("--normalize", help="이 프로파일과 절대 임펄스를 맞춤")
+    a = ap.parse_args()
+    for row in schedule(a.profile, a.duration, a.dt, a.normalize):
+        print(" ".join(f"{v!r}" if i == 0 else f"{v!r}"
+                       for i, v in enumerate(row)))

@@ -69,18 +69,59 @@ def quat_angle_deg(q1, q2):
                                          abs(w)))
 
 
-def run(path, profile, T, rtol=1e-13, atol=1e-15):
-    rows = load_hex(path)
+def load_mom(path):
+    """JSBSim 이 **실제로 적용한** 외부 모멘트 로그. 매 적분 스텝."""
+    out = []
+    for line in open(path):
+        v = [float.fromhex(x) for x in line.split()]
+        out.append((v[0], np.array(v[1:4])))
+    return out
+
+
+def rhs_const(t, y, M):
+    """ZOH 구간 안에서는 모멘트가 상수다."""
+    w = y[4:]
+    wdot = (M - np.cross(w, I_DIAG * w)) / I_DIAG
+    qw, qx, qy, qz = y[:4]
+    wx, wy, wz = w
+    qdot = 0.5 * np.array([
+        -qx * wx - qy * wy - qz * wz,
+        qw * wx + qy * wz - qz * wy,
+        qw * wy - qx * wz + qz * wx,
+        qw * wz + qx * wy - qy * wx,
+    ])
+    return np.concatenate([qdot, wdot])
+
+
+def run(hex_path, mom_path, dt, rtol=1e-13, atol=1e-15):
+    """**동일 입력** 재생. 앞선 판의 세 결함을 고친 것:
+
+      1. Python 이 프로파일을 다시 계산하지 않는다. JSBSim 이 적용한
+         모멘트 로그를 그대로 읽는다 — 두 구현이 어긋나도 검출된다.
+      2. JSBSim 은 dt 마다 명령을 갱신하고 그 사이를 유지하는 ZOH 다.
+         연속 함수 M(t) 를 RHS 마다 부르면 **다른 입력**을 푸는 것이다.
+      3. 불연속(계단의 국면 경계, 그리고 ZOH 의 매 스텝 경계)에서
+         적분기를 **재시작**한다. rtol 을 줄여도 불연속을 가로지르는
+         적분은 낫지 않는다.
+    """
+    rows = load_hex(hex_path)
+    mom = load_mom(mom_path)
     ts = [r[0] for r in rows]
-    q0 = np.array(rows[0][1:5])
-    w0 = np.array(rows[0][5:8])          # rad/s (JSBSim 내부 단위)
-    q0 = q0 / np.linalg.norm(q0)
-    sol = solve_ivp(rhs, (ts[0], ts[-1]), np.concatenate([q0, w0]),
-                    method="DOP853", t_eval=ts, rtol=rtol, atol=atol,
-                    args=(profile, T))
-    if not sol.success:
-        raise SystemExit(f"FAIL: 기준 적분 실패 — {sol.message}")
-    return rows, sol
+    y = np.concatenate([np.array(rows[0][1:5]) / np.linalg.norm(rows[0][1:5]),
+                        np.array(rows[0][5:8])])
+    ref = {0.0: y.copy()}
+    want = set(round(t, 9) for t in ts)
+    for tk, M in mom:
+        sol = solve_ivp(rhs_const, (tk, tk + dt), y, method="DOP853",
+                        rtol=rtol, atol=atol, args=(M,))
+        if not sol.success:
+            raise SystemExit(f"FAIL: t={tk} 기준 적분 실패 — {sol.message}")
+        y = sol.y[:, -1]
+        tn = round(tk + dt, 9)
+        if tn in want:
+            ref[tn] = y.copy()
+    Y = np.array([ref[round(t, 9)] for t in ts]).T
+    return rows, type("S", (), {"y": Y})()
 
 
 def metrics(rows, sol, profile, T):
@@ -125,10 +166,12 @@ def metrics(rows, sol, profile, T):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("hex_path")
-    ap.add_argument("profile", choices=("step", "c2ramp"))
+    ap.add_argument("mom_path", help="JSBSim 이 실제 적용한 모멘트 로그")
+    ap.add_argument("dt", type=float, help="적분 스텝 (ZOH 구간 길이)")
+    ap.add_argument("profile", choices=("step", "c0ramp", "c1ramp", "c2ramp"))
     ap.add_argument("duration", type=float)
     a = ap.parse_args()
-    rows, sol = run(a.hex_path, a.profile, a.duration)
+    rows, sol = run(a.hex_path, a.mom_path, a.dt)
     m = metrics(rows, sol, a.profile, a.duration)
     print(" ".join(f"{k}={v:.6e}" for k, v in m.items()))
     return 0

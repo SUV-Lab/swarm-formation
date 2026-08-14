@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <array>
 
 #include <FGFDMExec.h>
 #include <models/FGPropagate.h>
@@ -77,8 +78,7 @@ int main(int argc, char **argv)
   std::string model;
   if (caseid == "acc02")      model = "nesc_brick";
   else if (caseid == "acc03") model = "nesc_brick_damped";
-  else if (caseid == "forced_step" || caseid == "forced_c2ramp")
-    model = "nesc_brick_forced";
+  else if (caseid.rfind("forced_", 0) == 0) model = "nesc_brick_forced";
   else {
     std::fprintf(stderr, "FAIL: 사례 '%s' 는 acc02/acc03 이 아니다\n",
                  caseid.c_str());
@@ -87,6 +87,7 @@ int main(int argc, char **argv)
   const bool damped = (caseid == "acc03");
   const bool forced = (caseid.rfind("forced_", 0) == 0);
   const std::string profile = forced ? caseid.substr(7) : "";
+  const std::string sched_path = argc > 9 ? argv[9] : "schedule.txt";
   // fail-open 제거: readback 은 지원하지 않는 값도 그대로 돌려주므로
   // 검사가 되지 않는다. JSBSim 의 switch 가 default 로 빠지면 적분이
   // 조용히 멈춘다. 종류별 허용 집합을 여기서 못 박는다.
@@ -116,6 +117,9 @@ int main(int argc, char **argv)
   const std::string hex_path = csv_path + ".hex";
   std::FILE *hexf = std::fopen(hex_path.c_str(), "w");
   if (!hexf) { std::fprintf(stderr, "FAIL: %s 열기 실패\n", hex_path.c_str()); return 2; }
+  const std::string mom_path = csv_path + ".mom";
+  std::FILE *mf = std::fopen(mom_path.c_str(), "w");
+  if (!mf) { std::fprintf(stderr, "FAIL: %s 열기 실패\n", mom_path.c_str()); return 2; }
 
   JSBSim::FGFDMExec fdm;
   fdm.SetRootDir(SGPath(root));
@@ -127,7 +131,24 @@ int main(int argc, char **argv)
   }
   // 외부 모멘트 프로퍼티는 XML 의 function 이 평가되기 전에 존재해야
   // 한다. LoadModel 직후에 만든다.
+  std::vector<std::array<double, 4>> sched;
   if (forced) {
+    // 스케줄은 forced_profile.py 가 만든다. 생성기는 소비만 한다.
+    std::FILE *sf = std::fopen(sched_path.c_str(), "r");
+    if (!sf) {
+      std::fprintf(stderr, "FAIL: 스케줄 %s 없음 — forced_profile.py 로 "
+                   "먼저 만든다\n", sched_path.c_str());
+      return 3;
+    }
+    std::array<double, 4> row{};
+    while (std::fscanf(sf, "%lf %lf %lf %lf", &row[0], &row[1], &row[2],
+                       &row[3]) == 4)
+      sched.push_back(row);
+    std::fclose(sf);
+    if (sched.empty()) {
+      std::fprintf(stderr, "FAIL: 스케줄이 비었다\n");
+      return 3;
+    }
     fdm.SetPropertyValue("forced/moment-l", 0.0);
     fdm.SetPropertyValue("forced/moment-m", 0.0);
     fdm.SetPropertyValue("forced/moment-n", 0.0);
@@ -227,6 +248,20 @@ int main(int argc, char **argv)
   double worst_force = 0.0, worst_moment = 0.0;
 
   for (int k = 0; k <= steps; ++k) {
+    // 강제응답: 스케줄 파일의 k 번째 행을 그대로 쓴다. **여기에는
+    // 프로파일 정의가 없다** — 앞선 판은 C++ 에 다시 구현해두고 "한 곳에
+    // 정의"라고 적었다. 두 구현이 어긋나면 그 차이가 적분기 차이로 보인다.
+    if (forced) {
+      const size_t idx = static_cast<size_t>(k);
+      if (idx >= sched.size()) {
+        std::fprintf(stderr, "FAIL: 스케줄이 %zu 행뿐인데 스텝 %d\n",
+                     sched.size(), k);
+        return 3;
+      }
+      fdm.SetPropertyValue("forced/moment-l", sched[idx][1]);
+      fdm.SetPropertyValue("forced/moment-m", sched[idx][2]);
+      fdm.SetPropertyValue("forced/moment-n", sched[idx][3]);
+    }
     if (k % every == 0) {
       const auto e = prop->GetEuler();
       const auto w = prop->GetPQRi();
@@ -239,6 +274,27 @@ int main(int argc, char **argv)
       const auto vi_ = prop->GetInertialVelocity();
       const auto wi_ = prop->GetPQRi();
       const auto vned_k = prop->GetVel();
+      if (false) {  // (아래 매-스텝 블록으로 옮김)
+        const double ax = fdm.GetPropertyValue("moments/l-external-lbsft");
+        const double ay = fdm.GetPropertyValue("moments/m-external-lbsft");
+        const double az = fdm.GetPropertyValue("moments/n-external-lbsft");
+        std::fprintf(mf, "%a %a %a %a\n", k * dt, ax, ay, az);
+        // 명령값과 축·부호·크기를 매 스텝 재폐쇄한다.
+        // 지연 없음. Run() 뒤에 읽는 값은 방금 쓴 명령 그대로다 — 앞서
+      // "한 스텝 지연"으로 보였던 것은 모멘트 적용 코드가 편집 중
+      // 사라진 탓이었고, 재폐쇄가 그것을 잡았다.
+      const double cmd[3] = {sched[k][1], sched[k][2], sched[k][3]};
+        const double act[3] = {ax, ay, az};
+        for (int i = 0; i < 3; ++i) {
+          const double sc = std::max(1e-12, std::fabs(cmd[i]));
+          if (std::fabs(act[i] - cmd[i]) > 1e-9 * sc) {
+            std::fprintf(stderr, "FAIL: t=%.4f 축%d 외부 모멘트 재폐쇄 "
+                         "실패 — 명령 %.12g, 실제 %.12g\n",
+                         k * dt, i + 1, cmd[i], act[i]);
+            return 3;
+          }
+        }
+      }
       std::fprintf(hexf,
                    "%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a,%a\n",
                    k * dt,
@@ -253,32 +309,6 @@ int main(int argc, char **argv)
                   prop->GetAltitudeASL(), v(1), v(2), v(3),
                   e(1) * kRad2Deg, e(2) * kRad2Deg, e(3) * kRad2Deg,
                   w(1) * kRad2Deg, w(2) * kRad2Deg, w(3) * kRad2Deg);
-    }
-    // 강제응답: 프로파일이 정한 모멘트를 매 스텝 써 넣는다. 정의는
-    // forced_profile.py 한 곳에 있고 독립 기준도 같은 것을 읽는다.
-    if (forced) {
-      const double tt = k * dt;
-      const double seg = duration / 6.0;
-      const int ph = std::min(5, static_cast<int>(tt / seg));
-      const double u = (tt - ph * seg) / seg;
-      auto c2 = [](double x) {
-        x = std::min(1.0, std::max(0.0, x));
-        return x * x * x * (10.0 - 15.0 * x + 6.0 * x * x);
-      };
-      double sh = 0.0;
-      if (profile == "step") {
-        const double v[6] = {0.0, 1.0, 1.0, -1.0, -1.0, 0.0};
-        sh = v[ph];
-      } else {
-        if (ph == 1) sh = c2(u);
-        else if (ph == 2) sh = 1.0;
-        else if (ph == 3) sh = 1.0 - 2.0 * c2(u);
-        else if (ph == 4) sh = -1.0;
-        else if (ph == 5) sh = -1.0 + c2(u);
-      }
-      fdm.SetPropertyValue("forced/moment-l", 2.0e-3 * sh);
-      fdm.SetPropertyValue("forced/moment-m", 4.0e-3 * sh);
-      fdm.SetPropertyValue("forced/moment-n", 3.0e-3 * sh);
     }
     // 공력 힘·모멘트가 전 구간 0이어야 한다 — 사례 2 의 전제이며,
     // 불변량 검사가 성립하는 근거다.
@@ -318,6 +348,30 @@ int main(int argc, char **argv)
     if (k < steps && !fdm.Run()) {
       std::fprintf(stderr, "FAIL: Run() 이 t=%.4f 에서 중단\n", k * dt);
       return 2;
+    }
+    if (forced && k < steps) {
+      // **Run() 이후에** 읽는다. 외부 반력은 Run 안에서 계산되므로,
+      // 프로퍼티를 쓰자마자 읽으면 직전 값이 나온다 (재폐쇄가 이 순서
+      // 오류를 t=1.001 에서 잡았다). 여기서 읽는 값이 [t_k, t_k+dt]
+      // 구간에 실제로 적용된 모멘트다 — ZOH 재생의 입력이 된다.
+      const double ax = fdm.GetPropertyValue("moments/l-external-lbsft");
+      const double ay = fdm.GetPropertyValue("moments/m-external-lbsft");
+      const double az = fdm.GetPropertyValue("moments/n-external-lbsft");
+      std::fprintf(mf, "%a %a %a %a\n", k * dt, ax, ay, az);
+      // 지연 없음. Run() 뒤에 읽는 값은 방금 쓴 명령 그대로다 — 앞서
+      // "한 스텝 지연"으로 보였던 것은 모멘트 적용 코드가 편집 중
+      // 사라진 탓이었고, 재폐쇄가 그것을 잡았다.
+      const double cmd[3] = {sched[k][1], sched[k][2], sched[k][3]};
+      const double act[3] = {ax, ay, az};
+      for (int i = 0; i < 3; ++i) {
+        const double sc = std::max(1e-12, std::fabs(cmd[i]));
+        if (std::fabs(act[i] - cmd[i]) > 1e-9 * sc) {
+          std::fprintf(stderr, "FAIL: t=%.4f 축%d 외부 모멘트 재폐쇄 실패 "
+                       "— 명령 %.12g, 실제 %.12g\n", k * dt, i + 1,
+                       cmd[i], act[i]);
+          return 3;
+        }
+      }
     }
   }
 
@@ -362,6 +416,7 @@ int main(int argc, char **argv)
   }
   std::fclose(csv);
   std::fclose(hexf);
+  std::fclose(mf);
   std::fprintf(stderr, "[검사] 통과 — dt=%g, %d 스텝, 출력 %g s 간격 → %s\n",
                dt, steps, out_dt, csv_path.c_str());
   return 0;
