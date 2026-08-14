@@ -33,8 +33,10 @@
  </fileheader>
 
  <metrics>
-  <!-- Reference geometry is unused while every coefficient is zero. Values
-       are the brick's own dimensions so nothing is invented. -->
+  <!-- Reference geometry IS used here: the damping terms carry
+       S*b^2/(2V) and S*c^2/(2V) through aero/bi2vel and aero/ci2vel, so
+       these values change the moments directly. They are the brick's own
+       dimensions, from the published table. -->
   <wingarea  unit="FT2"> 0.2222222 </wingarea>  <!-- 8 in x 4 in -->
   <wingspan  unit="FT" > 0.3333333 </wingspan>  <!-- 4 in -->
   <chord     unit="FT" > 0.6666667 </chord>     <!-- 8 in -->
