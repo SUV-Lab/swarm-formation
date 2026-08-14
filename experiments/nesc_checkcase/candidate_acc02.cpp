@@ -24,6 +24,7 @@
 #include <models/FGPropagate.h>
 #include <models/FGAuxiliary.h>
 #include <models/FGAircraft.h>
+#include <models/FGAerodynamics.h>
 #include <models/FGMassBalance.h>
 #include <initialization/FGInitialCondition.h>
 
@@ -76,12 +77,16 @@ int main(int argc, char **argv)
   std::string model;
   if (caseid == "acc02")      model = "nesc_brick";
   else if (caseid == "acc03") model = "nesc_brick_damped";
+  else if (caseid == "forced_step" || caseid == "forced_c2ramp")
+    model = "nesc_brick_forced";
   else {
     std::fprintf(stderr, "FAIL: 사례 '%s' 는 acc02/acc03 이 아니다\n",
                  caseid.c_str());
     return 3;
   }
   const bool damped = (caseid == "acc03");
+  const bool forced = (caseid.rfind("forced_", 0) == 0);
+  const std::string profile = forced ? caseid.substr(7) : "";
   // fail-open 제거: readback 은 지원하지 않는 값도 그대로 돌려주므로
   // 검사가 되지 않는다. JSBSim 의 switch 가 default 로 빠지면 적분이
   // 조용히 멈춘다. 종류별 허용 집합을 여기서 못 박는다.
@@ -120,6 +125,13 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "FAIL: LoadModel(%s)\n", model.c_str());
     return 2;
   }
+  // 외부 모멘트 프로퍼티는 XML 의 function 이 평가되기 전에 존재해야
+  // 한다. LoadModel 직후에 만든다.
+  if (forced) {
+    fdm.SetPropertyValue("forced/moment-l", 0.0);
+    fdm.SetPropertyValue("forced/moment-m", 0.0);
+    fdm.SetPropertyValue("forced/moment-n", 0.0);
+  }
   fdm.Setdt(dt);
   fdm.SetPropertyValue("simulation/integrator/rate/rotational", int_rate);
   fdm.SetPropertyValue("simulation/integrator/position/rotational", int_att);
@@ -152,6 +164,9 @@ int main(int argc, char **argv)
   auto prop = fdm.GetPropagate();
   auto aux = fdm.GetAuxiliary(); (void)aux;
   auto air = fdm.GetAircraft();
+  // FGAircraft::GetMoments 는 외부 반력까지 합산한다. 공력만 보려면
+  // FGAerodynamics 쪽을 봐야 한다 — 강제응답 리그에서 이 구분이 필요하다.
+  auto aero = fdm.GetAerodynamics();
 
   const auto pqri = prop->GetPQRi();
   const auto pqr = prop->GetPQR();
@@ -239,11 +254,37 @@ int main(int argc, char **argv)
                   e(1) * kRad2Deg, e(2) * kRad2Deg, e(3) * kRad2Deg,
                   w(1) * kRad2Deg, w(2) * kRad2Deg, w(3) * kRad2Deg);
     }
+    // 강제응답: 프로파일이 정한 모멘트를 매 스텝 써 넣는다. 정의는
+    // forced_profile.py 한 곳에 있고 독립 기준도 같은 것을 읽는다.
+    if (forced) {
+      const double tt = k * dt;
+      const double seg = duration / 6.0;
+      const int ph = std::min(5, static_cast<int>(tt / seg));
+      const double u = (tt - ph * seg) / seg;
+      auto c2 = [](double x) {
+        x = std::min(1.0, std::max(0.0, x));
+        return x * x * x * (10.0 - 15.0 * x + 6.0 * x * x);
+      };
+      double sh = 0.0;
+      if (profile == "step") {
+        const double v[6] = {0.0, 1.0, 1.0, -1.0, -1.0, 0.0};
+        sh = v[ph];
+      } else {
+        if (ph == 1) sh = c2(u);
+        else if (ph == 2) sh = 1.0;
+        else if (ph == 3) sh = 1.0 - 2.0 * c2(u);
+        else if (ph == 4) sh = -1.0;
+        else if (ph == 5) sh = -1.0 + c2(u);
+      }
+      fdm.SetPropertyValue("forced/moment-l", 2.0e-3 * sh);
+      fdm.SetPropertyValue("forced/moment-m", 4.0e-3 * sh);
+      fdm.SetPropertyValue("forced/moment-n", 3.0e-3 * sh);
+    }
     // 공력 힘·모멘트가 전 구간 0이어야 한다 — 사례 2 의 전제이며,
     // 불변량 검사가 성립하는 근거다.
     for (int i = 1; i <= 3; ++i) {
-      worst_force = std::max(worst_force, std::fabs(air->GetForces(i)));
-      worst_moment = std::max(worst_moment, std::fabs(air->GetMoments(i)));
+      worst_force = std::max(worst_force, std::fabs(aero->GetForces(i)));
+      worst_moment = std::max(worst_moment, std::fabs(aero->GetMoments(i)));
     }
     if (damped) {
       // 감쇠 모멘트를 해석식으로 재폐쇄한다. 모델이 "0이 아니다"만으로는
@@ -263,7 +304,7 @@ int main(int argc, char **argv)
                               -qbar * S * c * c2v * qa,
                               -qbar * S * b * b2v * ra};
       for (int i = 0; i < 3; ++i) {
-        const double got = air->GetMoments(i + 1);
+        const double got = aero->GetMoments(i + 1);
         const double scale = std::max(1e-12, std::fabs(want[i]));
         if (std::fabs(got - want[i]) > 1e-9 * scale) {
           std::fprintf(stderr,
@@ -283,7 +324,17 @@ int main(int argc, char **argv)
   std::fprintf(stderr,
                "[검사] 전 구간 공력 힘 최대 %.3e lbf, 모멘트 최대 %.3e ftlbf\n",
                worst_force, worst_moment);
-  if (!damped) {
+  if (forced) {
+    // 강제응답 리그는 공력이 0이어야 한다 — 외부 모멘트만 작용해야
+    // 일-에너지 폐쇄 dKE/dt = M·ω 가 성립한다.
+    if (worst_force > 1e-12 || worst_moment > 1e-12) {
+      std::fprintf(stderr, "FAIL: 강제응답 리그의 공력이 0이 아니다 "
+                   "(힘 %.3e, 모멘트 %.3e)\n", worst_force, worst_moment);
+      return 3;
+    }
+    std::fprintf(stderr, "[검사] 강제응답 %s — 공력 0, 외부 모멘트만\n",
+                 profile.c_str());
+  } else if (!damped) {
     if (worst_force > 1e-12 || worst_moment > 1e-12) {
       std::fprintf(stderr,
                    "FAIL: 사례 2 는 공력이 0이어야 한다 — 불변량의 전제\n");
