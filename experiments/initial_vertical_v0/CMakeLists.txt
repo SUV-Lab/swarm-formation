@@ -13,3 +13,8 @@ target_include_directories(v0_harness PRIVATE
   ${JSBSIM_ROOT}/include/JSBSim ${MMP_DYN_ROOT}/include)
 target_link_directories(v0_harness PRIVATE ${JSBSIM_ROOT}/lib)
 target_link_libraries(v0_harness PRIVATE JSBSim Eigen3::Eigen)
+
+add_library(v0_aero STATIC v0_aero.cpp)
+target_include_directories(v0_aero PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(v0_aero_test v0_aero_test.cpp)
+target_link_libraries(v0_aero_test PRIVATE v0_aero)
