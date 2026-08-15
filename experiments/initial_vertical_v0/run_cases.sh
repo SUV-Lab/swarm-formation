@@ -11,6 +11,29 @@ BIN=./.build/v0_harness
 SCRATCH=${TMPDIR:-/tmp}/v0_case.csv
 fails=0
 
+# JSBSim 은 공유 라이브러리이고, 바이너리에 박히는 RUNPATH 는 **설정 시점의
+# 절대경로**다. 컨테이너에서 설정하면 /ws/... 가 박히므로 호스트 셸에서는
+# 그대로 실행할 수 없다 — 사례 7개가 전부 127 로 끝나고, 그 127 이
+# "기대와 다름"으로만 보여 원인이 가려진다.
+#
+# 그래서 스크립트가 저장소 상대 경로로 직접 찾는다. 못 찾으면 사례를 돌리기
+# 전에 멈춘다: 재현 명령이 참이 아니면 결과도 참이 아니다.
+JSBSIM_LIB=$(cd "../jsbsim_probe/.jsbsim/inst-v1.3.1/lib" 2>/dev/null && pwd)
+if [ -z "${JSBSIM_LIB:-}" ] || [ ! -e "$JSBSIM_LIB/libJSBSim.so.1" ]; then
+  echo "중단: libJSBSim.so.1 을 찾지 못했다." >&2
+  echo "  기대 위치: experiments/jsbsim_probe/.jsbsim/inst-v1.3.1/lib" >&2
+  echo "  JSBSim 을 먼저 빌드·설치하거나 LD_LIBRARY_PATH 를 직접 지정하라." >&2
+  exit 2
+fi
+export LD_LIBRARY_PATH="$JSBSIM_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+if [ ! -x "$BIN" ]; then
+  echo "중단: $BIN 이 없다. 먼저 빌드하라:" >&2
+  echo "  cmake -S . -B .build -DJSBSIM_ROOT=<inst> -DMMP_DYN_ROOT=<dyn>" >&2
+  echo "  cmake --build .build -j4" >&2
+  exit 2
+fi
+
 run() {
   local expect="$1" name="$2"; shift 2
   echo

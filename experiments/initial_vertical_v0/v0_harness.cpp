@@ -173,7 +173,9 @@ struct Gate {
 struct Combined {
   std::vector<Gate> sixdof;
   bool sixdof_ready = false;
-  bool projected = false;        // 1단계 통과해야 투영한다
+  // 투영과 포락선은 매 시각 계산한다. projected 는 "이 투영이
+  // **인계 후보로 관문에 쓰였는가**" 이지 "계산했는가" 가 아니다.
+  bool projected = false;
   vd::HandoffVerdict envelope;
   bool envelope_ok = false;
   bool handoff_ready = false;    // 둘의 AND
@@ -216,8 +218,9 @@ void report(const char *title, const Combined &c)
                 c.a.x(), c.a.y(), c.a.z());
   } else {
     const auto &e = c.envelope;
-    std::printf("      1단계가 실패해 이 투영은 **관문에 쓰이지 않았다.**\n");
-    std::printf("      [진단·관문 아님] 그래도 투영했다면 중기 판정은:\n");
+    std::printf("      1단계가 실패해 이 투영은 후보가 아니다 — "
+                "**관문에 쓰이지 않았다.**\n");
+    std::printf("      [진단·관문 아님] 같은 시각에 계산해 둔 중기 판정:\n");
     std::printf("        사유 %s\n", vd::handoffRejectName(e.reject));
     if (e.evaluation.valid)
       std::printf("        사용률 %.5f · 제한요소 %s · 속력 %.4f m/s · "
@@ -411,8 +414,13 @@ int main(int argc, char **argv)
   std::printf("  V [%.1f, %.1f] m/s · margin %.3f → 순항 하한 %.5f m/s · "
               "인계 상한 %.1f m/s\n", mp.speed_min_mps, mp.speed_max_mps,
               mp.constraint_margin, floor_mps, vmax_mps);
-  std::printf("  bank_max %.1f° · gamma_max %.1f° · 모델 작동 속력 %.1f m/s\n\n",
+  std::printf("  bank_max %.1f° · gamma_max %.1f° · 모델 작동 속력 %.1f m/s\n",
               bank_deg, fpa_deg, mp.model_activation_speed_mps);
+  // 읽는 것은 **배포 기본 설정**이다. 실행 시 planning/handoff_max_vel_mps
+  // 같은 재정의가 걸리면 생산의 인계 상한은 달라진다 — 여기 결과의 범위는
+  // 그 재정의가 없는 기본 설정 기준이다.
+  std::printf("  ※ 배포 기본 설정 기준. 실행 시 planning/handoff_max_vel_mps "
+              "재정의는 재현하지 않는다.\n\n");
   if (std::fabs(mp.mass_kg - mass) > 1e-6) {
     std::fprintf(stderr, "계약 위반: 질량 불일치 — 6DOF %.4f kg vs 생산 3DOF "
                  "%.4f kg. 다른 질량의 포락선과 비교하는 것은 무의미하다.\n",
@@ -610,7 +618,8 @@ int main(int argc, char **argv)
     for (const auto &x : c.sixdof) c.sixdof_ready &= x.pass;
 
     // ── 2단계: 후보 PVA 투영 → 중기 포락선 ──────────────────
-    // 1단계를 통과한 순간에만 투영한다. 그래야 "후보"라는 말이 성립한다.
+    // 계산은 매 시각 하되, **후보로 인정되는 것은 1단계를 통과한 순간의
+    // 투영뿐이다.** 나머지는 보고용 진단이고 dwell 에 들어가지 않는다.
     // GetUVWdot 은 몸체 성분의 시간도함수라 수송항이 이미 빠져 있다
     // (FGAccelerations.cpp:191). 되돌려 놓고 회전시켜야 d(V_ned)/dt 다.
     const auto a_ned = prop->GetTb2l()
@@ -681,8 +690,10 @@ int main(int argc, char **argv)
   if (have_first && first_sixdof.t != best.t)
     report("[sixdof_ready 가 처음 성립한 순간]", first_sixdof);
   else if (!have_first)
-    std::printf("sixdof_ready 는 한 번도 성립하지 않았다 — 투영 자체가 "
-                "없었다.\n\n");
+    std::printf("sixdof_ready 는 한 번도 성립하지 않았다 — **인계 후보로 "
+                "쓰인 투영이 없었다.**\n"
+                "  (투영과 포락선 판정 자체는 매 시각 계산해 두었다. 진단용이며 "
+                "관문에는 들어가지 않는다.)\n\n");
   std::fflush(stdout);
   return 1;
 }
