@@ -34,6 +34,31 @@ if [ ! -x "$BIN" ]; then
   exit 2
 fi
 
+# vertical 사례의 적용범위 집계를 **값으로** 단언한다. 출력만 하고
+# 단언하지 않으면 집계 코드를 지워도 사례가 통과한다 — 그러면 이 수치는
+# 영구 증거가 못 된다.
+#
+# 경계는 출처가 확정한 유효범위가 아니라 보수적으로 택한 진단 정책
+# 경계다. 값이 바뀌면 여기서 깨지고, 그때 왜 바뀌었는지 적어야 한다.
+EXPECT_APPLICABILITY=(
+  "window=CL steps=60001 in_mach=12786 ok=106 best_s=0.2120 below=7604 above=5076"
+  "window=Cm steps=60001 in_mach=12786 ok=126 best_s=0.2520 below=7584 above=5076"
+)
+
+assert_applicability() {
+  local out="$1"
+  for want in "${EXPECT_APPLICABILITY[@]}"; do
+    if ! grep -qF "[APPLICABILITY] $want" <<<"$out"; then
+      echo "!! 적용범위 집계가 기대와 다르다"
+      echo "   기대: $want"
+      echo "   실제: $(grep -F '[APPLICABILITY]' <<<"$out" | head -2)"
+      fails=$((fails + 1))
+      return
+    fi
+  done
+  echo "적용범위 집계 2줄 단언 통과 (전 적분 스텝)"
+}
+
 run() {
   local expect="$1" name="$2"; shift 2
   echo
@@ -41,6 +66,10 @@ run() {
   "$BIN" --root . --case "$name" "$@" 2>&1 \
     | grep -vE '^$|JSBSim Flight|JSBSim-ML|startup beginning|aerodynamic axis|aerodynamic moment'
   local got=${PIPESTATUS[0]}
+  if [ "$name" = "vertical" ]; then
+    assert_applicability "$("$BIN" --root . --case vertical --tmax 120 \
+      --csv "$SCRATCH" 2>&1)"
+  fi
   if [ "$got" != "$expect" ]; then
     echo "!! 기대 exit=$expect 인데 $got — 사례 성격이 바뀌었다"
     fails=$((fails + 1))

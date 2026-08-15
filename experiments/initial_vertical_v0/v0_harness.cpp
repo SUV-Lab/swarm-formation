@@ -595,8 +595,9 @@ int main(int argc, char **argv)
                     "sixdof_ready,env_ok,env_util,env_reject,handoff_ready\n");
 
   // ── 적용범위 창, 매 적분 스텝 집계 ────────────────────────
-  // CSV 는 50 스텝마다 기록하므로 그것으로 dwell 을 재면 중간 49 스텝의
-  // 실패를 놓친다. 판정과 같은 해상도로 여기서 직접 센다.
+  // CSV 는 50 스텝마다 기록하므로 그것으로 dwell 을 재면 중간 49 스텝을
+  // 보지 못한다 — 실패도 성공도 놓치므로 방향을 미리 단정할 수 없다.
+  // 판정과 같은 해상도로 여기서 직접 센다.
   //
   // 경계는 **출처가 확정한 유효범위가 아니다.** TR 1096 곡선의 실제
   // 판독 범위와, 원문 p.4 가 관측한 Cm 기울기 변화점을 보수적으로
@@ -673,9 +674,10 @@ int main(int argc, char **argv)
     // 적용범위 창 — 매 스텝.
     {
       ++n_steps_seen;
-      const double T = 288.15 - 0.0065 * std::min(alt, 11000.0);
-      const double a_snd = std::sqrt(1.4 * 287.053 * T);
-      const double M = sp / a_snd;
+      // 마하를 다시 계산하지 않는다. 별도 표준대기를 복제하면 모델이
+      // 실제로 쓴 대기·음속과 경계 판정이 갈릴 수 있다. 모델 자신의
+      // 값을 읽는다.
+      const double M = aux->GetMach();
       const bool in_mach = (M >= 0.3585 && M <= 0.7000);
       if (in_mach) ++n_in_mach;
       const double adeg = alpha * kRad2Deg;
@@ -783,6 +785,25 @@ int main(int argc, char **argv)
   std::printf("  sixdof_ready 성립 스텝 %ld · 두 단계 동시 성립 스텝 %ld\n\n",
               n_sixdof, n_both);
 
+  // 집계 자체의 불변조건. 대역 안 스텝은 하한 이탈·상한 이탈·범위 안
+  // 셋으로 정확히 갈린다. 어긋나면 집계가 깨진 것이므로 멈춘다.
+  for (int w = 0; w < 2; ++w) {
+    const long parts = n_below[w] + n_above[w] + win[w].n_ok;
+    if (parts != n_in_mach) {
+      std::fprintf(stderr,
+                   "계약 위반: 적용범위 집계 불일치 [%s] — 하한 %ld + "
+                   "상한 %ld + 범위안 %ld = %ld != 대역내 %ld\n",
+                   win[w].name, n_below[w], n_above[w], win[w].n_ok,
+                   parts, n_in_mach);
+      return 3;
+    }
+    if (win[w].best > 0.0 && win[w].n_ok == 0) {
+      std::fprintf(stderr, "계약 위반: [%s] 연속시간이 있는데 만족 스텝이 "
+                   "0 이다\n", win[w].name);
+      return 3;
+    }
+  }
+
   std::printf("[적용범위 창] **조건부 진단** — 아래 경계는 어떤 출처도 "
               "수치적 유효범위로 확정한 적이 없다.\n");
   std::printf("  매 적분 스텝(dt=%.4f s) 집계 · 전체 %ld 스텝 · "
@@ -805,6 +826,12 @@ int main(int argc, char **argv)
                   "상한 %ld (%.1f%%)\n", n_below[w],
                   100.0 * n_below[w] / n_in_mach, n_above[w],
                   100.0 * n_above[w] / n_in_mach);
+    // 구조화 한 줄 — 회귀가 이 값을 직접 단언한다. 집계를 지우면
+    // 이 줄이 사라져 사례가 깨진다.
+    std::printf("[APPLICABILITY] window=%s steps=%ld in_mach=%ld ok=%ld "
+                "best_s=%.4f below=%ld above=%ld\n", win[w].name,
+                n_steps_seen, n_in_mach, win[w].n_ok, win[w].best,
+                n_below[w], n_above[w]);
   }
   std::printf("\n");
 
