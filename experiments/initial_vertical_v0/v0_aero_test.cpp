@@ -19,6 +19,16 @@ bool throws(F f)
   try { f(); } catch (const std::exception &) { return true; }
   return false;
 }
+// "던진다"만 보는 시험은 약하다 — 지금은 압축성이 늘 던지므로 거기까지
+// 도달하기만 하면 무엇이든 통과한다. 이유까지 확인한다.
+template <typename F>
+bool throwsWith(F f, const char *needle)
+{
+  try { f(); } catch (const std::exception &e) {
+    return std::string(e.what()).find(needle) != std::string::npos;
+  }
+  return false;
+}
 
 v0aero::Geometry geom()
 {
@@ -61,18 +71,9 @@ int main()
   // ── 미회수 입력은 fail-closed ───────────────────────────
   Tr1096Anchor anchor;              // available = false
   DownwashLag downwash;             // available = false
-  expect(throws([&] { pitchDamping(0.50, g, anchor, downwash); }),
+  NonTailMachModel nt0;             // available = false
+  expect(throws([&] { pitchDamping(0.50, g, anchor, downwash, nt0); }),
          "기준점 미회수면 Cm_q 를 내지 않는다");
-  anchor.available = true;
-  anchor.cm_q_total_per_rad = -10.0;
-  anchor.cl_alpha_htail_per_rad = 3.0;
-  expect(throws([&] { pitchDamping(0.50, g, anchor, downwash); }),
-         "다운워시 항 미회수면 Cm_q 를 내지 않는다 (CL_alpha 와 분리 계약)");
-  downwash.available = true;
-  downwash.factor = 1.0;
-  expect(throws([&] { pitchDamping(0.50, g, anchor, downwash); }),
-         "압축성 관계 미회수면 Cm_q 를 내지 않는다 — 단순 "
-         "1/sqrt(1-M^2) 로 대체하지 않는다");
   expect(throws([&] { liftSlopeRatio(0.50, 0.13, 4.0, 0.785); }),
          "압축성 보정 자체가 미회수 상태에서 던진다");
 
@@ -104,21 +105,125 @@ int main()
   expect(std::fabs(tail3 / tail - 2.0) < 1e-9,
          "꼬리 면적을 2배로 하면 감쇠 기여가 2배 — 면적의 1차 의존");
 
+  // ── 규약과 단위 ────────────────────────────────────────
+  expect(throws([&] {
+           PitchDampingAlone::make(-8.0, PitchRateNorm::ChordOverV, 0.5,
+                                   Grade::Estimated, "x");
+         }),
+         "q c/V 규약의 값은 거부된다 — 2배 어긋난다");
+  expect(throws([&] {
+           PitchDampingAlone::make(-8.0, PitchRateNorm::Unspecified, 0.5,
+                                   Grade::Estimated, "x");
+         }),
+         "규약 미지정은 거부된다");
+  expect(throws([&] {
+           PitchDampingAlone::make(std::nan(""), PitchRateNorm::HalfChordOverV,
+                                   0.5, Grade::Estimated, "x");
+         }),
+         "비유한 값은 팩토리에서 거부된다");
+  expect(throws([&] {
+           PitchDampingAlone::make(-8.0, PitchRateNorm::HalfChordOverV, 0.5,
+                                   Grade::Unknown, "x");
+         }),
+         "등급 UNKNOWN 은 거부된다");
+  expect(throws([&] {
+           PitchDampingAlone::make(-8.0, PitchRateNorm::HalfChordOverV, 0.5,
+                                   Grade::Estimated, "");
+         }),
+         "근거 문자열이 비면 거부된다");
+
+  // ── 폐쇄 검사: 식 (3) 대 실측 on/off ────────────────────
+  {
+    Tr1096Anchor a;
+    a.available = true;
+    a.norm = PitchRateNorm::HalfChordOverV;
+    a.grade = Grade::MeasuredDigitized;
+    a.basis = "TR 1096 fig 7";
+    a.cl_alpha_htail_per_rad = 3.0;
+    a.read_error = 0.05;
+    DownwashLag d;
+    d.available = true; d.factor = 1.0;
+    d.grade = Grade::MeasuredDigitized; d.basis = "TR 1096 p.20";
+    // 식 (3) 이 예측하는 차이를 실측이 정확히 재현하도록 놓으면 닫힌다.
+    const double pred = tailPitchDampingContribution(3.0, 1.0, g);
+    a.cm_q_tail_off = -2.0;
+    a.cm_q_total = a.cm_q_tail_off + pred;
+    expect(checkTailClosure(a, g, d).closed,
+           "실측 on/off 차이가 식 (3) 과 맞으면 닫힌다");
+    // 실측 차이를 판독 오차 너머로 어긋나게 하면 닫히지 않아야 한다.
+    a.cm_q_total = a.cm_q_tail_off + pred * 1.5;
+    const TailClosure bad = checkTailClosure(a, g, d);
+    expect(!bad.closed,
+           "실측 차이가 식 (3) 과 어긋나면 닫히지 않는다 — 오차가 "
+           "나머지에 숨지 않는다");
+    NonTailMachModel nt;
+    nt.available = true; nt.ratio_to_anchor = 1.0;
+    nt.grade = Grade::Estimated; nt.basis = "가정"; nt.diagnostic_only = false;
+    expect(throws([&] { pitchDamping(0.50, g, a, d, nt); }),
+           "닫히지 않은 상태에서는 Cm_q 를 조립하지 않는다");
+  }
+
+  // ── 비꼬리 마하 모델 ────────────────────────────────────
+  {
+    Tr1096Anchor a;
+    a.available = true; a.norm = PitchRateNorm::HalfChordOverV;
+    a.grade = Grade::MeasuredDigitized; a.basis = "TR 1096 fig 7";
+    a.cl_alpha_htail_per_rad = 3.0; a.read_error = 0.05;
+    DownwashLag d;
+    d.available = true; d.factor = 1.0;
+    d.grade = Grade::MeasuredDigitized; d.basis = "TR 1096 p.20";
+    a.cm_q_tail_off = -2.0;
+    a.cm_q_total = a.cm_q_tail_off + tailPitchDampingContribution(3.0, 1.0, g);
+    NonTailMachModel nt;
+    // **표적 조항만 위반한다**: 등급과 근거는 멀쩡하고 available 만
+    // false 다. 그렇지 않으면 requireUsable 이 먼저 잡아서 availability
+    // 검사를 지워도 시험이 통과한다 (실제로 그 변이가 살아남았다).
+    nt.available = false;
+    nt.ratio_to_anchor = 1.0;
+    nt.grade = Grade::Estimated;
+    nt.basis = "마하 무관 가정";
+    expect(throwsWith([&] { pitchDamping(0.50, g, a, d, nt); },
+                      "마하 모델 미회수"),
+           "비꼬리 마하 모델 미회수면 **그 이유로** 거부된다 — 마하 "
+           "무관은 근거가 아니라 추정이다");
+    nt.available = true;
+    nt.diagnostic_only = true;
+    expect(throwsWith([&] { pitchDamping(0.50, g, a, d, nt); },
+                      "진단 전용"),
+           "진단 전용 모델은 호출부가 명시하지 않으면 **그 이유로** "
+           "거부된다");
+    // 명시하면 그 관문은 넘고 압축성에서 멈춘다 — 서로 다른 이유임을
+    // 확인해야 두 관문이 각각 하중을 받는다.
+    expect(throwsWith([&] { pitchDamping(0.50, g, a, d, nt, true); },
+                      "압축성 보정"),
+           "진단을 허용하면 진단 관문은 넘고 **압축성**에서 멈춘다");
+  }
+
   // ── 합과 단독은 섞이지 않는다 ───────────────────────────
-  PitchDampingSum sum;
-  sum.cm_q_plus_cm_alphadot_per_rad = -12.0;
-  sum.mach = 0.5;
-  sum.grade = Grade::MeasuredDigitized;
-  expect(throws([&] { subtractAlphaDot(sum, -4.0, Grade::Unknown, "x"); }),
+  const PitchDampingSum sum = PitchDampingSum::make(
+      -12.0, PitchRateNorm::HalfChordOverV, 0.5, Grade::MeasuredDigitized,
+      "20150018562 fig 5");
+  expect(throws([&] {
+           subtractAlphaDot(sum, -4.0, PitchRateNorm::HalfChordOverV,
+                            Grade::Unknown, "x");
+         }),
          "Cm_alphadot 등급이 UNKNOWN 이면 합에서 단독을 빼지 못한다");
-  expect(throws([&] { subtractAlphaDot(sum, -4.0, Grade::Estimated, ""); }),
-         "근거 문자열이 비면 빼지 못한다 — 근거 없는 뺄셈은 합을 "
-         "단독으로 저장하는 것과 같다");
-  const PitchDampingAlone alone =
-      subtractAlphaDot(sum, -4.0, Grade::Estimated, "TR 1188 fig 23");
-  expect(std::fabs(alone.cm_q_per_rad - (-8.0)) < 1e-12,
+  expect(throws([&] {
+           subtractAlphaDot(sum, -4.0, PitchRateNorm::HalfChordOverV,
+                            Grade::Estimated, "");
+         }),
+         "근거 문자열이 비면 빼지 못한다");
+  expect(throws([&] {
+           subtractAlphaDot(sum, -4.0, PitchRateNorm::ChordOverV,
+                            Grade::Estimated, "x");
+         }),
+         "규약이 다르면 빼지 못한다");
+  const PitchDampingAlone alone = subtractAlphaDot(
+      sum, -4.0, PitchRateNorm::HalfChordOverV, Grade::Estimated,
+      "TR 1188 fig 23");
+  expect(std::fabs(alone.value() - (-8.0)) < 1e-12,
          "근거가 있으면 뺄셈이 성립한다");
-  expect(alone.grade == Grade::Estimated,
+  expect(alone.grade() == Grade::Estimated,
          "뺀 결과의 등급은 ESTIMATED 다 (MEASURED 가 아니다)");
 
   std::printf("\n%s: %d failed\n", failures ? "FAIL" : "PASS", failures);
