@@ -15,9 +15,22 @@
 | 발행 | 2012년 11월, Marshall Space Flight Center, 계약 NNM12AA41C |
 | 저자 | G.L. Watts (Jacobs ESSSA / Qualis), J.W. McCarter (Jacobs ESSSA / DESE) |
 | 분량 | 28쪽 |
-| 배포 | **Unclassified-Unlimited**, Subject Category 02 |
+| 배포 (문서 표지) | **Unclassified-Unlimited**, Subject Category 02 — **문서 표면 문구이고 NTRS 필드가 아니다** |
+| 권리 (NTRS) | `copyright.determinationType` = **`PUBLIC_USE_PERMITTED`**, `distribution` = `PUBLIC`, `exportControl` = NO / ear NO / itar NO. 2026-08-15 확인, `https://ntrs.nasa.gov/api/citations/20130003336` |
 | 크기 | 624,193 바이트 |
 | **SHA-256** | `9e3b026b7684f9e118a1379cb228b8418728b140f5c106df3bb58b979a97d85d` |
+
+**배포 표시와 권리 표시는 다른 것이다.** 위 표의 첫 줄은 배포(누구에게
+풀렸는가)이고 둘째 줄이 권리(무엇을 해도 되는가)다. 이전 판은 배포 표시만
+적어 권리 근거가 비어 있었다.
+
+권리 값에 **`GOV_` 접두사가 없다**는 점을 같이 적어 둔다. 이 문서는 계약
+NNM12AA41C 의 **계약자 보고서**라 미국 정부 저작물로 자동 성립하지 않으며,
+NTRS 는 같은 필드에 정부 저작물이면 `GOV_PUBLIC_USE_PERMITTED` 를 넣는다
+(대조 확인: NTRS 19980228044·19930092137 둘 다 `GOV_` 접두사 있음).
+따라서 이 값은 **공개 이용 허용**이지 공개 도메인 선언이 아니다 — 읽고
+인용하는 것은 뒷받침되지만, 원문 텍스트·그림·식을 트리에 옮겨 싣는 것은
+이 필드만으로는 뒷받침되지 않는다.
 
 원문 PDF 는 커밋하지 않는다(`.gitignore`). `./fetch.sh` 가 받고 해시를
 검증한다.
