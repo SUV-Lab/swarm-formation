@@ -639,19 +639,27 @@ std::string PathManager::stateEnvelopeProblem(
         };
         const double um_xy = unit("optimization/dynamics_unit_xy_m", 100.0);
         const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
-        const double vh = std::hypot(vel_units.x() * um_xy,
-                                     vel_units.y() * um_xy);
-        const double vz = vel_units.z() * um_z;
-        const double vm = std::hypot(vh, vz);
         const auto &dyn = poly_traj_opt_->dynamicsParams();
         const double floor_mps =
             poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy;
+        const double vmax_pre = effectiveHandoffMaxMps();
+        // The JUDGEMENT is mmp_vehicle_dynamics::speedConeVerdict — one
+        // definition shared with every off-line harness, so none of them can
+        // certify a state this gate would refuse. What stays here is the two
+        // ROS-parameterised scalars above and the wording below.
+        const Eigen::Vector3d vel_mps(vel_units.x() * um_xy,
+                                      vel_units.y() * um_xy,
+                                      vel_units.z() * um_z);
+        const auto verdict = mmp_vehicle_dynamics::speedConeVerdict(
+            dyn, vel_mps, floor_mps, vmax_pre);
+        const double vm = verdict.speed_mps;
         char buf[160];
         // [SPEED-BOUNDARY] see path_manager.h. Commanding exactly the floor
         // must pass whatever the direction; the unit round trip puts some
         // directions 2.8e-14 m/s under it — (1,1,0) and r5's own first-leg
         // aim (-18.3, -199.2, 0) among them.
-        if (belowSpeedBoundary(vm, floor_mps)) {
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::SpeedBelowFloor) {
             snprintf(buf, sizeof buf,
                      "speed %.1f m/s below the margin-backed cruise floor "
                      "%.1f m/s", vm, floor_mps);
@@ -688,7 +696,7 @@ std::string PathManager::stateEnvelopeProblem(
         //                          manager copy is a separate parameter
         //                          and may drift — not used here.)
         //   model maximum          dynamics speed_max is the tightest
-        const double vmax_mps = effectiveHandoffMaxMps();
+        const double vmax_mps = vmax_pre;
         double explicit_cap = 0.0;
         if (node_->has_parameter("planning/handoff_max_vel_mps"))
             node_->get_parameter("planning/handoff_max_vel_mps",
@@ -697,7 +705,8 @@ std::string PathManager::stateEnvelopeProblem(
         // Eight of the ten shipped missions state exactly
         // optimization/max_vel * unit = 200.0 m/s, and a strict > put every
         // one of them on the last bits of the direction normalization.
-        if (aboveSpeedBoundary(vm, vmax_mps)) {
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::SpeedAboveMaximum) {
             const char *which =
                 vmax_mps >= dyn.speed_max_mps - 1e-9
                     ? "model maximum"
@@ -708,8 +717,9 @@ std::string PathManager::stateEnvelopeProblem(
                      "(%s)", vm, vmax_mps, which);
             return buf;
         }
-        const double gamma = std::atan2(std::abs(vz), vh);
-        if (gamma > dyn.flight_path_angle_max_rad) {
+        const double gamma = verdict.flight_path_angle_rad;
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::FlightPathOutsideCone) {
             snprintf(buf, sizeof buf,
                      "flight path angle %.1f deg outside the +/-%.1f deg "
                      "validity cone",
@@ -740,21 +750,29 @@ std::string PathManager::stateEnvelopeProblem(
         const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
         const Eigen::Vector3d S(um_xy, um_xy, um_z);
         const auto &dyn = poly_traj_opt_->dynamicsParams();
-        const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
+        // Same shared judgement as the velocity half. The speed/cone part
+        // re-runs here and has already passed above; what this call adds is
+        // the inverse-dynamics and envelope verdict. NOT
+        // "envelopeUtilization() <= 1.0": below the model activation speed
+        // that comparison certifies everything (utilization is 0.0 there
+        // while isWithinEnvelope is false), which is why the predicate and
+        // not the ratio decides.
+        const auto verdict = mmp_vehicle_dynamics::handoffVerdict(
             dyn, S.cwiseProduct(pos_units), S.cwiseProduct(vel_units),
-            S.cwiseProduct(acc_units));
+            S.cwiseProduct(acc_units), poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy,
+            effectiveHandoffMaxMps());
         char buf[160];
-        if (!ev.valid) {
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::InverseDynamicsUndefined) {
             return "inverse dynamics undefined for this state — cannot be "
                    "certified";
         }
-        if (!mmp_vehicle_dynamics::isWithinEnvelope(dyn, ev)) {
-            mmp_vehicle_dynamics::EnvelopeLimit lim;
-            const double u =
-                mmp_vehicle_dynamics::envelopeUtilization(dyn, ev, &lim);
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::EnvelopeExceeded) {
             snprintf(buf, sizeof buf,
                      "flying this exact state demands %.0f%% of the %s limit",
-                     100.0 * u, mmp_vehicle_dynamics::envelopeLimitName(lim));
+                     100.0 * verdict.utilization,
+                     mmp_vehicle_dynamics::envelopeLimitName(verdict.limit));
             return buf;
         }
         return {};

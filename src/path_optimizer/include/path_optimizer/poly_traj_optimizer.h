@@ -562,8 +562,11 @@ namespace ego_planner
     // sub-stall commanded starts onto this floor instead of planning one.
     double dynamicsMinSpeedFloorUnits() const {
         if (!dynamics_enable_ || dyn_unit_xy_m_ <= 1e-9) return 0.0;
-        return dynamics_params_.speed_min_mps *
-               (1.0 + dynamics_params_.constraint_margin) / dyn_unit_xy_m_;
+        // The product itself is defined once, beside the handoff verdict
+        // that enforces it (mmp_vehicle_dynamics), so the planner frame and
+        // any off-line harness cannot disagree about the cruise floor.
+        return mmp_vehicle_dynamics::marginBackedSpeedFloorMps(
+                   dynamics_params_) / dyn_unit_xy_m_;
     }
     // [FINAL-EVAL] the shared flight-dynamics model, for whole-flight audits
     // outside the solver (the stitched chain+terminal product includes a

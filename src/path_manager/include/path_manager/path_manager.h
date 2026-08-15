@@ -395,12 +395,18 @@ namespace path_manager
     // The same rule applies to all four boundaries: the margin-backed cruise
     // floor and the effective handoff ceiling here, and the transition
     // model's activation speed and maximum speed in classifyStartState.
-    static constexpr double kSpeedBoundaryEpsMps = 1e-6;
+    //
+    // The rule itself now lives in mmp_vehicle_dynamics beside the handoff
+    // verdict that applies it, so an off-line harness reproduces the same
+    // boundary arithmetic instead of re-picking an epsilon. These stay as
+    // the names the planner already calls it by.
+    static constexpr double kSpeedBoundaryEpsMps =
+        mmp_vehicle_dynamics::kSpeedBoundaryEpsMps;
     static bool belowSpeedBoundary(double v_mps, double floor_mps) {
-        return v_mps < floor_mps - kSpeedBoundaryEpsMps;
+        return mmp_vehicle_dynamics::belowSpeedBoundary(v_mps, floor_mps);
     }
     static bool aboveSpeedBoundary(double v_mps, double ceiling_mps) {
-        return v_mps > ceiling_mps + kSpeedBoundaryEpsMps;
+        return mmp_vehicle_dynamics::aboveSpeedBoundary(v_mps, ceiling_mps);
     }
 
     // NOTE: statedStartSpeedProblem is DELETED. It was a second validator
