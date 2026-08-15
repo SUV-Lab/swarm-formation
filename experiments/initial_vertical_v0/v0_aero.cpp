@@ -153,17 +153,49 @@ ClosureDiagnostic closureDiagnostic(const Tr1096Anchor &anchor,
   return d;
 }
 
+double halfChordSweepRad(double sweep_c4_rad, double aspect_ratio,
+                         double taper_ratio)
+{
+  if (aspect_ratio <= 0.0 || taper_ratio < 0.0) {
+    throw Unavailable("반시위 후퇴각: 형상이 유효하지 않다");
+  }
+  const double t = std::tan(sweep_c4_rad)
+                 - (4.0 / aspect_ratio)
+                   * ((0.5 - 0.25) * (1.0 - taper_ratio)
+                      / (1.0 + taper_ratio));
+  return std::atan(t);
+}
+
+double liftSlopeTn3911PerRad(double mach, double aspect_ratio,
+                             double half_chord_sweep_rad)
+{
+  const double A = aspect_ratio;
+  const double c = std::cos(half_chord_sweep_rad);
+  if (A <= 0.0 || c <= 0.0) {
+    throw Unavailable("TN 3911 (A1): 형상이 유효하지 않다");
+  }
+  const double radicand = 4.0 + (A / c) * (A / c) - (A * mach) * (A * mach);
+  if (radicand <= 0.0) {
+    // (A M)^2 가 나머지를 넘어서면 식이 정의되지 않는다 — 아공속
+    // 가정이 깨지는 지점이다. 조용히 넘기지 않는다.
+    throw OutOfRange("TN 3911 (A1): 근호 안이 비양수 — 적용 밖");
+  }
+  return 2.0 * M_PI * A / (2.0 + std::sqrt(radicand));
+}
+
 Compressibility liftSlopeRatio(double mach, double mach_anchor,
                                double aspect_ratio, double sweep_c4_rad)
 {
   requireInBand(mach, "압축성 보정");
   (void)mach_anchor; (void)aspect_ratio; (void)sweep_c4_rad;
-  // TR 1188 의 유한 날개·후퇴각 관계가 아직 회수되지 않았다. 여기에
-  // 단순 Prandtl-Glauert 를 넣는 것은 계약 위반이다 — 종횡비와 후퇴각이
-  // 빠진 보정은 AR 4.0·후퇴각 45° 에서 틀린 방향으로 크다.
+  // 관계는 회수됐다(TN 3911 eq. A1, 위 liftSlopeTn3911PerRad). 다만
+  // **출처 감사가 끝나지 않았다** — 권리·중립성 확인 전에는 연결하지
+  // 않는다. TR 1188 에는 이 관계가 없다는 것이 확인됐으므로 여기서
+  // TR 1188 을 근거로 댈 수도 없다.
   throw Unavailable(
-      "압축성 보정: TR 1188 의 유한 날개·후퇴각 관계 미회수. "
-      "단순 1/sqrt(1-M^2) 로 대체하지 않는다 (계약).");
+      "압축성 보정: 관계는 TN 3911 eq.(A1) 로 회수됐으나 그 문서의 "
+      "권리·중립성 감사가 끝나지 않았다. 단순 1/sqrt(1-M^2) 로 "
+      "대체하지 않는다 (대역 상단에서 26.5% 과대).");
 }
 
 void pitchDampingInBand(double mach, const Geometry &g,

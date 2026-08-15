@@ -230,6 +230,36 @@ int main()
   expect(alone.grade() == Grade::Estimated,
          "뺀 결과의 등급은 ESTIMATED 다 (MEASURED 가 아니다)");
 
+  // ── TN 3911 eq (A1) — 관계는 검산하되 연결은 안 한다 ────
+  {
+    const double lam_c2 = halfChordSweepRad(45.0 * 3.14159265358979323846
+                                            / 180.0, 4.0, 0.6);
+    expect(std::fabs(std::tan(lam_c2) - 0.9375) < 1e-12,
+           "1/4시위 45° · A 4.0 · 테이퍼 0.6 → tan(반시위) = 0.9375");
+    const double a13 = liftSlopeTn3911PerRad(0.13, 4.0, lam_c2);
+    const double a70 = liftSlopeTn3911PerRad(0.70, 4.0, lam_c2);
+    expect(std::fabs(a13 - 3.2167) < 1e-3, "eq (A1) M=0.13 → 3.2167 /rad");
+    expect(std::fabs(a70 / a13 - 1.0972) < 1e-3,
+           "eq (A1) 대역 비 M 0.13→0.70 = 1.0972");
+    const double pg = std::sqrt(1.0 - 0.13 * 0.13)
+                    / std::sqrt(1.0 - 0.70 * 0.70);
+    expect(pg / (a70 / a13) > 1.26 && pg / (a70 / a13) < 1.27,
+           "단순 Prandtl-Glauert 는 대역 상단에서 26.5% 과대 — 그래서 "
+           "쓰지 않는다");
+    // 무한 평면날개 극한에서만 단순 PG 와 일치한다.
+    const double big = 1.0e6;
+    const double r_inf = liftSlopeTn3911PerRad(0.70, big, 0.0)
+                       / liftSlopeTn3911PerRad(0.13, big, 0.0);
+    expect(std::fabs(r_inf - pg * (a70 / a13) / (a70 / a13)) < 1e-2 ||
+           std::fabs(r_inf - std::sqrt(1.0 - 0.13 * 0.13)
+                             / std::sqrt(1.0 - 0.70 * 0.70)) < 1e-2,
+           "A→무한 · 후퇴각 0 에서만 단순 PG 로 수렴한다");
+    // 연결은 여전히 거부된다 — 출처 감사 미완.
+    expect(throwsWith([&] { liftSlopeRatio(0.50, 0.13, 4.0, lam_c2); },
+                      "감사가 끝나지 않았다"),
+           "관계를 회수했어도 출처 감사 전에는 연결하지 않는다");
+  }
+
   std::printf("\n%s: %d failed\n", failures ? "FAIL" : "PASS", failures);
   return failures ? 1 : 0;
 }

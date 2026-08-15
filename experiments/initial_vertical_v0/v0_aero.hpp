@@ -165,7 +165,32 @@ struct DownwashLag {
   bool available = false;
 };
 
-// ─── 압축성 (TR 1188) ───────────────────────────────────────
+// ─── 압축성 ─────────────────────────────────────────────────
+// **TR 1188 에는 유한 날개 압축성 관계가 없다.** 전제가 틀렸다 — 그
+// 문서의 압축성 내용은 2차원 단순 Prandtl-Glauert 가 전부이고, 유한
+// 스팬도 후퇴각도 다루지 않는다. 필요한 관계는 NACA TN 3911
+// (Lowry & Polhamus, 1957) eq. (A1) 이다:
+//
+//   CL_alpha = 2 pi A / [ 2 + sqrt( 4 + (A/cos L)^2 - (A M)^2 ) ]   /rad
+//
+// L 은 **반시위 후퇴각**이다(TN 3911 이 명시). 테이퍼비는 들어가지
+// 않는다 — 반시위 기준이 테이퍼 효과를 흡수하기 때문이다.
+//
+// 왜 단순 Prandtl-Glauert 로 끝내면 안 되는지가 여기서 수치로 보인다.
+// A=4.0, 반시위 후퇴각 43.15° 에서 M 0.13 -> 0.70 의 CL_alpha 비는
+// 1.0972 인데 단순 PG 는 1.3884 를 준다 — 대역 상단에서 **26.5% 과대**.
+// 평면 무한날개(A -> inf, L = 0)에서만 단순 PG 가 맞는다.
+//
+// 1/4시위 후퇴각에서 반시위 후퇴각으로:
+//   tan L_c2 = tan L_c4 - (4/A) ( (0.5-0.25)(1-taper)/(1+taper) )
+double halfChordSweepRad(double sweep_c4_rad, double aspect_ratio,
+                         double taper_ratio);
+
+// TN 3911 eq. (A1). 관계 자체는 검산했으나 **출처 감사가 끝나기
+// 전에는 쓰지 않는다** — liftSlopeRatio 가 계속 거부한다.
+double liftSlopeTn3911PerRad(double mach, double aspect_ratio,
+                             double half_chord_sweep_rad);
+
 struct Compressibility {
   double ratio_to_anchor = 1.0;    // CL_alpha(M) / CL_alpha(M_anchor)
   Grade grade = Grade::Unknown;
