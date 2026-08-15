@@ -305,6 +305,7 @@ int main(int argc, char **argv)
   const double izz = need(P, "izz_kgm2", fail);
   const double d_ref = need(P, "d_ref_m", fail);
   const double s_ref = need(P, "s_ref_m2", fail);
+  const double aero_s = need(P, "aero_ref_area_m2", fail);
   const double length = need(P, "length_m", fail);
   const double cg_frac = need(P, "cg_frac", fail);
   const double m_max = need(P, "pitch_moment_max_nm", fail);
@@ -421,6 +422,19 @@ int main(int argc, char **argv)
   // 그 재정의가 없는 기본 설정 기준이다.
   std::printf("  ※ 배포 기본 설정 기준. 실행 시 planning/handoff_max_vel_mps "
               "재정의는 재현하지 않는다.\n\n");
+  // 기준면적 정합. 3DOF 가 추론하는 양력 L = m a_L 은 순수 운동학이라
+  // S 와 무관하지만, CL_max 비교는 S 로 나눈 뒤에 한다. 두 모형의 S 가
+  // 다르면 같은 물리 양력이 다른 CL 로 보여 상한이 헐거워진다.
+  if (std::fabs(mp.wing_area_m2 - aero_s) > 1e-9) {
+    std::fprintf(stderr,
+                 "계약 위반: 공력 기준면적 불일치 — 6DOF %.6f m² vs 생산 "
+                 "3DOF %.6f m².\n"
+                 "  같은 물리 양력이 3DOF 눈에 %.3f 배 다른 CL 로 보여 "
+                 "CL_max 상한이 헐거워진다.\n",
+                 aero_s, mp.wing_area_m2,
+                 mp.wing_area_m2 / (aero_s > 0.0 ? aero_s : 1.0));
+    return 3;
+  }
   if (std::fabs(mp.mass_kg - mass) > 1e-6) {
     std::fprintf(stderr, "계약 위반: 질량 불일치 — 6DOF %.4f kg vs 생산 3DOF "
                  "%.4f kg. 다른 질량의 포락선과 비교하는 것은 무의미하다.\n",
@@ -435,7 +449,9 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "실행 오류: 템플릿 없음 %s\n", tpl_rel.c_str());
     return 2;
   }
-  subst(xml, "@@S_REF_FT2@@", s_ref * kM2ToFt2);
+  // JSBSim wingarea 는 공력 계수의 기준면적이다. 동체 단면적
+  // (s_ref_m2)이 아니라 **양력 기준면적**을 넣어야 한다.
+  subst(xml, "@@S_REF_FT2@@", aero_s * kM2ToFt2);
   subst(xml, "@@D_REF_FT@@", d_ref / kFt2M);
   subst(xml, "@@CG_X_IN@@", cg_frac * length / kFt2M * 12.0);
   subst(xml, "@@IXX_SLUGFT2@@", ixx / kSlugFt2ToKgM2);
@@ -507,8 +523,10 @@ int main(int argc, char **argv)
     std::printf("  고도 %.3f m   질량 %.4f kg   CG_x %.4f m   Iyy %.2f kg·m²\n",
                 prop->GetAltitudeASL() * kFt2M, mb->GetMass() * kSlugToKg,
                 mb->GetXYZcg(1) * kFt2M / 12.0, iyy_got);
-    std::printf("  추력 %.1f N   가용 피치 모멘트 %.1f N·m   공력 계수 전부 0\n\n",
+    std::printf("  추력 %.1f N   가용 피치 모멘트 %.1f N·m   공력 계수 전부 0\n",
                 thrust_used, m_max);
+    std::printf("  공력 기준면적 %.4f m² (생산 wing_area_m2 와 일치 확인)\n\n",
+                aero_s);
     if (std::fabs(gam - ic_gamma_deg) > 1e-6) {
       std::fprintf(stderr, "계약 위반: 초기 비행경로각 %.9f° != %.9f°\n",
                    gam, ic_gamma_deg);

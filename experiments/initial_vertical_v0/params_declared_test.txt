@@ -12,8 +12,23 @@ ixx_kgm2                900.0        DECLARED_TEST  형상 미정 — 임의 시
 iyy_kgm2                4200.0       DECLARED_TEST  〃
 izz_kgm2                4400.0       DECLARED_TEST  〃
 d_ref_m                 0.60         DECLARED_TEST  형상 미정
-s_ref_m2                0.2827       DECLARED_TEST  = pi*d^2/4
+s_ref_m2                0.2827       DECLARED_TEST  = pi*d^2/4 (동체 단면적)
 length_m                6.0          DECLARED_TEST  형상 미정
+# ── 공력 기준량 ──────────────────────────────────────────────
+# **기준면적은 생산 3DOF 의 wing_area_m2 와 같아야 한다.** 생산 모델은
+# CL = L/(q S) 로 정의하고(flight_dynamics.cpp:210-211) CL_max 1.40 을
+# 그 S 기준으로 건다. 6DOF 가 다른 S 로 정규화된 CL 로 날면 같은 물리
+# 양력이 3DOF 눈에는 S3/S6 배만큼 작은 CL 로 보인다 — 동체 단면적
+# 0.2827 을 쓰면 3.537 배 작아져 **CL_max 에 영원히 걸리지 않는다.**
+# 포락선 검사의 fail-open 이므로 하니스가 일치를 강제한다.
+#
+# s_ref_m2(동체 단면적)와 혼동하지 않는다. 그것은 회수 감사 공식의 기준량
+# 이고 이것은 양력 기준면적이다. 서로 다른 양이다.
+aero_ref_area_m2        1.0          DECLARED       생산 wing_area_m2 와 동일 (강제)
+# 모멘트 계수 기준길이. Cm = M/(q S c) 의 c 다. 형상이 정해지지 않아
+# 미상이며, Cm 계열을 주입하려면 먼저 선언되어야 한다.
+aero_ref_chord_m        UNKNOWN      UNKNOWN        형상 미정 — Cm 주입 전제
+aero_ref_span_m         UNKNOWN      UNKNOWN        형상 미정 — Cl/Cn 주입 전제
 cg_frac                 0.45         DECLARED_TEST  질량배치 미정
 # 자세 제어 권한. 공력 제어면 효율(Cm_de 등)이 UNKNOWN 이므로 계수를
 # 지어내는 대신 **가용 제어 모멘트**를 직접 선언한다. 정직한 대체다.
