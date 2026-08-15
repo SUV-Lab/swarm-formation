@@ -594,6 +594,26 @@ int main(int argc, char **argv)
                     "p_dps,q_dps,r_dps,mass_kg,cg_x_m,ctrl_nm,ctrl_frac,"
                     "sixdof_ready,env_ok,env_util,env_reject,handoff_ready\n");
 
+  // ── 적용범위 창, 매 적분 스텝 집계 ────────────────────────
+  // CSV 는 50 스텝마다 기록하므로 그것으로 dwell 을 재면 중간 49 스텝의
+  // 실패를 놓친다. 판정과 같은 해상도로 여기서 직접 센다.
+  //
+  // 경계는 **출처가 확정한 유효범위가 아니다.** TR 1096 곡선의 실제
+  // 판독 범위와, 원문 p.4 가 관측한 Cm 기울기 변화점을 보수적으로
+  // 택한 진단 정책 경계다.
+  struct Window {
+    const char *name;
+    double a_min_deg, a_max_deg;
+    long n_ok = 0;
+    double dwell = 0.0, best = 0.0, best_end = -1.0;
+  };
+  Window win[2] = {
+    {"CL", -2.6, 20.0, 0, 0.0, 0.0, -1.0},
+    {"Cm", -3.5, 10.0, 0, 0.0, 0.0, -1.0},
+  };
+  long n_in_mach = 0, n_steps_seen = 0;
+  long n_below[2] = {0, 0}, n_above[2] = {0, 0};
+
   double dwell = 0.0, t_handoff = -1.0;
   double max_pitch = 0.0, max_rate = 0.0, max_ctrl = 0.0, max_alpha = 0.0;
   double best_gam_err = 1e9, best_sp = 0.0, best_t = 0.0;
@@ -649,6 +669,35 @@ int main(int argc, char **argv)
     max_rate = std::max(max_rate, rate_mag);
     max_ctrl = std::max(max_ctrl, frac);
     const double gerr = std::fabs((gam - gam_tgt_used) * kRad2Deg);
+
+    // 적용범위 창 — 매 스텝.
+    {
+      ++n_steps_seen;
+      const double T = 288.15 - 0.0065 * std::min(alt, 11000.0);
+      const double a_snd = std::sqrt(1.4 * 287.053 * T);
+      const double M = sp / a_snd;
+      const bool in_mach = (M >= 0.3585 && M <= 0.7000);
+      if (in_mach) ++n_in_mach;
+      const double adeg = alpha * kRad2Deg;
+      for (int w = 0; w < 2; ++w) {
+        if (in_mach) {
+          if (adeg < win[w].a_min_deg) ++n_below[w];
+          else if (adeg > win[w].a_max_deg) ++n_above[w];
+        }
+        const bool ok = in_mach && adeg >= win[w].a_min_deg
+                     && adeg <= win[w].a_max_deg;
+        if (ok) {
+          ++win[w].n_ok;
+          win[w].dwell += dt;
+          if (win[w].dwell > win[w].best) {
+            win[w].best = win[w].dwell;
+            win[w].best_end = t;
+          }
+        } else {
+          win[w].dwell = 0.0;
+        }
+      }
+    }
 
     // ── 1단계: 6DOF 준비 상태 7항목 ─────────────────────────
     // 속력 하한은 **여기서 판정하지 않는다.** 그것은 중기 모델이 정의하는
@@ -733,6 +782,31 @@ int main(int argc, char **argv)
               best_gam_err, best_t, best_sp);
   std::printf("  sixdof_ready 성립 스텝 %ld · 두 단계 동시 성립 스텝 %ld\n\n",
               n_sixdof, n_both);
+
+  std::printf("[적용범위 창] **조건부 진단** — 아래 경계는 어떤 출처도 "
+              "수치적 유효범위로 확정한 적이 없다.\n");
+  std::printf("  매 적분 스텝(dt=%.4f s) 집계 · 전체 %ld 스텝 · "
+              "마하 [0.3585, 0.7000] 안 %ld (%.2f%%)\n",
+              dt, n_steps_seen, n_in_mach,
+              100.0 * n_in_mach / std::max(1L, n_steps_seen));
+  for (int w = 0; w < 2; ++w) {
+    std::printf("  [%s] %+.2f° <= alpha <= %+.2f°\n", win[w].name,
+                win[w].a_min_deg, win[w].a_max_deg);
+    std::printf("       동시 만족 %ld/%ld (%.2f%%) · 최장 연속 %.4f s",
+                win[w].n_ok, n_steps_seen,
+                100.0 * win[w].n_ok / std::max(1L, n_steps_seen),
+                win[w].best);
+    if (win[w].best_end >= 0.0)
+      std::printf(" (끝 t=%.4f)", win[w].best_end);
+    std::printf("  → dwell %.2f s %s\n", g_dwell,
+                win[w].best >= g_dwell ? "충족" : "미충족");
+    if (n_in_mach > 0)
+      std::printf("       대역 내 이탈 분해: 하한 %ld (%.1f%%) · "
+                  "상한 %ld (%.1f%%)\n", n_below[w],
+                  100.0 * n_below[w] / n_in_mach, n_above[w],
+                  100.0 * n_above[w] / n_in_mach);
+  }
+  std::printf("\n");
 
   if (t_handoff >= 0.0) {
     std::printf("═══ 인계 도달 — t = %.4f s (연속 %.2f s 동안 두 단계 동시 "
