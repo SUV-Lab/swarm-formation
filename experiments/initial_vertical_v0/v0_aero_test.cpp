@@ -71,14 +71,11 @@ int main()
   // ── 미회수 입력은 fail-closed ───────────────────────────
   Tr1096Anchor anchor;              // available = false
   DownwashLag downwash;             // available = false
-  NonTailMachModel nt0;             // available = false
-  expect(throws([&] { pitchDamping(0.50, g, anchor, downwash, nt0); }),
-         "기준점 미회수면 Cm_q 를 내지 않는다");
   expect(throws([&] { liftSlopeRatio(0.50, 0.13, 4.0, 0.785); }),
          "압축성 보정 자체가 미회수 상태에서 던진다");
 
   // ── eq (3) 꼬리 기여: 부호와 형상 의존 ──────────────────
-  const double tail = tailPitchDampingContribution(3.0, 1.0, g);
+  const double tail = tailSensitivityEq3(3.0, 1.0, g);
   expect(tail < 0.0, "꼬리 기여는 음수다 (감쇠)");
   // 식의 **형태**를 검사한다. 1차량에서 같은 방식으로 유도해 맞춘다 —
   // 매니페스트의 선언 비 1.8172 는 소수 4자리 반올림이라 1차량에서
@@ -96,12 +93,12 @@ int main()
   // 꼬리거리 2배 -> 기여 4배 (제곱 의존). TR 1096 의 핵심 주장이다.
   Geometry g2 = g;
   g2.tail_arm_m = g.tail_arm_m * 2.0;
-  const double tail2 = tailPitchDampingContribution(3.0, 1.0, g2);
+  const double tail2 = tailSensitivityEq3(3.0, 1.0, g2);
   expect(std::fabs(tail2 / tail - 4.0) < 1e-9,
          "꼬리거리를 2배로 하면 감쇠 기여가 4배 — 거리의 제곱 의존");
   Geometry g3 = g;
   g3.htail_area_m2 = g.htail_area_m2 * 2.0;
-  const double tail3 = tailPitchDampingContribution(3.0, 1.0, g3);
+  const double tail3 = tailSensitivityEq3(3.0, 1.0, g3);
   expect(std::fabs(tail3 / tail - 2.0) < 1e-9,
          "꼬리 면적을 2배로 하면 감쇠 기여가 2배 — 면적의 1차 의존");
 
@@ -140,63 +137,70 @@ int main()
     a.grade = Grade::MeasuredDigitized;
     a.basis = "TR 1096 fig 7";
     a.cl_alpha_htail_per_rad = 3.0;
-    a.read_error = 0.05;
+    a.read_error_whole = 0.05;
+    a.read_error_wing_fuselage = 0.10;
     DownwashLag d;
     d.available = true; d.factor = 1.0;
     d.grade = Grade::MeasuredDigitized; d.basis = "TR 1096 p.20";
     // 식 (3) 이 예측하는 차이를 실측이 정확히 재현하도록 놓으면 닫힌다.
-    const double pred = tailPitchDampingContribution(3.0, 1.0, g);
-    a.cm_q_tail_off = -2.0;
-    a.cm_q_total = a.cm_q_tail_off + pred;
-    expect(checkTailClosure(a, g, d).closed,
+    const double pred = tailSensitivityEq3(3.0, 1.0, g);
+    a.cm_q_wing_fuselage = -2.0;
+    a.cm_q_whole_config = a.cm_q_wing_fuselage + pred;
+    expect(closureDiagnostic(a, g, d).within_read_error,
            "실측 on/off 차이가 식 (3) 과 맞으면 닫힌다");
     // 실측 차이를 판독 오차 너머로 어긋나게 하면 닫히지 않아야 한다.
-    a.cm_q_total = a.cm_q_tail_off + pred * 1.5;
-    const TailClosure bad = checkTailClosure(a, g, d);
-    expect(!bad.closed,
+    a.cm_q_whole_config = a.cm_q_wing_fuselage + pred * 1.5;
+    const ClosureDiagnostic bad = closureDiagnostic(a, g, d);
+    expect(!bad.within_read_error,
            "실측 차이가 식 (3) 과 어긋나면 닫히지 않는다 — 오차가 "
            "나머지에 숨지 않는다");
-    NonTailMachModel nt;
-    nt.available = true; nt.ratio_to_anchor = 1.0;
-    nt.grade = Grade::Estimated; nt.basis = "가정"; nt.diagnostic_only = false;
-    expect(throws([&] { pitchDamping(0.50, g, a, d, nt); }),
-           "닫히지 않은 상태에서는 Cm_q 를 조립하지 않는다");
   }
 
-  // ── 비꼬리 마하 모델 ────────────────────────────────────
+  // ── 실제로 회수된 값에서 폐쇄가 실패한다는 것을 못박는다 ──
+  // 이건 미구현이 아니라 **판정**이다. 값이 바뀌면 여기서 깨져야 한다.
   {
     Tr1096Anchor a;
-    a.available = true; a.norm = PitchRateNorm::HalfChordOverV;
-    a.grade = Grade::MeasuredDigitized; a.basis = "TR 1096 fig 7";
-    a.cl_alpha_htail_per_rad = 3.0; a.read_error = 0.05;
+    a.available = true;
+    a.norm = PitchRateNorm::HalfChordOverV;
+    a.grade = Grade::MeasuredDigitized;
+    a.basis = "TR 1096 fig 9(b)/10(a), M=0.13";
+    a.cm_q_whole_config = -5.48;        // W+F2+V+H2
+    a.cm_q_wing_fuselage = -2.00;       // W+F2, 수직꼬리 없음
+    a.cl_alpha_htail_per_rad = 0.054 * 57.3;
+    a.read_error_whole = 0.05;
+    a.read_error_wing_fuselage = 0.10;
     DownwashLag d;
-    d.available = true; d.factor = 1.0;
+    d.available = true; d.factor = 1.0;   // 원문: 사실상 0 (앙상블 진술)
     d.grade = Grade::MeasuredDigitized; d.basis = "TR 1096 p.20";
-    a.cm_q_tail_off = -2.0;
-    a.cm_q_total = a.cm_q_tail_off + tailPitchDampingContribution(3.0, 1.0, g);
-    NonTailMachModel nt;
-    // **표적 조항만 위반한다**: 등급과 근거는 멀쩡하고 available 만
-    // false 다. 그렇지 않으면 requireUsable 이 먼저 잡아서 availability
-    // 검사를 지워도 시험이 통과한다 (실제로 그 변이가 살아남았다).
-    nt.available = false;
-    nt.ratio_to_anchor = 1.0;
-    nt.grade = Grade::Estimated;
-    nt.basis = "마하 무관 가정";
-    expect(throwsWith([&] { pitchDamping(0.50, g, a, d, nt); },
-                      "마하 모델 미회수"),
-           "비꼬리 마하 모델 미회수면 **그 이유로** 거부된다 — 마하 "
-           "무관은 근거가 아니라 추정이다");
-    nt.available = true;
-    nt.diagnostic_only = true;
-    expect(throwsWith([&] { pitchDamping(0.50, g, a, d, nt); },
-                      "진단 전용"),
-           "진단 전용 모델은 호출부가 명시하지 않으면 **그 이유로** "
-           "거부된다");
-    // 명시하면 그 관문은 넘고 압축성에서 멈춘다 — 서로 다른 이유임을
-    // 확인해야 두 관문이 각각 하중을 받는다.
-    expect(throwsWith([&] { pitchDamping(0.50, g, a, d, nt, true); },
-                      "압축성 보정"),
-           "진단을 허용하면 진단 관문은 넘고 **압축성**에서 멈춘다");
+
+    const ClosureDiagnostic c = closureDiagnostic(a, g, d);
+    expect(std::fabs(c.measured_increment - (-3.48)) < 1e-9,
+           "실측 구성 증분 = -3.48 (V+H2, 수평꼬리 단독 아님)");
+    expect(std::fabs(c.eq3_prediction - (-4.0876)) < 2e-3,
+           "식 (3) 예측 = -4.088");
+    expect(std::fabs(c.read_error_tolerance - 0.1118) < 1e-3,
+           "허용폭 0.1118 은 **판독 오차만** 이다");
+    expect(!c.within_read_error,
+           "**닫히지 않는다** — 식 (3) 이 17.5% 과대예측. 원문의 "
+           "'다운워시 사실상 0' 은 앙상블 진술이고 우리 형상이 "
+           "흩어짐의 한쪽 끝이다");
+  }
+
+  // ── 대역 내 Cm_q 는 활성화 경로가 없다 ─────────────────
+  // 성공 분기를 두지 않는 것이 판정을 코드에 남기는 방법이다.
+  {
+    Tr1096Anchor a;
+    a.mach = 0.13;
+    for (const double m : {kMachMin, 0.50, 0.60, kMachMax}) {
+      expect(throwsWith([&] { pitchDampingInBand(m, g, a); }, "UNKNOWN"),
+             "대역 내 Cm_q 요청은 마하 " + std::to_string(m).substr(0, 4) +
+             " 에서 UNKNOWN 판정으로 거부된다");
+    }
+    expect(throwsWith([&] { pitchDampingInBand(0.50, g, a); },
+                      "V+H2 구성 증분"),
+           "거부 사유가 수직꼬리 오염을 명시한다");
+    expect(throwsWith([&] { pitchDampingInBand(0.50, g, a); }, "17.5"),
+           "거부 사유가 식 (3) 의 폐쇄 실패를 명시한다");
   }
 
   // ── 합과 단독은 섞이지 않는다 ───────────────────────────

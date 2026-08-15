@@ -131,19 +131,30 @@ struct Geometry {
 };
 
 // ─── TR 1096 기준점 (M = 0.13) ──────────────────────────────
-// 꼬리 on 과 off 를 **둘 다** 회수해야 한다. 하나만으로는 식 (3) 을
-// 검증할 수 없다 — 아래 폐쇄 검사 참조.
+// **이름이 곧 계약이다.** 두 실측값의 차이는 수평꼬리 단독 기여가
+// 아니라 `V+H2 구성 증분`이다 — 꼬리 off 기준 W+F2 에는 수직꼬리가
+// 없고 꼬리 on 형상에는 있기 때문이다. 그 차이에 CL_alpha,H 의 마하
+// 보정을 통째로 거는 것은 **근거가 없다**: 섞여 있는 수직꼬리 기여가
+// 같은 비율로 변한다는 보장이 없다.
 struct Tr1096Anchor {
-  double mach = 0.13;
+  double mach = 0.13;              // 대역 [0.3585, 0.7000] **밖**이다
   double reynolds = 0.71e6;
-  double cm_q_total = 0.0;         // 꼬리 on, 무차원
-  double cm_q_tail_off = 0.0;      // 꼬리 off, 무차원
+  // 전체 형상 W+F2+V+H2 (그림 9(b) / 10(a))
+  double cm_q_whole_config = 0.0;
+  // 날개+동체 W+F2, **수직꼬리 없음** (같은 그림)
+  double cm_q_wing_fuselage = 0.0;
   double cl_alpha_htail_per_rad = 0.0;   // 이쪽은 정말 /rad 다
-  double read_error = 0.0;         // 그림 판독 오차 (무차원, Cm_q 와 같은 단위)
+  double read_error_whole = 0.0;   // 그림 판독 오차 (Cm_q 와 같은 무차원)
+  double read_error_wing_fuselage = 0.0;
   PitchRateNorm norm = PitchRateNorm::Unspecified;
   Grade grade = Grade::Unknown;
   std::string basis;
   bool available = false;
+
+  // 두 실측의 차이. **수평꼬리 단독이 아니다.** 이름으로 못박는다.
+  double configurationIncrementVPlusH() const {
+    return cm_q_whole_config - cm_q_wing_fuselage;
+  }
 };
 
 // ─── 다운워시 항 (CL_alpha 와 분리) ─────────────────────────
@@ -176,36 +187,58 @@ struct NonTailMachModel {
   bool diagnostic_only = true;
 };
 
-// ─── 식 (3) 의 꼬리 기여 ────────────────────────────────────
+// ─── 식 (3) — **민감도·스케일링 진단 전용** ─────────────────
 //   (dCm_q)_H = -2 CL_alpha_H[/rad] (1 - d eps/d(ql/V)) (S_H/S)(l/c)^2
 // 원문 상수 -114.6 은 per-degree 계수용이고 -114.6 = -2 x 57.3 이다.
-double tailPitchDampingContribution(double cl_alpha_htail_per_rad,
-                                    double downwash_factor,
-                                    const Geometry &g);
+//
+// **이 함수의 값은 실측 절대값 보정에도, 전체 형상의 마하 외삽에도
+// 쓰지 않는다.** 우리 형상에서 실측과 17.5% 어긋났다(아래 폐쇄 진단).
+// 남은 역할은 수평꼬리 형상을 바꿨을 때 감쇠가 어느 방향으로 얼마나
+// 움직이는지 보는 것 하나뿐이다.
+double tailSensitivityEq3(double cl_alpha_htail_per_rad,
+                          double downwash_factor, const Geometry &g);
 
-// ─── 폐쇄 검사: 식 (3) 대 실측 on/off 차이 ──────────────────
-// **이것이 없으면 식 (3) 은 검증되지 않는다.** 나머지를
-// (실측 total - 계산한 tail) 로 정의해 버리면 식이 틀려도 항상
-// 재조립되어 오차가 나머지에 숨는다. 실측 (total - tail_off) 와
-// 식 (3) 의 예측을 **독립적으로** 비교해 판독 오차 안에서 닫혀야 한다.
-struct TailClosure {
-  double measured_delta = 0.0;     // 실측 total - 실측 tail_off
-  double predicted_delta = 0.0;    // 식 (3)
+// ─── 폐쇄 진단: 식 (3) 대 실측 구성 증분 ────────────────────
+// 실측 (전체 - 날개동체) 와 식 (3) 예측을 **독립 비교**한다. 나머지를
+// (실측 전체 - 계산한 꼬리) 로 정의하면 식이 틀려도 항상 재조립되어
+// 오차가 나머지에 숨는다.
+//
+// **결과: 우리 형상에서 닫히지 않는다.** 실측 -3.48, 식 (3) -4.088,
+// 잔차 -0.608, 허용 0.1118 → 식 (3) 이 17.5% 과대예측.
+// 원문의 "d eps_r/d(ql/V) 는 사실상 0" 은 **앙상블 진술**이고
+// 개별 형상에서는 흩어진다(H1 비 0.98 / H2 0.85 / H3 1.07).
+//
+// tolerance 는 **판독 오차만** 합친 폭이다. 전체 모델 불확실성이
+// 아니다 — 형상 오차, 레이놀즈수 차이, 수직꼬리 오염은 들어 있지 않다.
+struct ClosureDiagnostic {
+  double measured_increment = 0.0;   // 실측 (전체 - 날개동체) = V+H2 증분
+  double eq3_prediction = 0.0;
   double residual = 0.0;
-  double tolerance = 0.0;          // 판독 오차에서 전파
-  bool closed = false;
+  double read_error_tolerance = 0.0; // **판독 오차만**
+  bool within_read_error = false;
 };
-TailClosure checkTailClosure(const Tr1096Anchor &anchor, const Geometry &g,
-                             const DownwashLag &downwash);
+ClosureDiagnostic closureDiagnostic(const Tr1096Anchor &anchor,
+                                    const Geometry &g,
+                                    const DownwashLag &downwash);
 
-// ─── 조립: Cm_q(M) ──────────────────────────────────────────
-// 폐쇄 검사를 통과하지 못하면 던진다. 비꼬리 마하 모델이 진단 전용이면
-// 결과에 그 표시가 남는다.
-PitchDampingAlone pitchDamping(double mach, const Geometry &g,
-                               const Tr1096Anchor &anchor,
-                               const DownwashLag &downwash,
-                               const NonTailMachModel &non_tail,
-                               bool allow_diagnostic = false);
+// ─── 대역 내 Cm_q — 현재 UNKNOWN ────────────────────────────
+// **성공 경로가 없다.** 이것은 미구현이 아니라 판정이다:
+//
+//   · M = 0.13 실측은 전체 형상(W+F2+V+H2) 것이고 대역 밖이다
+//   · 실측 차이 -3.48 은 V+H2 구성 증분이라 CL_alpha,H 의 마하 보정을
+//     통째로 걸 근거가 없다 — 수직꼬리 기여가 같은 비율로 변한다는
+//     보장이 없다
+//   · 식 (3) 은 우리 형상에서 실측과 17.5% 어긋나 절대값 보정에
+//     쓸 수 없다
+//
+// 다음 둘 중 하나가 생기기 전까지 목표 대역의 Cm_q 는 UNKNOWN 이다:
+//   (a) 수직꼬리와 수평꼬리 기여의 분리 근거
+//   (b) 전체 형상의 **대역 내** 자료
+//
+// 그때까지 이 함수는 항상 던진다. 값을 내는 분기를 두지 않는 것이
+// 이 판정을 코드에 남기는 방법이다.
+[[noreturn]] void pitchDampingInBand(double mach, const Geometry &g,
+                                     const Tr1096Anchor &anchor);
 
 }  // namespace v0aero
 

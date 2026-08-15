@@ -111,12 +111,11 @@ PitchDampingAlone subtractAlphaDot(const PitchDampingSum &sum,
       "합(" + sum.basis() + ") - Cm_alphadot(" + basis + ")");
 }
 
-double tailPitchDampingContribution(double cl_alpha_htail_per_rad,
-                                    double downwash_factor,
-                                    const Geometry &g)
+double tailSensitivityEq3(double cl_alpha_htail_per_rad,
+                          double downwash_factor, const Geometry &g)
 {
   if (g.wing_area_m2 <= 0.0 || g.wing_mac_m <= 0.0) {
-    throw Unavailable("꼬리 감쇠: 형상이 비어 있다");
+    throw Unavailable("식 (3) 민감도: 형상이 비어 있다");
   }
   const double area_ratio = g.htail_area_m2 / g.wing_area_m2;
   const double arm_ratio = g.tail_arm_m / g.wing_mac_m;
@@ -124,30 +123,34 @@ double tailPitchDampingContribution(double cl_alpha_htail_per_rad,
        * area_ratio * arm_ratio * arm_ratio;
 }
 
-TailClosure checkTailClosure(const Tr1096Anchor &anchor, const Geometry &g,
-                             const DownwashLag &downwash)
+ClosureDiagnostic closureDiagnostic(const Tr1096Anchor &anchor,
+                                    const Geometry &g,
+                                    const DownwashLag &downwash)
 {
-  if (!anchor.available) throw Unavailable("폐쇄 검사: 기준점 미회수");
-  requireUsable(anchor.cm_q_total, anchor.grade, anchor.basis,
-                "기준점 Cm_q (꼬리 on)");
-  requireUsable(anchor.cm_q_tail_off, anchor.grade, anchor.basis,
-                "기준점 Cm_q (꼬리 off)");
+  if (!anchor.available) throw Unavailable("폐쇄 진단: 기준점 미회수");
+  requireUsable(anchor.cm_q_whole_config, anchor.grade, anchor.basis,
+                "기준점 Cm_q (전체 형상 W+F2+V+H2)");
+  requireUsable(anchor.cm_q_wing_fuselage, anchor.grade, anchor.basis,
+                "기준점 Cm_q (날개+동체 W+F2, 수직꼬리 없음)");
   requireUsable(anchor.cl_alpha_htail_per_rad, anchor.grade, anchor.basis,
                 "기준점 CL_alpha,H");
   requireNorm(anchor.norm, "기준점");
-  if (!downwash.available) throw Unavailable("폐쇄 검사: 다운워시 항 미회수");
+  if (!downwash.available) throw Unavailable("폐쇄 진단: 다운워시 항 미회수");
   requireUsable(downwash.factor, downwash.grade, downwash.basis, "다운워시 항");
 
-  TailClosure c;
-  c.measured_delta = anchor.cm_q_total - anchor.cm_q_tail_off;
-  c.predicted_delta = tailPitchDampingContribution(
-      anchor.cl_alpha_htail_per_rad, downwash.factor, g);
-  c.residual = c.predicted_delta - c.measured_delta;
-  // 두 실측값의 차이라 판독 오차가 독립적으로 두 번 들어간다.
-  c.tolerance = anchor.read_error * std::sqrt(2.0);
-  c.closed = std::isfinite(c.residual)
-          && std::fabs(c.residual) <= c.tolerance;
-  return c;
+  ClosureDiagnostic d;
+  d.measured_increment = anchor.configurationIncrementVPlusH();
+  d.eq3_prediction = tailSensitivityEq3(anchor.cl_alpha_htail_per_rad,
+                                        downwash.factor, g);
+  d.residual = d.eq3_prediction - d.measured_increment;
+  // 두 실측의 차이라 판독 오차가 독립적으로 들어간다. **판독 오차만**
+  // 이다 — 형상 오차, 레이놀즈수 차이, 수직꼬리 오염은 여기 없다.
+  d.read_error_tolerance = std::sqrt(
+      anchor.read_error_whole * anchor.read_error_whole +
+      anchor.read_error_wing_fuselage * anchor.read_error_wing_fuselage);
+  d.within_read_error = std::isfinite(d.residual)
+                     && std::fabs(d.residual) <= d.read_error_tolerance;
+  return d;
 }
 
 Compressibility liftSlopeRatio(double mach, double mach_anchor,
@@ -163,63 +166,25 @@ Compressibility liftSlopeRatio(double mach, double mach_anchor,
       "단순 1/sqrt(1-M^2) 로 대체하지 않는다 (계약).");
 }
 
-PitchDampingAlone pitchDamping(double mach, const Geometry &g,
-                               const Tr1096Anchor &anchor,
-                               const DownwashLag &downwash,
-                               const NonTailMachModel &non_tail,
-                               bool allow_diagnostic)
+void pitchDampingInBand(double mach, const Geometry &g,
+                        const Tr1096Anchor &anchor)
 {
-  requireInBand(mach, "Cm_q");
-
-  // 1) 식 (3) 이 실측 on/off 차이와 닫히는지 **먼저** 본다.
-  //    닫히지 않으면 분해 자체가 성립하지 않는다.
-  const TailClosure c = checkTailClosure(anchor, g, downwash);
-  if (!c.closed) {
-    char b[288];
-    std::snprintf(b, sizeof(b),
-                  "식 (3) 이 실측 꼬리 on/off 차이와 닫히지 않는다: "
-                  "실측 %.5f, 예측 %.5f, 잔차 %.5f, 허용 %.5f. "
-                  "나머지를 (실측 total - 계산 tail) 로 정의하면 이 불일치가 "
-                  "나머지에 숨는다 — 그래서 여기서 멈춘다.",
-                  c.measured_delta, c.predicted_delta, c.residual,
-                  c.tolerance);
-    throw NotClosed(b);
-  }
-
-  // 2) 비꼬리 기여의 마하 의존. 마하 무관은 **추정**이지 근거가 아니다.
-  if (!non_tail.available) {
-    throw Unavailable(
-        "Cm_q: 비꼬리(날개+동체) 기여의 마하 모델 미회수. 마하 무관으로 "
-        "두는 것은 공개 근거가 아니라 추정이므로 기본값으로 삼지 않는다.");
-  }
-  requireUsable(non_tail.ratio_to_anchor, non_tail.grade, non_tail.basis,
-                "비꼬리 마하 모델");
-  if (non_tail.diagnostic_only && !allow_diagnostic) {
-    throw Unavailable(
-        "Cm_q: 비꼬리 마하 모델이 진단 전용이다. 진단으로 쓰려면 "
-        "호출부가 allow_diagnostic 을 명시해야 한다.");
-  }
-
-  // 3) 압축성은 CL_alpha,H 에 걸린다.
-  const Compressibility comp = liftSlopeRatio(
-      mach, anchor.mach, g.htail_aspect_ratio, g.htail_sweep_c4_rad);
-  requireUsable(comp.ratio_to_anchor, comp.grade, comp.basis, "압축성 비");
-
-  // 4) 조립. 꼬리는 CL_alpha,H 를 통해, 비꼬리는 자기 모델을 통해 자란다.
-  //    나머지는 **실측 tail_off** 다 — 계산값을 뺀 잔여가 아니다.
-  const double tail_anchor = c.predicted_delta;
-  const double non_tail_anchor = anchor.cm_q_tail_off;
-  const double value = non_tail_anchor * non_tail.ratio_to_anchor
-                     + tail_anchor * comp.ratio_to_anchor;
-
-  PitchDampingAlone out = PitchDampingAlone::make(
-      value, PitchRateNorm::HalfChordOverV, mach, Grade::Estimated,
-      "TR 1096 M=0.13 기준점(" + anchor.basis + ") + 압축성(" + comp.basis
-      + ") + 비꼬리 마하(" + non_tail.basis + ")");
-  if (non_tail.diagnostic_only) {
-    out.markDiagnosticOnly("비꼬리 마하 모델이 진단 전용");
-  }
-  return out;
+  (void)g;
+  char b[640];
+  std::snprintf(b, sizeof(b),
+      "목표 대역의 Cm_q 는 UNKNOWN 이다 (요청 마하 %.4f).\n"
+      "  · M = %.2f 실측은 **전체 형상**(W+F2+V+H2) 것이고 대역 "
+      "[%.4f, %.4f] 밖이다\n"
+      "  · 실측 차이는 수평꼬리 단독이 아니라 **V+H2 구성 증분**이라 "
+      "CL_alpha,H 의 마하 보정을 통째로 걸 근거가 없다 — 섞인 수직꼬리 "
+      "기여가 같은 비율로 변한다는 보장이 없다\n"
+      "  · 식 (3) 은 우리 형상에서 실측과 17.5%% 어긋나 절대값 보정에 "
+      "쓸 수 없다\n"
+      "  다음 중 하나가 생기기 전까지 활성화하지 않는다: "
+      "(a) 수직꼬리·수평꼬리 기여의 분리 근거, "
+      "(b) 전체 형상의 대역 내 자료.",
+      mach, anchor.mach, kMachMin, kMachMax);
+  throw Unavailable(b);
 }
 
 }  // namespace v0aero
