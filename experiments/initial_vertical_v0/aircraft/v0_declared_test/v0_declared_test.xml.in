@@ -12,7 +12,11 @@
    inertia/* 속성은 전부 읽기 전용이므로(FGMassBalance.cpp:398-409)
    실행 중 주입은 불가능하다 — 그래서 로드 전에 XML 을 만든다.
 
-   공력 계수는 전부 0 이다. Cm_alpha, Cm_q, CL_alpha 가 UNKNOWN 이므로
+   기준 형상은 NACA TR 1096 (NTRS 19930092137) 의 일반 연구 모델을
+   S = 1.0 m² 로 스케일한 것이다. 기준량은 날개면적·날개스팬·날개 MAC
+   이며, 모멘트 기준점은 원문대로 날개 MAC 의 25% 지점이다.
+
+   공력 계수는 아직 전부 0 이다. 대역 안 실측이 회수되지 않아
    **지어내지 않는다.** 따라서 몸체축 힘은 추력뿐이고, 자세가 궤적을
    바꾸는 경로도 추력 방향 전환 하나뿐이다. 여기서 나오는 궤적은
    실제 항공기 궤적이 아니라 **추력·중력만의 궤적**이다.
@@ -21,8 +25,8 @@
 
  <metrics>
   <wingarea unit="FT2"> @@S_REF_FT2@@ </wingarea>
-  <wingspan unit="FT" > @@D_REF_FT@@ </wingspan>
-  <chord    unit="FT" > @@D_REF_FT@@ </chord>
+  <wingspan unit="FT" > @@SPAN_FT@@ </wingspan>
+  <chord    unit="FT" > @@CHORD_FT@@ </chord>
   <location name="AERORP"   unit="IN"> <x>@@CG_X_IN@@</x> <y>0</y> <z>0</z> </location>
   <location name="EYEPOINT" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
   <location name="VRP"      unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>

@@ -303,11 +303,19 @@ int main(int argc, char **argv)
   const double ixx = need(P, "ixx_kgm2", fail);
   const double iyy = need(P, "iyy_kgm2", fail);
   const double izz = need(P, "izz_kgm2", fail);
-  const double d_ref = need(P, "d_ref_m", fail);
-  const double s_ref = need(P, "s_ref_m2", fail);
-  const double aero_s = need(P, "aero_ref_area_m2", fail);
-  const double length = need(P, "length_m", fail);
-  const double cg_frac = need(P, "cg_frac", fail);
+  // 기준 형상은 NACA TR 1096 의 일반 연구 모델을 S = 1.0 m² 로 스케일한
+  // 것이다. 원통 동체 감사의 기준량(body_audit_*)은 **읽지 않는다** —
+  // 더 이상 이 기체의 기준 형상도 공력 기준면적도 아니다.
+  const double aero_s = need(P, "wing_area_m2", fail);
+  const double wing_b = need(P, "wing_span_m", fail);
+  const double wing_c = need(P, "wing_mac_m", fail);
+  const double fuse_len = need(P, "fuse_length_m", fail);
+  const double nose_to_c4 = need(P, "nose_to_mac_c4_m", fail);
+  const double htail_s = need(P, "htail_area_m2", fail);
+  const double tail_arm = need(P, "tail_arm_m", fail);
+  const double vh = need(P, "htail_volume_coeff", fail);
+  const double wing_ar = need(P, "wing_aspect_ratio", fail);
+  const double tail_arm_over_mac = need(P, "tail_arm_over_mac", fail);
   const double m_max = need(P, "pitch_moment_max_nm", fail);
   const double thrust = need(P, "thrust_max_n", fail);
   const double a_cmd_max = need(P, "ctrl_alpha_cmd_max_deg", fail) * kDeg2Rad;
@@ -327,6 +335,27 @@ int main(int argc, char **argv)
   // 음성대조 1: UNKNOWN 인 값을 필수로 요구하면 멈춰야 한다.
   if (neg == "missing_param") need(P, "cm_alpha", fail);
   if (fail) return 3;
+  // 스케일 검산. 매니페스트가 무차원량(종횡비·꼬리거리비·부피계수)을
+  // 중복 선언하므로 1차량에서 다시 만들어 맞는지 본다. 스케일 산술이
+  // 틀리면 여기서 죽는다 — 계수를 얹기 전에 형상이 맞아야 한다.
+  {
+    struct Check { const char *name; double derived, declared, tol; };
+    const Check checks[] = {
+      {"종횡비 b²/S", wing_b * wing_b / aero_s, wing_ar, 1e-4},
+      {"꼬리거리비 l/c̄", tail_arm / wing_c, tail_arm_over_mac, 1e-3},
+      {"꼬리 부피계수 (S_H/S)(l/c̄)",
+       (htail_s / aero_s) * (tail_arm / wing_c), vh, 1e-3},
+    };
+    for (const auto &c : checks) {
+      if (std::fabs(c.derived - c.declared) > c.tol) {
+        std::fprintf(stderr, "계약 위반: 형상 스케일 불일치 — %s 는 1차량에서 "
+                     "%.6f 인데 선언값은 %.6f 다\n",
+                     c.name, c.derived, c.declared);
+        return 3;
+      }
+    }
+  }
+
   const double alt0 = ic_alt_m >= 0.0 ? ic_alt_m : alt0_p;
   const double v0 = ic_speed_mps >= 0.0 ? ic_speed_mps : v0_p;
   // 사례 파라미터는 매니페스트 값을 덮어쓴다. 덮어쓴 것은 **반드시 출력**
@@ -449,11 +478,15 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "실행 오류: 템플릿 없음 %s\n", tpl_rel.c_str());
     return 2;
   }
-  // JSBSim wingarea 는 공력 계수의 기준면적이다. 동체 단면적
-  // (s_ref_m2)이 아니라 **양력 기준면적**을 넣어야 한다.
+  // JSBSim 의 wingarea/wingspan/chord 는 공력 계수의 기준량이다.
+  // 각각 날개면적·날개스팬·날개 MAC 이어야 한다 — 동체 지름이 아니다.
   subst(xml, "@@S_REF_FT2@@", aero_s * kM2ToFt2);
-  subst(xml, "@@D_REF_FT@@", d_ref / kFt2M);
-  subst(xml, "@@CG_X_IN@@", cg_frac * length / kFt2M * 12.0);
+  subst(xml, "@@SPAN_FT@@", wing_b / kFt2M);
+  subst(xml, "@@CHORD_FT@@", wing_c / kFt2M);
+  // CG 를 모멘트 기준점(날개 MAC 의 25% 지점)에 둔다. TR 1096 이 그
+  // 점으로 모멘트를 옮겨 보고하므로, 같은 점에 CG 를 두어야 Cm 이
+  // CG 둘레의 값이 된다.
+  subst(xml, "@@CG_X_IN@@", nose_to_c4 / kFt2M * 12.0);
   subst(xml, "@@IXX_SLUGFT2@@", ixx / kSlugFt2ToKgM2);
   subst(xml, "@@IYY_SLUGFT2@@", iyy / kSlugFt2ToKgM2);
   subst(xml, "@@IZZ_SLUGFT2@@", izz / kSlugFt2ToKgM2);
@@ -525,8 +558,14 @@ int main(int argc, char **argv)
                 mb->GetXYZcg(1) * kFt2M / 12.0, iyy_got);
     std::printf("  추력 %.1f N   가용 피치 모멘트 %.1f N·m   공력 계수 전부 0\n",
                 thrust_used, m_max);
-    std::printf("  공력 기준면적 %.4f m² (생산 wing_area_m2 와 일치 확인)\n\n",
+    std::printf("  공력 기준면적 %.4f m² (생산 wing_area_m2 와 일치 확인)\n",
                 aero_s);
+    std::printf("  기준 형상 NACA TR 1096 스케일 — 날개 b %.4f m · c̄ %.4f m · "
+                "AR %.3f\n", wing_b, wing_c, wing_b * wing_b / aero_s);
+    std::printf("  수평꼬리 S_H %.4f m² · 꼬리거리 %.4f m · 부피계수 V_H %.4f\n",
+                htail_s, tail_arm, vh);
+    std::printf("  동체 길이 %.4f m · CG 는 MAC 25%% 지점 (기수에서 %.4f m)\n\n",
+                fuse_len, nose_to_c4);
     if (std::fabs(gam - ic_gamma_deg) > 1e-6) {
       std::fprintf(stderr, "계약 위반: 초기 비행경로각 %.9f° != %.9f°\n",
                    gam, ic_gamma_deg);
