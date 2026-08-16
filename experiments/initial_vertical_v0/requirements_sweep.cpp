@@ -543,13 +543,18 @@ int main(int argc, char **argv)
                 "                  + Cm_alphadot·(α̇ c̄/2V) ] + M_control\n\n");
     std::printf("      %8s %10s | %14s %14s %14s %12s\n", "V[m/s]", "고도[m]",
                 "정적 Cm_α", "회전감쇠 Cm_q", "α̇감쇠 Cm_αdot", "제어");
+    // 배율은 q S c̄ = (1/2 rho V²) S c̄ 이므로 **rho 와 S, c̄ 를 함께
+    // 밝혀야** 다른 조건과 비교할 수 있다. 배율만 적으면 어느 밀도·
+    // 기준면적에서 나온 수인지 사라진다.
     for (double v : {150.0, 200.0, 230.0}) {
-      const double q = 0.5 * vd::airDensity(base, 2000.0) * v * v;
+      const double rho = vd::airDensity(base, 2000.0);
+      const double q = 0.5 * rho * v * v;
       const double scale = q * S * c_bar;      // 계수 1 당 모멘트 [N·m]
       std::printf("      %8.0f %10.0f | %14s %14s %14s %12.1f\n",
                   v, 2000.0, "UNKNOWN", "UNKNOWN", "UNKNOWN", m_ctrl);
-      std::printf("      %8s %10s   계수 1 당 %.1f N·m — 계수가 오면 이 배율로 곱한다\n",
-                  "", "", scale);
+      std::printf("      %8s %10s   계수 1 당 %.1f N·m  = q %.1f Pa × S %.3f m² "
+                  "× c̄ %.6f m  (rho %.5f kg/m³)\n",
+                  "", "", scale, q, S, c_bar, rho);
     }
     std::printf("\n  (4) 출처와 사용 가능 범위\n");
     std::printf("      Cm_q        대역 내 UNKNOWN. TR 1096 이 M=0.13 에서\n"
