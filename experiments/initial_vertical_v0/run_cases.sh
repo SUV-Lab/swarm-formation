@@ -78,6 +78,67 @@ run() {
   fi
 }
 
+# ── 요구조건 역산 회귀 ───────────────────────────────────────
+# 세 가지를 값으로 단언한다. 출력만 하고 단언하지 않으면 코드를 지워도
+# 통과한다.
+SWEEP=./.build/requirements_sweep
+if [ -x "$SWEEP" ]; then
+  echo
+  echo "════════════════ requirements_sweep 회귀 ════════════════"
+
+  # (1) 분류 자기시험 — 네 분기 전부. 자연 실행에서 OVERSHOOT 가 0 이라
+  #     ODE 를 통해서만 시험하면 그 분기가 검증되지 않는다.
+  if "$SWEEP" --self-test >/dev/null 2>&1; then
+    echo "분류 자기시험 통과 (DIRECT/OVERSHOOT/DESCENT/NONE + 허용오차)"
+  else
+    echo "!! 분류 자기시험 실패"; fails=$((fails + 1))
+  fi
+
+  # (2) 능력 단조성 — 능력이 커질 때 가능성이 줄면 안 된다.
+  if "$SWEEP" --monotone-check --dt 0.02 >/dev/null 2>&1; then
+    echo "능력 단조성 회귀 통과 (위반 0)"
+  else
+    echo "!! 능력 단조성 위반"; fails=$((fails + 1))
+  fi
+
+  # (3) V0별 분류 개수와 직접 전환 증인 — **같은 정책 묶음**으로 단언.
+  #     최단과 최소 손실이 반올림상 같아 보여도 이득으로 구분된다.
+  SW_OUT=$("$SWEEP" --dt 0.02 2>&1)
+  # direct=0 인 V0 는 **증인이 없어야 한다.** 개수만 단언하면 DIRECT 필터를
+  # 지우거나 최초 진입 조건을 없애는 변이가 살아남는다 — 실제로 살아남았다.
+  EXPECT_SWEEP=(
+    "[SWEEP] v0=150 direct=0 over=0 desc=41 none=204 witness=none"
+    "[SWEEP] v0=180 direct=0 over=0 desc=56 none=189 witness=none"
+    "[SWEEP] v0=200 direct=0 over=0 desc=58 none=187 witness=none"
+  )
+  sweep_ok=1
+  for want in "${EXPECT_SWEEP[@]}"; do
+    grep -qF "$want" <<<"$SW_OUT" || { echo "!! 기대: $want"; sweep_ok=0; }
+  done
+  # V0 230 은 직접 전환이 있는 유일한 사례. 증인을 **정책까지 묶어** 단언
+  # 한다. 증인이 둘 다 필요하다 — 최단 전환만 보면 DIRECT 필터를 지우는
+  # 변이가 살아남는다. 그 변이는 최단은 그대로 두고 **최저 CL 증인만**
+  # DESCENT 정책으로 바꾼다(1.00/17.20 → 0.60/98.56). 실제로 살아남았다.
+  W230="[SWEEP] v0=230 direct=21 over=0 desc=47 none=177 fastest_t=13.28"
+  grep -qF "$W230" <<<"$SW_OUT" || { echo "!! 기대: $W230"; sweep_ok=0; }
+  grep -qF "fastest_cl=1.40 fastest_kg=0.50 fastest_tw=0.25" <<<"$SW_OUT" \
+    || { echo "!! V0 230 최단 전환 증인의 정책 묶음이 다르다"; sweep_ok=0; }
+  grep -qF "lowcl_cl=1.00 lowcl_kg=0.35 lowcl_t=17.20" <<<"$SW_OUT" \
+    || { echo "!! V0 230 최저 CL 증인의 정책 묶음이 다르다 — DIRECT 아닌 정책이 섞였을 수 있다"; sweep_ok=0; }
+  # 직접 전환이 있는 V0 는 정확히 하나여야 한다(증인 표 머리글 개수).
+  n_tab=$(grep -c "선정 기준" <<<"$SW_OUT")
+  [ "$n_tab" = "1" ] \
+    || { echo "!! 증인 표가 $n_tab 개 — 직접 전환 V0 는 230 하나뿐이어야 한다"; sweep_ok=0; }
+  # 추력 명령 0 은 직접 전환 증인이 아니어야 한다 (이전 해석 철회의 근거).
+  grep -q "직접 전환 중에는 없음" <<<"$SW_OUT" \
+    || { echo "!! 추력 명령 0 이 직접 전환 증인으로 나왔다"; sweep_ok=0; }
+  if [ "$sweep_ok" = 1 ]; then
+    echo "V0별 분류 개수·직접 전환 증인 단언 통과"
+  else
+    fails=$((fails + 1))
+  fi
+fi
+
 # ── 측정 대상 ────────────────────────────────────────────────
 run 1 vertical --tmax 120 --csv v0_vertical.csv
 
