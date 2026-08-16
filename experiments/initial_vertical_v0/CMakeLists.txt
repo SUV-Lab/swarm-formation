@@ -18,3 +18,8 @@ add_library(v0_aero STATIC v0_aero.cpp)
 target_include_directories(v0_aero PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(v0_aero_test v0_aero_test.cpp)
 target_link_libraries(v0_aero_test PRIVATE v0_aero)
+
+add_executable(requirements_sweep requirements_sweep.cpp
+               ${MMP_DYN_ROOT}/src/flight_dynamics.cpp)
+target_include_directories(requirements_sweep PRIVATE ${MMP_DYN_ROOT}/include)
+target_link_libraries(requirements_sweep PRIVATE Eigen3::Eigen)
