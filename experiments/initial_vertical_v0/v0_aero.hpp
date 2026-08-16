@@ -90,6 +90,19 @@ class PitchDampingAlone {
   std::string diagnostic_reason_;
 };
 
+// **합은 일반 6DOF 전파에 쓸 수 없다.** 두 계수는 일반 운동방정식에서
+// 서로 다른 입력에 곱해진다:
+//   Cm_q      -> q c/(2V)        (몸체 피치율)
+//   Cm_alphadot -> alphadot c/(2V) (받음각 변화율)
+// q 와 alphadot 은 같은 양이 아니다 — 정상 선회나 돌풍 중에는 크게
+// 갈린다. 강제진동 시험이 둘을 합으로만 내는 것은 그 시험에서 두 입력이
+// 묶여 움직이기 때문이지, 물리적으로 하나여서가 아니다.
+//
+// 따라서 이 타입은:
+//   · 별도 타입으로 보관한다 (Cm_q 로 변환 금지 — subtractAlphaDot 만이
+//     유일한 경로이고 Cm_alphadot 의 근거를 요구한다)
+//   · **그 시험 조건에서의 총 감쇠 진단에만** 쓴다
+//   · 일반 6DOF 전파에는 두 항이 분리되기 전까지 UNKNOWN 이다
 class PitchDampingSum {
  public:
   static PitchDampingSum make(double cm_q_plus_cm_alphadot,

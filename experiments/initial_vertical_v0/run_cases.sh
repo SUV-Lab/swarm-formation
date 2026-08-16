@@ -137,6 +137,17 @@ if [ -x "$SWEEP" ]; then
   else
     fails=$((fails + 1))
   fi
+
+  # (4) 회전 권한(B) — 무차원량과 **fail-closed 판정**을 단언한다.
+  #     계수가 하나라도 값으로 새면 여기서 깨진다.
+  AT_OUT=$("$SWEEP" --attitude 2>&1)
+  at_ok=1
+  grep -qF "[ATTITUDE] m_ctrl_over_iyy=2.14286 iyy_nondim=12.3942 cbar=0.510556"     <<<"$AT_OUT" || { echo "!! 회전 권한 무차원량이 다르다"; at_ok=0; }
+  # 네 계수 전부 UNKNOWN, 정착시간 미확정이어야 한다.
+  grep -qF "cm_alpha=UNKNOWN cm_q=UNKNOWN cm_alphadot=UNKNOWN settle=UNDETERMINED"     <<<"$AT_OUT" || { echo "!! 계수/정착시간이 UNKNOWN 이 아니다"; at_ok=0; }
+  # 무차원 관성은 **기준길이와 함께** 나와야 한다 (없으면 비교 불가).
+  grep -q "기준길이 c̄" <<<"$AT_OUT"     || { echo "!! 무차원 관성에 기준길이가 없다"; at_ok=0; }
+  [ "$at_ok" = 1 ] && echo "회전 권한 무차원량·fail-closed 단언 통과"                    || fails=$((fails + 1))
 fi
 
 # ── 측정 대상 ────────────────────────────────────────────────

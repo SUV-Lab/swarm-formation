@@ -383,6 +383,8 @@ int main(int argc, char **argv)
 {
   double alt0 = 2000.0, gamma_tgt = 20.0, dwell = 1.0, dt = 0.01, tmax = 200.0;
   bool monotone = false, design_space = false, self_test = false;
+  bool attitude = false;
+  double iyy = 4200.0, mac = 0.510556, m_ctrl = 9000.0;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     auto v = [&]() { return (i + 1 < argc) ? std::atof(argv[++i]) : 0.0; };
@@ -393,6 +395,10 @@ int main(int argc, char **argv)
     else if (a == "--monotone-check") monotone = true;
     else if (a == "--design-space") design_space = true;
     else if (a == "--self-test") self_test = true;
+    else if (a == "--attitude") attitude = true;
+    else if (a == "--iyy") iyy = v();
+    else if (a == "--mac") mac = v();
+    else if (a == "--m-control") m_ctrl = v();
     else { std::fprintf(stderr, "알 수 없는 인자: %s\n", a.c_str()); return 2; }
   }
 
@@ -502,6 +508,77 @@ int main(int argc, char **argv)
     std::printf("  [음성대조] 목표 89.9° (콘 30° 밖): %s\n\n",
                 y.feasible ? "발견 — **고장**" : "미발견 (정상)");
     if (y.feasible) return 3;
+  }
+
+  if (attitude) {
+    // ── B. 회전 권한 — **무차원량으로만 보고한다** ──────────
+    // 정확한 관성을 역산했다고 말하지 않는다. 실제 질량배치 자료가
+    // 없으므로 참값도 그 범위도 모른다.
+    std::printf("[B] 회전 권한 — **무차원량 보고. 관성 역산이 아니다.**\n\n");
+    const double m = base.mass_kg;
+    const double S = base.wing_area_m2;
+    const double c_bar = mac;
+    std::printf("  기준량: m %.1f kg · S %.3f m² · c̄ %.6f m\n", m, S, c_bar);
+    std::printf("  선언 Iyy %.1f kg·m² — **근거 없는 시험값**이다.\n\n", iyy);
+
+    // (1) 피치 각가속도 권한
+    std::printf("  (1) 제어 회전 권한  M_control / Iyy\n");
+    std::printf("      선언 제어 모멘트 %.1f N·m / Iyy %.1f = **%.5f rad/s²**"
+                " (%.3f °/s²)\n", m_ctrl, iyy, m_ctrl / iyy,
+                m_ctrl / iyy / kDeg);
+    std::printf("      Iyy 가 바뀌면 이 값이 선형으로 바뀐다. 그래서 아래\n"
+                "      무차원 관성과 함께 읽어야 한다.\n\n");
+
+    // (2) 무차원 관성 — **기준길이를 명시**한다
+    std::printf("  (2) 무차원 관성  Iyy / (m c̄²)\n");
+    std::printf("      %.1f / (%.1f × %.6f²) = **%.4f**  (기준길이 c̄ = %.6f m)\n",
+                iyy, m, c_bar, iyy / (m * c_bar * c_bar), c_bar);
+    std::printf("      **기준길이를 밝히지 않은 무차원 관성은 비교 불가**다.\n"
+                "      그리고 이 값이 비슷하다는 이유로 다른 기체를 같다고\n"
+                "      말할 수 없다 — 질량배치·공력이 함께 맞아야 한다.\n\n");
+
+    // (3) 피치 모멘트 기여 분해 — 계수가 없으면 fail-closed
+    std::printf("  (3) 전체 피치 모멘트의 기여 분해\n");
+    std::printf("      M = q S c̄ [ Cm_alpha·α + Cm_q·(q c̄/2V)\n"
+                "                  + Cm_alphadot·(α̇ c̄/2V) ] + M_control\n\n");
+    std::printf("      %8s %10s | %14s %14s %14s %12s\n", "V[m/s]", "고도[m]",
+                "정적 Cm_α", "회전감쇠 Cm_q", "α̇감쇠 Cm_αdot", "제어");
+    for (double v : {150.0, 200.0, 230.0}) {
+      const double q = 0.5 * vd::airDensity(base, 2000.0) * v * v;
+      const double scale = q * S * c_bar;      // 계수 1 당 모멘트 [N·m]
+      std::printf("      %8.0f %10.0f | %14s %14s %14s %12.1f\n",
+                  v, 2000.0, "UNKNOWN", "UNKNOWN", "UNKNOWN", m_ctrl);
+      std::printf("      %8s %10s   계수 1 당 %.1f N·m — 계수가 오면 이 배율로 곱한다\n",
+                  "", "", scale);
+    }
+    std::printf("\n  (4) 출처와 사용 가능 범위\n");
+    std::printf("      Cm_q        대역 내 UNKNOWN. TR 1096 이 M=0.13 에서\n"
+                "                  **단독으로** 다루지만(전체 형상 -5.48,\n"
+                "                  규약 q c̄/2V) 대역 밖이고, 식 (3) 이 실측\n"
+                "                  구성 증분과 닫히지 않았다(SOURCES.md).\n");
+    std::printf("      Cm_alphadot 회수 자료 없음. UNKNOWN.\n");
+    std::printf("      둘의 합     TR 1188 대역 내 그림과 NTRS 20150018562\n"
+                "                  계측이 합만 준다. **일반 6DOF 전파에 쓸 수\n"
+                "                  없다** — 두 계수는 q 와 α̇ 라는 서로 다른\n"
+                "                  입력에 곱해진다. 그 시험 조건에서의 총\n"
+                "                  감쇠 진단에만 쓰고, 분리 전까지 UNKNOWN.\n");
+    std::printf("      Cm_alpha    대역 내 UNKNOWN (공력중심 이동 근거 없음).\n");
+
+    std::printf("\n  (5) 판정 — fail-closed\n");
+    std::printf("      네 계수가 모두 UNKNOWN 이므로 **정착시간을 내지 않는다.**\n"
+                "      정착시간은 관성만이 아니라 정적 안정성·감쇠 두 항·\n"
+                "      동압·속력 변화·제어 입력을 포함한 시간응답으로만\n"
+                "      측정된다. Cm_q 하나로 계산한 이전 판의 정착시간\n"
+                "      (572 s / 79 s)은 Cm_alphadot 이 빠져 **무효이며 철회**한다.\n");
+    std::printf("\n  결론: 현재 모델이 요구하는 회전 권한을 무차원량으로\n"
+                "  표현했으며, 실제 관성·감쇠 자료가 공급되면 같은 계약으로\n"
+                "  6DOF 응답을 판정할 수 있다. **현 공개 자료만으로 실제\n"
+                "  기체의 정착시간은 확정할 수 없다.**\n");
+    std::printf("\n[ATTITUDE] m_ctrl_over_iyy=%.5f iyy_nondim=%.4f "
+                "cbar=%.6f cm_alpha=UNKNOWN cm_q=UNKNOWN "
+                "cm_alphadot=UNKNOWN settle=UNDETERMINED\n",
+                m_ctrl / iyy, iyy / (m * c_bar * c_bar), c_bar);
+    return 0;
   }
 
   if (self_test) {
