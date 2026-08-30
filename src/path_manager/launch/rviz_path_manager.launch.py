@@ -68,8 +68,24 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'drone_id',
-            default_value='1',
-            description='Target drone ID to run (0-5)'
+            default_value='',
+            description='Run only this agent index from drone_hardware.yaml. '
+                        'Empty (default) runs every configured agent. An index '
+                        'the yaml does not configure is refused. Forwarded to '
+                        'path_manager.launch.py, which owns the rule.'
+        ),
+        # transition is DECLARED and used by path_manager.launch.py, but this
+        # entry point neither declared nor forwarded it — so `transition:=1`
+        # here was accepted by ros2 launch, turned into a LaunchConfiguration
+        # nobody reads, and silently did nothing. Only MMP_TRANSITION in the
+        # environment worked. Declared and forwarded now, so both do.
+        DeclareLaunchArgument(
+            'transition',
+            default_value='',
+            description="Force the launch-to-cruise transition generator: "
+                        "'1'/'true' on, '0'/'false' off, empty leaves "
+                        "optimizer_params.yaml in charge. Forwarded to "
+                        "path_manager.launch.py."
         ),
         DeclareLaunchArgument(
             'record_bag',
@@ -104,6 +120,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(path_manager_launch),
             launch_arguments={
                 'debug': LaunchConfiguration('debug'),
+                'transition': LaunchConfiguration('transition'),
                 'drone_id': LaunchConfiguration('drone_id'),
                 'record_bag': LaunchConfiguration('record_bag'),
                 'disable_file_logging': LaunchConfiguration('disable_file_logging'),

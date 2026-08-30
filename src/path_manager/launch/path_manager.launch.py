@@ -70,10 +70,16 @@ def create_drone_nodes(context, *args, **kwargs):
               f'{"ON" if transition_override else "OFF"} '
               f'(overrides optimizer_params.yaml)')
 
-    # Target drone ID
-    drone_id_str = context.perform_substitution(LaunchConfiguration('drone_id'))
-    target_drone_id = int(drone_id_str)
-    print(f"Target drone ID: {target_drone_id}")
+    # Target drone ID. EMPTY (the default) means "every agent configured in
+    # drone_hardware.yaml" — which is what this launch has always actually
+    # done. The old default was '1', printed as "Target drone ID: 1", and then
+    # ignored: the agent list is built from the yaml and the shipped yaml has
+    # only drone_0. So the line said 1, the node was drone 0, and the recorded
+    # bag was named drone1_*. A value that is printed and then not used is
+    # worse than no value.
+    drone_id_str = context.perform_substitution(
+        LaunchConfiguration('drone_id')).strip()
+    target_drone_id = int(drone_id_str) if drone_id_str else None
 
     # Config paths
     pkg_share = FindPackageShare('path_manager')
@@ -101,6 +107,19 @@ def create_drone_nodes(context, *args, **kwargs):
         drone_key = f'drone_{i}'
         if drone_key in drone_cfg:
             drones_to_run.append(drone_cfg[drone_key]['index'])
+
+    # Now the argument selects. Refuse an index the yaml does not configure
+    # instead of running everything and printing a number nobody used — that
+    # silence is the finding. This happens BEFORE any node action is built, so
+    # a bad id starts nothing.
+    if target_drone_id is not None:
+        if target_drone_id not in drones_to_run:
+            raise RuntimeError(
+                f"drone_id:={target_drone_id} is not configured in "
+                f"drone_hardware.yaml (configured indices: {drones_to_run}). "
+                f"Omit drone_id to run every configured agent.")
+        drones_to_run = [target_drone_id]
+
     print(f"Running agents: {drones_to_run}")
 
     # Create nodes per drone
@@ -176,7 +195,12 @@ def create_drone_nodes(context, *args, **kwargs):
     if record_bag:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         bag_dir = './logs'
-        bag_name = f"drone{target_drone_id}_trajectory_{timestamp}"
+        # Named after the agents that ACTUALLY run, not after the argument.
+        # One bag carries the whole launch (the recorded topics are unprefixed),
+        # so with more than one agent the name says so rather than picking one.
+        tag = (str(drones_to_run[0]) if len(drones_to_run) == 1
+               else '-'.join(str(d) for d in drones_to_run))
+        bag_name = f"drone{tag}_trajectory_{timestamp}"
         bag_path = os.path.join(bag_dir, bag_name)
 
         # Create directory if it doesn't exist
@@ -221,8 +245,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'drone_id',
-            default_value='1',
-            description='Target drone ID to run (0-5)'
+            default_value='',
+            description='Run only this agent index from drone_hardware.yaml. '
+                        'Empty (default) runs every configured agent. An index '
+                        'the yaml does not configure is refused.'
         ),
         DeclareLaunchArgument(
             'record_bag',
