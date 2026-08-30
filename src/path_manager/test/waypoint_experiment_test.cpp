@@ -426,6 +426,84 @@ int main(int argc, char **argv)
           src.t_s[i], src.pos_m[i], src.vel_mps[i], src.acc_mps2[i]});
     const auto m_perfect =
         we::evaluateReproduction(src, perfect, dyn, hooks);
+
+    // [PA-3] The three optional gates follow ONE rule: a gate that was not
+    // measured makes the verdict INCOMPLETE, never PASS. agl and zone carried
+    // that from the start; the deviation gate did not — it read TRUE when the
+    // caller set no tolerance, and the default IS none, so every caller that
+    // did not set one was counting an unmeasured gate as satisfied.
+    //
+    // Pinned on a PERFECT rollout, so nothing else can be the reason for the
+    // verdict: this run reproduces the source exactly, and the only question
+    // left is what an unmeasured gate does to the answer.
+    {
+      // (a) No tolerance given -> the deviation gate is SKIPPED, and the
+      //     verdict says INCOMPLETE even though every measured gate held.
+      we::EvalParams ep_none;                 // max_xtrack_gate_m defaults 0
+      const auto m_skip = we::evaluateReproduction(src, perfect, dyn, hooks,
+                                                   ep_none);
+      std::printf("selftest xtrack-skip: skipped=%d gate=%d verdict=%s\n",
+                  (int)m_skip.gate_xtrack_skipped, (int)m_skip.gate_xtrack,
+                  m_skip.verdictName());
+      expect(m_skip.gate_xtrack_skipped,
+             "no deviation tolerance -> the gate is recorded as SKIPPED");
+      expect(m_skip.verdict() != we::ReproductionMetrics::Verdict::kPass,
+             "a verdict that never measured deviation is not a PASS — the "
+             "same rule agl and zone already followed");
+
+      // (b) A tolerance the perfect rollout meets -> measured, and it holds.
+      we::EvalParams ep_set = ep_none;
+      ep_set.max_xtrack_gate_m = 50.0;        // perfect rollout deviates ~0
+      const auto m_meas = we::evaluateReproduction(src, perfect, dyn, hooks,
+                                                   ep_set);
+      std::printf("selftest xtrack-meas: skipped=%d gate=%d xtrack=%.3f "
+                  "verdict=%s\n", (int)m_meas.gate_xtrack_skipped,
+                  (int)m_meas.gate_xtrack, m_meas.max_xtrack_m,
+                  m_meas.verdictName());
+      expect(!m_meas.gate_xtrack_skipped && m_meas.gate_xtrack,
+             "with a tolerance set the gate is MEASURED and holds");
+
+      // (c) The distinction has to change the ANSWER, not only the flag.
+      //     The self-test's own hooks measure neither terrain nor zones, so
+      //     BOTH verdicts above are INCOMPLETE for those reasons and the
+      //     deviation gate cannot be seen through them. Give full hooks, so
+      //     agl and zone are measured and pass, and the deviation gate is the
+      //     only thing left that can hold the verdict back.
+      we::SafetyHooks full;
+      full.terrain_z = [](double, double, double *e) { *e = 0.0; return true; };
+      full.zone_probe = [](const Eigen::Vector3d &) {
+        return tp::ZoneProbe::CLEAR;
+      };
+      full.min_agl_m = 1.0;             // rollout flies at z = 2000
+      const auto f_skip = we::evaluateReproduction(src, perfect, dyn, full,
+                                                   ep_none);
+      const auto f_meas = we::evaluateReproduction(src, perfect, dyn, full,
+                                                   ep_set);
+      std::printf("selftest xtrack-answer: skip=%s meas=%s\n",
+                  f_skip.verdictName(), f_meas.verdictName());
+      expect(f_meas.verdict() == we::ReproductionMetrics::Verdict::kPass,
+             "with terrain, zone AND deviation all measured and holding, the "
+             "verdict is PASS");
+      expect(f_skip.verdict() == we::ReproductionMetrics::Verdict::kIncomplete,
+             "drop ONLY the deviation tolerance and the same flight reads "
+             "INCOMPLETE — the skip reaches the answer, which is the whole "
+             "of PA-3");
+
+      // (d) A tolerance the rollout misses -> measured, and it fails.
+      //     Own offset copy, so this block does not depend on a fixture
+      //     declared further down.
+      we::RolloutResult shifted = perfect;
+      for (auto &fs : shifted.samples) fs.pos_m.y() += 300.0;
+      we::EvalParams ep_tight = ep_none;
+      ep_tight.max_xtrack_gate_m = 1.0;
+      const auto m_off_gate = we::evaluateReproduction(src, shifted, dyn,
+                                                       hooks, ep_tight);
+      expect(!m_off_gate.gate_xtrack_skipped && !m_off_gate.gate_xtrack,
+             "an offset rollout against a tight tolerance FAILS the gate, "
+             "so the gate can still refuse");
+      expect(m_off_gate.verdict() == we::ReproductionMetrics::Verdict::kFail,
+             "...and that refusal reaches the verdict as FAIL");
+    }
     std::cout << "selftest perfect: xtrack " << m_perfect.max_xtrack_m
               << " len_ratio " << m_perfect.len_ratio << "\n";
     expect(m_perfect.measured && m_perfect.max_xtrack_m < 1e-6,
@@ -676,7 +754,11 @@ int main(int argc, char **argv)
     // The comparison is reported, not gated: the baseline is not a bound,
     // so "within Nx the baseline" would assert a relationship the two
     // aiming geometries do not have.
-    expect(best_row > 0.0, "the best row is measurable");
+    // Was `best_row > 0.0`, which the 1e18 seed satisfies on its own: an
+    // empty uni_err would have printed [OK] beside 1000000000000000000.0.
+    // Assert the seed was actually replaced by data.
+    expect(!uni_err.empty() && best_row < 1e17,
+           "the best row came from measured data, not the seed");
     // Equal budget means the SAME waypoint count, so uniform is re-run at
     // whatever count refinement actually ended with.
     if (ref_at_16 > 0.0 && !rr.best.empty()) {

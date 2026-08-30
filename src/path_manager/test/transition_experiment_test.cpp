@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -652,6 +653,112 @@ int main(int argc, char **argv)
     }
   }
 
+  if (run("gate_speed_boundary")) {
+    // [V-5] The GENERATOR's speed band, at the boundary. gate_overspeed
+    // below only shows a gross overspeed (ceiling 150 against a 165 m/s
+    // start); s8limits pins the same band on the VALIDATOR. Nothing pinned
+    // the generator AT its boundary, and while nothing did, that gate held
+    // bare > and < against the validator's hand-written 1e-9 and the shared
+    // doctrine's 1e-6 — three tolerances for two limits.
+    //
+    // The three points are stated relative to the SHARED epsilon, never a
+    // literal: exactly at the limit, inside the tolerance, outside it.
+    vd::Parameters p = baseParams();
+    const double eps = vd::kSpeedBoundaryEpsMps;
+
+    // Level entry, straight at a level candidate: q and load sit far inside
+    // their own caps, so a limit disqualification is attributable to the
+    // speed band alone. makeRequest cannot be reused — its 32-deg climb
+    // kills every candidate on load factor before the speed gate is
+    // reached, which is exactly why that fixture never saw this.
+    const auto levelRunP = [&](const vd::Parameters &pp, double v0) {
+      tp::TransitionRequest req;
+      req.limits = makeLimits(pp);
+      req.initial_pos_m = Eigen::Vector3d(0.0, 0.0, 3000.0);
+      req.initial_vel_mps = v0 * Eigen::Vector3d(1.0, 0.0, 0.0);
+      req.initial_acc_mps2 = Eigen::Vector3d::Zero();
+      for (int i = 0; i < 3; ++i) {
+        tp::EntryCandidate e;
+        e.route_vertex = i;
+        e.route_start_s = 48.0 + 2.0 * i;
+        e.pos_m = Eigen::Vector3d(6000.0 + 1000.0 * i, 0.0, 3000.0);
+        e.tangent = Eigen::Vector3d(1.0, 0.0, 0.0);
+        req.entry_candidates.push_back(e);
+      }
+      req.zone_probe = [](const Eigen::Vector3d &) {
+        return tp::ZoneProbe::CLEAR;
+      };
+      req.zone_exposure_raw = [](const Eigen::Vector3d &) { return 0.0; };
+      req.terrain_z = [](double, double, double *e) { *e = 0.0; return true; };
+      req.pva_problem = [](const Eigen::Vector3d &, const Eigen::Vector3d &,
+                           const Eigen::Vector3d &) { return std::string(); };
+      return tp::generate(req);
+    };
+    const auto levelRun = [&](double v0) { return levelRunP(p, v0); };
+
+    // Reference point: a benign level entry must generate, or the three
+    // points below measure the fixture rather than the gate. 190 m/s, not
+    // the band midpoint — measured on this fixture, level flight saturates
+    // CL below 150 m/s, so the midpoint (135) dies on disq_saturated and
+    // would have made this whole variant a fixture check.
+    const double v_ref = 190.0;
+    const auto r_ref = levelRun(v_ref);
+    expect(r_ref.ok,
+           "level entry mid-band generates — the boundary points below "
+           "measure the gate, not the fixture");
+    const auto why = [](const char *tag, double v0, const auto &r) {
+      std::printf("  [V5-GEN] %-8s v0=%9.4f ok=%d | fin=%d preg=%d repr=%d "
+                  "sat=%d terr=%d zone=%d lim=%d to=%d endpva=%d adap=%d\n",
+                  tag, v0, r.ok ? 1 : 0, r.audit.disq_finiteness,
+                  r.audit.disq_preguard, r.audit.disq_representable,
+                  r.audit.disq_saturated, r.audit.disq_terrain,
+                  r.audit.disq_zone, r.audit.disq_limits,
+                  r.audit.disq_timeout, r.audit.disq_end_pva,
+                  r.audit.disq_adapter);
+    };
+    why("ref", v_ref, r_ref);
+
+    // Ceiling: exactly at it, inside the tolerance, outside it.
+    const double v_max = p.speed_max_mps;
+    const auto c_at = levelRun(v_max);
+    const auto c_in = levelRun(v_max + 0.5 * eps);
+    const auto c_out = levelRun(v_max + 1000.0 * eps);
+    why("ceil@", v_max, c_at);
+    why("ceil-in", v_max + 0.5 * eps, c_in);
+    why("ceil-out", v_max + 1000.0 * eps, c_out);
+    expect(c_at.audit.disq_limits == 0,
+           "V0 EXACTLY at the model ceiling is not disqualified on limits");
+    expect(c_in.audit.disq_limits == 0,
+           "V0 inside the shared boundary tolerance is not disqualified");
+    expect(c_out.audit.disq_limits > 0,
+           "V0 outside the tolerance IS disqualified on limits");
+
+    // Floor: the default activation speed (40 m/s) cannot be isolated here.
+    // Measured on this fixture, level flight saturates CL below 150 m/s, so
+    // every candidate dies on disq_saturated long before the speed band is
+    // consulted — the activation floor exists precisely because the model is
+    // not valid down there. To put the FLOOR at a speed the vehicle can
+    // actually hold, this block raises it (and speed_min above it, which
+    // parametersAreValid requires) exactly the way gate_overspeed lowers the
+    // ceiling. The production limits are untouched; only this fixture moves.
+    vd::Parameters pf = p;
+    pf.model_activation_speed_mps = 170.0;  // inside the measured 150..230
+    pf.speed_min_mps = 180.0;               // parametersAreValid: min > act
+    const double v_act = pf.model_activation_speed_mps;
+    const auto f_at = levelRunP(pf, v_act);
+    const auto f_in = levelRunP(pf, v_act - 0.5 * eps);
+    const auto f_out = levelRunP(pf, v_act - 1000.0 * eps);
+    why("floor@", v_act, f_at);
+    why("floor-in", v_act - 0.5 * eps, f_in);
+    why("floor-out", v_act - 1000.0 * eps, f_out);
+    expect(f_at.audit.disq_limits == 0,
+           "V0 EXACTLY at the activation floor is not disqualified on limits");
+    expect(f_in.audit.disq_limits == 0,
+           "V0 inside the tolerance below the floor is not disqualified");
+    expect(f_out.audit.disq_limits > 0,
+           "V0 outside the tolerance below the floor IS disqualified");
+  }
+
   if (run("gate_overspeed")) {
     // Model ceiling below the start speed: the per-step limit gate (not
     // the saturation flags — speed is not a command) disqualifies.
@@ -726,6 +833,39 @@ int main(int argc, char **argv)
            "V AT the model ceiling accepted (inclusive)");
     expect(verdict(onePiece(v_max + 0.01, 0.0, 0.0, 0.5)) == FAIL,
            "V above the model ceiling refused");
+
+    // [V-5] The same band at the SHARED tolerance rather than at 0.01. The
+    // points above sit 10^4 epsilons away from the boundary, so they hold
+    // whatever the tolerance is — including the hand-written 1e-9 this gate
+    // used to carry against the doctrine's 1e-6. These three do not.
+    {
+      const double eps = vd::kSpeedBoundaryEpsMps;
+      expect(verdict(onePiece(v_max + 0.5 * eps, 0.0, 0.0, 0.5)) == OK,
+             "V inside the shared tolerance above the ceiling accepted");
+      expect(verdict(onePiece(v_max + 1000.0 * eps, 0.0, 0.0, 0.5)) == FAIL,
+             "V outside the shared tolerance above the ceiling refused");
+      expect(verdict(onePiece(v_act - 0.5 * eps, -p.gravity_mps2, 0.0, 0.2)) ==
+                 OK,
+             "V inside the shared tolerance below the floor accepted");
+      expect(verdict(onePiece(v_act - 1000.0 * eps, -p.gravity_mps2, 0.0,
+                              0.2)) == FAIL,
+             "V outside the shared tolerance below the floor refused");
+
+      // [V-5] Every gate above compares an m/s sample against an m/s limit
+      // off req.limits.dyn. generate() asserts that set before using it;
+      // this entry did not, so a caller reaching the validator directly
+      // compared against whatever it was handed. Fail closed.
+      const vd::Parameters good = req.limits.dyn;
+      vd::Parameters bad = good;
+      bad.speed_max_mps = bad.speed_min_mps - 1.0;  // ordering broken
+      req.limits.dyn = bad;
+      expect(!vd::parametersAreValid(bad), "the fixture's bad set IS invalid");
+      expect(verdict(onePiece(v_max - 0.01, 0.0, 0.0, 0.5)) == FAIL,
+             "an invalid parameter set is refused before any comparison");
+      req.limits.dyn = good;
+      expect(verdict(onePiece(v_max - 0.01, 0.0, 0.0, 0.5)) == OK,
+             "...and the same trajectory passes once the set is valid again");
+    }
 
     // Dynamic pressure: the cap moves around the piece's exact q.
     {

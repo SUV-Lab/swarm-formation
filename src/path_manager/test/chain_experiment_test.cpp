@@ -29,6 +29,9 @@
 // The [CHAIN]/[CHAIN-REPORT] narrative lands in ./logs/runtime/ (LogManager
 // is file-only); this binary prints the machine-checkable verdicts to stdout.
 #include <algorithm>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sstream>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +41,9 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+
+#include "path_planner/dyn_a_star.h"
+#include "path_planner/sdf/distance_field.h"
 
 #include "path_manager/segment_chain_planner.h"
 #include "path_manager/transition_phase.h"
@@ -57,26 +63,6 @@ void expect(bool condition, const std::string &label)
 // to the log file rather than to stdout — so a claim about it has to be
 // checked there. Returns false when no verdict line exists at all, which is
 // itself a failure for any assertion phrased as "the verdict says X".
-bool lastFinalEvalHas(const std::string &needle)
-{
-  namespace fs = std::filesystem;
-  const fs::path dir{"./logs/runtime"};
-  if (!fs::exists(dir)) return false;
-  fs::path newest;
-  fs::file_time_type best{};
-  for (const auto &e : fs::directory_iterator(dir)) {
-    const auto n = e.path().filename().string();
-    if (n.rfind("chain_experiment", 0) != 0) continue;
-    const auto t = fs::last_write_time(e);
-    if (newest.empty() || t > best) { newest = e.path(); best = t; }
-  }
-  if (newest.empty()) return false;
-  std::ifstream in(newest);
-  std::string line, last;
-  while (std::getline(in, line))
-    if (line.find("[FINAL-EVAL] verdict:") != std::string::npos) last = line;
-  return !last.empty() && last.find(needle) != std::string::npos;
-}
 
 // Rolling-hills DEM, mission scale (1 u = 100 m): 360 x 300 u at 2 u/cell,
 // crests ~1.8 u (180 m). Heights are authored through the SAME forward map
@@ -186,7 +172,8 @@ int main(int argc, char **argv)
        with_wpzonepass0 = false, with_legmid = false,
        with_cutarc = false, with_transwp = false, with_legseam = false,
        with_dynprobe = false, with_fm2fail = false, with_envchange = false,
-       with_legfail = false,
+       with_stageorder = false,
+       with_legfail = false, with_finalclear = false,
        with_zonemultileg = false, with_transition = false,
        with_transitionauto = false, with_s8bounds = false,
        with_waypoints = false;
@@ -354,6 +341,8 @@ int main(int argc, char **argv)
     if (v == "legaudit") { with_legaudit = true; }
     if (v == "legmid") { with_legmid = true; }
     if (v == "cutarc") { with_cutarc = true; }
+    if (v == "finalclear") { with_finalclear = true; }
+    if (v == "stageorder") { with_stageorder = true; }
     if (v == "legseam") { with_legseam = true; }
     if (v == "legfail") { with_legfail = true; }
     if (v == "dynprobe") { with_dynprobe = true; }
@@ -2332,6 +2321,17 @@ int main(int argc, char **argv)
     // alone does not change these outcomes. The predicate itself is pinned as
     // a pure function in start_claim_test, where the rest of the per-source
     // matrix lives.
+    //
+    // What it DOES isolate, and what was not known when it was written: this
+    // is the only fixture that pins the [FM2-FINAL-CLEAR] gate's CALL SITE.
+    // Deleting the gate makes all three of these plan (measured: chain=1
+    // handoff=1 derived=1, three checks die). The gate's RULE is pinned
+    // separately in `finalclear`. NOTE (re-measured 2026-08-18, merged tree):
+    // deleting the obstacle half no longer passes the sweep -- it kills
+    // finalclear (69/70). The merged-in `envchange` variant also depends on
+    // obstacleBlocked inside polylineClear, through
+    // PathManager::revalidateStoredTrajectory. The older wording said the
+    // opposite and was measured before that merge.
     {
       using SS = path_manager::StartStateSource;
       double g = 0.0;
@@ -2710,6 +2710,324 @@ int main(int argc, char **argv)
     expect(ep_after == ep_before,
            "...and NO front end ran for it — the policy epoch is untouched, "
            "which is what 'decided before anything is attempted' means");
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_stageorder) {
+    // [PA-5] The FM2 STAGE ORDER, pinned through the PRODUCTION entry point.
+    //
+    //     raw FM2  ->  obstacles only  ->  terrain lift  ->  final full check
+    //
+    // Every piece of this was already covered and the ORDER was not. On
+    // 2026-08-18 an abort/cancel merge took the other side of one hunk and
+    // moved the terrain half from the final stage up to the raw stage. That
+    // is a real regression — the lift sweep exists to fix exactly what the
+    // raw stage would then refuse, and under the shipped front_end: fm2 the
+    // refusal is terminal because no A* pool is allocated to fall back to.
+    // It passed 86 registered tests, 70 chain variants and a live mission.
+    //
+    // finalclear pins the same two predicates as PURE FUNCTIONS and could not
+    // see it: the question is not what polylineClear computes, it is WHICH
+    // STAGE CALLS WHICH. So this variant drives astarSearchAndGetSimplePath
+    // itself, with no A* pool ever allocated, which is the shipped shape.
+    //
+    // The fixture: flat ground with one wide ridge across the whole corridor.
+    // A route flown at z = 3.0 over a 2.6 u ridge has 0.4 u of clearance
+    // against a 0.6 u margin — inside the margin, so the raw geodesic is NOT
+    // terrain-clear, and NOT blocked either, so the lift sweep can raise it.
+    // No obstacle anywhere: the SDF is a slab that is switched off.
+    struct OffField : public path_planner::sdf::IDistanceField {
+      double x0{0.0};
+      bool on{false};
+      float getDistance(const Eigen::Vector3d &p) const override {
+        return on ? static_cast<float>(std::abs(p.x() - x0)) : 1e9f;
+      }
+      bool getDistanceAndGradient(const Eigen::Vector3d &p, float *d,
+                                  Eigen::Vector3d *g) const override {
+        if (d) *d = getDistance(p);
+        if (g) *g = Eigen::Vector3d(p.x() >= x0 ? 1.0 : -1.0, 0.0, 0.0);
+        return true;
+      }
+      bool hasData() const override { return true; }
+    };
+
+    // Constants MEASURED, not guessed. The first fixture written here used a
+    // 6 u ridge and the geodesic simply climbed over it (FM2-SWEEP lifted=0),
+    // so the raw form was already terrain-clear and the mutation below
+    // SURVIVED — the test proved nothing. A parameter sweep over ridge
+    // height / width / ceiling found the shape that actually produces the
+    // condition: a ridge NARROWER than the coarse FM2 cell (k=3 x 0.5 =
+    // 1.5 u), which the coarse speed map under-resolves, so the geodesic
+    // threads it at an altitude the fine-pitch rule calls too close.
+    //
+    //   sweep result at this shape: FM2-SWEEP lifted=7, route 14 pts
+    //   same shape with the raw stage judging terrain: route 0 pts
+    const double kMargin  = 0.6;
+    const double kRidgeZ  = 2.9;      // route flies 3.0 -> 0.1 u clearance
+    const double kRidgeLo = 20.0;     // 0.8 u wide, under the 1.5 u coarse cell
+    const double kRidgeHi = 20.8;
+    const double kRouteZ  = 3.0;
+    const auto terrain = [&](double x, double y) -> float {
+      (void)y;
+      return (x >= kRidgeLo && x <= kRidgeHi) ? (float)kRidgeZ : 0.0f;
+    };
+
+    OffField field;
+    path_planner::search::PathSearcher as;
+    as.setObstacleMargin(kMargin);
+    as.setSDF(&field, Eigen::Vector3d(-5.0, -5.0, -2.0),
+              Eigen::Vector3d(60.0, 30.0, 20.0), 0.5, 0.25);
+    as.setTerrainHeightmap(terrain, 1.0);
+    as.setFrontEnd(path_planner::search::PathSearcher::FrontEnd::FM2);
+    as.setFm2CoarseK(3);
+    // NO initGridMap: the shipped fm2 configuration never allocates the A*
+    // pool (path_manager.cpp guards it on front_end != "fm2"). If the FM2
+    // stage refuses, there is nothing to fall back to — which is the whole
+    // reason the raw criterion has to be the one no later stage can fix.
+
+    const Eigen::Vector3d A(2.0, 10.0, kRouteZ), B(40.0, 10.0, kRouteZ);
+
+    // (1) The mission plans. Under the correct stage order the raw geodesic
+    //     may sit inside the terrain margin over the ridge, the sweep lifts
+    //     it, and the final gate passes.
+    std::vector<Eigen::Vector3d> route =
+        as.astarSearchAndGetSimplePath(0.5, A, B, 0, /*is_takeoff_leg=*/false);
+    std::printf("  [PA5] route pts=%zu\n", route.size());
+    expect(route.size() >= 2,
+           "a route whose RAW form grazes terrain but carries no obstacle "
+           "still plans — the lift sweep is allowed to do its job");
+
+    if (route.size() >= 2) {
+      // (2) What came back really is clear by the FINAL rule. If the sweep
+      //     did not actually repair anything this would fail, and the test
+      //     would be measuring the wrong thing.
+      Eigen::Vector3d bad;
+      expect(as.polylineClear(route, &bad, 0.0),
+             "...and the returned route passes the FINAL rule "
+             "(terrain + obstacles), so the repair really happened");
+
+      // (3) The repair was REAL, not incidental. The route that came back is
+      //     not the straight chord: the sweep lifted vertices into it. If a
+      //     future change made the geodesic simply fly over the ridge, this
+      //     count would collapse to 2 and the mutation below would stop being
+      //     discriminating — which is exactly how the first draft of this
+      //     fixture failed, silently.
+      expect(route.size() > 2,
+             "the route carries repair vertices — a 2-point route here would "
+             "mean the geodesic cleared the ridge on its own and this fixture "
+             "no longer reproduces the condition");
+      const std::vector<Eigen::Vector3d> chord = {A, B};
+      expect(as.polylineObstacleClear(chord, &bad),
+             "the corridor carries no obstacle at all — so anything the raw "
+             "stage refuses here, it refuses for TERRAIN");
+    }
+
+    // (4) An obstacle on the raw path is refused AT THE RAW STAGE. No lift
+    //     gets a route out of a solid volume, so this one must not wait.
+    //
+    //     "It came back empty" is NOT enough to pin that: if the raw stage
+    //     let the blocked geodesic through, the FINAL gate would refuse it
+    //     and the result would be empty either way. Measured — a mutation
+    //     that deleted the raw check outright survived this fixture until
+    //     the assertion below was added.
+    //
+    //     What separates them is WHERE the refusal is logged. The raw refusal
+    //     goes to the LogManager, which this fixture does not install, so it
+    //     leaves no trace; the final gate shouts [FM2-FINAL-CLEAR] through
+    //     RCLCPP_ERROR onto stderr. So: stderr must stay SILENT of that tag.
+    field.on = true;
+    field.x0 = 20.0;                    // slab across the corridor
+    std::string cap_path = "/tmp/pa5_blocked_stderr.txt";
+    std::string console;
+    {
+      std::fflush(stderr);
+      int saved = dup(STDERR_FILENO);
+      int fd = open(cap_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      dup2(fd, STDERR_FILENO);
+      std::vector<Eigen::Vector3d> blocked =
+          as.astarSearchAndGetSimplePath(0.5, A, B, 0, false);
+      std::fflush(stderr);
+      dup2(saved, STDERR_FILENO);
+      close(fd); close(saved);
+      std::ifstream in(cap_path);
+      std::stringstream ss; ss << in.rdbuf(); console = ss.str();
+      std::printf("  [PA5] blocked pts=%zu\n", blocked.size());
+      expect(blocked.empty(),
+             "an obstacle ON the raw path produces NO route — there is no A* "
+             "pool to fall back to, so this must be a refusal and not a "
+             "straight line through the slab");
+    }
+    expect(console.find("[FM2-FINAL-CLEAR]") == std::string::npos,
+           "...and it was refused at the RAW stage, not carried to the final "
+           "gate — the final gate never had to speak");
+
+    rclcpp::shutdown();
+    if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
+    std::cout << "FAIL: " << failures << " failed check(s)\n";
+    return 1;
+  }
+
+  if (with_finalclear) {
+    // [FM2-FINAL-CLEAR] The route-validation contract, pinned as the PURE
+    // PREDICATE it is. Two halves, and only one of them was covered.
+    //
+    // The searcher's own fixtures reach these rules only through a full FM2
+    // plan. That pins the CALL SITE -- deleting the final gate outright makes
+    // `dynprobe`'s [TAKEOFF] arms plan a route from a start inside the
+    // terrain margin, which is a real refusal and a real regression.
+    //
+    // RE-MEASURED 2026-08-18 on the merged tree (70 variants), because the
+    // old sentence here said the sweep "passes clean with the OBSTACLE half
+    // of polylineClear deleted (measured, 68 variants)". It does not any more:
+    //
+    //   obstacle half deleted -> 69/70   dies: finalclear
+    //   terrain  half deleted -> 68/70   dies: dynprobe, finalclear
+    //
+    // Two things changed. This fixture now covers the obstacle half itself,
+    // and the merged-in `envchange` variant reaches polylineClear through
+    // PathManager::revalidateStoredTrajectory with a dynamic sphere, which
+    // only the obstacle half can see. The original reasoning -- that every
+    // obstacle the harness can build is grounded, so a terrain lift moves a
+    // point AWAY from one and the post-sweep obstacle case has no natural
+    // fixture -- still explains why the rule is stated directly here.
+    //
+    // A slab of ZERO thickness at a known x. obstacle_margin_ is what gives
+    // it width, so the fixture states the margin's role instead of hiding it
+    // inside the geometry.
+    struct SlabField : public path_planner::sdf::IDistanceField {
+      double x0;
+      bool on{true};
+      explicit SlabField(double x) : x0(x) {}
+      float getDistance(const Eigen::Vector3d &p) const override {
+        return on ? static_cast<float>(std::abs(p.x() - x0)) : 1e9f;
+      }
+      bool getDistanceAndGradient(const Eigen::Vector3d &p, float *d,
+                                  Eigen::Vector3d *g) const override {
+        if (d) *d = getDistance(p);
+        if (g) *g = Eigen::Vector3d(p.x() >= x0 ? 1.0 : -1.0, 0.0, 0.0);
+        return true;
+      }
+      bool hasData() const override { return true; }
+    };
+    // Terrain: flat 0, with one 2 u ridge whose position the case chooses.
+    // 5.0 u tall against a route flying at z = 3, so the ridge is a genuine
+    // clearance violation and not a margin graze.
+    double ridge_lo = 1e9, ridge_hi = 1e9, ridge_ymax = 1e9;
+    const auto terrain = [&](double x, double y) -> float {
+      return (x >= ridge_lo && x <= ridge_hi && y <= ridge_ymax) ? 5.0f : 0.0f;
+    };
+
+    SlabField slab(1.0);
+    slab.on = false;
+    path_planner::search::PathSearcher as;
+    as.setObstacleMargin(0.6);
+    as.setSDF(&slab, Eigen::Vector3d(-50.0, -50.0, -50.0),
+              Eigen::Vector3d(400.0, 400.0, 400.0), 0.4, 0.1);
+    as.setTerrainHeightmap(terrain, 2.0);
+
+    const double relief = as.startTerrainReliefArc();
+    expect(std::abs(relief - 3.0) < 1e-9,
+           "the takeoff allowance is 5 x the 0.60 u margin");
+
+    // A straight 60 u run at z = 3. Two vertices only: every violation below
+    // is strictly INSIDE a segment, which is the case a vertex-only check
+    // would wave through.
+    const std::vector<Eigen::Vector3d> line = {{0.0, 0.0, 3.0},
+                                               {60.0, 0.0, 3.0}};
+    Eigen::Vector3d hit;
+
+    // (1) THE RAW/FINAL SPLIT. A ridge at x in [40, 42] is terrain, not
+    // geometry -- the raw stage must pass it (the lift sweep is what repairs
+    // it) and the final stage must refuse it. One polyline, two answers: that
+    // difference IS the split, and a mutation collapsing either direction
+    // shows up here and nowhere else.
+    ridge_lo = 40.0; ridge_hi = 42.0;
+    expect(as.polylineObstacleClear(line, &hit),
+           "the RAW stage passes a terrain-violating seed -- the sweep has "
+           "not run yet");
+    expect(!as.polylineClear(line, &hit, 0.0),
+           "...and the FINAL stage refuses the same polyline");
+    expect(hit.x() >= 40.0 - 1e-6 && hit.x() <= 42.0 + 1e-6,
+           "...naming a point on the ridge, not the first vertex");
+
+    // (2) The terrain allowance is an ARC BUDGET, and it is short. Same
+    // ridge, moved inside and then just outside the 3.0 u allowance.
+    ridge_lo = 1.0; ridge_hi = 2.0;
+    expect(as.polylineClear(line, &hit, relief),
+           "a terrain violation wholly inside the takeoff allowance is "
+           "permitted");
+    expect(!as.polylineClear(line, &hit, 0.0),
+           "...and the SAME violation is refused when no allowance applies");
+    ridge_lo = 4.0; ridge_hi = 5.0;
+    expect(!as.polylineClear(line, &hit, relief),
+           "a terrain violation past the allowance is refused");
+
+    // (3) OBSTACLES ARE NEVER EXEMPT -- not even wholly inside the takeoff
+    // allowance, which is the one place a reader might expect otherwise.
+    // This is the check that dies when the obstacle half is deleted; nothing
+    // in the variant sweep did.
+    ridge_lo = 1e9; ridge_hi = 1e9;           // terrain out of the way
+    slab.on = true; slab.x0 = 1.0;            // arc 1.0, allowance 3.0
+    expect(!as.polylineClear(line, &hit, relief),
+           "an obstacle inside the takeoff allowance is still refused -- the "
+           "allowance is for TERRAIN clearance only");
+    expect(std::abs(hit.x() - 1.0) <= 0.6 + 1e-6,
+           "...naming a point within the margin of the slab");
+    expect(!as.polylineObstacleClear(line, &hit),
+           "...and the RAW stage refuses it too: geometry cannot be lifted "
+           "out of");
+    slab.on = false;
+
+    // (4) The arc is measured ALONG THE POLYLINE, not as a radius from the
+    // start. The route goes out to y = 20, steps across, and comes back down
+    // beside itself, so its far end sits 2 u from the start in SPACE and
+    // 40 u along the PATH. The ridge is planted only where that return leg
+    // is -- x in [1.5, 2.5] and low y, which the outbound leg (x = 0) and the
+    // crossing leg (y = 20) both miss. A radius-based allowance would exempt
+    // the violation for being 2.8 u from the start; an arc-based one spends
+    // its 3.0 u in the first three metres of flight and has none left.
+    const std::vector<Eigen::Vector3d> hook = {{0.0, 0.0, 3.0},
+                                               {0.0, 20.0, 3.0},
+                                               {2.0, 20.0, 3.0},
+                                               {2.0, 0.0, 3.0}};
+    ridge_lo = 1.5; ridge_hi = 2.5; ridge_ymax = 2.0;
+    expect(!as.polylineClear(hook, &hit, relief),
+           "the allowance is spent along the ROUTE, not inside a ball around "
+           "the start");
+    expect((hit - hook.front()).norm() < relief,
+           "...and the point it refuses is CLOSER to the start than the "
+           "allowance is long -- which is what makes this an arc rule");
+    ridge_ymax = 1e9;
+
+    // (5) The arc accumulates ACROSS segments rather than resetting at each
+    // vertex. Vertices at 0/2/4; the ridge sits at arc ~4.5, on the third
+    // segment. Per-segment accounting would see 0.5 u of it and exempt it.
+    const std::vector<Eigen::Vector3d> steps = {{0.0, 0.0, 3.0},
+                                                {2.0, 0.0, 3.0},
+                                                {4.0, 0.0, 3.0},
+                                                {60.0, 0.0, 3.0}};
+    ridge_lo = 4.4; ridge_hi = 4.6;
+    expect(!as.polylineClear(steps, &hit, relief),
+           "the allowance is consumed across vertices, not restarted at "
+           "each one");
+    ridge_lo = 2.4; ridge_hi = 2.6;
+    expect(as.polylineClear(steps, &hit, relief),
+           "...while a violation genuinely inside the first 3.0 u still "
+           "passes, whichever segment it falls on");
+
+    // (6) Fail-closed on a degenerate input. "Not enough polyline to judge"
+    // is not the same as "clear", and the searcher's return path treats a
+    // false here as a refusal.
+    ridge_lo = 1e9; ridge_hi = 1e9;
+    const std::vector<Eigen::Vector3d> one = {{0.0, 0.0, 3.0}};
+    expect(!as.polylineClear(one, &hit, 0.0),
+           "a single-point polyline is refused, not called clear");
+    expect(!as.polylineObstacleClear(one, &hit),
+           "...by the raw stage as well");
+
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
@@ -3831,7 +4149,6 @@ int main(int argc, char **argv)
     const poly_traj::Trajectory traj = pm->traj_.local_traj.traj;
     const double T = traj.getTotalDuration();
     using PK = path_manager::SegmentChainPlanner::PhaseKind;
-    using Span = path_manager::SegmentChainPlanner::PhaseSpan;
     // Each span-contract violation must yield UNEVALUATED.
     expect(!chain.evaluateFlight(traj, {{T * 0.5, PK::CRUISE, "short"}},
                                  nullptr, 0)

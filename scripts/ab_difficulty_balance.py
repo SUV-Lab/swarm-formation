@@ -436,7 +436,14 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir,
 
     cmd = (
         '{drone_id: 0, mission_id: "%s", '
-        "start_position: {x: %g, y: %g, z: %g}, target_position: {x: %g, y: %g, z: %g}, "
+        # %.4f, NOT %g. %g keeps 6 SIGNIFICANT digits, so a five-digit frame
+        # coordinate loses everything past the first decimal: r4's
+        # 12343.9370 -> 12343.9 and 17256.0410 -> 17256, moving the start
+        # 3.7 m x 4.1 m. That was enough to flip a 338 km route from a clean
+        # 461-piece plan to "front-end failed", deterministically. Latent until
+        # d30621c rewrote mission coordinates to 6+ significant digits.
+        "start_position: {x: %.4f, y: %.4f, z: %.4f}, "
+        "target_position: {x: %.4f, y: %.4f, z: %.4f}, "
         'formation_type: "none", use_initial_velocity: %s, '
         "use_initial_speed: %s, initial_speed: %g, "
         "initial_velocity: {x: %g, y: %g, z: %g}, use_initial_acceleration: %s, "
