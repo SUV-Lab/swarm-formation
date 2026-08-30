@@ -396,12 +396,18 @@ namespace path_manager
     // The same rule applies to all four boundaries: the margin-backed cruise
     // floor and the effective handoff ceiling here, and the transition
     // model's activation speed and maximum speed in classifyStartState.
-    static constexpr double kSpeedBoundaryEpsMps = 1e-6;
+    //
+    // The rule itself now lives in mmp_vehicle_dynamics beside the handoff
+    // verdict that applies it, so an off-line harness reproduces the same
+    // boundary arithmetic instead of re-picking an epsilon. These stay as
+    // the names the planner already calls it by.
+    static constexpr double kSpeedBoundaryEpsMps =
+        mmp_vehicle_dynamics::kSpeedBoundaryEpsMps;
     static bool belowSpeedBoundary(double v_mps, double floor_mps) {
-        return v_mps < floor_mps - kSpeedBoundaryEpsMps;
+        return mmp_vehicle_dynamics::belowSpeedBoundary(v_mps, floor_mps);
     }
     static bool aboveSpeedBoundary(double v_mps, double ceiling_mps) {
-        return v_mps > ceiling_mps + kSpeedBoundaryEpsMps;
+        return mmp_vehicle_dynamics::aboveSpeedBoundary(v_mps, ceiling_mps);
     }
 
     // NOTE: statedStartSpeedProblem is DELETED. It was a second validator
@@ -558,7 +564,10 @@ namespace path_manager
     // internal zone list. A* / optimizer are re-bound on next planGlobalTraj.
     // Thread/timing: callers must ensure this is invoked on the same
     // callback group as trajectory commands (handled in ReplanFSM).
-    void setRiskZonesRuntime(const std::vector<RiskZone>& zones);
+    // [PA-7] Returns false and changes NOTHING when any zone is malformed.
+    // Validating here as well as at the message boundary means no caller can
+    // install a zone whose peak violates the (0, 1] the struct declares.
+    bool setRiskZonesRuntime(const std::vector<RiskZone>& zones);
     // [S13] Per-zone policy snapshot for the transition generator (contract
     // §5 zone_policy[]). A pass NUMBER is not a policy: endpoint-contained
     // zones are exempt individually, the pass-2 fallback leaves the WHOLE
@@ -744,6 +753,24 @@ namespace path_manager
                             const Eigen::Vector3d &pos) const {
       return riskZoneValue(zone_index, pos);
     }
+    // The FRONT END's composed field at pos. Paired with getEffectiveRisk this
+    // is what makes the cross-layer identity checkable: the two are separate
+    // transcriptions of one contract, and mutating either alone splits them.
+    double getFrontEndRisk(const Eigen::Vector3d &pos) const {
+      return searcher_.riskFieldAt(pos);
+    }
+    // The BACK END's actual risk cost term and its analytic gradient at pos.
+    // Not a parallel reimplementation: it calls the very function L-BFGS calls,
+    // so numerically differentiating the returned cost checks the gradient the
+    // solver really uses.
+    bool getBackEndRiskCost(const Eigen::Vector3d &pos,
+                            const Eigen::Vector3d &vel,
+                            Eigen::Vector3d &gradp,
+                            Eigen::Vector3d &gradv,
+                            double &cost) const {
+      if (!poly_traj_opt_) return false;
+      return poly_traj_opt_->inspectRiskCostAt(pos, vel, gradp, gradv, cost);
+    }
 
   private:
     std::shared_ptr<rclcpp::Node> node_;
@@ -788,6 +815,11 @@ namespace path_manager
     double risk_vertical_ratio_{0.35};
     double riskEllipsoidRadius(const RiskZone &zone,
                                const Eigen::Vector3d &pos) const;
+    // Pushes risk_zones_ into the front-end searcher. Called by both the
+    // plan path and the zone setter so the layers never disagree about which
+    // zone set is live.
+    void bindRiskZonesToSearcher();
+    void bindRiskZonesToOptimizer();
     double riskZoneValue(size_t zone_index,
                          const Eigen::Vector3d &pos) const;
     // Terrain-masked risk field (radial horizon / viewshed). For each source

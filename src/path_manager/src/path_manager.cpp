@@ -1,4 +1,7 @@
 #include "path_manager/path_manager.h"
+#include "path_planner/risk_shape.h"
+
+#include <stdexcept>
 
 #include <algorithm>
 #include <cmath>
@@ -25,8 +28,27 @@ namespace path_manager
             node_->get_parameter("enable_debug_logs", enable_debug_logs_);
         }
             
-        int drone_id;
-        node_->get_parameter("drone_id", drone_id);
+        // [PARAM] drone_id is DATA, not a diagnostic: it reaches the
+        // optimizer (setDroneId) and the published PolyTraj. It used to be an
+        // uninitialized local whose get_parameter return was discarded, so a
+        // failed read published whatever was on the stack — or, once
+        // initialized, silently published as drone 0. Neither is acceptable
+        // for a value that identifies the aircraft, so this refuses instead.
+        // ReplanFSM declares it before constructing PathManager; a direct
+        // construction (a test) must declare it itself.
+        int drone_id = 0;
+        if (!node_->has_parameter("drone_id")) {
+            throw std::runtime_error(
+                "PathManager: 'drone_id' is not declared — refusing to plan "
+                "as drone 0 by default. ReplanFSM declares it before "
+                "constructing PathManager; a direct construction must "
+                "declare it itself.");
+        }
+        if (!node_->get_parameter("drone_id", drone_id)) {
+            throw std::runtime_error(
+                "PathManager: 'drone_id' is declared but could not be read "
+                "(type mismatch?) — refusing to plan as drone 0 by default.");
+        }
         traj_.local_traj.drone_id = drone_id;
 
         node_->declare_parameter("manager/max_vel", -1.0);
@@ -304,17 +326,53 @@ namespace path_manager
         node_->get_parameter("risk_zones", tz_params);
         log_manager_->infof("Risk zone params size: %zu", tz_params.size());
         if (tz_params.size() >= 5 && tz_params.size() % 5 == 0) {
+            // [PA-7] Validate BEFORE adopting anything. Both RiskZone's own
+            // declaration and risk_zones.yaml state peak MUST be in (0, 1];
+            // this loader used to assign it raw, so 0, a negative, >1, NaN and
+            // Inf all became live field parameters.
+            //
+            // ATOMIC REJECTION: the whole set is refused rather than the
+            // offending zone. Dropping one zone silently REMOVES a hazard from
+            // the field and the planner then routes straight through it.
+            //
+            // This does NOT make startup fail-closed at system level: a
+            // rejected config leaves zero zones and planning continues. Whether
+            // it should is an open policy question (ledger PA-7).
+            std::vector<RiskZone> parsed;
+            size_t bad = 0;
             for (size_t ti = 0; ti < tz_params.size(); ti += 5) {
                 RiskZone tz;
                 tz.center = Eigen::Vector3d(tz_params[ti], tz_params[ti+1], tz_params[ti+2]);
                 tz.reach = tz_params[ti+3];
                 tz.peak = tz_params[ti+4];
-                risk_zones_raw_.push_back(tz);
+                const bool geom_ok = std::isfinite(tz.center.x()) &&
+                                     std::isfinite(tz.center.y()) &&
+                                     std::isfinite(tz.center.z()) &&
+                                     std::isfinite(tz.reach) && tz.reach > 0.0;
+                if (!geom_ok || !mmp::risk::isValidPeak(tz.peak)) {
+                    ++bad;
+                    log_manager_->errorf(
+                        "  RiskZone #%zu REJECTED: center=(%.3f,%.3f,%.3f) "
+                        "range=%.3f peak=%.3f — peak must be finite and in "
+                        "(0, 1], range must be finite and > 0",
+                        ti / 5, tz.center.x(), tz.center.y(), tz.center.z(),
+                        tz.reach, tz.peak);
+                    continue;
+                }
+                parsed.push_back(tz);
                 log_manager_->infof("  RiskZone #%zu: center=(%.1f,%.1f,%.1f) range=%.1f risk=%.1f",
-                    risk_zones_raw_.size()-1, tz.center.x(), tz.center.y(), tz.center.z(),
+                    parsed.size()-1, tz.center.x(), tz.center.y(), tz.center.z(),
                     tz.reach, tz.peak);
             }
-            log_manager_->infof("Loaded %zu risk zones (risk_weight=%.1f)", risk_zones_raw_.size(), risk_weight_);
+            if (bad > 0) {
+                log_manager_->errorf(
+                    "risk_zones REJECTED: %zu of %zu zones invalid — loading "
+                    "NONE. A partially loaded set would hide %zu hazard(s).",
+                    bad, tz_params.size() / 5, bad);
+            } else {
+                risk_zones_raw_ = std::move(parsed);
+                log_manager_->infof("Loaded %zu risk zones (risk_weight=%.1f)", risk_zones_raw_.size(), risk_weight_);
+            }
         } else if (tz_params.empty()) {
             log_manager_->infof("No risk zones configured");
         } else {
@@ -447,8 +505,11 @@ namespace path_manager
             poly_traj_opt_->setLogManager(log_manager_);
 
             // Set parameters first to ensure node_ is initialized
-            poly_traj_opt_->setParam(node_);
+            // The id goes in FIRST: setParam logs through LOG_* , which
+            // formats drone_id_ into every line it emits. Setting it after
+            // meant those lines carried the pre-set value.
             poly_traj_opt_->setDroneId(traj_.local_traj.drone_id);
+            poly_traj_opt_->setParam(node_);
 
             // Four optimization/* values are consumed by PathManager, not by
             // setParam — re-read them on every (forced) re-init, or a
@@ -639,19 +700,27 @@ std::string PathManager::stateEnvelopeProblem(
         };
         const double um_xy = unit("optimization/dynamics_unit_xy_m", 100.0);
         const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
-        const double vh = std::hypot(vel_units.x() * um_xy,
-                                     vel_units.y() * um_xy);
-        const double vz = vel_units.z() * um_z;
-        const double vm = std::hypot(vh, vz);
         const auto &dyn = poly_traj_opt_->dynamicsParams();
         const double floor_mps =
             poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy;
+        const double vmax_pre = effectiveHandoffMaxMps();
+        // The JUDGEMENT is mmp_vehicle_dynamics::speedConeVerdict — one
+        // definition shared with every off-line harness, so none of them can
+        // certify a state this gate would refuse. What stays here is the two
+        // ROS-parameterised scalars above and the wording below.
+        const Eigen::Vector3d vel_mps(vel_units.x() * um_xy,
+                                      vel_units.y() * um_xy,
+                                      vel_units.z() * um_z);
+        const auto verdict = mmp_vehicle_dynamics::speedConeVerdict(
+            dyn, vel_mps, floor_mps, vmax_pre);
+        const double vm = verdict.speed_mps;
         char buf[160];
         // [SPEED-BOUNDARY] see path_manager.h. Commanding exactly the floor
         // must pass whatever the direction; the unit round trip puts some
         // directions 2.8e-14 m/s under it — (1,1,0) and r5's own first-leg
         // aim (-18.3, -199.2, 0) among them.
-        if (belowSpeedBoundary(vm, floor_mps)) {
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::SpeedBelowFloor) {
             snprintf(buf, sizeof buf,
                      "speed %.1f m/s below the margin-backed cruise floor "
                      "%.1f m/s", vm, floor_mps);
@@ -688,7 +757,7 @@ std::string PathManager::stateEnvelopeProblem(
         //                          manager copy is a separate parameter
         //                          and may drift — not used here.)
         //   model maximum          dynamics speed_max is the tightest
-        const double vmax_mps = effectiveHandoffMaxMps();
+        const double vmax_mps = vmax_pre;
         double explicit_cap = 0.0;
         if (node_->has_parameter("planning/handoff_max_vel_mps"))
             node_->get_parameter("planning/handoff_max_vel_mps",
@@ -697,7 +766,8 @@ std::string PathManager::stateEnvelopeProblem(
         // Eight of the ten shipped missions state exactly
         // optimization/max_vel * unit = 200.0 m/s, and a strict > put every
         // one of them on the last bits of the direction normalization.
-        if (aboveSpeedBoundary(vm, vmax_mps)) {
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::SpeedAboveMaximum) {
             const char *which =
                 vmax_mps >= dyn.speed_max_mps - 1e-9
                     ? "model maximum"
@@ -708,8 +778,9 @@ std::string PathManager::stateEnvelopeProblem(
                      "(%s)", vm, vmax_mps, which);
             return buf;
         }
-        const double gamma = std::atan2(std::abs(vz), vh);
-        if (gamma > dyn.flight_path_angle_max_rad) {
+        const double gamma = verdict.flight_path_angle_rad;
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::FlightPathOutsideCone) {
             snprintf(buf, sizeof buf,
                      "flight path angle %.1f deg outside the +/-%.1f deg "
                      "validity cone",
@@ -740,21 +811,29 @@ std::string PathManager::stateEnvelopeProblem(
         const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
         const Eigen::Vector3d S(um_xy, um_xy, um_z);
         const auto &dyn = poly_traj_opt_->dynamicsParams();
-        const auto ev = mmp_vehicle_dynamics::evaluateInverseDynamics(
+        // Same shared judgement as the velocity half. The speed/cone part
+        // re-runs here and has already passed above; what this call adds is
+        // the inverse-dynamics and envelope verdict. NOT
+        // "envelopeUtilization() <= 1.0": below the model activation speed
+        // that comparison certifies everything (utilization is 0.0 there
+        // while isWithinEnvelope is false), which is why the predicate and
+        // not the ratio decides.
+        const auto verdict = mmp_vehicle_dynamics::handoffVerdict(
             dyn, S.cwiseProduct(pos_units), S.cwiseProduct(vel_units),
-            S.cwiseProduct(acc_units));
+            S.cwiseProduct(acc_units), poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy,
+            effectiveHandoffMaxMps());
         char buf[160];
-        if (!ev.valid) {
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::InverseDynamicsUndefined) {
             return "inverse dynamics undefined for this state — cannot be "
                    "certified";
         }
-        if (!mmp_vehicle_dynamics::isWithinEnvelope(dyn, ev)) {
-            mmp_vehicle_dynamics::EnvelopeLimit lim;
-            const double u =
-                mmp_vehicle_dynamics::envelopeUtilization(dyn, ev, &lim);
+        if (verdict.reject ==
+            mmp_vehicle_dynamics::HandoffReject::EnvelopeExceeded) {
             snprintf(buf, sizeof buf,
                      "flying this exact state demands %.0f%% of the %s limit",
-                     100.0 * u, mmp_vehicle_dynamics::envelopeLimitName(lim));
+                     100.0 * verdict.utilization,
+                     mmp_vehicle_dynamics::envelopeLimitName(verdict.limit));
             return buf;
         }
         return {};
@@ -1267,26 +1346,13 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         // cost is added to the A* g-score per visited cell.
         // Member, not a local: the searcher keeps a raw pointer to this
         // vector past the end of this call (see astar_risks_ in the header).
-        astar_risks_.clear();
-        astar_risks_.reserve(risk_zones_.size());
-        for (const auto &tz : risk_zones_) {
-            astar_risks_.push_back(
-                {tz.center, tz.reach, tz.peak,
-                 tz.reach * risk_vertical_ratio_});
-        }
+        bindRiskZonesToSearcher();
         Eigen::Vector3d map_size = map_upper_bound_ - map_lower_bound_;
         searcher_.setLogManager(log_manager_);
         searcher_.setSDF(&sdf_manager_, map_lower_bound_, map_size,
                          sdf_voxel_size_, sdf_voxel_z_);
-        const std::vector<path_planner::search::RiskZoneLite> *astar_tz_ptr =
-            astar_risks_.empty() ? nullptr : &astar_risks_;
-        searcher_.setRiskZones(astar_tz_ptr);
-        searcher_.setRiskVisibility(
-            [this](size_t zi, const Eigen::Vector3d &p) -> double {
-                return riskVisibilityValue(zi, p);
-            });
-        log_manager_->infof("[PM DBG] setRiskZones: %zu zones (ptr=%p) weight=%.3f",
-            astar_risks_.size(), (const void*)astar_tz_ptr, risk_weight_);
+        log_manager_->infof("[PM DBG] setRiskZones: %zu zones weight=%.3f",
+            astar_risks_.size(), risk_weight_);
         // Re-bind the optimizer with the SAME zone set every plan, symmetric
         // with the searcher_ re-bind above. initOptimizer() only snapshots the
         // set active at startup, so without this per-plan push a runtime zone
@@ -1294,28 +1360,7 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
         // panel but never MINCO — which then smooths trajectories into freshly
         // added zones (and keeps dodging removed ones). An empty list
         // intentionally clears stale zones.
-        if (poly_traj_opt_) {
-            std::vector<ego_planner::RiskZone> opt_zones;
-            opt_zones.reserve(risk_zones_.size());
-            for (const auto &tz : risk_zones_) {
-                ego_planner::RiskZone oz;
-                oz.center = tz.center;
-                oz.reach = tz.reach;
-                oz.peak = tz.peak;
-                oz.vertical_reach = tz.reach * risk_vertical_ratio_;
-                opt_zones.push_back(oz);
-            }
-            poly_traj_opt_->setRiskZones(opt_zones);
-            poly_traj_opt_->setRiskVisibility(
-                [this](size_t zi, const Eigen::Vector3d &p,
-                       Eigen::Vector3d *grad) -> double {
-                    return riskVisibility(zi, p, grad);
-                });
-            poly_traj_opt_->setRiskShadowCeiling(
-                [this](size_t zi, const Eigen::Vector3d &p) -> double {
-                    return riskShadowCeiling(zi, p);
-                });
-        }
+        bindRiskZonesToOptimizer();
         // A* must see obstacles so the simple_path it returns is already an
         // avoidance path. Feeding that into MINCO makes the initial inner
         // points sit OUTSIDE the obstacle, and L-BFGS only has to smooth the
@@ -1621,11 +1666,10 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
                 double moat = 0.0;
                 double visibility = 0.0;
                 if (q < 1.0) {
-                    const double u = 1.0 - q;
                     visibility = riskVisibilityValue(zi, p);
-                    moat = tz.peak * u * u * visibility;
+                    moat = tz.peak * mmp::risk::shape(q) * visibility;
                 }
-                survival *= (1.0 - std::min(moat, 1.0 - 1e-3));
+                survival *= (1.0 - std::min(moat, mmp::risk::kMoatCap));
                 if (dump) {
                     char buf[64];
                     std::snprintf(buf, sizeof(buf),
@@ -2261,14 +2305,15 @@ double PathManager::riskZoneValue(size_t zone_index,
                                   const Eigen::Vector3d &pos) const
 {
     if (zone_index >= risk_zones_.size()) return 0.0;
-    constexpr double kMoatCap = 1.0 - 1e-3;
     const auto &zone = risk_zones_[zone_index];
     const double q = riskEllipsoidRadius(zone, pos);
+    // Early-out kept deliberately: shape() already returns 0 outside the
+    // envelope, but riskVisibilityValue() raycasts, and letting it run for a
+    // result that is multiplied by zero would pay for every miss.
     if (!(q < 1.0)) return 0.0;
-    const double u = 1.0 - q;
-    return std::min(zone.peak * u * u *
+    return std::min(zone.peak * mmp::risk::shape(q) *
                         riskVisibilityValue(zone_index, pos),
-                    kMoatCap);
+                    mmp::risk::kMoatCap);
 }
 
 void PathManager::rebuildTerrainRiskMasks()
@@ -4211,8 +4256,94 @@ bool PathManager::zoneExposureRaw(const ZonePolicySnapshot &snap,
     return true;
 }
 
-void PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
+void PathManager::bindRiskZonesToOptimizer()
 {
+    // Extracted from planFrontEnd for the same reason as the searcher bind:
+    // the optimizer only learned about a zone update at the next plan, so
+    // nothing could read what the BACK END prices without running a solve.
+    if (!poly_traj_opt_) return;
+    std::vector<ego_planner::RiskZone> opt_zones;
+    opt_zones.reserve(risk_zones_.size());
+    for (const auto &tz : risk_zones_) {
+        ego_planner::RiskZone oz;
+        oz.center = tz.center;
+        oz.reach = tz.reach;
+        oz.peak = tz.peak;
+        oz.vertical_reach = tz.reach * risk_vertical_ratio_;
+        opt_zones.push_back(oz);
+    }
+    poly_traj_opt_->setRiskZones(opt_zones);
+    poly_traj_opt_->setRiskVisibility(
+        [this](size_t zi, const Eigen::Vector3d &p,
+               Eigen::Vector3d *grad) -> double {
+            return riskVisibility(zi, p, grad);
+        });
+    poly_traj_opt_->setRiskShadowCeiling(
+        [this](size_t zi, const Eigen::Vector3d &p) -> double {
+            return riskShadowCeiling(zi, p);
+        });
+}
+
+void PathManager::bindRiskZonesToSearcher()
+{
+    // Pushes the effective zone set into the front-end searcher. Extracted
+    // from planFrontEnd so the zone SETTER can bind too: before this, the
+    // searcher only learned about a runtime zone update at the next plan, so
+    // the front-end field read empty in between and nothing could compare the
+    // layers outside a full solve.
+    //
+    // astar_risks_ is a member because the searcher keeps a raw pointer into
+    // it. Calling this from the setter is safe under the same single-threaded
+    // executor assumption that already governs risk_zones_ itself, which the
+    // setter has always mutated.
+    astar_risks_.clear();
+    astar_risks_.reserve(risk_zones_.size());
+    for (const auto &tz : risk_zones_) {
+        astar_risks_.push_back(
+            {tz.center, tz.reach, tz.peak, tz.reach * risk_vertical_ratio_});
+    }
+    searcher_.setRiskZones(astar_risks_.empty() ? nullptr : &astar_risks_);
+    searcher_.setRiskVisibility(
+        [this](size_t zi, const Eigen::Vector3d &p) -> double {
+            return riskVisibilityValue(zi, p);
+        });
+}
+
+bool PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
+{
+    // [PA-7] ATOMIC REJECTION: refuse the SET, not the offending member.
+    // Keeping the survivors would delete a declared hazard from the field and
+    // the planner would route through it with nothing on record. Refusing
+    // leaves the previous known-good set in force and says why.
+    size_t bad = 0;
+    for (size_t i = 0; i < zones.size(); ++i) {
+        const auto &z = zones[i];
+        const bool geom_ok = std::isfinite(z.center.x()) &&
+                             std::isfinite(z.center.y()) &&
+                             std::isfinite(z.center.z()) &&
+                             std::isfinite(z.reach) && z.reach > 0.0;
+        if (!geom_ok || !mmp::risk::isValidPeak(z.peak)) {
+            ++bad;
+            if (log_manager_) {
+                log_manager_->errorf(
+                    "setRiskZonesRuntime: zone #%zu REJECTED "
+                    "center=(%.3f,%.3f,%.3f) reach=%.3f peak=%.3f — peak must "
+                    "be finite and in (0, 1], reach finite and > 0",
+                    i, z.center.x(), z.center.y(), z.center.z(), z.reach,
+                    z.peak);
+            }
+        }
+    }
+    if (bad > 0) {
+        if (log_manager_) {
+            log_manager_->errorf(
+                "setRiskZonesRuntime: REJECTING the whole update — %zu of %zu "
+                "zones invalid. Active set unchanged at %zu.",
+                bad, zones.size(), risk_zones_.size());
+        }
+        return false;
+    }
+
     // Atomically replace the active zone list. The next planGlobalTraj
     // call will re-bind A* and the optimizer with the new set via the
     // existing setup paths (see planGlobalTraj where searcher_.setRiskZones
@@ -4220,6 +4351,8 @@ void PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
     risk_zones_raw_ = zones;
     refreshEffectiveRiskZones();
     rebuildTerrainRiskMasks();
+    bindRiskZonesToSearcher();
+    bindRiskZonesToOptimizer();
     // Avoid leaving the altitude panel and colored trajectory latched to the
     // previous zone set while waiting for another plan request. Empty zones
     // intentionally flow through these publishers as clear/delete messages.
@@ -4241,6 +4374,7 @@ void PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
                 tz.reach, tz.peak);
         }
     }
+    return true;
 }
 
 void PathManager::publishDynamicObstacles()
