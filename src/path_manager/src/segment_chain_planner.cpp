@@ -1309,10 +1309,11 @@ bool SegmentChainPlanner::authorContractsFromRoute(
   // an unsustainable climb as a hard BC (review find).
   double tan_grade_max = std::numeric_limits<double>::infinity();
   if (const auto *dyn = pm_->dynamicsParams()) {
-    double um = 100.0;
-    if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-      um = node_->get_parameter("optimization/dynamics_unit_xy_m")
-               .as_double();
+    // readNumParam declares-if-absent, so this can never read a literal while
+    // the real value is declared a moment later. ReplanFSM now declares both
+    // unit names in its constructor, which is before this planner exists.
+    const double um =
+        readNumParam(node_, "optimization/dynamics_unit_xy_m", 100.0);
     const double v = cruise * um;
     const double q =
         0.5 * mmp_vehicle_dynamics::airDensity(*dyn, 0.0) * v * v;
@@ -1364,10 +1365,8 @@ bool SegmentChainPlanner::authorContractsFromRoute(
     phase_tan_grade_ = tan_grade_max;
     phase_turn_radius_u_ = 0.0;
     if (const auto *dyn = pm_->dynamicsParams()) {
-      double um = 100.0;
-      if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-        um = node_->get_parameter("optimization/dynamics_unit_xy_m")
-                 .as_double();
+      const double um =
+          readNumParam(node_, "optimization/dynamics_unit_xy_m", 100.0);
       const double vm = std::max(1e-3, v0.norm()) * um;
       const double nmax = std::max(1.01, dyn->load_factor_max);
       phase_turn_radius_u_ =
@@ -1582,11 +1581,10 @@ SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
     return unsupported(prob +
                        "; no valid assumption parameter set to transition "
                        "under");
-  double um = 100.0, uz = 100.0;
-  if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-    um = node_->get_parameter("optimization/dynamics_unit_xy_m").as_double();
-  if (node_->has_parameter("optimization/dynamics_unit_z_m"))
-    uz = node_->get_parameter("optimization/dynamics_unit_z_m").as_double();
+  const double um =
+      readNumParam(node_, "optimization/dynamics_unit_xy_m", 100.0);
+  const double uz =
+      readNumParam(node_, "optimization/dynamics_unit_z_m", 100.0);
   const Eigen::Vector3d v_si(vel_u.x() * um, vel_u.y() * um,
                              vel_u.z() * uz);
   const double V = v_si.norm();
@@ -1686,11 +1684,10 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   if (!dyn || !mmp_vehicle_dynamics::parametersAreValid(*dyn))
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "no valid assumption parameter set");
-  double um = 100.0, uz = 100.0;
-  if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-    um = node_->get_parameter("optimization/dynamics_unit_xy_m").as_double();
-  if (node_->has_parameter("optimization/dynamics_unit_z_m"))
-    uz = node_->get_parameter("optimization/dynamics_unit_z_m").as_double();
+  const double um =
+      readNumParam(node_, "optimization/dynamics_unit_xy_m", 100.0);
+  const double uz =
+      readNumParam(node_, "optimization/dynamics_unit_z_m", 100.0);
   if (um <= 1e-9 || uz <= 1e-9)
     return fail(PlanReason::TRANSITION_GENERATION_FAILED,
                 "degenerate dynamics unit scale");
@@ -1893,17 +1890,30 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   };
 
   const tp::TransitionResult tr = tp::generate(req);
+  // The per-gate tally is the ONLY thing that says which gate emptied the
+  // candidate set. It used to omit disq_zone_standoff, so a run wiped out
+  // by the 1.05x routing shell alone was indistinguishable from one wiped
+  // out inside the authored volume. Zone count rides along because a
+  // mis-paired scenario (zones that belong to another mission) presents
+  // exactly like a generator regression.
+  char audit_buf[640];
+  std::snprintf(
+      audit_buf, sizeof(audit_buf),
+      "enumerated %d, winner %d, zones %zu | disq fin %d "
+      "pre %d rep %d sat %d ter %d zone %d zone_standoff %d limits %d "
+      "time %d pva %d adapter %d",
+      tr.audit.candidates_enumerated, tr.audit.winner_primitive_id,
+      pm_->numRiskZones(), tr.audit.disq_finiteness, tr.audit.disq_preguard,
+      tr.audit.disq_representable, tr.audit.disq_saturated,
+      tr.audit.disq_terrain, tr.audit.disq_zone,
+      tr.audit.disq_zone_standoff, tr.audit.disq_limits,
+      tr.audit.disq_timeout, tr.audit.disq_end_pva, tr.audit.disq_adapter);
+  const std::string audit_str(audit_buf);
   log_->infof(
-      "[S13] transition audit: enumerated %d, winner %d | disq fin %d "
-      "pre %d rep %d sat %d ter %d zone %d limits %d time %d pva %d "
-      "adapter %d | dwell %.2f s, winner risk max %.3g int %.3g (search "
+      "[S13] transition audit: %s | dwell %.2f s, winner risk max %.3g int %.3g (search "
       "%.3g/%.3g), adapter err p/v/a %.3g/%.3g/%.3g, start acc: "
       "repro err %.3g / model %.3g m/s^2",
-      tr.audit.candidates_enumerated, tr.audit.winner_primitive_id,
-      tr.audit.disq_finiteness, tr.audit.disq_preguard,
-      tr.audit.disq_representable, tr.audit.disq_saturated,
-      tr.audit.disq_terrain, tr.audit.disq_zone, tr.audit.disq_limits,
-      tr.audit.disq_timeout, tr.audit.disq_end_pva, tr.audit.disq_adapter,
+      audit_str.c_str(),
       tr.audit.dwell_achieved_s, tr.audit.risk_max, tr.audit.risk_integral,
       tr.audit.search_risk_max, tr.audit.search_risk_integral,
       tr.audit.adapter_max_pos_err_m, tr.audit.adapter_max_vel_err_mps,
@@ -1913,7 +1923,7 @@ PlanResult SegmentChainPlanner::planTransitionMission(
     return fail(tr.any_candidate_reached_adapter
                     ? PlanReason::TRANSITION_ADAPTER_UNSOUND
                     : PlanReason::TRANSITION_GENERATION_FAILED,
-                tr.reason);
+                tr.reason + " [" + audit_str + "]");
 
   // Coordinator-side re-check of the returned end PVA (belt and braces:
   // the component gated it through the same closure, but the handoff is
@@ -2317,10 +2327,8 @@ PlanResult SegmentChainPlanner::planOverRoute(
   //
   // (the prefix/source invariant is checked at the entry, above every
   // fallback that could discard the prefix before it was validated)
-  double um_head = 100.0;
-  if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-    um_head = node_->get_parameter("optimization/dynamics_unit_xy_m")
-                  .as_double();
+  const double um_head =
+      readNumParam(node_, "optimization/dynamics_unit_xy_m", 100.0);
   // No pointer test. TRANSITION_HANDOFF is neither re-aimed nor floored
   // BECAUSE OF WHAT IT IS, and applyHeadPolicy knows that from the source —
   // passing floor_u = 0 to suppress the rule encoded the same fact a second
@@ -3092,9 +3100,12 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
   }
 
   const mmp_vehicle_dynamics::Parameters *dyn = pm_->dynamicsParams();
+  // Was a has_parameter probe with a literal fallback — the same shape that
+  // made the FSM's unit guard compare 100 against 100. readNumParam declares
+  // the name if it is absent, so a value that arrives later cannot leave this
+  // reader holding the literal.
   const auto param_or = [&](const char *n, double def) {
-    return node_->has_parameter(n) ? node_->get_parameter(n).as_double()
-                                   : def;
+    return readNumParam(node_, n, def);
   };
   const double um_xy = param_or("optimization/dynamics_unit_xy_m", 100.0);
   const double um_z = param_or("optimization/dynamics_unit_z_m", 100.0);

@@ -355,7 +355,13 @@ struct ReproductionMetrics {
   bool gate_complete{false};
   bool gate_len{false};
   bool gate_terminal{false};
-  bool gate_xtrack{false};   // deviation within the caller's tolerance
+  // [PA-3] Three gates, one shape. gate_xtrack used to be a lone bool that
+  // read TRUE when the caller set no tolerance, so verdict() could not tell
+  // "measured and passed" from "never measured" and called the second one a
+  // pass. agl and zone had carried the distinction from the start; this one
+  // did not, and the default tolerance is 0.0 — so every caller that does not
+  // set one was counting an unmeasured gate as satisfied.
+  bool gate_xtrack{false}, gate_xtrack_skipped{true};
   bool gate_agl_pass{false}, gate_agl_skipped{true};
   bool gate_zone_pass{false}, gate_zone_skipped{true};
 
@@ -363,12 +369,13 @@ struct ReproductionMetrics {
   Verdict verdict() const
   {
     if (!measured) return Verdict::kFail;
-    if (!gate_complete || !gate_len || !gate_terminal || !gate_xtrack)
-      return Verdict::kFail;
+    if (!gate_complete || !gate_len || !gate_terminal) return Verdict::kFail;
+    if (!gate_xtrack_skipped && !gate_xtrack) return Verdict::kFail;
     if (!gate_agl_skipped && !gate_agl_pass) return Verdict::kFail;
     if (!gate_zone_skipped && !gate_zone_pass) return Verdict::kFail;
-    // Everything that WAS measured passed, but safety was not measured.
-    if (gate_agl_skipped || gate_zone_skipped) return Verdict::kIncomplete;
+    // Everything that WAS measured passed, but something was not measured.
+    if (gate_xtrack_skipped || gate_agl_skipped || gate_zone_skipped)
+      return Verdict::kIncomplete;
     return Verdict::kPass;
   }
   const char *verdictName() const
@@ -391,7 +398,9 @@ struct EvalParams {
   // Deviation tolerance. Without it a "PASS" says only that the flight
   // finished near the last waypoint with a plausible length — it would
   // not mean the trajectory was reproduced (review find). <=0 disables
-  // the gate, which the printer then reports as a skipped gate.
+  // the gate, and verdict() then reports INCOMPLETE rather than PASS — the
+  // same rule agl and zone follow. A verdict that never measured deviation
+  // cannot certify one.
   double max_xtrack_gate_m{0.0};
   // Terrain lookup that FAILS (off-DEM / no data) is not sea level: with
   // this true, a failed lookup voids the evaluation instead of assuming

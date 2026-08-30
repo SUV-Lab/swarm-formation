@@ -869,10 +869,14 @@ ReproductionMetrics evaluateReproduction(
   m.terminal_speed_err_mps = std::abs(flown.samples.back().vel_mps.norm() -
                                       src.vel_mps.back().norm());
   m.gate_terminal = m.terminal_pos_err_m <= ep.terminal_pos_gate_m;
-  // <=0 disables the deviation gate (the printer reports it as skipped);
-  // with a tolerance set, PASS means the path was actually reproduced.
-  m.gate_xtrack =
-      ep.max_xtrack_gate_m <= 0.0 || m.max_xtrack_m <= ep.max_xtrack_gate_m;
+  // [PA-3] <=0 disables the deviation gate, and a disabled gate is SKIPPED,
+  // not satisfied. Same sentinel shape as the agl and zone gates below: the
+  // flag says whether it was measured, the pass says whether it held, and
+  // verdict() reports INCOMPLETE when something was never looked at.
+  if (ep.max_xtrack_gate_m > 0.0) {
+    m.gate_xtrack_skipped = false;
+    m.gate_xtrack = m.max_xtrack_m <= ep.max_xtrack_gate_m;
+  }
 
   for (const auto &a : flown.arrivals)
     m.max_wp_miss_m = std::max(m.max_wp_miss_m, a.miss_m);
