@@ -1,4 +1,5 @@
 #include "path_manager/replan_fsm.h"
+#include "path_planner/risk_shape.h"
 #include <cmath>
 #include <sys/resource.h>
 #include <numeric>
@@ -92,12 +93,26 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // so a drift silently makes the magnitude JUDGED differ from the
     // magnitude STATED — the exact fabrication the message contract forbids.
     // Loud at construction rather than wrong in flight.
+    // DECLARE, then read. The guard used to probe with has_parameter and fall
+    // back to a literal 100.0 — but the two optimization/* names are declared
+    // inside PathManager::initOptimizer, which first runs on the FIRST MISSION,
+    // long after this constructor. So has_parameter was false every time, the
+    // guard compared 100.0 against 100.0, and a real drift passed silently
+    // while a CONSISTENT non-100 setting was the only thing that could make it
+    // fire. It was fail-open on the case it exists for and false-positive on
+    // the case it does not.
+    //
+    // Declaring here is what lets it see the value. The optimizer's own
+    // declare_once then finds them present and reads the same numbers, so the
+    // declaration moves earlier without changing what anything reads.
     {
         double ux = 100.0, uz = 100.0;
-        if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-            node_->get_parameter("optimization/dynamics_unit_xy_m", ux);
-        if (node_->has_parameter("optimization/dynamics_unit_z_m"))
-            node_->get_parameter("optimization/dynamics_unit_z_m", uz);
+        if (!node_->has_parameter("optimization/dynamics_unit_xy_m"))
+            node_->declare_parameter("optimization/dynamics_unit_xy_m", 100.0);
+        node_->get_parameter("optimization/dynamics_unit_xy_m", ux);
+        if (!node_->has_parameter("optimization/dynamics_unit_z_m"))
+            node_->declare_parameter("optimization/dynamics_unit_z_m", 100.0);
+        node_->get_parameter("optimization/dynamics_unit_z_m", uz);
         if (std::abs(ux - initial_speed_unit_m_) > 1e-9 ||
             std::abs(uz - initial_speed_unit_m_) > 1e-9) {
             RCLCPP_ERROR(node_->get_logger(),
@@ -1009,7 +1024,13 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
         FSM_LOG_WARN("[PLAN] DEGRADED: %s", plan_res.detail.c_str());
     } else if (plan_res.outcome == PlanOutcome::FAILED &&
                !plan_res.detail.empty()) {
-        FSM_LOG_ERROR("[PLAN] FAILED: %s", plan_res.detail.c_str());
+        // One call, both destinations. This used to be a hand-rolled
+        // RCLCPP_ERROR plus FSM_LOG_ERROR because the macro could not be
+        // trusted to reach the console; now that it always does, keeping
+        // both would print the refusal to the console twice.
+        FSM_LOG_ERROR("[PLAN] FAILED reason=%d: %s",
+                      static_cast<int>(plan_res.reason),
+                      plan_res.detail.c_str());
     }
     const bool success = plan_res.hasTrajectory();
 
@@ -1187,6 +1208,18 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
     // of the SAME command retries instead of dying in the dedup gate above.
     const int prev_sequence = last_received_sequence_;
     const std::string prev_mission_id = current_mission_id_;
+    // ...and the five fields the adoption block mutates. Restoring only the
+    // two above is what the comment above the stage-1 refusal already names as
+    // the remaining hole: a refusal downstream of adoption dropped a flying
+    // trajectory and kept the rejected mission's start point. That used to be
+    // reachable only on the very first command, because a constant publisher
+    // mission_id made adoption run once per planner lifetime. Once every Run
+    // is genuinely a new mission, adoption runs every Run and so does this.
+    const Eigen::Vector3d prev_start_pt = start_pt_;
+    const Eigen::Vector3d prev_current_pos = current_pos_;
+    const bool prev_start_position_received = start_position_received_;
+    const bool prev_start_seed_agl_pending = start_seed_agl_pending_;
+    const bool prev_have_local_traj = have_local_traj_;
 
     last_received_sequence_ = msg->sequence;
 
@@ -1340,14 +1373,18 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
         // mission was stranded with no reject signal.
         last_received_sequence_ = prev_sequence;
         current_mission_id_ = prev_mission_id;
-        RCLCPP_ERROR(node_->get_logger(),
-                     "[PLAN REJECTED] mission '%s' (seq %d) produced no trajectory — "
-                     "sequence rolled back, a resend will retry",
-                     msg->mission_id.c_str(), msg->sequence);
-        log_manager_->errorf(
-                     "[PLAN REJECTED] mission '%s' (seq %d) produced no trajectory — "
-                     "sequence rolled back, a resend will retry",
-                     msg->mission_id.c_str(), msg->sequence);
+        // The adoption block's five fields go back too. Without this the
+        // refused mission's start point survives as the next plan's origin
+        // and the flight that was in the air is gone — the command was
+        // refused, so nothing it stated may outlive it.
+        start_pt_ = prev_start_pt;
+        current_pos_ = prev_current_pos;
+        start_position_received_ = prev_start_position_received;
+        start_seed_agl_pending_ = prev_start_seed_agl_pending;
+        have_local_traj_ = prev_have_local_traj;
+        FSM_LOG_ERROR("[PLAN REJECTED] mission '%s' (seq %d) produced no "
+                      "trajectory — sequence rolled back, a resend will retry",
+                      msg->mission_id.c_str(), msg->sequence);
     }
 
     auto callback_end = std::chrono::high_resolution_clock::now();
@@ -1521,24 +1558,44 @@ void ReplanFSM::loadRiskZonesCallback(
     // Convert the wire format to PathManager's internal RiskZone struct.
     std::vector<path_manager::RiskZone> zones;
     zones.reserve(msg->zones.size());
-    size_t dropped = 0;
+    // [PA-7] This used to DROP an offending zone and keep the rest: a hazard
+    // the mission declared silently left the field and the planner routed
+    // straight through it. ATOMIC REJECTION now — the set is refused whole and
+    // the previously active set stays in force.
+    //
+    // peak > 1 is rejected too. It used to be accepted on the grounds that it
+    // "saturates at the moat cap" -- which is exactly the damage: a saturated
+    // zone is gradient-free over most of its volume, so avoidance shaping is
+    // gone and only the barrier still acts.
+    size_t bad = 0;
     for (const auto& z : msg->zones) {
         if (!std::isfinite(z.center.x) ||
             !std::isfinite(z.center.y) ||
             !std::isfinite(z.center.z) ||
             !std::isfinite(z.reach) ||
-            !std::isfinite(z.peak) ||
-            z.reach <= 0.0 || z.peak <= 0.0) {
-            ++dropped;
+            z.reach <= 0.0 ||
+            !mmp::risk::isValidPeak(z.peak)) {
+            ++bad;
+            FSM_LOG_ERROR(
+                "loadRiskZones: zone REJECTED center=(%.3f,%.3f,%.3f) "
+                "reach=%.3f peak=%.3f — peak must be finite and in (0, 1], "
+                "reach must be finite and > 0",
+                z.center.x, z.center.y, z.center.z, z.reach, z.peak);
             continue;
         }
         path_manager::RiskZone tz;
         tz.center = Eigen::Vector3d(z.center.x, z.center.y, z.center.z);
         tz.reach = z.reach;
-        tz.peak = z.peak;  // raw max_risk_level, same semantics as the yaml
-                           // loader: values >= 1 saturate at the field-level
-                           // moat cap (1-1e-3) in getRiskNorm/RiskGradCostP
+        tz.peak = z.peak;
         zones.push_back(tz);
+    }
+    if (bad > 0) {
+        FSM_LOG_ERROR(
+            "loadRiskZones: REJECTING the whole update — %zu of %zu zones "
+            "invalid. Active set unchanged at %zu; adopting the survivors "
+            "would hide %zu declared hazard(s).",
+            bad, msg->zones.size(), active_risk_zones_.size(), bad);
+        return;
     }
 
     const size_t previous = active_risk_zones_.size();
@@ -1550,8 +1607,8 @@ void ReplanFSM::loadRiskZonesCallback(
     }
     path_manager_->setRiskZonesRuntime(active_risk_zones_);
     FSM_LOG_INFO(
-        "loadRiskZones: %s %zu zones (dropped %zu invalid), active set %zu -> %zu",
-        msg->replace ? "replaced with" : "appended", zones.size(), dropped,
+        "loadRiskZones: %s %zu zones (all valid), active set %zu -> %zu",
+        msg->replace ? "replaced with" : "appended", zones.size(),
         previous, active_risk_zones_.size());
 
     // [ENV-CHANGE] Zones are NOT obstacles and must not be re-checked with the

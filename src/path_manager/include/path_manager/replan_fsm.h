@@ -33,18 +33,25 @@
     } \
 } while(0)
 
+// WARN and ERROR are NOT diagnostics — they are the only thing an operator
+// whose Run vanished has to look at. They were XOR with INFO: with the
+// shipped enable_debug_logs: true they went to the file logger and NOTHING
+// reached the console, and with SWARM_DISABLE_FILE_LOGGING=1 (the headless
+// smoke) the file logger opens no file, so a refusal landed nowhere at all.
+//
+// Now: always the console, and the file too when a logger exists. Lowering
+// LogManager's min level does not substitute for this — LogManager::log
+// writes only to the file and has no console path at all.
 #define FSM_LOG_WARN(msg, ...) do { \
-    if (!enable_debug_logs_) { \
-        RCLCPP_WARN(node_->get_logger(), msg, ##__VA_ARGS__); \
-    } else if (log_manager_) { \
+    RCLCPP_WARN(node_->get_logger(), msg, ##__VA_ARGS__); \
+    if (log_manager_) { \
         log_manager_->warnf(msg, ##__VA_ARGS__); \
     } \
 } while(0)
 
 #define FSM_LOG_ERROR(msg, ...) do { \
-    if (!enable_debug_logs_) { \
-        RCLCPP_ERROR(node_->get_logger(), msg, ##__VA_ARGS__); \
-    } else if (log_manager_) { \
+    RCLCPP_ERROR(node_->get_logger(), msg, ##__VA_ARGS__); \
+    if (log_manager_) { \
         log_manager_->errorf(msg, ##__VA_ARGS__); \
     } \
 } while(0)

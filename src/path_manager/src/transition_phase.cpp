@@ -350,10 +350,23 @@ TrajectoryVerdict validateTransitionTrajectory(
   const double ux = lim.unit_xy_m, uz = lim.unit_z_m;
   const double total_T = traj.getTotalDuration();
   if (!(total_T > 0.0)) return TrajectoryVerdict::FAIL;
+  // Every gate below compares an m/s sample against an m/s limit off this
+  // Parameters set. generate() asserts the set before it uses it; this entry
+  // did not, so a caller reaching the validator directly compared against
+  // whatever it was handed. parametersAreValid pins the SI ordering
+  // (model_activation < speed_min < speed_max, all positive), which is the
+  // property the comparisons depend on — assert it here, fail closed.
+  if (!mmp_vehicle_dynamics::parametersAreValid(dyn)) {
+    return TrajectoryVerdict::FAIL;
+  }
   const double W = dyn.mass_kg * dyn.gravity_mps2;
   bool stale = false;
   double rmax = 0.0, rint = 0.0;
-  // One sample: every gate at BARE limits (no slack anywhere).
+  // One sample: every gate at the model limits. The speed band carries the
+  // shared boundary epsilon (mmp_vehicle_dynamics::kSpeedBoundaryEpsMps) and
+  // nothing else does — the older wording said "no slack anywhere" while the
+  // speed lines already carried a hand-written tolerance, which is how a
+  // later reader could have deleted it to match the comment.
   std::function<bool(double, bool)> sampleOk;
   sampleOk = [&](double t, bool refine) -> bool {
     const Eigen::Vector3d pu = traj.getPos(t);
@@ -388,8 +401,13 @@ TrajectoryVerdict validateTransitionTrajectory(
       case ZoneProbe::STALE_OR_INVALID: stale = true; return false;
     }
     const double V = v.norm();
-    if (V > dyn.speed_max_mps + 1e-9 ||
-        V < dyn.model_activation_speed_mps - 1e-9)
+    // ONE definition of the speed boundary, shared with the generator below
+    // and with segment_chain_planner. This used to hold a hand-written 1e-9
+    // while the doctrine epsilon is 1e-6 and the generator had none — three
+    // tolerances for the same two limits.
+    if (mmp_vehicle_dynamics::aboveSpeedBoundary(V, dyn.speed_max_mps) ||
+        mmp_vehicle_dynamics::belowSpeedBoundary(
+            V, dyn.model_activation_speed_mps))
       return false;
     // [S8] The transition-policy gamma bound applies to the FLOWN curve
     // too — a Hermite interior overshoot past it must refuse, not slip
@@ -751,8 +769,15 @@ TransitionResult generate(const TransitionRequest &req)
             const double q_s = 0.5 * rho_s * s.speed_mps * s.speed_mps;
             const double n_s = std::abs(closed.inputs.lift_n) /
                                (dyn.mass_kg * dyn.gravity_mps2);
-            if (s.speed_mps > dyn.speed_max_mps ||
-                s.speed_mps < dyn.model_activation_speed_mps ||
+            // Same shared boundary as the validator. Both operands are
+            // m/s: s.speed_mps is the propagated state and the limits come
+            // off the Parameters this function already asserted at entry.
+            // Bare > and < refused a mission that stated EXACTLY the limit,
+            // by float representation rather than by physics.
+            if (mmp_vehicle_dynamics::aboveSpeedBoundary(
+                    s.speed_mps, dyn.speed_max_mps) ||
+                mmp_vehicle_dynamics::belowSpeedBoundary(
+                    s.speed_mps, dyn.model_activation_speed_mps) ||
                 q_s > dyn.dynamic_pressure_max_pa ||
                 n_s > dyn.load_factor_max) {
               ++audit.disq_limits; disq = true; break;
