@@ -1,0 +1,110 @@
+<?xml version="1.0"?>
+<fdm_config name="nesc_brick_damped" version="2.0" release="ALPHA">
+
+ <fileheader>
+  <author>MMP project — non-production check-case model</author>
+  <description>
+   NESC atmospheric check-case 3 body (damped). Homogeneous rectangular solid,
+   8 x 4 x 2.25 in on the body x/y/z axes. Mass and inertia are the
+   published values (NASA/TM-2015-218675 Vol. II, appendix Table 4, about
+   the CM, products of inertia zero).
+
+   No external aircraft file is used; the values are transcribed from
+   public reference material with the source stated. That is not the same
+   as "no third-party data" -- mass, inertia and coefficients all come from
+   the published report.
+
+   IMPORTANT: the case OVERRIDES the base brick table. Table 5 lists
+   CD 0.01, but atmospheric case 3 is titled "Dragless Brick with
+   Aerodynamic Damping" and sets CD = 0.0. Only the damping derivatives
+   are active:
+
+       CL = CD = CY = Cl = Cm = Cn = 0
+       Clp = Cmq = Cnr = -1.0,  Clr = Cnp = 0
+
+   Drag would change the fall speed, hence dynamic pressure, hence the
+   damping moments -- so getting this wrong contaminates the attitude
+   result, not just the trajectory.
+
+   Check-case 3 is NOT a "no aerodynamics" case -- the damping derivatives
+   are explicitly used, so rotational kinetic energy and angular momentum
+   are no longer conserved and the acc02 invariants do not apply here.
+  </description>
+ </fileheader>
+
+ <metrics>
+  <!-- Reference geometry IS used here: the damping terms carry
+       S*b^2/(2V) and S*c^2/(2V) through aero/bi2vel and aero/ci2vel, so
+       these values change the moments directly. They are the brick's own
+       dimensions, from the published table. -->
+  <wingarea  unit="FT2"> 0.2222222 </wingarea>  <!-- 8 in x 4 in -->
+  <wingspan  unit="FT" > 0.3333333 </wingspan>  <!-- 4 in -->
+  <chord     unit="FT" > 0.6666667 </chord>     <!-- 8 in -->
+  <location name="AERORP" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+  <location name="EYEPOINT" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+  <location name="VRP" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+ </metrics>
+
+ <mass_balance>
+  <!-- Appendix Table 4, about the CM. Products of inertia are zero. -->
+  <ixx unit="SLUG*FT2"> 0.001894220 </ixx>
+  <iyy unit="SLUG*FT2"> 0.006211019 </iyy>
+  <izz unit="SLUG*FT2"> 0.007194665 </izz>
+  <ixy unit="SLUG*FT2"> 0.0 </ixy>
+  <ixz unit="SLUG*FT2"> 0.0 </ixz>
+  <iyz unit="SLUG*FT2"> 0.0 </iyz>
+  <!-- 0.155404754 slug x 32.174 ft/s^2 -->
+  <emptywt unit="LBS"> 5.00 </emptywt>
+  <location name="CG" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+ </mass_balance>
+
+ <ground_reactions/>
+ <propulsion/>
+ <flight_control name="none"/>
+
+ <aerodynamics>
+  <!-- Damping only. No drag axis: the case sets CD = 0. -->
+  <axis name="ROLL">
+   <function name="aero/moment/roll_damp">
+    <description>Clp = -1.0</description>
+    <product>
+     <property>aero/qbar-psf</property>
+     <property>metrics/Sw-sqft</property>
+     <property>metrics/bw-ft</property>
+     <property>aero/bi2vel</property>
+     <property>velocities/p-aero-rad_sec</property>
+     <value>-1.0</value>
+    </product>
+   </function>
+  </axis>
+
+  <axis name="PITCH">
+   <function name="aero/moment/pitch_damp">
+    <description>Cmq = -1.0</description>
+    <product>
+     <property>aero/qbar-psf</property>
+     <property>metrics/Sw-sqft</property>
+     <property>metrics/cbarw-ft</property>
+     <property>aero/ci2vel</property>
+     <property>velocities/q-aero-rad_sec</property>
+     <value>-1.0</value>
+    </product>
+   </function>
+  </axis>
+
+  <axis name="YAW">
+   <function name="aero/moment/yaw_damp">
+    <description>Cnr = -1.0</description>
+    <product>
+     <property>aero/qbar-psf</property>
+     <property>metrics/Sw-sqft</property>
+     <property>metrics/bw-ft</property>
+     <property>aero/bi2vel</property>
+     <property>velocities/r-aero-rad_sec</property>
+     <value>-1.0</value>
+    </product>
+   </function>
+  </axis>
+ </aerodynamics>
+
+</fdm_config>

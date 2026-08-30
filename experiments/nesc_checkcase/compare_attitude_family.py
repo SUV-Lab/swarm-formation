@@ -1,0 +1,474 @@
+#!/usr/bin/env python3
+"""NESC 대기권 사례 acc02/acc03 — 자세·각속도 족 산포 + 불변량 자기검사.
+
+생산 코드가 아니다. `./fetch.sh` 로 받은 `.nesc/ref/` 를 읽는다.
+
+무엇을 하는가
+-------------
+참여 도구 5종의 기준 시계열을 서로 비교해 **해의 족이 얼마나 퍼져 있는지**
+측정한다. 우리 구현을 넣기 전에 족 자체의 산포를 알아야, 나중에 우리
+결과의 차이가 "틀린 것"인지 "족 안"인지 말할 수 있다.
+
+합격선을 만들지 않는다
+----------------------
+보고서 자체가 단일 정답을 거부하고 해의 족을 제시한다. 최솟값–최댓값 안에
+드는 것을 조건으로 삼지 않으며, 여기서 내는 것은 전부 **측정값**이다.
+
+시각 정렬 — 보간하지 않는다
+---------------------------
+열 파일 모두 0–30 s 를 0.1 s 로 덮는 301점 공통 격자를 갖는다(고주기 파일은
+3001점이지만 같은 격자를 포함). 실측한 최근접 시각 오차는 최대 7.629e-7 s
+이므로 **최근접 표본을 1e-6 s 이내에서만 수용**한다.
+
+오일러각을 보간하면 래핑과 특이점에서 조용히 틀린다. 보간하지 않는 편이
+안전하고, 이 자료에서는 보간할 이유도 없다.
+
+자세 차이 — 오일러각을 직접 빼지 않는다
+---------------------------------------
+±180° 경계에서 1° 차이가 359° 로 보이고, 피치 ±90° 근처에서는 롤·요가
+겹쳐 같은 자세가 전혀 다른 각으로 표기된다. 그래서:
+
+    오일러각 → 쿼터니언 (NESC 규약: NED 기준 3-2-1 = yaw, pitch, roll)
+    자세 차이 = 2 · acos(|q1 · q2|)      (부호 모호성 때문에 절댓값)
+
+이 각거리는 표기법에 무관한 실제 회전 각이다.
+
+각속도 — 단위·프레임을 맞춘 뒤 성분별
+--------------------------------------
+공식 출력 사양에 따르면 `bodyAngularRateWrtEi_deg_s_*` 는 **지구 관성계에
+대한 몸체 각속도를 몸체축으로 표현**한 값이고 단위는 deg/s 다. 다섯 파일이
+같은 정의를 쓰므로 성분별로 그대로 비교한다.
+"""
+import argparse
+import csv
+import math
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+TIME_TOL_S = 1e-6
+GRID = [round(i * 0.1, 10) for i in range(301)]
+
+EUL = ("eulerAngle_deg_Roll", "eulerAngle_deg_Pitch", "eulerAngle_deg_Yaw")
+RATE = ("bodyAngularRateWrtEi_deg_s_Roll",
+        "bodyAngularRateWrtEi_deg_s_Pitch",
+        "bodyAngularRateWrtEi_deg_s_Yaw")
+GEO = ("latitude_deg", "longitude_deg")
+
+# WGS-84 / NESC 사양값. NED 는 지구와 함께 돌므로 이 값이 없으면
+# 각운동량 "보존"이 지구 자전을 그대로 재는 검사가 된다.
+OMEGA_EARTH = 7.292115e-5   # rad/s
+
+
+def quat_from_euler_deg(roll, pitch, yaw):
+    """NESC 규약 3-2-1 (yaw→pitch→roll), NED 기준. 반환 (w, x, y, z)."""
+    cr, sr = math.cos(math.radians(roll) / 2), math.sin(math.radians(roll) / 2)
+    cp, sp = math.cos(math.radians(pitch) / 2), math.sin(math.radians(pitch) / 2)
+    cy, sy = math.cos(math.radians(yaw) / 2), math.sin(math.radians(yaw) / 2)
+    return (cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy)
+
+
+def attitude_angle_deg(q1, q2):
+    """두 자세 사이의 각거리 [deg].
+
+    acos(dot) 은 작은 각에서 무너진다 — 1e-6° 에서 상대오차 14.6% (측정).
+    dot 이 1 에 붙으면 cos 의 기울기가 0 이라 유효숫자가 통째로 날아간다.
+    상대 쿼터니언 의 벡터부/스칼라부로 atan2 를 쓰면 작은 각에서 안정하다.
+    q 와 −q 가 같은 자세이므로 스칼라부 부호로 정렬한다."""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    # q_rel = conj(q1) * q2
+    w = w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2
+    x = w1 * x2 - x1 * w2 - y1 * z2 + z1 * y2
+    y = w1 * y2 + x1 * z2 - y1 * w2 - z1 * x2
+    z = w1 * z2 - x1 * y2 + y1 * x2 - z1 * w2
+    v = math.sqrt(x * x + y * y + z * z)
+    return math.degrees(2.0 * math.atan2(v, abs(w)))
+
+
+# NESC 부록 표 4: 벽돌의 질량·관성 (CM 기준, 곱관성 0)
+BRICK_I = (0.001894220, 0.006211019, 0.007194665)   # slug-ft^2
+
+
+def rate_norm(w):
+    return math.sqrt(sum(c * c for c in w))
+
+
+def quat_to_matrix(q):
+    w, x, y, z = q
+    return ((1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)),
+            (2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)),
+            (2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)))
+
+
+def ned_to_ecef(h_ned, lat_deg, lon_deg):
+    """NED 성분을 ECEF 로. NED 기저의 ECEF 표현을 열로 세운 행렬."""
+    la, lo = math.radians(lat_deg), math.radians(lon_deg)
+    sla, cla, slo, clo = math.sin(la), math.cos(la), math.sin(lo), math.cos(lo)
+    N = (-sla * clo, -sla * slo, cla)
+    E = (-slo, clo, 0.0)
+    D = (-cla * clo, -cla * slo, -sla)
+    return tuple(N[i] * h_ned[0] + E[i] * h_ned[1] + D[i] * h_ned[2]
+                 for i in range(3))
+
+
+def ecef_to_eci(h_ecef, t_s, omega=OMEGA_EARTH):
+    """ECEF → ECI. z축 둘레 지구 자전각만큼 되돌린다.
+
+    초기 GAST 의 상수 오프셋은 한 실행 안의 방향 드리프트만 볼 때 상쇄된다
+    (모든 표본에 같은 회전이 곱해진다). 서로 다른 절대 방향을 직접 비교할
+    때에만 공통 시각 기준이 추가로 필요하다."""
+    th = omega * t_s
+    c, sn = math.cos(th), math.sin(th)
+    return (c * h_ecef[0] - sn * h_ecef[1],
+            sn * h_ecef[0] + c * h_ecef[1],
+            h_ecef[2])
+
+
+def invariants(series, earth_rotation=True):
+    """acc02 전용. 감쇠 없는 강체이고 중력만 작용하므로 CM 둘레의 외부
+    모멘트가 0이다. 따라서 **회전 운동에너지**와 **관성계(ECI) 각운동량
+    벡터**가 보존된다. 참여 결과의 산포에서 만든 합격선이 아니라 해석적
+    불변량이므로 비교기 자신에 대한 자기검사가 된다.
+
+    earth_rotation=False 는 ECEF→ECI 변환을 빼는 회귀용이다 — 그러면
+    NED 기준이 되어 좋은 결과들이 30초치 지구 자전각(약 0.125°)으로
+    악화돼야 한다."""
+    ke, H = [], []
+    for q, w_deg, t_s, lat, lon in series:
+        w = [math.radians(c) for c in w_deg]
+        ke.append(0.5 * sum(I * c * c for I, c in zip(BRICK_I, w)))
+        h_body = [I * c for I, c in zip(BRICK_I, w)]
+        R = quat_to_matrix(q)                                   # 몸체 → NED
+        h_ned = [sum(R[r][c] * h_body[c] for c in range(3)) for r in range(3)]
+        h = ned_to_ecef(h_ned, lat, lon)
+        if earth_rotation:
+            h = ecef_to_eci(h, t_s)
+        H.append(h)
+    return ke, H
+
+
+def momentum_drift(H):
+    """각운동량 벡터의 크기 상대변동과 **방향 드리프트**.
+
+    크기만 보면 자세 적분 오류를 놓친다 — 몸체축 각속도가 맞고 자세만
+    틀리면 |H| 는 거의 유지되면서 방향이 돈다. 방향이 더 날카롭다."""
+    mag = [math.sqrt(sum(v * v for v in h)) for h in H]
+    mrel = (max(mag) - min(mag)) / max(sum(mag) / len(mag), 1e-30)
+    h0 = H[0]
+    worst = 0.0
+    for h in H:
+        # atan2(‖a×b‖, a·b) — 작은 각에서 acos 보다 안정하다.
+        cx = (h0[1] * h[2] - h0[2] * h[1],
+              h0[2] * h[0] - h0[0] * h[2],
+              h0[0] * h[1] - h0[1] * h[0])
+        cross = math.sqrt(sum(c * c for c in cx))
+        dot = sum(a * b for a, b in zip(h0, h))
+        worst = max(worst, math.degrees(math.atan2(cross, dot)))
+    return mrel, worst
+
+
+def contract_check(name, rows, picked_idx, raw_ts):
+    """**원본 CSV 단계**에서 fail-closed. 앞선 판은 load() 가 이미 골라낸
+    301개를 다시 301개인지 세고 있었다 — 구성상 항상 참이라 공허했다."""
+    bad = []
+    if not all(math.isfinite(t) for t in raw_ts):
+        bad.append("원본 시각에 비유한값")
+    if any(b - a <= 0 for a, b in zip(raw_ts, raw_ts[1:])):
+        bad.append("원본 시간축이 엄격 증가가 아님")
+    if len(set(raw_ts)) != len(raw_ts):
+        bad.append(f"원본에 중복 시각 {len(raw_ts) - len(set(raw_ts))}개")
+    # 격자 301점이 서로 다른 원본 행에 일대일 대응하는가
+    if len(picked_idx) != len(GRID):
+        bad.append(f"격자 대응 {len(picked_idx)}개 (301 기대)")
+    if len(set(picked_idx)) != len(picked_idx):
+        bad.append("격자 두 점이 같은 원본 행에 대응 — 일대일 아님")
+    for k, j in enumerate(picked_idx):
+        e = abs(raw_ts[j] - GRID[k])
+        if e > TIME_TOL_S:
+            bad.append(f"t={GRID[k]}s 대응 오차 {e:.3e} s > {TIME_TOL_S:.0e}")
+            break
+    for k, (q, w, _t, la, lo) in enumerate(rows):
+        if not all(math.isfinite(v) for v in list(q) + list(w) + [la, lo]):
+            bad.append(f"t={GRID[k]}s 표본에 비유한값")
+            break
+        if abs(math.sqrt(sum(c * c for c in q)) - 1.0) > 1e-9:
+            bad.append(f"t={GRID[k]}s 쿼터니언 노름 이탈")
+            break
+    if bad:
+        for b in bad:
+            print(f"FAIL: {name}: {b}", file=sys.stderr)
+        return False
+    return True
+
+
+def stats(diffs):
+    """최대 · RMS · 종단 · 최대 발생 시각."""
+    mx = max(diffs)
+    return (mx,
+            math.sqrt(sum(d * d for d in diffs) / len(diffs)),
+            diffs[-1],
+            GRID[diffs.index(mx)])
+
+
+def load(path):
+    """공통 격자 시각에 대해 최근접 표본을 뽑는다. 보간하지 않는다."""
+    with open(path, newline="") as fh:
+        rows = list(csv.reader(fh))
+    hdr = [c.strip() for c in rows[0]]
+    idx = {c: i for i, c in enumerate(hdr)}
+    for c in ("time",) + EUL + RATE + GEO:
+        if c not in idx:
+            raise SystemExit(f"FAIL: {path} 에 열 '{c}' 없음")
+    ts = [float(r[idx["time"]]) for r in rows[1:]]
+    out, picked_idx = [], []
+    for g in GRID:
+        j = min(range(len(ts)), key=lambda k: abs(ts[k] - g))
+        if abs(ts[j] - g) > TIME_TOL_S:
+            raise SystemExit(
+                f"FAIL: {os.path.basename(path)} t={g}s 최근접 오차 "
+                f"{abs(ts[j]-g):.3e} s > {TIME_TOL_S:.0e} — 재표본 필요")
+        picked_idx.append(j)
+        r = rows[1 + j]
+        out.append((
+            quat_from_euler_deg(*[float(r[idx[c]]) for c in EUL]),
+            tuple(float(r[idx[c]]) for c in RATE),
+            ts[j],
+            float(r[idx["latitude_deg"]]),
+            float(r[idx["longitude_deg"]]),
+        ))
+    return out, picked_idx, ts
+
+
+def selftest():
+    """계약 검사가 실제로 거절하는지 — **나쁜 입력으로** 확인한다.
+
+    정상 자료만으로는 임계값을 고정할 수 없다. 시각 허용오차를 무한대로
+    풀어도 좋은 자료는 여전히 통과하므로, 검사가 살아 있는지 알 수 없다.
+    아래는 각 조항마다 그 조항만 위반하는 입력을 만들어 거절을 요구한다."""
+    good_q = quat_from_euler_deg(0.0, 0.0, 0.0)
+    rows = [(good_q, (0.0, 0.0, 0.0), t, 0.0, 0.0) for t in GRID]
+    idx = list(range(len(GRID)))
+    raw = list(GRID)
+
+    # 각 픽스처는 **그 조항만** 위반해야 한다. 여러 조항을 동시에
+    # 위반하면 먼저 걸리는 검사가 나머지를 가려, 변이를 걸어도 죽지 않는다
+    # (실제로 처음 판이 그랬다: 시각을 흐트러뜨린 픽스처가 전부 허용오차
+    # 조항에 먼저 걸렸다).
+    cases = []
+    cases.append(("정상 입력", rows, idx, raw, True))
+
+    # 단조성만: 격자가 쓰지 않는 꼬리 행을 뒤로 어긋나게 붙인다.
+    # 대응 301점은 그대로 정확히 맞으므로 허용오차 조항은 건드리지 않는다.
+    # 29.95 는 0.1 격자에 없으므로 중복 조항을 건드리지 않는다.
+    cases.append(("원본 시간축 비단조", rows, idx, raw + [raw[-1] - 0.05], False))
+
+    # 중복 시각 · 일대일 — 아래 두 조항은 **논리적으로 포섭된다.**
+    #   엄격 증가 ⟹ 중복 없음
+    #   엄격 증가 + 격자간격 0.1 ≫ 2·허용오차 ⟹ 격자점마다 최근접이 유일
+    # 그래서 이 조항만 위반하는 입력을 만들 수 없고, 변이를 걸어도 앞선
+    # 조항이 먼저 잡는다. 방어를 위해 남기되 **독립 고정은 불가능**하다는
+    # 것을 여기 적어둔다 — 살아남는 변이를 "검사가 약하다"로 오해하지
+    # 않도록.
+    cases.append(("중복+비단조 (포섭 확인)", rows, idx, raw + [raw[-1]], False))
+    raw_dup = raw + [raw[10]]
+    idx_dup = list(idx); idx_dup[11] = 10
+    cases.append(("일대일 위반 (포섭 확인)", rows, idx_dup, raw_dup, False))
+
+    # 허용오차만: 대응 시각 하나를 1e-4 s 어긋나게 한다.
+    bad = list(raw); bad[10] += 1e-4
+    cases.append(("대응 오차 1e-4 s", rows, idx, bad, False))
+
+    # 값 조항 둘
+    bad_r = list(rows); bad_r[5] = (good_q, (float("nan"), 0.0, 0.0),
+                                    GRID[5], 0.0, 0.0)
+    cases.append(("표본에 NaN", bad_r, idx, raw, False))
+    bad_r = list(rows); bad_r[5] = ((1.0, 1.0, 0.0, 0.0), (0.0, 0.0, 0.0),
+                                    GRID[5], 0.0, 0.0)
+    cases.append(("쿼터니언 비정규", bad_r, idx, raw, False))
+
+    # 작은 각도 공식 고정 — acos 판이 여기서 죽는다.
+    ang_bad = []
+    for want in (1e-3, 1e-6, 1e-9):
+        th = math.radians(want)
+        qa = (1.0, 0.0, 0.0, 0.0)
+        qb = (math.cos(th / 2), math.sin(th / 2), 0.0, 0.0)
+        got = attitude_angle_deg(qa, qb)
+        if abs(got - want) > 1e-6 * max(want, 1e-12):
+            ang_bad.append(f"자세 {want:.0e}° → {got:.6e}° (상대오차 "
+                           f"{abs(got-want)/want:.2e})")
+    # q 와 −q 는 같은 자세다
+    q = quat_from_euler_deg(11.0, 22.0, 33.0)
+    if attitude_angle_deg(q, tuple(-c for c in q)) > 1e-12:
+        ang_bad.append("부호 반전 쿼터니언이 0° 로 나오지 않음")
+    # 180° 근처
+    th = math.radians(179.999)
+    got = attitude_angle_deg((1.0, 0.0, 0.0, 0.0),
+                             (math.cos(th / 2), math.sin(th / 2), 0.0, 0.0))
+    if abs(got - 179.999) > 1e-6:
+        ang_bad.append(f"179.999° → {got:.9f}°")
+    # 벡터 방향도 같은 성질
+    for want in (1e-3, 1e-6, 1e-9):
+        th = math.radians(want)
+        H = [(1.0, 0.0, 0.0), (math.cos(th), math.sin(th), 0.0)]
+        got = momentum_drift(H)[1]
+        if abs(got - want) > 1e-6 * max(want, 1e-12):
+            ang_bad.append(f"벡터 방향 {want:.0e}° → {got:.6e}°")
+    for b in ang_bad:
+        print(f"FAIL: 작은 각도 — {b}", file=sys.stderr)
+
+    fails = 0
+    print("계약 검사 자기시험 — 각 조항을 위반하는 입력이 거절되는가\n")
+    print(f"  작은 각도 공식: {'OK' if not ang_bad else 'FAIL'} "
+          f"(1e-3·1e-6·1e-9°, 부호 반전, 179.999°, 벡터 방향)\n")
+    for name, r, i_, t_, want in cases:
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            got = contract_check("selftest", r, i_, t_)
+        ok = (got == want)
+        fails += 0 if ok else 1
+        print(f"  {'OK  ' if ok else 'FAIL'}  {name:<24}"
+              f"{'통과 기대' if want else '거절 기대'} → "
+              f"{'통과' if got else '거절'}")
+    if fails or ang_bad:
+        print(f"\nFAIL: 계약 {fails}건, 작은 각도 {len(ang_bad)}건",
+              file=sys.stderr)
+        return 1
+    print(f"\nOK: {len(cases)}개 조항 전부 의도대로 동작")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scenario", default="02", choices=("02", "03"))
+    ap.add_argument("--data", default=os.path.join(HERE, ".nesc", "ref"))
+    ap.add_argument("--candidate", metavar="CSV",
+                    help="우리 결과. 족의 여섯 번째 구성원으로 섞지 않고 "
+                         "참여 5종 각각과 따로 대조한다")
+    ap.add_argument("--selftest", action="store_true",
+                    help="계약 검사를 나쁜 입력으로 시험 (자료 불필요)")
+    a = ap.parse_args()
+
+    if a.selftest:
+        return selftest()
+
+    d = os.path.join(a.data, f"atmos_scn_{a.scenario}")
+    sims = ["01", "02", "04", "05", "06"]
+    paths = {s: os.path.join(d, f"Atmos_{a.scenario}_sim_{s}.csv") for s in sims}
+    missing = [s for s, p in paths.items() if not os.path.exists(p)]
+    if missing:
+        print(f"FAIL: sim {missing} 없음 — ./fetch.sh 를 먼저 실행", file=sys.stderr)
+        return 3
+
+    series, ok = {}, True
+    for s_, p in paths.items():
+        rows, pidx, raw = load(p)
+        ok &= contract_check(f"sim {s_}", rows, pidx, raw)
+        series[s_] = rows
+    if not ok:
+        return 3
+
+    print(f"NESC 대기권 사례 acc{a.scenario} — 참여 도구 {len(sims)}종, "
+          f"공통 격자 {len(GRID)}점 (0–30 s @ 0.1 s), 보간 없음")
+    print("계약 검사: 시간축 단조·격자 일대일·유한성·쿼터니언 정규화 통과\n")
+
+    # ── 참여 5종의 족 산포. 후보를 넣어도 이 값은 재계산하지 않는다 ──
+    print("[족] 자세 각거리 [deg] — 참여 5종 쌍별 (오일러각 직접 차이가 아님)")
+    print(f"{'쌍':<10}{'최대':>9}{'RMS':>9}{'종단':>9}{'t_max':>8}")
+    pair_max = []
+    for i_, s1 in enumerate(sims):
+        for s2 in sims[i_ + 1:]:
+            dif = [attitude_angle_deg(series[s1][k][0], series[s2][k][0])
+                   for k in range(len(GRID))]
+            mx, rms, end, tm = stats(dif)
+            pair_max.append(mx)
+            print(f"{s1+'-'+s2:<10}{mx:>9.4f}{rms:>9.4f}{end:>9.4f}{tm:>8.1f}")
+    print(f"  → 족의 산포 (고정): {max(pair_max):.4f} deg\n")
+
+    print("[족] 몸체 각속도 [deg/s] — 성분별 최대 및 벡터 노름 최대")
+    print(f"{'쌍':<10}{'Roll':>9}{'Pitch':>9}{'Yaw':>9}{'‖Δω‖':>9}")
+    rmax, nmax = [0.0] * 3, 0.0
+    for i_, s1 in enumerate(sims):
+        for s2 in sims[i_ + 1:]:
+            m = [max(abs(series[s1][k][1][c] - series[s2][k][1][c])
+                     for k in range(len(GRID))) for c in range(3)]
+            nm = max(rate_norm([series[s1][k][1][c] - series[s2][k][1][c]
+                                for c in range(3)]) for k in range(len(GRID)))
+            rmax = [max(x, y) for x, y in zip(rmax, m)]
+            nmax = max(nmax, nm)
+            print(f"{s1+'-'+s2:<10}{m[0]:>9.4f}{m[1]:>9.4f}{m[2]:>9.4f}{nm:>9.4f}")
+    print(f"  → 족의 산포 (고정): 성분 {rmax[0]:.4f}/{rmax[1]:.4f}/{rmax[2]:.4f}"
+          f", 노름 {nmax:.4f} deg/s\n")
+
+    # ── acc02 불변량: 참여 결과가 아니라 해석적 성질에 대한 자기검사 ──
+    if a.scenario == "02":
+        print("[불변량] 감쇠 없는 강체 — 회전 운동에너지와 관성계 각운동량 보존")
+        print("  (참여 결과에서 만든 합격선이 아니라 해석적 불변량)")
+        print(f"{'sim':<10}{'KE 상대변동':>14}{'‖H‖ 상대변동':>16}"
+              f"{'H_eci 방향드리프트[deg]':>24}")
+        for s_ in sims:
+            ke, Lm = invariants(series[s_])
+            dke = (max(ke) - min(ke)) / max(abs(sum(ke) / len(ke)), 1e-30)
+            dmag, ddir = momentum_drift(Lm)
+            print(f"{s_:<10}{dke:>14.3e}{dmag:>16.3e}{ddir:>24.7f}")
+        print()
+        # 회귀 — 양팔이어야 한다. false 팔만 보면 정상 경로에서
+        # ecef_to_eci() 를 지워도 통과한다 (false 팔은 원래 자전을 안 뺀다).
+        spin = math.degrees(OMEGA_EARTH * GRID[-1])
+        on = max(momentum_drift(invariants(series[s_], True)[1])[1]
+                 for s_ in ("01", "04", "05"))
+        off = max(momentum_drift(invariants(series[s_], False)[1])[1]
+                  for s_ in ("01", "04", "05"))
+        fails = []
+        if on >= 1e-3:
+            fails.append(f"자전 보정 ON 에서 {on:.6f}° >= 0.001°")
+        if abs(off - spin) > 0.01:
+            fails.append(f"OFF 에서 {off:.4f}° 가 자전각 {spin:.4f}° 와 "
+                         f"0.01° 넘게 다름")
+        if on > 0 and off / on < 100.0:
+            fails.append(f"개선 비율 {off/on:.1f}배 < 100배 — 보정이 "
+                         f"실제로 효과를 내지 않음")
+        print(f"  [회귀] 자전 보정 ON {on:.7f}° / OFF {off:.4f}° "
+              f"(30초 자전각 {spin:.4f}°, 개선 {off/max(on,1e-30):.0f}배) … "
+              f"{'OK' if not fails else 'FAIL'}")
+        for f_ in fails:
+            print(f"FAIL: {f_}", file=sys.stderr)
+        if fails:
+            return 3
+        print()
+
+    # ── 우리 결과: 여섯 번째 구성원이 아니라 별도 후보 ──
+    if a.candidate:
+        cand, cpidx, craw = load(a.candidate)
+        if not contract_check("candidate", cand, cpidx, craw):
+            return 3
+        print("[후보] 우리 결과 대 참여 5종 — 족에 섞지 않고 각각과 대조")
+        print(f"{'대상':<10}{'자세 최대':>11}{'RMS':>9}{'종단':>9}{'t_max':>8}"
+              f"{'‖Δω‖ 최대':>12}")
+        for s_ in sims:
+            dif = [attitude_angle_deg(cand[k][0], series[s_][k][0])
+                   for k in range(len(GRID))]
+            mx, rms, end, tm = stats(dif)
+            nm = max(rate_norm([cand[k][1][c] - series[s_][k][1][c]
+                                for c in range(3)]) for k in range(len(GRID)))
+            print(f"{s_:<10}{mx:>11.3e}{rms:>9.2e}{end:>9.2e}{tm:>8.1f}{nm:>12.3e}")
+        if a.scenario == "02":
+            ke, Lm = invariants(cand)
+            dke = (max(ke) - min(ke)) / max(abs(sum(ke) / len(ke)), 1e-30)
+            dmag, ddir = momentum_drift(Lm)
+            print(f"\n  후보 불변량: KE {dke:.3e}, ‖H‖ {dmag:.3e}, "
+                  f"H 방향 드리프트 {ddir:.4e} deg")
+        print()
+
+    print("위 숫자는 전부 측정값이다. 참여 결과의 최솟값–최댓값 안에 드는")
+    print("것을 합격 조건으로 삼지 않는다.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

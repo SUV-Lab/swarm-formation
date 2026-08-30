@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.16)
+project(nesc_checkcase CXX)
+set(CMAKE_CXX_STANDARD 17)
+# JSBSIM_ROOT 는 jsbsim_probe/run.sh 가 만든 설치 트리를 가리킨다.
+if(NOT DEFINED JSBSIM_ROOT)
+  message(FATAL_ERROR "-DJSBSIM_ROOT=<inst dir> 필요")
+endif()
+add_executable(candidate_acc02 candidate_acc02.cpp)
+target_include_directories(candidate_acc02 PRIVATE ${JSBSIM_ROOT}/include/JSBSim)
+target_link_directories(candidate_acc02 PRIVATE ${JSBSIM_ROOT}/lib)
+target_link_libraries(candidate_acc02 PRIVATE JSBSim)
