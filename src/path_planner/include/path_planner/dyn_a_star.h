@@ -5,6 +5,7 @@
 #include <cmath>
 #include <functional>
 #include <rclcpp/rclcpp.hpp>
+#include "path_planner/risk_shape.h"
 
 #include <Eigen/Eigen>
 #include "path_planner/sdf/distance_field.h"
@@ -105,6 +106,9 @@ private:
     // Terrain sampling pitch for chord feasibility scans: min(0.5, half a DEM
     // cell). See setTerrainHeightmap.
     double terrain_stride_floor_ = 0.5;
+    // Pitch each side actually used, for the log line and the equality test.
+    mutable double dbg_sweep_pitch_ = 0.0;
+    mutable double dbg_gate_pitch_ = 0.0;
     double dyn_obstacle_margin_ = 0.0;  // dynamic-obstacle berth, frame units; 0 = off
     // Hard ground / ceiling for A* expansion. Cells at or below
     // ground_height_ (and at or above virtual_ceil_height_) are rejected
@@ -247,6 +251,11 @@ private:
     // 1-voxel-step A* path without shortcut/visibility-thinning. Used to
     // verify front-end behavior independent of the shortcut filter.
     bool bypass_shortcut_ = false;
+    // [FM2-FINAL-CLEAR] the terrain sweep's outcome, read by the whole-path
+    // gate so a refusal can say whether the repair ran out of budget.
+    int dbg_lifted_ = 0;
+    int dbg_lift_cap_ = 0;
+    bool dbg_sweep_clean_ = false;
     double map_resolution_ = 1.0;
     double map_resolution_z_ = 1.0;  // vertical grid spacing (anisotropic)
     Eigen::Vector3d map_origin_ = Eigen::Vector3d::Zero();
@@ -267,6 +276,143 @@ private:
     inline bool Coord2Index(const Eigen::Vector3d &pt, Eigen::Vector3i &idx) const;
 
     // Collision / risk queries backed by SDF.
+ public:
+    // The ROUTE-VALIDATION contract, public so it can be regressed as the
+    // pure predicate it is. The searcher's own fixtures can only reach these
+    // through a full FM2 plan, which pins the call site but not the rule.
+    //
+    // The sentence that used to sit here -- "a mutation that deleted the
+    // obstacle half of polylineClear passed the whole variant sweep" -- was
+    // measured before the abort/cancel merge and is no longer true. Re-measured
+    // 2026-08-18 on the merged tree: deleting the obstacle half kills
+    // finalclear (69/70); deleting the terrain half kills dynprobe and
+    // finalclear (68/70). Both halves are now pinned by the sweep.
+    // Everything below is a query: no state changes.
+    // How far the route may stay inside the terrain margin at its start
+    // before that becomes a refusal. Expressed in the margin itself rather
+    // than as a new tuning knob: the aircraft has to clear obstacle_margin_
+    // of ground, and it is given a few multiples of that distance to do it.
+    // Small on purpose — this is a takeoff allowance, not a corridor.
+    double startTerrainReliefArc() const { return 5.0 * obstacle_margin_; }
+
+    // Obstacles ONLY. This is what a RAW FM2 geodesic may be judged on: it
+    // is a seed, not a route — the simplification and the terrain-lift sweep
+    // that follow it exist precisely to raise vertices that sit too close to
+    // the ground. Refusing the seed for terrain proximity throws away a path
+    // the pipeline was about to fix, and on a real 40 m corridor that is
+    // every descent (measured: the r5 probe stopped planning entirely).
+    // Geometry is different — a box or a sphere cannot be lifted out of, so
+    // a seed that goes through one is refused here and now.
+    // THE sampling pitch for the terrain-clearance question, and the only
+    // definition of it. The terrain-lift sweep and the final terrain gate must
+    // walk the route with the SAME stride.
+    //
+    // They did not. The sweep walked at half the DEM cell — 0.50 u on a 100 m
+    // corridor — while the gate walked at half the finest voxel, 0.05 u. Ten
+    // times coarser. So the repairer sampled every 50 m, found nothing wrong at
+    // its own footsteps, and reported clean; the gate then walked the same
+    // route every 5 m and found a point 30 cm short of the 60 m it needs,
+    // between two of the repairer's samples. In fm2 there is no A* fallback, so
+    // that refusal is the end of the mission. Measured on r19, 2026-08-20:
+    // agl=0.597 required=0.600 with lifted=4 sweep_clean=true.
+    //
+    // The finer of the two inputs, so neither a coarse voxel nor a coarse DEM
+    // cell can widen the stride past a feature the other would have caught.
+    //
+    // Obstacle and risk-zone scanning keep their own strides on purpose: they
+    // answer a different question and were not part of this mismatch.
+    inline double terrainCheckPitch() const {
+        const double voxel =
+            std::max(0.02, 0.5 * std::min(map_resolution_, map_resolution_z_));
+        return (terrain_stride_floor_ > 0.0)
+                   ? std::min(voxel, terrain_stride_floor_) : voxel;
+    }
+    // What each side ACTUALLY used on the last run. Recorded rather than
+    // recomputed so a test can prove they agreed, instead of proving that one
+    // function equals itself.
+    double lastSweepPitch() const { return dbg_sweep_pitch_; }
+    // The production terrain repair, callable on any polyline. Public so a
+    // test drives THIS loop rather than a copy of it: a copy cannot notice the
+    // sweep's stride drifting away from the gate's, which is the whole defect.
+    int sweepTerrainClearance(std::vector<Eigen::Vector3d> &simple_path);
+    double lastGatePitch() const { return dbg_gate_pitch_; }
+
+    bool polylineObstacleClear(const std::vector<Eigen::Vector3d> &pts,
+                               Eigen::Vector3d *hit = nullptr) {
+        if (pts.size() < 2) return false;
+        const double pitch =
+            std::max(0.02, 0.5 * std::min(map_resolution_, map_resolution_z_));
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            const Eigen::Vector3d &a = pts[i], &b = pts[i + 1];
+            const double len = (b - a).norm();
+            const int n = std::max(1, static_cast<int>(std::ceil(len / pitch)));
+            for (int k = 0; k <= n; ++k) {
+                const Eigen::Vector3d p = a + (b - a) * (double(k) / n);
+                if (obstacleBlocked(p)) {
+                    if (hit) *hit = p;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool polylineClear(const std::vector<Eigen::Vector3d> &pts,
+                       Eigen::Vector3d *hit = nullptr,
+                       double start_relief_arc = 0.0) {
+        if (pts.size() < 2) return false;
+        // Half the finest step the occupancy predicate can resolve, so a thin
+        // slab between two widely spaced vertices cannot be stepped over —
+        // now taken from the shared definition, so the sweep that just tried to
+        // fix this route and the gate about to judge it cannot disagree.
+        const double pitch = terrainCheckPitch();
+        dbg_gate_pitch_ = pitch;
+        double arc = 0.0;
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            const Eigen::Vector3d &a = pts[i], &b = pts[i + 1];
+            const double len = (b - a).norm();
+            const int n = std::max(1, static_cast<int>(std::ceil(len / pitch)));
+            for (int k = 0; k <= n; ++k) {
+                const double f = double(k) / n;
+                const Eigen::Vector3d p = a + (b - a) * f;
+                const double arc_here = arc + len * f;
+                // Obstacles: never exempt, anywhere.
+                if (obstacleBlocked(p)) {
+                    if (hit) *hit = p;
+                    return false;
+                }
+                // Terrain: exempt only inside the start relief arc.
+                if (terrainClearanceShort(p) &&
+                    arc_here > start_relief_arc) {
+                    if (hit) *hit = p;
+                    return false;
+                }
+            }
+            arc += len;
+        }
+        return true;
+    }
+
+    // The two halves of checkOccupancy_esdf, separated so a caller can
+    // tolerate one without tolerating the other. Their disjunction is exactly
+    // checkOccupancy_esdf.
+    inline bool terrainClearanceShort(const Eigen::Vector3d &pos) {
+        if (!terrain_height_) return false;
+        const float h = terrain_height_(pos.x(), pos.y());
+        return std::isfinite(h) &&
+               pos.z() - static_cast<double>(h) < obstacle_margin_;
+    }
+    inline bool obstacleBlocked(const Eigen::Vector3d &pos) {
+        if (!sdf_ || !sdf_->hasData()) return false;
+        float d = sdf_->getDistance(pos);
+        if (!std::isfinite(d)) return true;  // outside map = blocked
+        if (d < obstacle_margin_) return true;
+        if (dyn_obstacle_margin_ > obstacle_margin_ &&
+            sdf_->getDynamicDistance(pos) < dyn_obstacle_margin_) return true;
+        return false;
+    }
+
+ private:
     inline bool checkOccupancy_esdf(const Eigen::Vector3d &pos) {
         // 2.5D TERRAIN via the DEM heightmap (exact z). The SDF's voxelised
         // terrain is z-quantised (~10 m) and under-sees it, so the FM2 speed
@@ -428,16 +574,14 @@ private:
                 (dx * dx + dy * dy) / (tz.reach * tz.reach) +
                 (dz * dz) / (rv * rv));
             if (q >= 1.0) continue;
-            const double u = 1.0 - q;
             double visibility = 1.0;
             if (risk_visibility_) {
                 visibility = std::clamp(risk_visibility_(zi, pos), 0.0, 1.0);
                 if (visibility <= 0.0) continue;
             }
-            const double moat =
-                tz.peak * u * u * visibility * endpointTaper(zi, pos);
-            constexpr double kMoatCap = 1.0 - 1e-3;
-            survival *= (1.0 - std::min(moat, kMoatCap));
+            const double moat = tz.peak * mmp::risk::shape(q) * visibility *
+                                endpointTaper(zi, pos);
+            survival *= (1.0 - std::min(moat, mmp::risk::kMoatCap));
         }
         return 1.0 - survival;
     }
@@ -627,6 +771,14 @@ public:
 
     void setLogManager(swarm_formation::LogManager::Ptr log_manager) { log_manager_ = log_manager; }
 
+    // Read-only view of the composed front-end risk field. getRiskNorm is
+    // private because nothing outside the searcher may STEER on it; a test
+    // still has to be able to read what this layer prices, or "every layer
+    // uses the shared shape" is an assertion nobody can check.
+    double riskFieldAt(const Eigen::Vector3d &pos) const {
+        return getRiskNorm(pos);
+    }
+
     // resolution_z <= 0 keeps the legacy isotropic behaviour (z = xy). A
     // finer z lets the FM2 grid resolve altitude at real-terrain scale
     // instead of quantizing every climb to one xy-sized cell.
@@ -686,105 +838,6 @@ public:
     // Last plan's [ZONE-AVOID] pass (0 = policy off / no zones,
     // 1 = zone-free route, 2 = soft fallback, 3 = re-hardened).
     int zoneAvoidPass() const { return zone_avoid_pass_; }
-    // [S13] Read-only zone disposition state for the policy snapshot:
-    // endpoint containment exemptions and the pass-2/3 soft-crossing set.
-    // [FM2-OCCUPANCY] Is every point of this polyline free, by the SAME
-    // predicate the search uses to call a cell blocked? First offender via
-    // `hit`.
-    //
-    // FM2 needs this and A* does not. The eikonal speed map marks an obstacle
-    // cell with a small but FINITE speed (kFMin) rather than zero, on
-    // purpose: a true wall at coarse resolution disconnects the
-    // terrain-following seam corridors the planner depends on. Only hard risk
-    // zones get F = 0. The price is that the wave can burrow through an
-    // obstacle, and the geodesic that follows it comes out the other side; in
-    // the [ZONE-AVOID] passes that leak is caught after extraction, on the
-    // plain path nothing looked. Measured with a wall that genuinely seals
-    // the corridor: 10 of 34 committed route vertices inside it.
-    //
-    // START RELIEF, and nothing wider. `start_relief_arc` > 0 tolerates ONE
-    // thing, in ONE place: the aircraft being closer to the TERRAIN than the
-    // clearance margin, within that arc length of the route's first point.
-    // The mission pins where the aircraft is; a drone sitting 0.15 u above
-    // flat ground with a 0.60 u margin would otherwise fail to plan at all,
-    // its own start reading as occupied.
-    //
-    // What it does NOT do, deliberately:
-    //   - obstacles are never exempt, not even at the start. A box or a
-    //     sphere at the takeoff point is a real obstruction and A* would move
-    //     the start off it (dyn_a_star.cpp, "시작점이 장애물 내부에 위치"),
-    //     which is adjustment, not tolerance. An earlier version of this
-    //     exempted everything inside a ball of the margin around BOTH
-    //     endpoints and justified it by that adjustment — the justification
-    //     was wrong and the hole was much wider than the problem.
-    //   - the GOAL gets nothing. A goal buried in terrain or an obstacle is a
-    //     mission that cannot be flown, and saying so is the answer.
-    //   - relief must END. Terrain shortfall past `start_relief_arc` fails,
-    //     so a route that never climbs away is still refused; the flight is
-    //     required to recover the margin, not merely to start without it.
-    //   - the in-flight re-check passes 0 and gets none of this: it asks
-    //     whether the REMAINING flight is safe, and "we were low at takeoff"
-    //     is not an argument about the rest of it.
-    // How far the route may stay inside the terrain margin at its start
-    // before that becomes a refusal. Expressed in the margin itself rather
-    // than as a new tuning knob: the aircraft has to clear obstacle_margin_
-    // of ground, and it is given a few multiples of that distance to do it.
-    // Small on purpose — this is a takeoff allowance, not a corridor.
-    double startTerrainReliefArc() const { return 5.0 * obstacle_margin_; }
-
-    bool polylineClear(const std::vector<Eigen::Vector3d> &pts,
-                       Eigen::Vector3d *hit = nullptr,
-                       double start_relief_arc = 0.0) {
-        if (pts.size() < 2) return false;
-        // Half the finest step the occupancy predicate can resolve, so a thin
-        // slab between two widely spaced vertices cannot be stepped over.
-        const double pitch =
-            std::max(0.02, 0.5 * std::min(map_resolution_, map_resolution_z_));
-        double arc = 0.0;
-        for (size_t i = 0; i + 1 < pts.size(); ++i) {
-            const Eigen::Vector3d &a = pts[i], &b = pts[i + 1];
-            const double len = (b - a).norm();
-            const int n = std::max(1, static_cast<int>(std::ceil(len / pitch)));
-            for (int k = 0; k <= n; ++k) {
-                const double f = double(k) / n;
-                const Eigen::Vector3d p = a + (b - a) * f;
-                const double arc_here = arc + len * f;
-                // Obstacles: never exempt, anywhere.
-                if (obstacleBlocked(p)) {
-                    if (hit) *hit = p;
-                    return false;
-                }
-                // Terrain: exempt only inside the start relief arc.
-                if (terrainClearanceShort(p) &&
-                    arc_here > start_relief_arc) {
-                    if (hit) *hit = p;
-                    return false;
-                }
-            }
-            arc += len;
-        }
-        return true;
-    }
-
-    // The two halves of checkOccupancy_esdf, separated so a caller can
-    // tolerate one without tolerating the other. Their disjunction is exactly
-    // checkOccupancy_esdf.
-    inline bool terrainClearanceShort(const Eigen::Vector3d &pos) {
-        if (!terrain_height_) return false;
-        const float h = terrain_height_(pos.x(), pos.y());
-        return std::isfinite(h) &&
-               pos.z() - static_cast<double>(h) < obstacle_margin_;
-    }
-    inline bool obstacleBlocked(const Eigen::Vector3d &pos) {
-        if (!sdf_ || !sdf_->hasData()) return false;
-        float d = sdf_->getDistance(pos);
-        if (!std::isfinite(d)) return true;  // outside map = blocked
-        if (d < obstacle_margin_) return true;
-        if (dyn_obstacle_margin_ > obstacle_margin_ &&
-            sdf_->getDynamicDistance(pos) < dyn_obstacle_margin_) return true;
-        return false;
-    }
-
     const std::vector<char> &zoneNoBarrier() const { return zone_no_barrier_; }
     const std::vector<char> &zoneSoftOverride() const {
       return zone_soft_override_;

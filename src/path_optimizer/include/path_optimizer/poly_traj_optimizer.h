@@ -25,18 +25,20 @@ using LogManager = swarm_formation::LogManager;
   } \
 } while(0)
 
+// Same change as replan_fsm.h: WARN and ERROR always reach the console, and
+// the file too when a logger exists. The XOR sent them to the file alone
+// under the shipped enable_debug_logs: true, and nowhere at all when file
+// logging was disabled.
 #define LOG_WARN(msg, ...) do { \
-  if (!enable_debug_logs_) { \
-      RCLCPP_WARN(node_->get_logger(), "[POLY_TRAJ_OPT][drone %d] " msg, drone_id_, ##__VA_ARGS__); \
-  } else if (log_manager_) { \
+  RCLCPP_WARN(node_->get_logger(), "[POLY_TRAJ_OPT][drone %d] " msg, drone_id_, ##__VA_ARGS__); \
+  if (log_manager_) { \
       log_manager_->warnf("[POLY_TRAJ_OPT][drone %d] " msg, drone_id_, ##__VA_ARGS__); \
   } \
 } while(0)
 
 #define LOG_ERROR(msg, ...) do { \
-  if (!enable_debug_logs_) { \
-      RCLCPP_ERROR(node_->get_logger(), "[POLY_TRAJ_OPT][drone %d] " msg, drone_id_, ##__VA_ARGS__); \
-  } else if (log_manager_) { \
+  RCLCPP_ERROR(node_->get_logger(), "[POLY_TRAJ_OPT][drone %d] " msg, drone_id_, ##__VA_ARGS__); \
+  if (log_manager_) { \
       log_manager_->errorf("[POLY_TRAJ_OPT][drone %d] " msg, drone_id_, ##__VA_ARGS__); \
   } \
 } while(0)
@@ -116,7 +118,11 @@ namespace ego_planner
     SwarmGraph::Ptr swarm_graph_;
     swarm_formation::LogManager::Ptr log_manager_;
 
-    int drone_id_;
+    // [PARAM] Every LOG_* macro prints this as the "[drone %d]" prefix, and
+    // setParam runs BEFORE setDroneId, so an uninitialized value was formatted
+    // on the way out. Since WARN/ERROR now always reach the console that is a
+    // garbage id printed unconditionally, not just a nondeterministic branch.
+    int drone_id_{0};
     int cps_num_prePiece_;
     int variable_num_;
     int piece_num_;
@@ -197,9 +203,16 @@ namespace ego_planner
     double debug_similarity_ = 0.0;
 
     double t_now_;
-    bool enable_obstacles_;
-    bool enable_debug_logs_;
-    bool enable_lbfgs_detail_logs_;
+    // [PARAM] Initialized at the declaration, and to the SAME values the
+    // parameter declarations use. setParam reads them into these members, so
+    // an uninitialized member was read by every logging macro between
+    // construction and the first setParam — formally UB, and it survived only
+    // because the production entry point happens to declare in the right
+    // order. The value here is the fallback, not a second policy: if it ever
+    // disagrees with the declare_once default below, one of the two is wrong.
+    bool enable_obstacles_{true};          // declare_once("enable_obstacles", true)
+    bool enable_debug_logs_{false};        // declared by ReplanFSM, default false
+    bool enable_lbfgs_detail_logs_{false}; // declare_once(..., false)
     // Post-convergence per-term VERTICAL-force attribution sweep. Answers
     // "which cost term (if any) lifts the trajectory HERE" for every hump,
     // and flags humps with NO spatial vertical force as intrinsic
@@ -562,8 +575,11 @@ namespace ego_planner
     // sub-stall commanded starts onto this floor instead of planning one.
     double dynamicsMinSpeedFloorUnits() const {
         if (!dynamics_enable_ || dyn_unit_xy_m_ <= 1e-9) return 0.0;
-        return dynamics_params_.speed_min_mps *
-               (1.0 + dynamics_params_.constraint_margin) / dyn_unit_xy_m_;
+        // The product itself is defined once, beside the handoff verdict
+        // that enforces it (mmp_vehicle_dynamics), so the planner frame and
+        // any off-line harness cannot disagree about the cruise floor.
+        return mmp_vehicle_dynamics::marginBackedSpeedFloorMps(
+                   dynamics_params_) / dyn_unit_xy_m_;
     }
     // [FINAL-EVAL] the shared flight-dynamics model, for whole-flight audits
     // outside the solver (the stitched chain+terminal product includes a
@@ -683,6 +699,18 @@ namespace ego_planner
                           std::vector<size_t> *out_piece_leg = nullptr);
 
     void setDesiredFormation(int type);
+
+    // Read-only evaluation of the risk cost term at one point. RiskGradCostP
+    // is private because nothing outside the solver may drive on it; a test
+    // still has to reach the REAL cost, or "value and analytic derivative
+    // always agree" is a claim about a copy nobody runs.
+    bool inspectRiskCostAt(const Eigen::Vector3d &p,
+                           const Eigen::Vector3d &v,
+                           Eigen::Vector3d &gradp,
+                           Eigen::Vector3d &gradv,
+                           double &costp) {
+      return RiskGradCostP(0, p, v, gradp, gradv, costp);
+    }
 
   private:
     static double costFunctionCallback(void *func_data, const double *x, double *grad, const int n);

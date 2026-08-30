@@ -1,4 +1,5 @@
 #include "path_optimizer/poly_traj_optimizer.h"
+#include "path_planner/risk_shape.h"
 #include <algorithm>
 #include <iomanip>
 #include <ctime>
@@ -3875,8 +3876,11 @@ namespace ego_planner
 
   // Risk cost: consumes the SAME continuous risk field as the FM2 front-end
   // (dyn_a_star.h getRiskNorm), so both layers price risk on one shared field:
-  // per zone a terrain-masked ellipsoidal quadratic moat
-  // m_i = visibility_i(p) * peak_i*(1 - q_i)^2,
+  // per zone a terrain-masked ellipsoidal moat whose shape comes from the one
+  // shared definition (mmp::risk::shape) instead of being transcribed here.
+  // It is currently quadratic; that is an implementation detail, not a
+  // contract (ledger PA-1):
+  // m_i = visibility_i(p) * peak_i * shape(q_i),
   // q_i^2 = rho_i^2/Rh_i^2 + dz_i^2/Rv_i^2,
   // OR-composed  r(p) = 1 - prod_i(1 - min(m_i, 1-1e-3))  in [0, 1].
   //
@@ -3891,8 +3895,8 @@ namespace ego_planner
   // b is the SMOOTHED BARRIER: the front-end adds a flat K inside every
   // non-exempt ellipsoid, which makes its geodesic keep a hard standoff at the
   // rim (observed margins of only metres). A moat-only back-end re-litigates
-  // that standoff: near the rim the moat is ~peak*u^2 with ZERO contact
-  // slope, so cutting the skirt is net-profitable against the time cost
+  // that standoff: under the CURRENT quadratic shape the moat near the rim is
+  // ~peak*u^2 with ZERO contact slope, so cutting the skirt is net-profitable against the time cost
   // until tens of metres deep. The barrier indicator is therefore shared
   // too (a step has no usable gradient, so it is ramped), OR-composed like
   // the moat. The ramp sits OUTSIDE the rim — full K at d <= reach, fading
@@ -3916,7 +3920,11 @@ namespace ego_planner
     gradv.setZero();
     costp = 0.0;
 
-    constexpr double kMoatCap = 1.0 - 1e-3;  // identical to getRiskNorm
+    constexpr double kMoatCap = mmp::risk::kMoatCap;
+    // NOTE: weight_Risk_barrier (25000.0) is derived FROM the rim contact
+    // slope of the current shape. Changing mmp::risk::shape obliges a
+    // re-derivation of that weight and a re-validation of the 154-case
+    // scenario set — risk_shape.h, contract property 6.
     // Ramp fraction ~ the front-end's coarse-cell bleed (cres ~ metres) at
     // typical zone sizes; steep enough that the approach equilibrium sits
     // outside the true rim. Shared with the setRiskZones precomputation.
@@ -3991,13 +3999,14 @@ namespace ego_planner
       // Shared terrain-masked moat. Product rule makes the LOS shadow edge
       // usable by L-BFGS while preserving the old radial gradient.
       if (q < 1.0) {
-        const double u = 1.0 - q;
-        const double base_m = tz.peak * u * u;
+        const double base_m = tz.peak * mmp::risk::shape(q);
         const double m = std::min(base_m * visibility * tf, kMoatCap);
         Sm *= (1.0 - m);
         Eigen::Vector3d grad_base_m = Eigen::Vector3d::Zero();
         if (m < kMoatCap && q > 1e-9) {
-          grad_base_m = (tz.peak * 2.0 * u * -1.0) * grad_q;
+          // d(base_m)/dq from the SAME shape the value came from, so the two
+          // cannot drift apart. It used to be a hand-written 2*u.
+          grad_base_m = (tz.peak * mmp::risk::shapeDeriv(q)) * grad_q;
         }
         if (m < kMoatCap && (1.0 - m) > 1e-9) {
           Gm += (tf * visibility * grad_base_m +
@@ -4124,18 +4133,34 @@ namespace ego_planner
                          risk_parallel_threads_);
     if (risk_parallel_threads_ < 0) risk_parallel_threads_ = 0;
 
-    declare_once("enable_obstacles", true);
-    node_->get_parameter("enable_obstacles", enable_obstacles_);
-    
-    // Get enable_debug_logs parameter (declared in replan_fsm)
-    node_->get_parameter("enable_debug_logs", enable_debug_logs_);
+    // [PARAM] The member initializers make these deterministic before the
+    // first read; they must not also become a place where a FAILED read hides
+    // as a normal setting. Absent (a direct construction that never declared
+    // it) and unreadable (declared with the wrong type) are different facts
+    // and are reported differently.
+    const auto read_bool = [&](const char *name, bool &out) {
+      if (!node_->has_parameter(name)) {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[PARAM] %s is not declared; keeping the compiled "
+                    "default %s", name, out ? "true" : "false");
+        return;
+      }
+      if (!node_->get_parameter(name, out)) {
+        RCLCPP_ERROR(node_->get_logger(),
+                     "[PARAM] %s is declared but could not be read; keeping "
+                     "%s", name, out ? "true" : "false");
+      }
+    };
 
-    // Declare + get (bug fix: this param was previously read without being
-    // declared, so it always fell back to default-constructed false).
-    if (!node_->has_parameter("enable_lbfgs_detail_logs")) {
-        declare_once("enable_lbfgs_detail_logs", false);
-    }
-    node_->get_parameter("enable_lbfgs_detail_logs", enable_lbfgs_detail_logs_);
+    declare_once("enable_obstacles", true);
+    read_bool("enable_obstacles", enable_obstacles_);
+
+    // Declared by ReplanFSM in production; a direct construction may not have
+    // it, which is why absence is a WARN and not an error here.
+    read_bool("enable_debug_logs", enable_debug_logs_);
+
+    declare_once("enable_lbfgs_detail_logs", false);
+    read_bool("enable_lbfgs_detail_logs", enable_lbfgs_detail_logs_);
     
     // Use conditional logging - only RCLCPP when debug logs disabled, only LogManager when enabled
     if (!enable_debug_logs_) {

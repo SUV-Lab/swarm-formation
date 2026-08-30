@@ -473,6 +473,159 @@ vector<Vector3d> PathSearcher::getPath()
     return path;
 }
 
+// The terrain-clearance repair, lifted out of astarSearchAndGetSimplePath so
+// the production loop is what a test can drive. It used to be inline, so the
+// only way to test it was to reimplement it — and a reimplementation cannot
+// catch the stride drifting apart from the gate's, which is the defect this
+// exists to prevent.
+//
+// Walks every kept segment at terrainCheckPitch(), inserts a lifted vertex at
+// the worst clearance shortfall, and repeats to a fixpoint. Returns the number
+// of lifts; sets dbg_sweep_pitch_/dbg_lifted_/dbg_sweep_clean_.
+int PathSearcher::sweepTerrainClearance(std::vector<Vector3d> &simple_path) {
+    if (!terrain_height_) return 0;
+    // One stride for the whole terrain repair, taken from the same place
+    // the final gate takes its own. Recorded so the log and the test can
+    // show the two sides agreed rather than assume it.
+    const double sweep_pitch = terrainCheckPitch();
+    dbg_sweep_pitch_ = sweep_pitch;
+    int lifted = 0;
+    // Hard cap on total lift/insert operations: every full_route vertex is
+    // preserved 1:1 into clean_path anchors (STEP 3 never merges), so an
+    // unbounded sweep would inflate piece_num_/variable_num_ and the
+    // optimizer's per-iteration cost. Real DEMs converge in a handful of
+    // lifts (bilinear cells have no sub-cell features — measured 2 lifts
+    // on a 44 km ridge-grazing terrain-following route); the cap only
+    // guards pathological
+    // geometry. A capped exit with work remaining is WARNed below — the
+    // optimizer terrain term is the remaining guard.
+    //
+    // NO fixed round cap: termination is guaranteed by the lift cap alone.
+    // In-place lifts are once-per-vertex (v.z is set to need+0.02 at FIXED
+    // (x,y), so the same vertex can never re-trigger), and every other
+    // change INSERTS a vertex, bounded by kLiftCap. The old 8-round cap
+    // bound FIRST on guard-dense corner chains (observed: terrain-following
+    // stress case exited at 8 rounds with only lifted=14, leaving a
+    // terrain-overlapping seed that the optimizer then rode into a -0.543
+    // goal-approach collision).
+    // kRoundSafety is a pure backstop against an unforeseen cycle.
+    constexpr int kLiftCap = 512;
+    constexpr int kRoundSafety = 256;
+    bool clean_exit = false;
+    dbg_lift_cap_ = kLiftCap;
+    for (int round = 0; round < kRoundSafety && lifted < kLiftCap; ++round) {
+        bool changed = false;
+        // (0) Lift KEPT interior vertices that themselves overlap terrain.
+        // The
+        // per-segment sweep below only samples interior points (s=1..n-1),
+        // so a vertex retained by chordOk's b<=a+1 fast path — which returns
+        // true WITHOUT calling chordOccRisk/checkOccupancy — can sit below
+        // terrain and would otherwise never be repaired. Endpoints (start,
+        // goal) are commanded positions and left untouched.
+        for (size_t k = 1; k + 1 < simple_path.size(); ++k) {
+            Vector3d &v = simple_path[k];
+            const float h = terrain_height_(v.x(), v.y());
+            if (!std::isfinite(h)) continue;
+            const double need = double(h) + obstacle_margin_;
+            if (v.z() < need) {
+                v.z() = need + 0.02;
+                ++lifted;
+                changed = true;
+            }
+        }
+        for (size_t k = 0; k + 1 < simple_path.size(); ++k) {
+            const Vector3d &p = simple_path[k];
+            const Vector3d &q = simple_path[k + 1];
+            const double len = (q - p).norm();
+            // Shared with the final terrain gate. Walking coarser than the
+            // judge is what let this sweep report "clean" on a route the
+            // judge then refused 30 cm short.
+            const int n =
+                std::max(1, (int)std::ceil(len / sweep_pitch));
+            double worst_pen = 0.0;
+            Vector3d worst_pt;
+            for (int s = 1; s < n; ++s) {
+                const Vector3d x = p + (double(s) / n) * (q - p);
+                const float h = terrain_height_(x.x(), x.y());
+                if (!std::isfinite(h)) continue;
+                const double pen =
+                    (double(h) + obstacle_margin_) - x.z();
+                if (pen > worst_pen) {
+                    worst_pen = pen;
+                    worst_pt = x;
+                    worst_pt.z() = double(h) + obstacle_margin_ + 0.02;
+                }
+            }
+            if (worst_pen > 0.0) {
+                simple_path.insert(simple_path.begin() + k + 1, worst_pt);
+                ++lifted;
+                ++k;  // the lifted vertex itself is clear; recheck halves next round
+                changed = true;
+            }
+        }
+        // (2) Inner-chord terrain check. The MINCO back-end smooths ACROSS
+        // kept corners along the mid->mid "inner chord", which can dip
+        // below a ridge even when both adjacent SEGMENTS are clear. The
+        // corner-cut guard earlier ran on the pre-sweep polyline, so
+        // sweep-inserted lift vertices never got this check. Lift the worst
+        // inner-chord clearance violation in place (same fixpoint as above).
+        for (size_t k = 1; k + 1 < simple_path.size(); ++k) {
+            const Vector3d m0 = 0.5 * (simple_path[k - 1] + simple_path[k]);
+            const Vector3d m1 = 0.5 * (simple_path[k] + simple_path[k + 1]);
+            const double len = (m1 - m0).norm();
+            const int n =
+                std::max(1, (int)std::ceil(len / sweep_pitch));
+            double worst_pen = 0.0;
+            Vector3d worst_pt;
+            for (int s = 0; s <= n; ++s) {
+                const Vector3d x = m0 + (double(s) / n) * (m1 - m0);
+                const float h = terrain_height_(x.x(), x.y());
+                if (!std::isfinite(h)) continue;
+                const double pen = (double(h) + obstacle_margin_) - x.z();
+                if (pen > worst_pen) {
+                    worst_pen = pen;
+                    worst_pt = x;
+                    worst_pt.z() = double(h) + obstacle_margin_ + 0.02;
+                }
+            }
+            if (worst_pen > 0.0) {
+                simple_path.insert(simple_path.begin() + k + 1, worst_pt);
+                ++lifted;
+                ++k;
+                changed = true;
+            }
+        }
+        if (!changed) { clean_exit = true; break; }
+    }
+    // [FM2-FINAL-CLEAR] carried to the whole-path gate below, which is the
+    // only place that can say whether the sweep's outcome was enough.
+    dbg_lifted_ = lifted;
+    dbg_sweep_clean_ = clean_exit;
+    RCLCPP_INFO(rclcpp::get_logger("astar"),
+                "[FM2-SWEEP] lifted=%d cap=%d clean_exit=%s pts=%zu",
+                 lifted, kLiftCap, clean_exit ? "true" : "false",
+                 simple_path.size());
+    if (log_manager_) {
+        if (!clean_exit && lifted > 0) {
+            // Exited via the round cap or kLiftCap while still finding
+            // work — a residual sub-chord clearance violation may remain.
+            // Distinct
+            // from the clean-convergence info line so it is greppable.
+            log_manager_->warnf(
+                "[A* SHORTCUT] terrain sweep hit its cap (lifted=%d, "
+                "cap=%d) with work remaining — residual clearance violation "
+                "possible; optimizer terrain term is the remaining guard",
+                lifted, kLiftCap);
+        } else if (lifted > 0) {
+            log_manager_->infof(
+                "[A* SHORTCUT] terrain sweep lifted %d vertex(es) over "
+                "sub-chord ridges (sweep_pitch %.3f u, dem_cell_floor %.3f u)",
+                lifted, sweep_pitch, terrain_stride_floor_);
+        }
+    }
+    return dbg_lifted_;
+}
+
 vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_size, Vector3d start_pt, Vector3d end_pt, int drone_id, bool is_takeoff_leg){
 
     if (log_manager_) {
@@ -712,12 +865,27 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
         // with { start, end }, discarding here turned a burrowed detour into
         // a straight segment through the same wall, which is worse.
         Eigen::Vector3d hit;
-        // Start relief only: the aircraft is where the mission says it is,
-        // and it is allowed to be below the terrain margin for a bounded
-        // stretch while it climbs away. Obstacles get no relief, the goal
-        // gets none, and the shortfall must end inside this arc.
-        if (polylineClear(fm2_path, &hit,
-                          is_takeoff_leg ? startTerrainReliefArc() : 0.0)) {
+        // RAW SEED: obstacles only. This is the split commit 9895396 made and
+        // that the abort merge (86b4eac) undid by accident — mmp_dev branched
+        // on 08-13, the split landed on 08-14, so taking "their" side of this
+        // hunk silently reverted a later fix. Restored here.
+        //
+        // Why the split: the raw geodesic is a SEED, not a route. The
+        // simplifier (:860+) and the terrain-lift sweep (:1206-1338, which
+        // raises interior vertices and inserts climb vertices) exist precisely
+        // to recover AGL, and both run AFTER this point. Judging terrain here
+        // throws away a path that would have been clean two stages later —
+        // measured then as "the r5 probe stopped planning entirely".
+        //
+        // Geometry is different: no lift gets a route out of a solid volume,
+        // so obstacles still refuse at the raw stage. Terrain is judged on the
+        // FINAL path at :1443, with the takeoff relief arc.
+        //
+        // The refusal here is TERMINAL under the shipped front_end: fm2 —
+        // path_manager.cpp:1424 skips the A* pool allocation in fm2 mode, so
+        // the else-branch below cannot produce a route. That is why the
+        // criterion has to be the one no later stage can fix.
+        if (polylineObstacleClear(fm2_path, &hit)) {
             fm2_done = true;
         } else if (log_manager_) {
             log_manager_->errorf(
@@ -1203,130 +1371,8 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
     // point to
     // terrain + margin as a new climb vertex, repeating until clean (same
     // spirit as the corner-cut guard's re-insertion loop above).
-    if (terrain_height_) {
-        int lifted = 0;
-        // Hard cap on total lift/insert operations: every full_route vertex is
-        // preserved 1:1 into clean_path anchors (STEP 3 never merges), so an
-        // unbounded sweep would inflate piece_num_/variable_num_ and the
-        // optimizer's per-iteration cost. Real DEMs converge in a handful of
-        // lifts (bilinear cells have no sub-cell features — measured 2 lifts
-        // on a 44 km ridge-grazing terrain-following route); the cap only
-        // guards pathological
-        // geometry. A capped exit with work remaining is WARNed below — the
-        // optimizer terrain term is the remaining guard.
-        //
-        // NO fixed round cap: termination is guaranteed by the lift cap alone.
-        // In-place lifts are once-per-vertex (v.z is set to need+0.02 at FIXED
-        // (x,y), so the same vertex can never re-trigger), and every other
-        // change INSERTS a vertex, bounded by kLiftCap. The old 8-round cap
-        // bound FIRST on guard-dense corner chains (observed: terrain-following
-        // stress case exited at 8 rounds with only lifted=14, leaving a
-        // terrain-overlapping seed that the optimizer then rode into a -0.543
-        // goal-approach collision).
-        // kRoundSafety is a pure backstop against an unforeseen cycle.
-        constexpr int kLiftCap = 512;
-        constexpr int kRoundSafety = 256;
-        bool clean_exit = false;
-        for (int round = 0; round < kRoundSafety && lifted < kLiftCap; ++round) {
-            bool changed = false;
-            // (0) Lift KEPT interior vertices that themselves overlap terrain.
-            // The
-            // per-segment sweep below only samples interior points (s=1..n-1),
-            // so a vertex retained by chordOk's b<=a+1 fast path — which returns
-            // true WITHOUT calling chordOccRisk/checkOccupancy — can sit below
-            // terrain and would otherwise never be repaired. Endpoints (start,
-            // goal) are commanded positions and left untouched.
-            for (size_t k = 1; k + 1 < simple_path.size(); ++k) {
-                Vector3d &v = simple_path[k];
-                const float h = terrain_height_(v.x(), v.y());
-                if (!std::isfinite(h)) continue;
-                const double need = double(h) + obstacle_margin_;
-                if (v.z() < need) {
-                    v.z() = need + 0.02;
-                    ++lifted;
-                    changed = true;
-                }
-            }
-            for (size_t k = 0; k + 1 < simple_path.size(); ++k) {
-                const Vector3d &p = simple_path[k];
-                const Vector3d &q = simple_path[k + 1];
-                const double len = (q - p).norm();
-                const int n =
-                    std::max(1, (int)std::ceil(len / terrain_stride_floor_));
-                double worst_pen = 0.0;
-                Vector3d worst_pt;
-                for (int s = 1; s < n; ++s) {
-                    const Vector3d x = p + (double(s) / n) * (q - p);
-                    const float h = terrain_height_(x.x(), x.y());
-                    if (!std::isfinite(h)) continue;
-                    const double pen =
-                        (double(h) + obstacle_margin_) - x.z();
-                    if (pen > worst_pen) {
-                        worst_pen = pen;
-                        worst_pt = x;
-                        worst_pt.z() = double(h) + obstacle_margin_ + 0.02;
-                    }
-                }
-                if (worst_pen > 0.0) {
-                    simple_path.insert(simple_path.begin() + k + 1, worst_pt);
-                    ++lifted;
-                    ++k;  // the lifted vertex itself is clear; recheck halves next round
-                    changed = true;
-                }
-            }
-            // (2) Inner-chord terrain check. The MINCO back-end smooths ACROSS
-            // kept corners along the mid->mid "inner chord", which can dip
-            // below a ridge even when both adjacent SEGMENTS are clear. The
-            // corner-cut guard earlier ran on the pre-sweep polyline, so
-            // sweep-inserted lift vertices never got this check. Lift the worst
-            // inner-chord clearance violation in place (same fixpoint as above).
-            for (size_t k = 1; k + 1 < simple_path.size(); ++k) {
-                const Vector3d m0 = 0.5 * (simple_path[k - 1] + simple_path[k]);
-                const Vector3d m1 = 0.5 * (simple_path[k] + simple_path[k + 1]);
-                const double len = (m1 - m0).norm();
-                const int n =
-                    std::max(1, (int)std::ceil(len / terrain_stride_floor_));
-                double worst_pen = 0.0;
-                Vector3d worst_pt;
-                for (int s = 0; s <= n; ++s) {
-                    const Vector3d x = m0 + (double(s) / n) * (m1 - m0);
-                    const float h = terrain_height_(x.x(), x.y());
-                    if (!std::isfinite(h)) continue;
-                    const double pen = (double(h) + obstacle_margin_) - x.z();
-                    if (pen > worst_pen) {
-                        worst_pen = pen;
-                        worst_pt = x;
-                        worst_pt.z() = double(h) + obstacle_margin_ + 0.02;
-                    }
-                }
-                if (worst_pen > 0.0) {
-                    simple_path.insert(simple_path.begin() + k + 1, worst_pt);
-                    ++lifted;
-                    ++k;
-                    changed = true;
-                }
-            }
-            if (!changed) { clean_exit = true; break; }
-        }
-        if (log_manager_) {
-            if (!clean_exit && lifted > 0) {
-                // Exited via the round cap or kLiftCap while still finding
-                // work — a residual sub-chord clearance violation may remain.
-                // Distinct
-                // from the clean-convergence info line so it is greppable.
-                log_manager_->warnf(
-                    "[A* SHORTCUT] terrain sweep hit its cap (lifted=%d, "
-                    "cap=%d) with work remaining — residual clearance violation "
-                    "possible; optimizer terrain term is the remaining guard",
-                    lifted, kLiftCap);
-            } else if (lifted > 0) {
-                log_manager_->infof(
-                    "[A* SHORTCUT] terrain sweep lifted %d vertex(es) over "
-                    "sub-chord ridges (pitch %.2f u)",
-                    lifted, terrain_stride_floor_);
-            }
-        }
-    }
+    // Terrain repair, at the SAME stride the final gate will judge with.
+    sweepTerrainClearance(simple_path);
 
     // Post-sweep near-pair MERGE (terrain-safe replacement of the old delete
     // filter that ran here). The sweep may insert a lift vertex within 0.3 u
@@ -1418,6 +1464,62 @@ vector<Vector3d> PathSearcher::astarSearchAndGetSimplePath(const double step_siz
                            drone_id, min_z, max_z, max_z - min_z);
     }
 
+    // [FM2-OCCUPANCY] THE FINAL PATH, judged whole. Everything that could
+    // repair it has run by now: the shortcut, and the terrain-lift sweep that
+    // raises and inserts vertices to recover ground clearance. What is left
+    // is what the optimizer will be seeded with and what the aircraft will
+    // approximately fly, so this is where "is it clear" is a fair question.
+    //
+    // Both kinds are refused here — terrain proximity and obstacles — with
+    // the takeoff allowance applying only to a search that begins where the
+    // aircraft is. The sweep above can hit its own caps and give up with a
+    // warning; this is what turns that warning into a refusal instead of a
+    // route nobody checked.
+    {
+        Eigen::Vector3d bad;
+        if (!polylineClear(simple_path, &bad,
+                           is_takeoff_leg ? startTerrainReliefArc() : 0.0)) {
+            // [FM2-FINAL-CLEAR] Quantified, and on a channel this environment
+            // actually shows. "The final route is not clear" is not
+            // actionable; which KIND, how far along, and by how much is.
+            {
+                const bool terr = terrainClearanceShort(bad);
+                const bool obst = obstacleBlocked(bad);
+                double arc = 0.0;
+                for (size_t i = 0; i + 1 < simple_path.size(); ++i) {
+                    const double L = (simple_path[i + 1] - simple_path[i]).norm();
+                    if ((simple_path[i] - bad).norm() +
+                            (simple_path[i + 1] - bad).norm() <= L + 1e-6) {
+                        arc += (simple_path[i] - bad).norm();
+                        break;
+                    }
+                    arc += L;
+                }
+                const float th = terrain_height_ ? terrain_height_(bad.x(), bad.y())
+                                                 : -1e30f;
+                const double agl = bad.z() - static_cast<double>(th);
+                RCLCPP_ERROR(rclcpp::get_logger("astar"),
+                    "[FM2-FINAL-CLEAR] kind=%s arc=%.3f relief_end=%.3f "
+                    "point=(%.2f,%.2f,%.3f) terrain_z=%.3f agl=%.3f "
+                    "required=%.3f deficit=%.3f "
+                    "sweep_pitch=%.3f gate_pitch=%.3f "
+                    "lifted=%d sweep_clean=%s pts=%zu",
+                    terr ? "TERRAIN" : (obst ? "OBSTACLE" : "OUTSIDE"),
+                    arc, is_takeoff_leg ? startTerrainReliefArc() : 0.0,
+                    bad.x(), bad.y(), bad.z(), (double)th, agl,
+                    obstacle_margin_, obstacle_margin_ - agl,
+                    dbg_sweep_pitch_, dbg_gate_pitch_, dbg_lifted_, 
+                    dbg_sweep_clean_ ? "true" : "false", simple_path.size());
+            }
+            if (log_manager_)
+                log_manager_->errorf(
+                    "[FM2] the FINAL route is not clear at (%.2f, %.2f, %.2f) "
+                    "— terrain lift could not recover it, or it meets an "
+                    "obstacle; returning NO path",
+                    bad.x(), bad.y(), bad.z());
+            return {};
+        }
+    }
     return simple_path;
 }
 

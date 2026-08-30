@@ -23,6 +23,18 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# [PA-2] Opt-in UndefinedBehaviorSanitizer build.
+#   colcon build --cmake-args -DMMP_SANITIZE=ON \
+#     --build-base build_ubsan --install-base install_ubsan
+# Default OFF, so the Release regression measures exactly what it did before:
+# mixing sanitizer objects into the normal tree would silently change the
+# thing every other test is calibrated against.
+option(MMP_SANITIZE "Build with UndefinedBehaviorSanitizer" OFF)
+if(MMP_SANITIZE)
+  add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=undefined)
+endif()
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)

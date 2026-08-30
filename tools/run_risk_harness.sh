@@ -22,7 +22,13 @@ set +u
 [ -f /opt/ros/humble/setup.bash ] && source /opt/ros/humble/setup.bash
 [ -f "$WS/install/setup.bash" ] && source "$WS/install/setup.bash"
 set -u
-BIN="$WS/install/path_manager/lib/path_manager/risk_scenarios_test"
+# $2 lets CMake name the binary of the tree under test; see the note in
+# run_chain_variants.sh for why resolving it from $WS/install is wrong when
+# ctest runs over a separate build tree.
+BIN="${2:-}"
+if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+  BIN="$WS/install/path_manager/lib/path_manager/risk_scenarios_test"
+fi
 FIXTURE="$WS/src/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml"
 [ -x "$BIN" ] || { echo "harness not built: $BIN (colcon build --packages-up-to path_manager)" >&2; exit 2; }
 [ -f "$FIXTURE" ] || { echo "fixture missing: $FIXTURE" >&2; exit 2; }
@@ -31,7 +37,10 @@ FIXTURE="$WS/src/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml"
 # full alpha sweep {0.1,0.3,1.0,3.0,10.0} x fm2 front-end. cwd is pinned to the
 # workspace root so the relative default inside the binary would also resolve.
 cd "$WS"
+# A literal empty argument is dropped by ctest, which would shift $2 into $1
+# and make the binary path a tee target. NONE names "no outfile" explicitly.
 OUT="${1:-}"
+[ "$OUT" = "NONE" ] && OUT=""
 if [ -n "$OUT" ]; then
   "$BIN" "$FIXTURE" | tee "$OUT"
 else

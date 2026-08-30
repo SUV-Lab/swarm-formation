@@ -5,14 +5,21 @@
     #  - all coords/reach in FRAME UNITS (1 unit = 100 m)
     #  - reach: horizontal semi-axis Rh. The planner derives
     #           Rv = manager/risk_vertical_ratio * Rh and evaluates
-    #           q^2 = rho^2/Rh^2 + dz^2/Rv^2,
-    #           moat = peak * (1-q)^2 for q < 1, zero outside.
-    #           Terrain LOS visibility multiplies this base field.
-    #  - peak: MUST be in (0, 1]. Values > 1 saturate against the
-    #          1-1e-3 cap over most of the zone, flattening the moat
-    #          into a gradient-free core (avoidance shaping is lost;
-    #          only the barrier still acts). The pre-V3 Gaussian
-    #          format used peak=100 "risk levels" — do not copy those.
+    #           q^2 = rho^2/Rh^2 + dz^2/Rv^2. Risk is maximal at the
+    #           centre, decreases monotonically outward, and is exactly
+    #           zero at and beyond q = 1. Terrain LOS visibility
+    #           multiplies this base field.
+    #           The CURRENT IMPLEMENTATION uses a quadratic decay
+    #           (mmp::risk::shape, path_planner/risk_shape.h). That is an
+    #           implementation detail, NOT a contract — do not build
+    #           anything on the exponent. Audited 2026-08-19; the
+    #           optimizer used a cubic decay until 47ce135.
+    #  - peak: MUST be in (0, 1]. A zone outside that range is REJECTED,
+    #          and one bad zone rejects the WHOLE set: a partially loaded
+    #          set would silently delete a hazard from the field. 0,
+    #          negative, > 1, NaN and Inf all fail. The pre-V3 Gaussian
+    #          format used peak=100 "risk levels" — those are now refused
+    #          rather than saturated.
     #
     # NOTE: this file is NOT loaded by path_manager.launch.py — zones
     # normally arrive at runtime via /mission/risk_zones (RViz
