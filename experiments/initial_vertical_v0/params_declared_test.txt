@@ -1,0 +1,177 @@
+# v0 파라미터 매니페스트 — 항목마다 출처 등급을 붙인다.
+#
+#   DECLARED           생산 계약값. 생산 설정과 일치해야 한다.
+#   DECLARED_TEST      이 실험이 선언한 시험값. **실제 플랫폼 값이 아니다.**
+#   MEASURED_DIGITIZED 공개 문헌의 그림에서 읽은 값 (판독 오차를 함께 적는다)
+#   SCALED_PUBLIC      공개 문헌의 무차원 형상을 스케일한 값 (출처·배율 명시)
+#   ESTIMATED          공개 방법으로 추정한 값 (방법을 함께 적는다)
+#   UNKNOWN            미상. 필수인데 UNKNOWN 이면 그 실험은 fail-closed.
+#
+# 임의 값을 숨겨 넣지 않는다. 이 파일에 없는 수는 코드에도 없다.
+#
+# ─────────────────────────────────────────────────────────────
+# 시험·인터페이스 검증용 기준 형상: NACA TR 1096 (NTRS 19930092137)
+# **실제 기체 형상으로 확정한 것이 아니다.** 배관과 계약을 검증할
+# 대상이며, 실기 형상 자료가 오면 교체된다.
+# ─────────────────────────────────────────────────────────────
+# 권리: NTRS `copyright.determinationType` = GOV_PUBLIC_USE_PERMITTED,
+#       `distribution` = PUBLIC, exportControl NO/ear NO/itar NO.
+#       2026-08-15 확인, https://ntrs.nasa.gov/api/citations/19930092137
+#
+# 중립성: 문서 본문에 제한 도메인 용어 0건. 스스로를 부품 교체식 일반
+#         연구 모델로 규정한다 — "designed to permit tests of the wing
+#         alone, fuselage alone, or the fuselage in combination with any
+#         of several tail configurations".
+#
+# 스케일: 원형 날개면적 324 in² = 0.209032 m². S = 1.0 m² 로 만드는
+#         **선형** 배율 k = sqrt(1.0/0.209032) = 2.187227.
+#         무차원량(종횡비·테이퍼비·후퇴각·S_H/S_W·l/c̄)은 불변.
+#         검산: b = 36 in × 0.0254 × k = 2.000000 m, AR = b²/S = 4.000.
+#
+# 형상 선택: 꼬리날개 H2 · 동체 F2 — 계열의 **가운데**를 택했다.
+#         H1/H2/H3 = S_H/S_W 0.10/0.20/0.30, F1/F2/F3 = l/c̄ 1.363/1.817/2.726.
+#         시험이 통과하도록 고르지 않기 위해 가운데로 고정한다. 바꾸려면
+#         여기서 바꾸고 그 사실을 보고에 적는다.
+#
+# name                    value        grade          note
+# ── 날개 (TR 1096 표 I) ──────────────────────────────────────
+wing_area_m2              1.0          DECLARED       생산 wing_area_m2 와 동일 (강제)
+wing_span_m               2.000000     SCALED_PUBLIC  36 in × k
+wing_mac_m                0.510556     SCALED_PUBLIC  9.19 in × k
+wing_aspect_ratio         4.0          SCALED_PUBLIC  무차원 — 표 I 그대로
+wing_taper_ratio          0.6          SCALED_PUBLIC  〃
+wing_sweep_c4_deg         45.0         SCALED_PUBLIC  〃
+# 날개 익형은 NACA 65A008 (표 I). 두께비는 계수 산출의 입력이지
+# JSBSim 기하 항목이 아니므로 수치로만 남긴다.
+wing_thickness_ratio      0.08         SCALED_PUBLIC  65A008 의 08
+# ── 수평 꼬리날개 H2 (표 I) ──────────────────────────────────
+htail_area_m2             0.200000     SCALED_PUBLIC  S_H/S_W 0.20 × 1.0
+htail_span_m              0.894400     SCALED_PUBLIC  16.10 in × k
+htail_mac_m               0.228260     SCALED_PUBLIC  4.11 in × k
+htail_aspect_ratio        4.0          SCALED_PUBLIC  무차원 — 날개와 같음
+htail_taper_ratio         0.6          SCALED_PUBLIC  〃
+htail_sweep_c4_deg        45.0         SCALED_PUBLIC  〃
+htail_thickness_ratio     0.08         SCALED_PUBLIC  65A008
+htail_incidence_deg       0.0          SCALED_PUBLIC  전 시험에서 0° 고정 (본문 p.2)
+# ── 동체 F2 (표 I · 그림 3) ──────────────────────────────────
+fuse_length_m             2.222222     SCALED_PUBLIC  40 in × k
+fuse_diameter_m           0.333333     SCALED_PUBLIC  6 in × k (길이÷세장비 6.67)
+fuse_fineness_ratio       6.67         SCALED_PUBLIC  무차원 — 표 I
+# ── 모멘트 기준 · 꼬리 거리 ──────────────────────────────────
+# TR 1096 원문(p.1-2): "moment data have been transferred from the
+# mounting point to the **25-percent point of the wing mean aerodynamic
+# chord**." CG 를 그 점에 두어 Cm 이 CG 둘레의 값이 되게 한다.
+nose_to_mac_c4_m          1.111111     SCALED_PUBLIC  20 in × k (그림 3, F2)
+tail_arm_m                0.927837     SCALED_PUBLIC  16.70 in × k
+tail_arm_over_mac         1.817200     SCALED_PUBLIC  무차원 — 스케일 불변
+# 수평꼬리 부피계수 V_H = (S_H/S_W)(l/c̄). eq (3) 이 그대로 쓰는 조합.
+htail_volume_coeff        0.363440     SCALED_PUBLIC  0.20 × 1.8172
+# ── 질량 · 관성 · CG ─────────────────────────────────────────
+# **공력 스케일링으로 정해지지 않는다.** TR 1096 은 풍동 모델이라
+# 실기 질량배치를 주지 않는다. 별도 선언값으로 남긴다.
+mass_kg                   1300.0       DECLARED_TEST  ADR-0002 중립 baseline
+# ── 관성은 근거 없는 시험값이다 ──────────────────────────────
+# 세장 동체 시절의 "형상 미정 — 임의 시험값" 이고, 기준 형상을 TR 1096
+# 스케일로 바꿀 때 함께 갱신하지 않았다. 실제 기체의 질량배치 자료가
+# 없으므로 **참값도, 참값의 범위도 알지 못한다.**
+#
+# 이전 판에서 회전반경 비(k/L)의 통상 범위를 들어 "형상 정합 범위
+# 401~786 kg·m²" 와 "약 7배 불일치" 를 적었으나 **철회한다.** 그 범위는
+# 출처 없는 경험값이라 정합 판정의 근거가 될 수 없다.
+#
+# 참고로 남기는 무차원량(판정이 아니라 기술): 이 값들로 계산한
+# Iyy/(m c̄²) 는 requirements_sweep --attitude 가 출력한다. 기준길이를
+# 명시하지 않은 무차원 관성은 비교 불가이므로 c̄ 를 함께 적는다.
+ixx_kgm2                  900.0        DECLARED_TEST  근거 없는 시험값
+iyy_kgm2                  4200.0       DECLARED_TEST  〃
+izz_kgm2                  4400.0       DECLARED_TEST  〃
+# ── 격리: 원통 동체 감사의 기준량 (body_audit_*) ─────────────
+# **더 이상 6DOF 기체의 기준 형상도, 공력 기준면적도 아니다.**
+# 회수 감사(experiments/aero_recovery)의 원통 공식이 쓰는 양이며
+# 여기 남겨 두는 것은 이력 보존 목적이다. 하니스는 읽지 않는다.
+body_audit_d_ref_m        0.60         DECLARED_TEST  회수 감사 기준 지름
+body_audit_s_ref_m2       0.2827       DECLARED_TEST  = pi d²/4 (동체 단면적)
+body_audit_length_m       6.0          DECLARED_TEST  회수 감사 기준 길이
+body_audit_cg_frac        0.45         DECLARED_TEST  회수 감사 CG 비
+# ── 제어 권한 ────────────────────────────────────────────────
+# 제어면 효율(Cm_de)이 여전히 UNKNOWN 이므로 계수를 지어내는 대신
+# **가용 제어 모멘트**를 직접 선언한다. 실제 제어 가능성 주장에는
+# Cm_de 와 액추에이터 한계가 따로 필요하다.
+pitch_moment_max_nm       9000.0       DECLARED_TEST  제어면 효율 미상
+thrust_max_n              3200.0       DECLARED_TEST  ADR-0002 baseline (T/W=0.25)
+# ── 자세 제어기 이득 — 설계 선택이므로 선언한다 ──────────────
+ctrl_alpha_cmd_max_deg    20.0         DECLARED_TEST  받음각 명령 포화
+ctrl_k_gamma              0.5          DECLARED_TEST  gamma 오차 -> alpha 명령
+ctrl_kp_att_nm_per_rad    40000.0      DECLARED_TEST  자세 비례
+ctrl_kd_att_nms_per_rad   20000.0      DECLARED_TEST  각속도 미분 (zeta 0.77)
+# ── 초기 수직 PVA ────────────────────────────────────────────
+alt_init_m                2000.0       DECLARED_TEST  실험 조건
+speed_init_mps            230.0        DECLARED_TEST  ADR-0003 §3 상한
+gamma_target_deg          20.0         DECLARED_TEST  ADR-0003 §2-1 기동 범위
+# ── 인계 판정 임계 — **실험 초깃값**. ADR-0001 기각사유 6 에 따라
+#    이 문서에서 동결하지 않는다. ───────────────────────────────
+gate_gamma_tol_deg        2.0          DECLARED_TEST  실험 초깃값
+gate_alpha_max_deg        12.0         DECLARED_TEST  〃
+gate_beta_max_deg         3.0          DECLARED_TEST  〃
+gate_att_err_deg          5.0          DECLARED_TEST  〃
+gate_rate_max_dps         5.0          DECLARED_TEST  〃
+gate_ctrl_margin_frac     0.20         DECLARED_TEST  〃
+gate_dwell_s              1.0          DECLARED_TEST  〃
+# ── 중기 유효영역은 여기 두지 않는다 ─────────────────────────
+# wing_area·thrust_max·CL 한계·n_max·q_max·gamma_max 는 생산 3DOF 설정이
+# 정의한다. 시험 매니페스트로 덮어쓰면 측정 대상이 바뀐다. 하니스는
+# 생산 YAML 에서 읽고 실행할 때 전부 출력한다.
+#
+# ── 공력 계수 — 아직 미상 ────────────────────────────────────
+# TR 1096 은 M = 0.13 단일 마하다(Re 0.71e6, 날개 MAC 기준). 우리 대역
+# 0.3585-0.7000 안의 실측은 세 문서 어디에도 없다. 저속값을 대역까지
+# 근거 없이 복사하지 않는다.
+#
+# **합을 단독으로 저장하지 않는다**: TR 1188 의 대역 내 유일 그림과
+# NTRS 20150018562 의 계측은 전부 (Cmq + Cma_dot) 합이다. 분리 근거가
+# 없으면 그 마하 구간은 UNKNOWN 으로 남긴다. TR 1096 만이 Cmq 를
+# **단독으로** 다룬다 — "the total damping is determined by a combination
+# of the rotary derivative C_mq, which is considered herein, and the
+# acceleration derivative C_m_alphadot" (p.20).
+cl_alpha_per_rad          UNKNOWN      UNKNOWN        대역 내 공개 실측 미회수
+cm_alpha_per_rad          UNKNOWN      UNKNOWN        〃
+# ── 대역 내 Cm_q — UNKNOWN 유지. 미구현이 아니라 판정이다. ───
+# 회수는 됐다. 다만 회수된 것을 대역으로 옮길 근거가 없다:
+#
+#  · M=0.13 실측은 **전체 형상**(W+F2+V+H2) 것이고 대역 밖이다
+#  · 두 실측의 차이 -3.48 은 수평꼬리 단독이 아니라 **V+H2 구성 증분**
+#    이다 — 꼬리 off 기준 W+F2 에 수직꼬리가 없다. 여기 CLα_H 의 마하
+#    보정을 통째로 걸면 섞인 수직꼬리 기여도 같은 비율로 변한다고
+#    가정하는 셈인데 그 근거가 없다
+#  · 식 (3) 은 우리 형상에서 실측과 17.5% 어긋난다(아래)
+#
+# 활성화 조건은 둘 중 하나다:
+#  (a) 수직꼬리·수평꼬리 기여의 분리 근거
+#  (b) 전체 형상의 **대역 내** 자료
+cm_q_in_band              UNKNOWN      UNKNOWN        활성화 조건 미충족
+# ── 회수된 M=0.13 기준점 (대역 밖 — 보존용) ──────────────────
+# 무차원화 규약 q c̄/(2V), c̄ 는 날개 MAC. 원문 p.2.
+# 판독 오차는 **판독만** 이다 — 형상 오차·레이놀즈수 차이·수직꼬리
+# 오염은 들어 있지 않다. 전체 모델 불확실성으로 읽으면 안 된다.
+anchor_mach               0.13         MEASURED_DIGITIZED  TR 1096 단일 시험 마하
+anchor_reynolds           0.71e6       MEASURED_DIGITIZED  날개 MAC 기준
+anchor_cm_q_whole         -5.48        MEASURED_DIGITIZED  W+F2+V+H2, fig 9(b)/10(a), ±0.05
+anchor_cm_q_wing_fuse     -2.00        MEASURED_DIGITIZED  W+F2 (수직꼬리 없음), ±0.10
+anchor_cl_alpha_htail_deg 0.054        MEASURED_DIGITIZED  본문 p.19 — fig 12/13 캡션의 0.54 는 오타
+# ── 폐쇄 진단 (기록) ─────────────────────────────────────────
+# 식 (3) 이 실측 구성 증분을 재현하는지 독립 비교한 결과. 닫히지 않는다.
+#   실측 증분   -3.48   (= -5.48 - (-2.00); 독립 확인 fig 12(b) 기호 -3.47)
+#   식 (3)      -4.088  (= -2 x 3.0942 x 0.20 x 1.8173^2, 다운워시 항 1.0)
+#   잔차        -0.608
+#   허용폭       0.1118 (판독 오차만)
+#   → 17.5% 과대예측
+# 원문의 "d eps_r/d(ql/V) 는 모든 꼬리 위치에서 사실상 0" 은 **앙상블
+# 진술**이고 개별 형상에서는 흩어진다: H1 비 0.98 / H2 0.85 / H3 1.07.
+# 하필 우리가 고른 H2 가 가장 안 맞는다.
+#
+# 0.85 경험 보정과 H1/H3 로의 형상 변경은 **둘 다 기각**한다. 전자는
+# 근거 없는 보정을 계수에 녹이는 것이고, 후자는 시험이 통과하도록
+# 형상을 고르는 것이다.
+#
+# 식 (3) 의 남은 역할은 **수평꼬리 형상 민감도**뿐이다. 실측 절대값
+# 보정에도, 전체 형상의 마하 외삽에도 쓰지 않는다.

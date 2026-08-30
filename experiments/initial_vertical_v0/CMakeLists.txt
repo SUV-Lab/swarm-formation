@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.16)
+project(initial_vertical_v0 CXX)
+set(CMAKE_CXX_STANDARD 17)
+if(NOT DEFINED JSBSIM_ROOT)
+  message(FATAL_ERROR "-DJSBSIM_ROOT=<inst dir> 필요")
+endif()
+if(NOT DEFINED MMP_DYN_ROOT)
+  message(FATAL_ERROR "-DMMP_DYN_ROOT=<mmp_vehicle_dynamics 소스> 필요")
+endif()
+find_package(Eigen3 REQUIRED)
+add_executable(v0_harness v0_harness.cpp ${MMP_DYN_ROOT}/src/flight_dynamics.cpp)
+target_include_directories(v0_harness PRIVATE
+  ${JSBSIM_ROOT}/include/JSBSim ${MMP_DYN_ROOT}/include)
+target_link_directories(v0_harness PRIVATE ${JSBSIM_ROOT}/lib)
+target_link_libraries(v0_harness PRIVATE JSBSim Eigen3::Eigen)
+
+add_library(v0_aero STATIC v0_aero.cpp)
+target_include_directories(v0_aero PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(v0_aero_test v0_aero_test.cpp)
+target_link_libraries(v0_aero_test PRIVATE v0_aero)
+
+add_executable(requirements_sweep requirements_sweep.cpp
+               ${MMP_DYN_ROOT}/src/flight_dynamics.cpp)
+target_include_directories(requirements_sweep PRIVATE ${MMP_DYN_ROOT}/include)
+target_link_libraries(requirements_sweep PRIVATE Eigen3::Eigen)

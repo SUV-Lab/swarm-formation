@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<fdm_config name="v0_declared_test" version="2.0" release="ALPHA">
+
+ <fileheader>
+  <author>MMP project — non-production v0 harness model</author>
+  <description>
+   v0 초기 수직 구간 시험 기체. **NESC 검증 사례가 아니다.**
+
+   이 파일은 **템플릿**이다. 이중 골뱅이로 둘러싼 자리를
+   params_declared_test.txt 에서 하니스가 채워 넣고, 하나라도 남으면
+   실행을 멈춘다. JSBSim 의
+   inertia/* 속성은 전부 읽기 전용이므로(FGMassBalance.cpp:398-409)
+   실행 중 주입은 불가능하다 — 그래서 로드 전에 XML 을 만든다.
+
+   기준 형상은 NACA TR 1096 (NTRS 19930092137) 의 일반 연구 모델을
+   S = 1.0 m² 로 스케일한 것이다. 기준량은 날개면적·날개스팬·날개 MAC
+   이며, 모멘트 기준점은 원문대로 날개 MAC 의 25% 지점이다.
+
+   공력 계수는 아직 전부 0 이다. 대역 안 실측이 회수되지 않아
+   **지어내지 않는다.** 따라서 몸체축 힘은 추력뿐이고, 자세가 궤적을
+   바꾸는 경로도 추력 방향 전환 하나뿐이다. 여기서 나오는 궤적은
+   실제 항공기 궤적이 아니라 **추력·중력만의 궤적**이다.
+  </description>
+ </fileheader>
+
+ <metrics>
+  <wingarea unit="FT2"> @@S_REF_FT2@@ </wingarea>
+  <wingspan unit="FT" > @@SPAN_FT@@ </wingspan>
+  <chord    unit="FT" > @@CHORD_FT@@ </chord>
+  <location name="AERORP"   unit="IN"> <x>@@CG_X_IN@@</x> <y>0</y> <z>0</z> </location>
+  <location name="EYEPOINT" unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+  <location name="VRP"      unit="IN"> <x>0</x> <y>0</y> <z>0</z> </location>
+ </metrics>
+
+ <mass_balance>
+  <!-- 구조 좌표 원점은 기수. X 는 뒤쪽이 양이므로 CG x = cg_frac * length
+       — 회수 감사의 cg 정의(CG 에서 앞끝까지 / L)와 같은 방향이다. -->
+  <ixx unit="SLUG*FT2"> @@IXX_SLUGFT2@@ </ixx>
+  <iyy unit="SLUG*FT2"> @@IYY_SLUGFT2@@ </iyy>
+  <izz unit="SLUG*FT2"> @@IZZ_SLUGFT2@@ </izz>
+  <ixy unit="SLUG*FT2"> 0.0 </ixy>
+  <ixz unit="SLUG*FT2"> 0.0 </ixz>
+  <iyz unit="SLUG*FT2"> 0.0 </iyz>
+  <emptywt unit="LBS"> @@WEIGHT_LBS@@ </emptywt>
+  <location name="CG" unit="IN"> <x>@@CG_X_IN@@</x> <y>0</y> <z>0</z> </location>
+ </mass_balance>
+
+ <ground_reactions/>
+ <propulsion/>
+ <flight_control name="none"/>
+
+ <external_reactions>
+  <!-- 추력: 몸체 X. CG 에 작용시켜 모멘트 팔이 생기지 않게 한다. -->
+  <force name="thrust" frame="BODY" unit="LBS">
+   <function><property>v0/ctrl/thrust-lbs</property></function>
+   <location unit="IN"> <x>@@CG_X_IN@@</x> <y>0</y> <z>0</z> </location>
+   <direction><x>1.0</x><y>0.0</y><z>0.0</z></direction>
+  </force>
+  <!-- 자세 제어 모멘트. 속성 이름이 단위다 — 하니스가 lb·ft 로 준다. -->
+  <moment name="ctrl_pitch" frame="BODY" unit="LBSFT">
+   <function><property>v0/ctrl/pitch-moment-lbft</property></function>
+   <direction><x>0.0</x><y>1.0</y><z>0.0</z></direction>
+  </moment>
+ </external_reactions>
+
+ <aerodynamics>
+  <!-- 계수 전부 0. UNKNOWN 을 0 으로 **가정**한 것이 아니라, 지어내지
+       않기 위해 공력 항 자체를 뺀 것이다. 결과 해석의 상한이 여기서 정해진다. -->
+ </aerodynamics>
+
+</fdm_config>
