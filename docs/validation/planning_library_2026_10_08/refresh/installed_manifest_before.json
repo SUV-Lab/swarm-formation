@@ -1,0 +1,45 @@
+{
+  "created_utc": "2026-10-08T06:54:24.799133+00:00",
+  "files": [
+    {
+      "path": "/ws/install/path_manager/lib/path_manager/path_manager_node",
+      "sha256": "494644a07ec00bf5bc8a600436a9917aeb90fe436abe6a08c3b27747c338e025",
+      "bytes": 144041768
+    },
+    {
+      "path": "/ws/install/path_manager/lib/libpath_manager_lib.a",
+      "sha256": "2f6118a5ffc5add44c450e14b81f0072ebbab2a241049a4d3cc6282b99106d4e",
+      "bytes": 295561876
+    },
+    {
+      "path": "/ws/install/path_optimizer/lib/libpath_optimizer_lib.a",
+      "sha256": "699fae1c1baeaf7e6ff522a49c06e8f2498465c5989fb0b2af8729fc6512623a",
+      "bytes": 64985756
+    },
+    {
+      "path": "/ws/install/path_planner/lib/libpath_planner_sdf.a",
+      "sha256": "d52a1b031c448d5dda7f5c52577a88dbfc567ba4839e2ccc3fc689e666eab6fa",
+      "bytes": 86280
+    },
+    {
+      "path": "/ws/install/path_planner/lib/libpath_planner_lib.a",
+      "sha256": "9b279aa335a15fea6e82fc10fcacf57fe089d88e533cccf19372d970b8ecd117",
+      "bytes": 358082
+    },
+    {
+      "path": "/ws/install/mmp_vehicle_dynamics/lib/libmmp_vehicle_dynamics.a",
+      "sha256": "0a111608fdef56a2febd9d3f6904577719bf46ed773d448591d81f76e7aaeb00",
+      "bytes": 33542
+    },
+    {
+      "path": "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+      "sha256": "19ba60796a2107b970c10bc1a4857b32980415e7bf165e3d4d1e688a1a306455",
+      "bytes": 48303
+    },
+    {
+      "path": "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+      "sha256": "354fa396e3f7a8919b266c434d3345324659de5c513f4074655f3df8e8045ad6",
+      "bytes": 1567
+    }
+  ]
+}

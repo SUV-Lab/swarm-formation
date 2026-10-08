@@ -2,37 +2,24 @@
 #define SEGMENT_CHAIN_PLANNER_H
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <Eigen/Eigen>
 #include <rclcpp/rclcpp.hpp>
 #include "path_manager/path_manager.h"
 #include "path_manager/planning_result.h"
+#include "path_manager/flight_evaluation.h"
+#include "path_manager/committed_route.h"
 
 namespace path_manager {
 
-// [CHAIN] Stage 1 of the trajectory phase-split work: plan the whole mission
-// once (the baseline — today's single-shot behavior), sample junction
-// contracts (full PVA) from that trajectory at equal time fractions, then
-// re-plan each span with the SAME pipeline (fm2 + MINCO + L-BFGS), chaining
-// the runs through the contracts: run N's tail BC and run N+1's head BC are
-// the SAME prescribed state, so the stitched trajectory is C2 at every seam
-// by construction — the report only confirms it.
-//
-// The contracts are sampled from the baseline rather than synthesized
-// (level-cruise at the junction chord) because the baseline already knows
-// what the unsplit optimum does there — climbing, banking — and pinning that
-// exact state avoids manufacturing artificial level-outs at the seams. It
-// also makes the comparison honest: baseline and chain share their junction
-// states, so any shape difference between them is the split itself.
-//
-// Owned by the FSM, beside the state machine, not inside it: the state
-// machine decides WHEN to plan; this component knows only how to turn one
-// mission into N chained pipeline runs. PathManager stays a pure single-run
-// pipeline throughout.
-//
-// Scope (deliberate, stage 1): single-goal missions, sequential runs. On any
-// segment failure the baseline is restored and flown — the experiment
-// degrades to today's behavior, loudly.
+// Coordinates the existing baseline and route-authored planning modes.
+// RosPlanningBackend owns this component; ROS command adoption and execution
+// remain in ReplanFSM. Route mode commits one front-end route, prepares
+// boundary contracts, solves independent segments sequentially or in
+// parallel, then applies the existing retry/fallback and whole-flight gates.
+// Geometry, units, three-pass routing policy and phase semantics are shared
+// with PathManager rather than implemented again here.
 class SegmentChainPlanner {
 public:
   // inherit_route (default on): chained runs re-solve a SLICE of the
@@ -97,6 +84,10 @@ public:
   // coordinator calls them separately with the transition in between;
   // planRouteParallel is their no-transition composition. Public: the
   // coordinator and the harness drive these seams directly.
+  std::optional<CommittedRoute> commitRoute(
+      const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+      bool run_parallel);
+  // Compatibility output-parameter adapter; unchanged outputs on failure.
   bool commitRoute(const StartHead &head,
                    const std::vector<Eigen::Vector3d> &waypoints,
                    bool run_parallel, std::vector<Eigen::Vector3d> *route,
@@ -125,88 +116,17 @@ public:
                            // captures still describe these tags.
                            const std::vector<size_t> &route_edge_leg = {},
                            uint64_t route_epoch = 0);
-  // [S13] Which JUDGMENT applies to a span of the flight. The evaluator
-  // selects the model by this CONTRACT TYPE — never by parsing the display
-  // name (review point: labels are for output; a typo in a string must not
-  // silently change physics).
-  //   CRUISE     full cruise-model envelope judgment (today's audit)
-  //   TERMINAL   prescribed helix — judged under the cruise model today
-  //              (distinct kind so a dedicated judgment can attach later)
-  //   TRANSITION outside the cruise model BY DEFINITION: excluded from the
-  //              cruise envelope statistics and MEASURED only — its own
-  //              gate arrives with the transition evaluator (ADR-0002
-  //              freezes the v0 limits as experimental, not acceptance).
-  //              Terrain/zone/risk checks still apply: those are
-  //              model-agnostic.
-  enum class PhaseKind { CRUISE, TERMINAL, TRANSITION };
-  struct PhaseSpan {
-    double t_end{0.0};
-    PhaseKind kind{PhaseKind::CRUISE};
-    std::string name;  // display only
-  };
+  PlanResult planOverRoute(
+      const CommittedRoute &route, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
+      const ego_planner::TailBoundary &mission_tail,
+      const TransitionPrefix *transition = nullptr);
+  // Preserve existing caller names while sharing plain result types with
+  // the whole-mission library entry point.
+  using PhaseKind = path_manager::PhaseKind;
+  using PhaseSpan = path_manager::PhaseSpan;
+  using FlightVerdict = path_manager::FlightVerdict;
 
-  struct FlightVerdict {
-    bool evaluated{false};  // false: degenerate input, nothing was judged
-    bool clean{true};
-    bool underground{false};
-    bool no_cruise{false};
-    double viol_pct{0.0};
-    double util_peak{0.0};
-    // Zone policy of the DELIVERED flight, sampled at 0.1 s. hard counts
-    // contact with a HARD_AVOID volume only; soft counts crossings the
-    // 3-pass policy chose (SOFT_UNAVOIDABLE / _ENDPOINT / _FALLBACK) and is
-    // reported, not judged. policy_measurable is false when zones exist but
-    // the snapshot was stale or invalid — "could not check" must never read
-    // as "clear".
-    // zone_hard_n counts samples inside the volume the MISSION AUTHORED.
-    // zone_standoff_n counts samples in the 1.0-1.05 routing standoff shell
-    // outside it. Refusing the second was the original defect: it fails a
-    // flight half a kilometre clear of anything the mission declared, on the
-    // exact surface where the optimizer's only restoring force is zero by
-    // construction, so identical missions flipped between CLEAN and FAILED.
-    // The shell is reported and degrades; the authored volume refuses.
-    // WHY the flight is not clean, separately. `clean` collapses three
-    // different causes into one bit, and the shared degrade helper then
-    // reported all of them as STITCHED_ENVELOPE_BUDGET — so a flight whose
-    // ZONE POLICY could not be evaluated came back with a machine-readable
-    // reason about the airframe's limits, and the enum priority buried the
-    // reason that was true. The detail string carried both; nothing a
-    // program reads did.
-    bool envelope_bad{false};
-    int zone_hard_n{0};
-    int zone_standoff_n{0};
-    int zone_soft_n{0};
-    // [LEG-POLICY] Leg handovers examined, and how many of them sat inside an
-    // authored volume under the stricter of the two adjoining policies. A
-    // handover is an instant, so it is counted rather than timed — but it
-    // refuses the flight exactly as a sampled contact does.
-    int zone_junction_n{0};
-    int zone_junction_hard_n{0};
-    bool policy_measurable{true};
-    // The conditions no trajectory may ever fly with, whatever produced it.
-    // Envelope over-utilization is graded separately: it is a margin the
-    // caller may knowingly spend. Terrain is not, and neither is a hard
-    // zone — the whole point of HARD_AVOID is that it is not traded against
-    // distance, so it cannot be a DEGRADED reason the caller absorbs.
-    // An unjudgeable zone policy joins them for the same reason a rejected
-    // terrain map does: the flight was not checked, so it is not cleared.
-    bool unflyable() const {
-      return evaluated && (underground || no_cruise || zone_hard_n > 0 ||
-                           zone_junction_hard_n > 0 || !policy_measurable);
-    }
-    // The unflyable conditions this verdict actually MEASURED, without the
-    // "could not check" one. For callers whose mission shape puts zone
-    // policy outside what the snapshot can express at all — a multi-leg
-    // front end — !policy_measurable is a statement about scope rather than
-    // about the flight, and treating it as a hazard refused every such
-    // mission that had a zone anywhere. Those callers refuse on this and
-    // degrade on the missing scope, so "we did not check" still never reads
-    // as "it is clear".
-    bool unflyableMeasured() const {
-      return evaluated && (underground || no_cruise || zone_hard_n > 0 ||
-                           zone_junction_hard_n > 0);
-    }
-  };
   // [LEG-POLICY] `piece_leg` is the caller's statement about what it is
   // handing over: one leg per MINCO piece of THIS trajectory, or nullptr for
   // "no per-piece attribution exists here". It is a parameter rather than a
@@ -220,9 +140,9 @@ public:
                                const std::vector<PhaseSpan> &spans,
                                const std::vector<size_t> *piece_leg,
                                uint64_t piece_epoch) const;
-  // [S13] The span list of the LAST stored flight (recorded just before
-  // the whole-flight evaluation) — audit/harness observability for the
-  // phase semantics; empty when the last plan stored nothing.
+  // Spans of the most recent completed evaluation, paired with its verdict.
+  // Empty after an entry refusal or an evaluation that could not run. A
+  // failed flight gate may still leave diagnostics for its rejected candidate.
   const std::vector<PhaseSpan> &lastPhaseSpans() const {
     return last_spans_;
   }
@@ -356,6 +276,21 @@ private:
     std::vector<rclcpp::Parameter> params;
     std::string label;  // "a=b, c=d" for the report; empty = none
   };
+  // Profiles and the optimizers configured from them form one preparation
+  // result. Node parameter changes finish before any slice worker starts.
+  struct RouteWorkerSetup {
+    SegmentOverrides departure, cruise, arrival;
+    std::vector<SegmentOverrides> effective;
+    std::vector<std::unique_ptr<ego_planner::PolyTrajOptimizer>> optimizers;
+  };
+  RouteWorkerSetup prepareRouteWorkers(std::vector<Contract> &contracts,
+                                       bool run_parallel,
+                                       bool phase_requested);
+  PlanResult planRouteFallback(
+      const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail,
+      const std::vector<SegmentOverrides> &effective_overrides,
+      const char *why, bool as_degraded);
   std::vector<SegmentOverrides> readSegmentOverrides() const;
   // One "name=value" string-array parameter parsed against declared types
   // (the seg<i> parser, generalized for the phase profiles).
@@ -435,6 +370,47 @@ private:
     // Empty when the committed route had no provenance to slice.
     std::vector<size_t> edge_leg;
   };
+  // One proposed repair owns its geometry and boundary conditions. The
+  // coordinator adopts it only after the solve accepts the entire repair.
+  struct MergeRetryCandidate {
+    int lo, hi;
+    RouteSliceRequest request;
+  };
+  struct MergeRetryProfile {
+    SegmentOverrides overrides;
+    std::string soft_drop_note;
+  };
+  std::vector<int> selectMergeNeighbors(
+      int failed, const std::vector<RouteSlice> &slices,
+      size_t contract_count) const;
+  MergeRetryCandidate prepareMergeRetry(
+      int failed, int neighbor, const std::vector<RouteSlice> &slices,
+      const std::vector<Contract> &contracts, const StartHead &effective_head,
+      const ego_planner::TailBoundary &mission_tail,
+      bool suppress_crossing_exempt) const;
+  MergeRetryProfile mergedRetryProfile(
+      const MergeRetryCandidate &candidate, const RouteWorkerSetup &workers,
+      bool phase_requested) const;
+
+  struct PhaseRetryCandidate {
+    bool departure;
+    std::vector<Contract> contracts;
+    std::vector<RouteSlice> slices;
+    RouteSliceRequest edge, neighbor;
+  };
+  struct PhaseRetrySolution {
+    poly_traj::Trajectory edge, neighbor;
+  };
+  std::optional<PhaseRetryCandidate> preparePhaseRetry(
+      const CommittedRoute &route, int vertex, bool departure,
+      const std::vector<Contract> &contracts, const StartHead &effective_head,
+      const ego_planner::TailBoundary &mission_tail,
+      bool suppress_crossing_exempt) const;
+  std::optional<PhaseRetrySolution> solvePhaseRetry(
+      const PhaseRetryCandidate &candidate,
+      const std::vector<SegmentOverrides> &effective_overrides,
+      const RouteSliceConfig &config, double peak_max) const;
+
   // Cuts the committed route at every contract position by forward polyline
   // projection (each cut searched from the previous cut's segment on, so
   // slices advance monotonically along the route). Returns one slice per
@@ -552,7 +528,7 @@ private:
   // [PHASE-DEP] screened handoff candidates (route vertex indices, first =
   // the authored one) + the physics the edge-retry ladder reuses.
   mutable std::vector<int> dep_candidates_, arr_candidates_;
-  std::vector<PhaseSpan> last_spans_;
+  mutable std::vector<PhaseSpan> last_spans_;
   mutable FlightVerdict last_verdict_{};
   HeadPolicy last_head_policy_{};
   mutable double phase_tan_grade_{1e9};

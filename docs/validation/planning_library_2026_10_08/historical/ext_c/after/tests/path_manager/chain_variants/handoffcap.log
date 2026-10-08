@@ -1,0 +1,15 @@
+[INFO] [1791437731.148922730] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791437731.148990358] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791437731.148998022] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791437731.149000948] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791437731.149113511] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791437731.149178023] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791437731.149214632] [chain_experiment]: Optimizer initialized successfully for drone 0
+route-sequential mode
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[OK]   PathManager declares the handoff cap parameter
+[OK]   set_parameter(220) accepted
+[OK]   handoff cap 220: 210 m/s passes the speed check
+[OK]   set_parameter(190) accepted
+[OK]   handoff cap 190: 195 m/s refused, reason names the explicit cap
+PASS: 0 failed check(s)

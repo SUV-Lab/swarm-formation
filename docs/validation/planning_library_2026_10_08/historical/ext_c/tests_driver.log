@@ -1,0 +1,330 @@
+path_manager PASS 30 tests
+path_optimizer PASS 2 tests
+mmp_vehicle_dynamics PASS 5 tests
+{
+  "started_utc": "2026-10-08T05:34:05.455092+00:00",
+  "ros_domain_id": 81,
+  "suites": {
+    "path_manager": {
+      "exit_code": 0,
+      "registered_test_count": 30,
+      "registered_names": [
+        "chain_variants",
+        "committed_route_test",
+        "direct_trajectory_solver_test",
+        "exec_abort_test",
+        "flight_assembly_test",
+        "fsm_scenarios_test",
+        "load_obstacles_test",
+        "log_visibility_test",
+        "mission_geometry_test",
+        "mission_planner_core_test",
+        "mission_planner_test",
+        "mission_route_search_test",
+        "mission_sequence_test",
+        "param_contract_test",
+        "risk_contract_test",
+        "risk_scenarios",
+        "ros_planning_backend_test",
+        "route_postprocessing_test",
+        "route_search_backend_test",
+        "route_slice_batch_test",
+        "route_slice_solver_test",
+        "start_claim_test",
+        "terrain_memo_test",
+        "terrain_pitch_test",
+        "terrain_risk_mask_test",
+        "trajectory_message_test",
+        "transition_experiment_test",
+        "unit_guard_test",
+        "vehicle_model_injection_test",
+        "waypoint_experiment_test"
+      ],
+      "executed_test_count": 30,
+      "elapsed_s": 107.34658810599649,
+      "last_log_written_after_start": true,
+      "permission_denied_count": 0,
+      "focused_tests": {
+        "load_obstacles_test": {
+          "ok_checks": 13,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "start_claim_test": {
+          "ok_checks": 70,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "risk_contract_test": {
+          "ok_checks": 29,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "terrain_pitch_test": {
+          "ok_checks": 16,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "terrain_risk_mask_test": {
+          "ok_checks": 31,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "waypoint_experiment_test": {
+          "ok_checks": 75,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "transition_experiment_test": {
+          "ok_checks": 94,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "unit_guard_test": {
+          "ok_checks": 8,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "param_contract_test": {
+          "ok_checks": 11,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "route_slice_solver_test": {
+          "ok_checks": 13,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "mission_planner_test": {
+          "ok_checks": 43,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "mission_planner_core_test": {
+          "ok_checks": 23,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "ros_planning_backend_test": {
+          "ok_checks": 31,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "route_slice_batch_test": {
+          "ok_checks": 47,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "flight_assembly_test": {
+          "ok_checks": 13,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "direct_trajectory_solver_test": {
+          "ok_checks": 29,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "mission_geometry_test": {
+          "ok_checks": 26,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "route_postprocessing_test": {
+          "ok_checks": 31,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "committed_route_test": {
+          "ok_checks": 34,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "mission_route_search_test": {
+          "ok_checks": 14,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "route_search_backend_test": {
+          "ok_checks": 83,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "vehicle_model_injection_test": {
+          "ok_checks": 47,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "terrain_memo_test": {
+          "ok_checks": 12,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "trajectory_message_test": {
+          "ok_checks": 7,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "fsm_scenarios_test": {
+          "ok_checks": 21,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "exec_abort_test": {
+          "ok_checks": 21,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "mission_sequence_test": {
+          "ok_checks": 9,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "log_visibility_test": {
+          "ok_checks": 16,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "chain_variants": {
+          "ok_checks": 0,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "risk_scenarios": {
+          "ok_checks": 154,
+          "failed_checks": 0,
+          "pass": true
+        }
+      },
+      "summary_lines": [
+        " 1/30 Test  #1: load_obstacles_test ..............   Passed    0.03 sec",
+        " 2/30 Test  #2: start_claim_test .................   Passed    0.03 sec",
+        " 3/30 Test  #3: risk_contract_test ...............   Passed    0.18 sec",
+        " 4/30 Test  #4: terrain_pitch_test ...............   Passed    0.03 sec",
+        " 5/30 Test  #5: terrain_risk_mask_test ...........   Passed    1.35 sec",
+        " 6/30 Test  #6: waypoint_experiment_test .........   Passed    0.17 sec",
+        " 7/30 Test  #7: transition_experiment_test .......   Passed    0.11 sec",
+        " 8/30 Test  #8: unit_guard_test ..................   Passed    0.15 sec",
+        " 9/30 Test  #9: param_contract_test ..............   Passed    0.15 sec",
+        "10/30 Test #10: route_slice_solver_test ..........   Passed    0.14 sec",
+        "11/30 Test #11: mission_planner_test .............   Passed    0.36 sec",
+        "12/30 Test #12: mission_planner_core_test ........   Passed    0.03 sec",
+        "13/30 Test #13: ros_planning_backend_test ........   Passed    0.17 sec",
+        "14/30 Test #14: route_slice_batch_test ...........   Passed    0.15 sec",
+        "15/30 Test #15: flight_assembly_test .............   Passed    0.03 sec",
+        "16/30 Test #16: direct_trajectory_solver_test ....   Passed    0.15 sec",
+        "17/30 Test #17: mission_geometry_test ............   Passed    0.03 sec",
+        "18/30 Test #18: route_postprocessing_test ........   Passed    0.03 sec",
+        "19/30 Test #19: committed_route_test .............   Passed    0.42 sec",
+        "20/30 Test #20: mission_route_search_test ........   Passed    0.03 sec",
+        "21/30 Test #21: route_search_backend_test ........   Passed    0.70 sec",
+        "22/30 Test #22: vehicle_model_injection_test .....   Passed    0.35 sec",
+        "23/30 Test #23: terrain_memo_test ................   Passed    0.03 sec",
+        "24/30 Test #24: trajectory_message_test ..........   Passed    0.03 sec",
+        "25/30 Test #25: fsm_scenarios_test ...............   Passed   18.42 sec",
+        "26/30 Test #26: exec_abort_test ..................   Passed    2.46 sec",
+        "27/30 Test #27: mission_sequence_test ............   Passed   30.87 sec",
+        "28/30 Test #28: log_visibility_test ..............   Passed   21.96 sec",
+        "29/30 Test #29: chain_variants ...................   Passed   27.72 sec",
+        "30/30 Test #30: risk_scenarios ...................   Passed    1.02 sec",
+        "100% tests passed, 0 tests failed out of 30",
+        "Total Test time (real) = 107.29 sec"
+      ],
+      "pass": true,
+      "scenario_evidence": {
+        "chain_pass_count": 71,
+        "chain_failure_count": 0,
+        "chain_log_count": 71,
+        "all_chain_logs_written_after_start": true,
+        "chain_tally_last_line": "DONE 71/71",
+        "risk_154_0": true
+      }
+    },
+    "path_optimizer": {
+      "exit_code": 0,
+      "registered_test_count": 2,
+      "registered_names": [
+        "optimizer_session_test",
+        "route_cost_profile_test"
+      ],
+      "executed_test_count": 2,
+      "elapsed_s": 0.2187083030003123,
+      "last_log_written_after_start": true,
+      "permission_denied_count": 0,
+      "focused_tests": {
+        "route_cost_profile_test": {
+          "ok_checks": 28,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "optimizer_session_test": {
+          "ok_checks": 67,
+          "failed_checks": 0,
+          "pass": true
+        }
+      },
+      "summary_lines": [
+        "1/2 Test #1: route_cost_profile_test ..........   Passed    0.04 sec",
+        "2/2 Test #2: optimizer_session_test ...........   Passed    0.17 sec",
+        "100% tests passed, 0 tests failed out of 2",
+        "Total Test time (real) =   0.21 sec"
+      ],
+      "pass": true
+    },
+    "mmp_vehicle_dynamics": {
+      "exit_code": 0,
+      "registered_test_count": 5,
+      "registered_names": [
+        "config_snapshot_test",
+        "flight_dynamics_test",
+        "point_mass_eom_test",
+        "python_binding_test",
+        "vehicle_model_test"
+      ],
+      "executed_test_count": 5,
+      "elapsed_s": 0.36887679899518844,
+      "last_log_written_after_start": true,
+      "permission_denied_count": 0,
+      "focused_tests": {
+        "flight_dynamics_test": {
+          "ok_checks": 0,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "vehicle_model_test": {
+          "ok_checks": 0,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "point_mass_eom_test": {
+          "ok_checks": 0,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "python_binding_test": {
+          "ok_checks": 28,
+          "failed_checks": 0,
+          "pass": true
+        },
+        "config_snapshot_test": {
+          "ok_checks": 1,
+          "failed_checks": 0,
+          "pass": true
+        }
+      },
+      "summary_lines": [
+        "1/5 Test #1: flight_dynamics_test .............   Passed    0.04 sec",
+        "2/5 Test #2: vehicle_model_test ...............   Passed    0.04 sec",
+        "3/5 Test #3: point_mass_eom_test ..............   Passed    0.04 sec",
+        "4/5 Test #4: python_binding_test ..............   Passed    0.14 sec",
+        "5/5 Test #5: config_snapshot_test .............   Passed    0.05 sec",
+        "100% tests passed, 0 tests failed out of 5",
+        "Total Test time (real) =   0.31 sec"
+      ],
+      "pass": true
+    }
+  },
+  "pass": true,
+  "total_test_count": 37,
+  "finished_utc": "2026-10-08T05:35:53.416485+00:00"
+}

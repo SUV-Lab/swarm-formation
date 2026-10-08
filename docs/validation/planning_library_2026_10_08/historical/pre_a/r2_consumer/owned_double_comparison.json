@@ -1,0 +1,18 @@
+{
+  "reference": "/tmp/mmp_modularization_final/r2_consumer/result.json",
+  "result": "/tmp/mmp_modularization_ext_baseline/r2_consumer/result.json",
+  "field_exact": {
+    "schema": true,
+    "source": true,
+    "input_unchanged": true,
+    "serialized_after_planner_destruction": true,
+    "status": true,
+    "final": true,
+    "reference": true,
+    "phases": true,
+    "evaluation": true,
+    "identity": true,
+    "terrain": true
+  },
+  "pass": true
+}

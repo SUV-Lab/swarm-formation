@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+project(mmp_r2_external_consumer LANGUAGES CXX)
+find_package(path_manager REQUIRED)
+add_executable(r2_external_consumer main.cpp)
+target_link_libraries(r2_external_consumer PRIVATE path_manager::path_manager_lib)

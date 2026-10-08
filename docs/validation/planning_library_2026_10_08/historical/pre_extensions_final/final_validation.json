@@ -1,0 +1,42 @@
+{
+  "scope": "Incremental planning/optimization library extraction with ROS2 execution retained",
+  "branches": {
+    "superproject": "lgh/dev",
+    "planning_submodule": "mmp_dev"
+  },
+  "container": "mmp_dev",
+  "tests": {
+    "manager_ctest": 26,
+    "optimizer_ctest": 2,
+    "chain_cases": 71,
+    "risk_cases": 154,
+    "optimizer_session_checks": 67
+  },
+  "checks": {
+    "manager_and_optimizer_ctest": true,
+    "external_consumers": true,
+    "r2_public_library": true,
+    "focused_asan_ubsan": true,
+    "comparison": true,
+    "original_comparison": true,
+    "frontend_comparison": true,
+    "evaluation_comparison": true,
+    "postprocessing_comparison": true,
+    "cost_profile_comparison": true,
+    "abort_comparison": true
+  },
+  "independent_reviews": {
+    "library_design": "No blocking issue found; existing production uses both public entry points; owned outputs and borrowed environments are explicit.",
+    "packaging_orchestration": "No blocking issue found; installed targets/public headers, worker ordering, policy captures and FSM invalidation preserve existing contracts."
+  },
+  "production_build": "path_optimizer and path_manager succeeded; initial duplicate package dependency corrected and failure log retained",
+  "after_build_changes": "Comments and documentation only",
+  "own_test_processes": "Stopped and process list verified",
+  "limitations": [
+    "ROS node configuration, GridMap environment adapter, clock/logging and execution storage remain by design.",
+    "Use independent planner/optimizer instances for concurrent callers; borrowed environment must outlive calls.",
+    "Direct plans retain evaluated=false for separate whole-flight evaluation.",
+    "Installed prefix relocation across machines and full-stack sanitizer coverage were not tested."
+  ],
+  "pass": true
+}

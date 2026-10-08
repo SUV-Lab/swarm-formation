@@ -1,0 +1,17 @@
+{
+  "started_utc": "2026-10-08T06:54:38.007332+00:00",
+  "command": [
+    "docker",
+    "exec",
+    "-u",
+    "user",
+    "mmp_dev",
+    "bash",
+    "-lc",
+    "source /opt/ros/humble/setup.bash && source /ws/install/setup.bash && cd /ws && colcon --log-base /tmp/mmp_modularization_finalize/colcon_logs build --base-paths src/mmp_vehicle_dynamics src/mmp_path_planning/src/path_optimizer src/mmp_path_planning/src/path_manager --packages-select mmp_vehicle_dynamics path_optimizer path_manager --executor sequential --event-handlers console_direct+"
+  ],
+  "pass": true,
+  "exit_code": 0,
+  "elapsed_s": 47.293113997002365,
+  "finished_utc": "2026-10-08T06:55:25.300545+00:00"
+}

@@ -1,0 +1,10 @@
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791437672.225452269] [exact_mission_default]: Initializing optimizer for drone 0...
+[INFO] [1791437672.225700739] [exact_mission_default]: Optimizer initialized successfully for drone 0
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437672.293837264] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437672.298305298] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437672.301312248] [exact_mission_default]: Setting formation with 0 positions to optimizer
+[WARN] [1791437672.301322517] [exact_mission_default]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+CAPTURE default has_trajectory=1 pieces=12 reference_pieces=12 evaluated=1

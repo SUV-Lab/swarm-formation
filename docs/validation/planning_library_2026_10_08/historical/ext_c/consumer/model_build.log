@@ -1,0 +1,3 @@
+[ 50%] Building CXX object CMakeFiles/vehicle_model_consumer.dir/main.cpp.o
+[100%] Linking CXX executable vehicle_model_consumer
+[100%] Built target vehicle_model_consumer

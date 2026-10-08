@@ -1,0 +1,38 @@
+[INFO] [1791437661.914948284] [terrain_publisher]: Terrain publisher initializing...
+[INFO] [1791437661.919702489] [terrain_publisher]: Publisher created on /terrain/grid_map with TRANSIENT_LOCAL QoS
+[INFO] [1791437661.920591672] [terrain_publisher]: Service created on /terrain/load_map
+[INFO] [1791437661.921370015] [terrain_publisher]: Subscribed to /mission/risk_zones + /mission/obstacles for corridor coverage
+[INFO] [1791437661.921514758] [terrain_publisher]: Loading terrain data...
+[INFO] [1791437661.922044831] [terrain_publisher]: World is set to "none", skipping terrain loading
+[INFO] [1791437661.922352564] [terrain_publisher]: Terrain GridMap published successfully
+[INFO] [1791437661.922496035] [terrain_publisher]: Node will keep running to serve TRANSIENT_LOCAL subscribers
+[INFO] [1791437662.002934546] [terrain_publisher]: [load_map] world=full_map mission="/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml" halfwidth_u=0.0 res_m=0.0
+[INFO] [1791437662.165011587] [terrain_publisher]: [corridor] /ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml: bbox u=(14524.6,17183.0)..(15365.8,18418.7) -> 2804x4119 cells @ 30m (11.5M)
+[INFO] [1791437663.063491493] [terrain_publisher]: Cropped shape: 2804 x 4119
+[INFO] [1791437663.071112884] [terrain_publisher]: Elevation range: 0.0m ~ 1569.3m
+[INFO] [1791437663.076907157] [terrain_publisher]: NaN count: 654218
+[INFO] [1791437663.077062501] [terrain_publisher]: Actual cell size: 30.0m | Target cell size: 100.0m | Scale factor: 0.3000
+[INFO] [1791437663.077322513] [terrain_publisher]: Map size (grid): 4119 x 2804 cells
+[INFO] [1791437663.077449213] [terrain_publisher]: Map size (actual): 84.1km x 123.6km (X x Y)
+[INFO] [1791437663.113398494] [terrain_publisher]: GridMap created: 11549676 data points, 1 layers (elevation)
+[INFO] [1791437663.137065064] [terrain_publisher]: [load_map] loaded corridor for /ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml @ 30 m, bbox u=(14524.6,17183.0)..(15365.8,18418.7)
+Initializing rclpy...
+Creating TerrainPublisher node...
+Spinning node...
+Traceback (most recent call last):
+  File "/ws/install/mmp_terrain/lib/mmp_terrain/terrain_publisher", line 33, in <module>
+    sys.exit(load_entry_point('mmp-terrain', 'console_scripts', 'terrain_publisher')())
+  File "/ws/build/mmp_terrain/mmp_terrain/terrain_publisher.py", line 870, in main
+    rclpy.spin(node)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+    executor.spin_once()
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 776, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 765, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 748, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+  File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 645, in _wait_for_ready_callbacks
+    wait_set.wait(timeout_nsec)
+KeyboardInterrupt
+[ros2run]: Interrupt

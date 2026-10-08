@@ -1,4 +1,10 @@
 #include "path_manager/path_manager.h"
+#include "path_manager/direct_trajectory_solver.h"
+#include "path_manager/mission_geometry.h"
+#include "path_manager/route_postprocessing.h"
+#include "path_manager/mission_route_search.h"
+#include "path_manager/builtin_route_search.h"
+#include "path_manager/ros_route_search.h"
 #include "path_planner/risk_shape.h"
 
 #include <stdexcept>
@@ -61,7 +67,6 @@ namespace path_manager
         node_->declare_parameter("planning/handoff_max_vel_mps", 0.0);
         node_->declare_parameter("manager/length_per_piece", 3.0);
         node_->declare_parameter("manager/risk_weight", 1.0);
-        node_->declare_parameter("manager/risk_barrier", 100.0);
         // [GNRON] endpoint moat taper radius (frame units; <=0 off): fade a
         // must-enter zone's moat to zero near the contained endpoint so the
         // approach to the mission point is not priced against it.
@@ -90,19 +95,8 @@ namespace path_manager
         node_->declare_parameter("manager/risk_mask_viz_contours", 5);
         node_->declare_parameter("manager/risk_mask_viz_volume_alpha", 0.24);
         node_->declare_parameter("manager/risk_mask_viz_agl", 0.15);
-        node_->declare_parameter("manager/risk_smha_w", 2.0);
-        node_->declare_parameter("manager/front_end", std::string("fm2"));
-        node_->declare_parameter("manager/fm2_coarse_k", 4);
-        node_->declare_parameter("manager/fm2_max_cells", 8000000);
-        node_->declare_parameter("manager/fm2_star", true);
-        node_->declare_parameter("manager/fm2_alt_penalty", 2.0);
-        node_->declare_parameter("manager/fm2_alt_zscale", 10.0);
-        node_->declare_parameter("manager/fm2_alt_zscale_down", 2.0);
-        // [ROUGH] H2 terrain-roughness routing (0 = off/legacy field).
-        node_->declare_parameter("manager/fm2_rough_weight", 0.0);
-        node_->declare_parameter("manager/fm2_rough_slope0", 0.20);
-        node_->declare_parameter("manager/astar_bypass_shortcut", false);
-        node_->declare_parameter("manager/astar_step_size", 1.0);
+        builtin_route_search_ = std::make_shared<BuiltinRouteSearchBackend>(
+            readRosBuiltinRouteSearchConfig(*node_), log_manager_, &searcher_);
         node_->declare_parameter("manager/dyn_yaw_seed", 42);  // fixed = reproducible obstacle orientations; <0 = randomize each run
         node_->declare_parameter("manager/sdf_voxel_size", 1.0);
         node_->declare_parameter("manager/sdf_voxel_z", 0.0);
@@ -117,13 +111,11 @@ namespace path_manager
         node_->declare_parameter("optimization/alt_floor_headroom", 0.5);
         node_->declare_parameter("manager/min_goal_agl", 1.0);
         node_->declare_parameter("manager/align_start_vel_to_route", true);
-        node_->declare_parameter("manager/zone_avoid_lexicographic", true);
         node_->declare_parameter("manager/corner_fillet_radius", 0.0);
         node_->get_parameter("manager/max_vel", max_vel_);
         node_->get_parameter("manager/max_acc", max_acc_);
         node_->get_parameter("manager/length_per_piece", length_per_piece_);
         node_->get_parameter("manager/risk_weight", risk_weight_);
-        node_->get_parameter("manager/risk_barrier", risk_barrier_);
         node_->get_parameter("manager/risk_goal_taper_radius",
                              risk_goal_taper_radius_);
         node_->get_parameter("manager/risk_terrain_mask_enable",
@@ -180,18 +172,6 @@ namespace path_manager
                         risk_mask_viz_mode_.c_str());
             risk_mask_viz_mode_ = "heatmap";
         }
-        node_->get_parameter("manager/risk_smha_w", risk_smha_w_);
-        node_->get_parameter("manager/front_end", front_end_str_);
-        node_->get_parameter("manager/fm2_coarse_k", fm2_coarse_k_);
-        node_->get_parameter("manager/fm2_max_cells", fm2_max_cells_);
-        node_->get_parameter("manager/fm2_star", fm2_star_);
-        node_->get_parameter("manager/fm2_alt_penalty", fm2_alt_penalty_);
-        node_->get_parameter("manager/fm2_alt_zscale", fm2_alt_zscale_);
-        node_->get_parameter("manager/fm2_alt_zscale_down", fm2_alt_zscale_dn_);
-        node_->get_parameter("manager/fm2_rough_weight", fm2_rough_weight_);
-        node_->get_parameter("manager/fm2_rough_slope0", fm2_rough_slope0_);
-        node_->get_parameter("manager/astar_bypass_shortcut", astar_bypass_shortcut_);
-        node_->get_parameter("manager/astar_step_size", astar_step_size_);
         node_->get_parameter("manager/sdf_voxel_size", sdf_voxel_size_);
         node_->get_parameter("manager/sdf_voxel_z", sdf_voxel_z_);
         // sdf_voxel_size <= 0 resolves to the DEM cell size once terrain
@@ -219,8 +199,6 @@ namespace path_manager
         node_->get_parameter("manager/min_goal_agl", min_goal_agl_);
         node_->get_parameter("manager/align_start_vel_to_route",
                              align_start_vel_to_route_);
-        node_->get_parameter("manager/zone_avoid_lexicographic",
-                             zone_avoid_lexico_);
         node_->get_parameter("manager/corner_fillet_radius", corner_fillet_radius_);
         // Dynamic-obstacle spawn-orientation RNG seed. FIXED by default so the
         // SAME mission spawns the SAME oriented obstacles -> reproducible plans.
@@ -455,6 +433,22 @@ namespace path_manager
         rebuildTerrainRiskMasks();
     }
 
+    void PathManager::setVehicleModel(mmp_vehicle_dynamics::VehicleModel::Ptr model)
+    {
+        if (model && !model->valid())
+            throw std::invalid_argument("invalid vehicle model");
+        if (poly_traj_opt_) poly_traj_opt_->setVehicleModel(model);
+        vehicle_model_override_ = std::move(model);
+    }
+
+    void PathManager::setRouteSearchBackend(std::shared_ptr<RouteSearchBackend> backend)
+    {
+        route_search_backend_ = std::move(backend);
+        // Existing flight/policy captures remain meaningful until the next
+        // actual search advances the epoch. Do not treat algorithm selection
+        // as a physical environment change or emit a synthetic ABORT.
+    }
+
     void PathManager::initOptimizer(bool force_reinit)
     {
         if (is_optimizer_initialized_ && poly_traj_opt_ && !force_reinit)
@@ -509,6 +503,8 @@ namespace path_manager
             // formats drone_id_ into every line it emits. Setting it after
             // meant those lines carried the pre-set value.
             poly_traj_opt_->setDroneId(traj_.local_traj.drone_id);
+            if (vehicle_model_override_)
+                poly_traj_opt_->setVehicleModel(vehicle_model_override_);
             poly_traj_opt_->setParam(node_);
 
             // Four optimization/* values are consumed by PathManager, not by
@@ -527,14 +523,15 @@ namespace path_manager
             node_->get_parameter("optimization/alt_floor_headroom",
                                  alt_floor_headroom_);
 
-            // Wire SDF-based obstacle avoidance into the optimizer.
-            poly_traj_opt_->setSDFManager(&sdf_manager_);
+            ego_planner::OptimizerRuntimeSettings runtime_settings;
+            ego_planner::OptimizerEnvironment environment;
+            environment.distance_field = &sdf_manager_;
             // Strictly below the front-end margin: a margin-respecting path then
             // carries ZERO obstacle cost, so its 10000-weighted gradient cannot
             // pin the geometry to the polyline and smoothness can round corners
             // inside the (margin - clearance) buffer.
-            poly_traj_opt_->setObstacleClearance(
-                std::min(opt_obstacle_clearance_, obstacle_clearance_));
+            runtime_settings.obstacle_clearance =
+                std::min(opt_obstacle_clearance_, obstacle_clearance_);
             {
                 // [REJECT] ancestor safety net (default ON): an audit-failed
                 // (terrain/obstacle-overlapping) trajectory is discarded, not
@@ -544,7 +541,7 @@ namespace path_manager
                 if (!node_->has_parameter("optimization/collision_reject"))
                     node_->declare_parameter("optimization/collision_reject", true);
                 node_->get_parameter("optimization/collision_reject", reject_on);
-                poly_traj_opt_->setCollisionReject(reject_on);
+                runtime_settings.collision_reject = reject_on;
 
                 // [CONV-REJECT] non-convergence gate: an L-BFGS failure exit
                 // whose envelope violations exceed the threshold is discarded
@@ -571,12 +568,13 @@ namespace path_manager
                 node_->get_parameter(
                     "optimization/audit_envelope_violation_hard_max",
                     env_viol_hard);
-                poly_traj_opt_->setEnvelopeReject(env_reject_on, env_viol_max,
-                                                  env_viol_hard);
+                runtime_settings.envelope_reject = env_reject_on;
+                runtime_settings.envelope_violation_max = env_viol_max;
+                runtime_settings.envelope_violation_hard_max = env_viol_hard;
 
                 // [GNRON] endpoint moat taper — same radius as the front-end
                 // (wired in initSearcher) so both stages price one field.
-                poly_traj_opt_->setRiskGoalTaperRadius(risk_goal_taper_radius_);
+                runtime_settings.risk_goal_taper_radius = risk_goal_taper_radius_;
 
                 // [LBFGS-TUNE] solver knobs for no-rebuild parameter sweeps.
                 // Defaults reproduce the hardcoded values exactly.
@@ -600,73 +598,77 @@ namespace path_manager
                     node_->get_parameter("optimization/lbfgs_max_linesearch", maxls);
                     node_->get_parameter("optimization/lbfgs_f_dec", fdec);
                     node_->get_parameter("optimization/lbfgs_s_curv", scurv);
-                    poly_traj_opt_->setLbfgsParams(mem, geps, past, delta,
-                                                   maxls, fdec, scurv);
+                    runtime_settings.lbfgs_mem_size = mem;
+                    runtime_settings.lbfgs_g_epsilon = geps;
+                    runtime_settings.lbfgs_past = past;
+                    runtime_settings.lbfgs_delta = delta;
+                    runtime_settings.lbfgs_max_linesearch = maxls;
+                    runtime_settings.lbfgs_f_dec = fdec;
+                    runtime_settings.lbfgs_s_curv = scurv;
                 }
             }
-            poly_traj_opt_->setGroundHeight(ground_height_);
-            poly_traj_opt_->setVirtualCeilHeight(virtual_ceil_height_);
+            runtime_settings.ground_height = ground_height_;
+            runtime_settings.virtual_ceil_height = virtual_ceil_height_;
+            poly_traj_opt_->setRuntimeSettings(runtime_settings);
             // 2.5D terrain heightmap: the optimizer queries the DEM elevation
             // directly (exact z) instead of the coarse voxelised SDF, so terrain
             // clearance matches the panel/DEM. terrain_data_ outlives the optimizer.
-            poly_traj_opt_->setTerrainHeightmap(
+            environment.terrain_height =
                 [this](double x, double y) -> float {
                     return terrain_data_.valid
                              ? terrain_data_.getElevation(x, y)
                              : -std::numeric_limits<float>::infinity();
-                },
-                // DEM cell in frame units — scales the SWATH-FLOOR sampling
-                // pitch to the actual grid (corridor 30 m vs
-                // full_map 250 m).
-                terrain_data_.valid ? terrain_data_.resolution : 0.0);
+                };
+            // DEM cell in frame units — scales the SWATH-FLOOR sampling
+            // pitch to the actual grid (corridor 30 m vs full_map 250 m).
+            environment.terrain_cell_u =
+                terrain_data_.valid ? terrain_data_.resolution : 0.0;
             // Value + analytic slope of the same surface, for the terrain term
             // and alt-cap gate: cost and gradient must agree exactly (see
             // TerrainData::getElevationAndGrad).
-            poly_traj_opt_->setTerrainHeightGrad(
+            environment.terrain_gradient =
                 [this](double x, double y, float *h, float *gx, float *gy) -> bool {
                     return terrain_data_.getElevationAndGrad(x, y, h, gx, gy);
-                });
+                };
 
             // Pass risk zones to optimizer for trajectory fine-tuning (2nd stage)
             if (!risk_zones_.empty()) {
-                std::vector<ego_planner::RiskZone> opt_zones;
                 for (const auto &tz : risk_zones_) {
                     ego_planner::RiskZone oz;
                     oz.center = tz.center;
                     oz.reach = tz.reach;
                     oz.peak = tz.peak;
                     oz.vertical_reach = tz.reach * risk_vertical_ratio_;
-                    opt_zones.push_back(oz);
+                    environment.risk.zones.push_back(oz);
                 }
-                poly_traj_opt_->setRiskZones(opt_zones);
-                log_manager_->infof("Passed %zu risk zones to optimizer", opt_zones.size());
             }
-            poly_traj_opt_->setRiskVisibility(
+            environment.risk.visibility =
                 [this](size_t zi, const Eigen::Vector3d &p,
                        Eigen::Vector3d *grad) -> double {
                     return riskVisibility(zi, p, grad);
-                });
+                };
             // [OCCLUSION-CAP] raw LOS horizon for the visibility-aware cap: same
             // zone indexing as the visibility callback above.
-            poly_traj_opt_->setRiskShadowCeiling(
+            environment.risk.shadow_ceiling =
                 [this](size_t zi, const Eigen::Vector3d &p) -> double {
                     return riskShadowCeiling(zi, p);
-                });
+                };
+            poly_traj_opt_->setEnvironment(std::move(environment));
+            if (!risk_zones_.empty()) {
+                log_manager_->infof("Passed %zu risk zones to optimizer", risk_zones_.size());
+            }
 
-            // NOTE: the local unique_ptr deliberately shadows the member of
-            // the same name so this configuration body — moved verbatim from
-            // initOptimizer — reads unchanged. initOptimizer assigns the
-            // returned instance to the member; [CHAIN-PAR] workers keep
-            // their own.
+            // initOptimizer adopts this instance; parallel workers each
+            // keep their own session. Both borrow this manager's providers.
             return poly_traj_opt_;
         }
     }
 
     double PathManager::effectiveHandoffMaxMps() const
 {
-    const auto *dynp = dynamicsParams();
+    const auto model = vehicleModel();
     const double model_max =
-        dynp ? dynp->speed_max_mps : std::numeric_limits<double>::infinity();
+        model ? model->limits().speed_max_mps : std::numeric_limits<double>::infinity();
     double um_xy = 100.0;
     if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
         node_->get_parameter("optimization/dynamics_unit_xy_m", um_xy);
@@ -700,7 +702,8 @@ std::string PathManager::stateEnvelopeProblem(
         };
         const double um_xy = unit("optimization/dynamics_unit_xy_m", 100.0);
         const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
-        const auto &dyn = poly_traj_opt_->dynamicsParams();
+        const auto &model = poly_traj_opt_->vehicleModel();
+        const auto limits = model->limits();
         const double floor_mps =
             poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy;
         const double vmax_pre = effectiveHandoffMaxMps();
@@ -711,8 +714,7 @@ std::string PathManager::stateEnvelopeProblem(
         const Eigen::Vector3d vel_mps(vel_units.x() * um_xy,
                                       vel_units.y() * um_xy,
                                       vel_units.z() * um_z);
-        const auto verdict = mmp_vehicle_dynamics::speedConeVerdict(
-            dyn, vel_mps, floor_mps, vmax_pre);
+        const auto verdict = model->velocityVerdict(vel_mps, floor_mps, vmax_pre);
         const double vm = verdict.speed_mps;
         char buf[160];
         // [SPEED-BOUNDARY] see path_manager.h. Commanding exactly the floor
@@ -769,7 +771,7 @@ std::string PathManager::stateEnvelopeProblem(
         if (verdict.reject ==
             mmp_vehicle_dynamics::HandoffReject::SpeedAboveMaximum) {
             const char *which =
-                vmax_mps >= dyn.speed_max_mps - 1e-9
+                vmax_mps >= limits.speed_max_mps - 1e-9
                     ? "model maximum"
                     : (explicit_cap > 1e-9 ? "explicit handoff cap"
                                            : "default planning cap");
@@ -785,7 +787,7 @@ std::string PathManager::stateEnvelopeProblem(
                      "flight path angle %.1f deg outside the +/-%.1f deg "
                      "validity cone",
                      gamma * 180.0 / M_PI,
-                     dyn.flight_path_angle_max_rad * 180.0 / M_PI);
+                     limits.flight_path_angle_max_rad * 180.0 / M_PI);
             return buf;
         }
         return {};
@@ -810,7 +812,7 @@ std::string PathManager::stateEnvelopeProblem(
         const double um_xy = unit("optimization/dynamics_unit_xy_m", 100.0);
         const double um_z = unit("optimization/dynamics_unit_z_m", 100.0);
         const Eigen::Vector3d S(um_xy, um_xy, um_z);
-        const auto &dyn = poly_traj_opt_->dynamicsParams();
+        const auto &model = poly_traj_opt_->vehicleModel();
         // Same shared judgement as the velocity half. The speed/cone part
         // re-runs here and has already passed above; what this call adds is
         // the inverse-dynamics and envelope verdict. NOT
@@ -818,8 +820,8 @@ std::string PathManager::stateEnvelopeProblem(
         // that comparison certifies everything (utilization is 0.0 there
         // while isWithinEnvelope is false), which is why the predicate and
         // not the ratio decides.
-        const auto verdict = mmp_vehicle_dynamics::handoffVerdict(
-            dyn, S.cwiseProduct(pos_units), S.cwiseProduct(vel_units),
+        const auto verdict = model->handoffVerdict(
+            S.cwiseProduct(pos_units), S.cwiseProduct(vel_units),
             S.cwiseProduct(acc_units), poly_traj_opt_->dynamicsMinSpeedFloorUnits() * um_xy,
             effectiveHandoffMaxMps());
         char buf[160];
@@ -839,15 +841,14 @@ std::string PathManager::stateEnvelopeProblem(
         return {};
     }
 
-    bool PathManager::planGlobalTraj(const StartHead &head,
-                                     const std::vector<Eigen::Vector3d> &waypoints,
-                                     const ego_planner::TailBoundary &tail,
-                                     bool junction_goal,
-                                     const std::vector<Eigen::Vector3d> *route_override,
-                                     const std::vector<double> *cap_ref_override,
-                                     bool front_end_only,
-                                     const RouteProvenance *provenance)
+    std::optional<PathManager::PreparedRoute> PathManager::prepareRoute(
+        const StartHead &head,
+        const std::vector<Eigen::Vector3d> &waypoints, bool junction_goal,
+        const std::vector<Eigen::Vector3d> *route_override,
+        const std::vector<double> *cap_ref_override,
+        const RouteProvenance *provenance)
     {
+        PreparedRoute prepared;
         const Eigen::Vector3d &start_pos = head.pos_u;
         const Eigen::Vector3d &start_vel = head.vel_u;
         const Eigen::Vector3d &start_acc = head.acc_u;
@@ -880,54 +881,42 @@ std::string PathManager::stateEnvelopeProblem(
             log_manager_->errorf(
                 "[HEAD-POLICY] planGlobalTraj called with an UNSPECIFIED "
                 "start-state source — refusing");
-            return false;
+            return std::nullopt;
         }
         if (!start_pos.allFinite() || !start_vel.allFinite() ||
             !start_acc.allFinite()) {
             log_manager_->errorf(
                 "[HEAD-POLICY] planGlobalTraj called with a non-finite start "
                 "state — refusing");
-            return false;
+            return std::nullopt;
         }
         log_manager_->infof("Planning global trajectory with %zu waypoints", waypoints.size());
-        auto t_total_start = std::chrono::steady_clock::now();
+        prepared.total_start = std::chrono::steady_clock::now();
 
         if (waypoints.empty()) {
             RCLCPP_ERROR(node_->get_logger(), "planGlobalTraj: No waypoints provided!");
-            return false;
+            return std::nullopt;
         }
 
-        // Waypoint z is HEIGHT ABOVE TERRAIN (AGL), not absolute: mission
-        // sources cannot know the DEM, so an absolute z routinely ended up
-        // inside a hill (SDF probe < 0 -> infeasible pinned tail -> -1005
-        // with the obstacle cost frozen). z_abs = elevation(x,y) + max(z,
-        // min_goal_agl). Over water / outside the DEM the elevation is 0-ish
-        // by construction (getElevation invalid), so AGL == ASL there and
-        // legacy over-water missions behave identically.
-        std::vector<Eigen::Vector3d> wps = waypoints;
+        // Geometry preparation borrows the current terrain synchronously.
+        // An absent callback preserves the no-terrain waypoint semantics.
+        ElevationQuery elevation;
         if (terrain_data_.valid) {
-            for (size_t wi = 0; wi < wps.size(); ++wi) {
-                auto &wp = wps[wi];
-                // [CHAIN] A junction goal's z is ABSOLUTE — sampled from a
-                // trajectory the baseline plan actually flies — not AGL.
-                // Re-adding the terrain elevation here would lift the goal
-                // off the junction contract and break the chained head/tail
-                // match at the seam. Interior waypoints (if any) keep their
-                // AGL semantics: they are genuine mission points.
-                if (junction_goal && wi + 1 == wps.size()) continue;
-                const double agl = std::max(wp.z(), min_goal_agl_);
-                const float elev = terrain_data_.getElevation(wp.x(), wp.y());
-                const double base =
-                    (elev > -1e9f) ? static_cast<double>(elev) : 0.0;
-                const double z_abs = base + agl;
-                if (std::abs(z_abs - wp.z()) > 1e-9) {
-                    log_manager_->infof(
-                        "[GOAL AGL] waypoint (%.1f, %.1f) z=%.2f AGL "
-                        "-> absolute %.2f (terrain %.2f + agl %.2f)",
-                        wp.x(), wp.y(), wp.z(), z_abs, base, agl);
-                }
-                wp.z() = z_abs;
-            }
+            elevation = [this](double x, double y) {
+                return terrain_data_.getElevation(x, y);
+            };
+        }
+        auto resolved = resolveMissionWaypoints(
+            waypoints, junction_goal, min_goal_agl_, elevation);
+        prepared.absolute_waypoints = std::move(resolved.waypoints);
+        const auto &wps = prepared.absolute_waypoints;
+        for (const auto &change : resolved.altitude_changes) {
+            const auto &wp = wps[change.index];
+            log_manager_->infof(
+                "[GOAL AGL] waypoint (%.1f, %.1f) z=%.2f AGL "
+                "-> absolute %.2f (terrain %.2f + agl %.2f)",
+                wp.x(), wp.y(), change.original_z, change.absolute_z,
+                change.terrain_base, change.agl);
         }
 
         // Diagnostic guard: warn if the mission start or any waypoint falls
@@ -957,173 +946,23 @@ std::string PathManager::stateEnvelopeProblem(
             }
         }
 
-        // === STEP 1: Build waypoint sequence ===
-        // Build segment list: start -> wp1 -> wp2 -> ... -> wpN
-        std::vector<Eigen::Vector3d> all_points;
-        all_points.push_back(start_pos);
-        for (const auto& wp : wps) {
-            all_points.push_back(wp);
-        }
-
-        // Compute map bounds from waypoints
-        map_lower_bound_ = start_pos;
-        map_upper_bound_ = start_pos;
-
-        // Extend bounds to include all waypoints with margin
-        double bound_margin_xy = 10.0;
-        // Z margin below the lowest waypoint. Without this the map bottom
-        // sits exactly on the start altitude, meaning obstacles anchored at
-        // that altitude touch the map floor — their SDF gradient looks
-        // asymmetric (no voxels below, voxels above), which tricks L-BFGS
-        // into attempting a vertical-only escape that smoothness then blocks.
-        const double bound_margin_z_below = 5.0;
-
-        auto expand_points = [&](double margin_xy) {
-            for (const auto& pt : all_points) {
-                map_lower_bound_.x() = std::min(map_lower_bound_.x(), pt.x() - margin_xy);
-                map_lower_bound_.y() = std::min(map_lower_bound_.y(), pt.y() - margin_xy);
-                map_lower_bound_.z() = std::min(map_lower_bound_.z(), pt.z() - bound_margin_z_below);
-                map_upper_bound_.x() = std::max(map_upper_bound_.x(), pt.x() + margin_xy);
-                map_upper_bound_.y() = std::max(map_upper_bound_.y(), pt.y() + margin_xy);
-            }
-        };
-        expand_points(bound_margin_xy);
-
-        // Include only risk zones whose moat can actually TOUCH the mission
-        // area. The old code covered EVERY configured zone and inflated the
-        // margin to the largest reach: the default scenario layout ~3000 u
-        // from a k3 corridor mission blew its FM2 grid from 1.3M to 1.4G
-        // cells (0.55 s -> 18 s eikonal) and drove k2's grid build into
-        // outright failure (grid=0x0x0 -> silent front-end fallback) — for
-        // zones the route could never meet. Fixpoint so zone-zone chains
-        // still work: a zone that touches an included zone's footprint can
-        // shape the detour around it.
-        std::vector<char> zone_in(risk_zones_.size(), 0);
-        double max_included_reach = 0.0;
-        bool grew = true;
-        while (grew) {
-            grew = false;
-            for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-                if (zone_in[zi]) continue;
-                const auto &tz = risk_zones_[zi];
-                const double r = tz.reach + 5.0;
-                const double dx = std::max({map_lower_bound_.x() - tz.center.x(),
-                                            0.0,
-                                            tz.center.x() - map_upper_bound_.x()});
-                const double dy = std::max({map_lower_bound_.y() - tz.center.y(),
-                                            0.0,
-                                            tz.center.y() - map_upper_bound_.y()});
-                if (std::hypot(dx, dy) > r) continue;
-                zone_in[zi] = 1;
-                grew = true;
-                max_included_reach = std::max(max_included_reach, tz.reach);
-                map_lower_bound_.x() = std::min(map_lower_bound_.x(), tz.center.x() - r);
-                map_lower_bound_.y() = std::min(map_lower_bound_.y(), tz.center.y() - r);
-                map_upper_bound_.x() = std::max(map_upper_bound_.x(), tz.center.x() + r);
-                map_upper_bound_.y() = std::max(map_upper_bound_.y(), tz.center.y() + r);
-            }
-        }
-        if (max_included_reach > 0.0) {
-            // Routing berth around zones that DO matter (old semantics, but
-            // scoped to included zones instead of the global maximum).
-            bound_margin_xy = std::max(bound_margin_xy, max_included_reach + 5.0);
-            expand_points(bound_margin_xy);
-        }
-        {
-            const size_t n_in = std::count(zone_in.begin(), zone_in.end(), 1);
-            if (n_in < risk_zones_.size()) {
-                log_manager_->infof(
-                    "[BBOX] %zu/%zu risk zones excluded from map bounds "
-                    "(moat cannot reach the mission area)",
-                    risk_zones_.size() - n_in, risk_zones_.size());
-            }
-        }
-
-        // Z bounds: sample terrain along route to find max elevation
-        double max_terrain_z = 0.0;
-        if (terrain_data_.valid) {
-            for (size_t i = 0; i < all_points.size() - 1; ++i) {
-                Eigen::Vector3d dir = all_points[i+1] - all_points[i];
-                double dist = dir.head<2>().norm();
-                int n_samples = std::max(2, (int)(dist / 2.0));
-                for (int s = 0; s <= n_samples; ++s) {
-                    double t = (double)s / n_samples;
-                    Eigen::Vector3d p = all_points[i] + t * dir;
-                    // Also sample laterally
-                    for (double offset : {-bound_margin_xy, 0.0, bound_margin_xy}) {
-                        float elev = terrain_data_.getElevation(p.x() + offset, p.y());
-                        if (elev > -1e10) max_terrain_z = std::max(max_terrain_z, (double)elev);
-                        elev = terrain_data_.getElevation(p.x(), p.y() + offset);
-                        if (elev > -1e10) max_terrain_z = std::max(max_terrain_z, (double)elev);
-                    }
-                }
-            }
-        }
-        // Upper bound: max(terrain peak, flight altitude) + headroom. The max()
-        // keeps the flight altitude inside the box even over low terrain.
-        // The headroom sets the FM2 grid's z extent and so its cell count
-        // (see manager/map_ceiling_headroom).
-        //
-        // RISK ZONE TOPS ARE NOT IN THIS MAX. Scope of that claim, since an
-        // earlier version of this comment overreached twice: what is
-        // MEASURED is that covering them bought nothing and cost a lot on
-        // r6/r7. It is NOT a general law — if a zone top sits below an
-        // altitude the platform can actually reach, overflying it may well
-        // be a legitimate route, and nothing here decides that. What is
-        // definitely wrong is the reason first given (that the box steers
-        // the route); see below.
-        //
-        // Measured with the shipped risk_vertical_ratio and the zone sets
-        // the r6/r7 scenarios actually load (8 zones each), sweeping the
-        // ceiling over a 4x range:
-        //     r6  ceiling 21.47 / 35.47 / 53.82  ->  geodesic [1.99, 6.60]
-        //     r7  ceiling 13.95 / 27.95 / 46.64  ->  geodesic [3.01, 5.56]
-        // The geodesic does not move at all. Covering the tops only inflated
-        // the z grid (r6 128 -> 189 cells) and the plan (4922 -> 7110 ms,
-        // +44%). The box is a PERMISSIVE BOUND, not an attractor: the wave
-        // goes where the speed field sends it, and raising the lid over
-        // airspace nothing wants to use just buys cells to fill.
-        //
-        // The zonewall regression does fail when tops are covered, and that
-        // failure is real — but it is stage-specific and its mechanism is
-        // not "the wave climbs to the ceiling". In the same run, ceiling
-        // 157.51 produced a LOWER climb (47.33) than ceiling 112.68 did
-        // (81.55), and a third stage at ceiling 111.18 climbed only 23.93
-        // and planned CLEAN. That fixture forces risk_vertical_ratio to 3.0
-        // (8.6x shipped) with LOS masking off specifically to seal an
-        // over-the-top escape, so raising the lid dissolves its premise;
-        // what it demonstrates is that the fixture depends on the lid, not
-        // that production does.
-        //
-        // What the failing stages DO show is worth keeping in view: the
-        // rejects there name maximum thrust and bank angle, not altitude.
-        // The geodesic is shear-limited to the model's flight-path VALIDITY
-        // cone (tan 30 deg), while the thrust-sustainable climb grade is
-        // ~7 deg — a number segment_chain_planner already computes from the
-        // same shared model and never tells the front end. A route the front
-        // end may draw at 30 deg and the back end can only fly at 7 is the
-        // actual gap; the bounding box is not where it lives.
-        map_upper_bound_.z() =
-            std::max(max_terrain_z, map_upper_bound_.z()) + map_ceiling_headroom_;
-
-        // zone_top is REPORTED but not applied: the sweep above showed the
-        // geodesic ignores the lid, so this number exists to make "is a zone
-        // above the ceiling?" answerable from a log rather than only by
-        // patching the planner.
-        double max_zone_top = 0.0;
-        int n_zone_top = 0;
-        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-            if (!zone_in[zi]) continue;
-            const double top = risk_zones_[zi].center.z() +
-                               risk_zones_[zi].reach * risk_vertical_ratio_;
-            if (top > max_zone_top) max_zone_top = top;
-            ++n_zone_top;
+        const MissionBoundsResult bounds = computeMissionBounds(
+            start_pos, wps, risk_zones_,
+            {map_ceiling_headroom_, risk_vertical_ratio_}, elevation);
+        map_lower_bound_ = bounds.lower;
+        map_upper_bound_ = bounds.upper;
+        if (bounds.included_zone_count < risk_zones_.size()) {
+            log_manager_->infof(
+                "[BBOX] %zu/%zu risk zones excluded from map bounds "
+                "(moat cannot reach the mission area)",
+                risk_zones_.size() - bounds.included_zone_count,
+                risk_zones_.size());
         }
         log_manager_->infof(
             "[BBOX] headroom=%.2f terrain_peak=%.2f zone_top=%.2f (%d zones, "
             "not covered) -> ceiling %.2f",
-            map_ceiling_headroom_, max_terrain_z, max_zone_top, n_zone_top,
-            map_upper_bound_.z());
+            map_ceiling_headroom_, bounds.max_terrain_z, bounds.max_zone_top,
+            static_cast<int>(bounds.included_zone_count), map_upper_bound_.z());
         log_manager_->infof("Map bounds: lower=(%.2f,%.2f,%.2f), upper=(%.2f,%.2f,%.2f)",
             map_lower_bound_.x(), map_lower_bound_.y(), map_lower_bound_.z(),
             map_upper_bound_.x(), map_upper_bound_.y(), map_upper_bound_.z());
@@ -1150,7 +989,7 @@ std::string PathManager::stateEnvelopeProblem(
             }
             if (!buildSDFForBounds(sdf_lo, sdf_hi)) {
                 RCLCPP_ERROR(node_->get_logger(), "SDF build failed");
-                return false;
+                return std::nullopt;
             }
             // A mission-bbox grid (no terrain yet) stays rebuildable so a
             // later mission with terrain gets the world-wide grid.
@@ -1172,24 +1011,23 @@ std::string PathManager::stateEnvelopeProblem(
 
 
         // === STEP 2~3: front-end search + densification ===
-        std::vector<Eigen::Vector3d> full_route, clean_path;
-        std::vector<double> cap_ref;
-        std::vector<size_t> edge_leg;
+        auto &clean_path = prepared.route.path;
+        auto &cap_ref = prepared.route.cap;
+        auto &edge_leg = prepared.route.edge_leg;
         if (route_override && route_override->size() >= 2) {
             // [CHAIN] Inherited committed route (see the header comment):
             // the optimizer re-solves this exact geometry; no re-litigation
             // of the route homotopy, the altitude band/cap tables inherit
             // the baseline's committed profile over the span.
             clean_path = *route_override;
-            full_route = clean_path;
             if (cap_ref_override) cap_ref = *cap_ref_override;
-            fe_raw_max_z_ = -1e9;
+            prepared.raw_max_z = -1e9;
             for (const auto &p : clean_path)
-                fe_raw_max_z_ = std::max(fe_raw_max_z_, p.z());
+                prepared.raw_max_z = std::max(prepared.raw_max_z, p.z());
             log_manager_->infof(
                 "[CHAIN] inherited committed route: %zu vertices, cap_ref "
                 "%zu, committed max z %.2f (front-end search skipped)",
-                clean_path.size(), cap_ref.size(), fe_raw_max_z_);
+                clean_path.size(), cap_ref.size(), prepared.raw_max_z);
             // [LEG-POLICY] This branch runs NO search, so it can mint no
             // tags, and it never runs the epoch reset at the top of
             // planFrontEnd — leg_policies_ here still describes whichever
@@ -1218,10 +1056,14 @@ std::string PathManager::stateEnvelopeProblem(
                         provenance->edge_leg->size(), clean_path.size());
                 leg_policies_.clear();
             }
-        } else if (!planFrontEnd(start_pos, wps, full_route, clean_path,
-                                 cap_ref, edge_leg,
-                                 allowsTakeoffRelief(head.src))) {
-            return false;
+        } else {
+            auto profile = planFrontEnd(start_pos, wps,
+                                         allowsTakeoffRelief(head.src));
+            if (!profile) return std::nullopt;
+            clean_path = std::move(profile->path);
+            cap_ref = std::move(profile->cap_ref);
+            edge_leg = std::move(profile->edge_leg);
+            prepared.raw_max_z = profile->raw_max_z;
         }
         // [CHAIN] retain the committed products for the chain planner to
         // slice — copied BEFORE the optimizer's midpoint/lead-in insertions
@@ -1237,7 +1079,46 @@ std::string PathManager::stateEnvelopeProblem(
         if (edge_leg.size() + 1 == clean_path.size() && !clean_path.empty()) {
             last_route_edge_leg_ = edge_leg;
             last_route_epoch_ = zone_policy_epoch_;
+        } else {
+            edge_leg.clear();
         }
+        prepared.route.epoch = last_route_epoch_;
+        return prepared;
+    }
+
+    std::optional<CommittedRoute> PathManager::planCommittedRoute(
+        const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints)
+    {
+        auto prepared = prepareRoute(head, waypoints, false, nullptr, nullptr,
+                                      nullptr);
+        if (!prepared) return std::nullopt;
+        log_manager_->infof("[CHAIN-PAR] front-end only: %zu vertices "
+                            "committed, optimization skipped",
+                            prepared->route.path.size());
+        prepared->route.front_end_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - prepared->total_start).count();
+        return std::move(prepared->route);
+    }
+
+    bool PathManager::planGlobalTraj(const StartHead &head,
+                                     const std::vector<Eigen::Vector3d> &waypoints,
+                                     const ego_planner::TailBoundary &tail,
+                                     bool junction_goal,
+                                     const std::vector<Eigen::Vector3d> *route_override,
+                                     const std::vector<double> *cap_ref_override,
+                                     bool front_end_only,
+                                     const RouteProvenance *provenance)
+    {
+        auto prepared = prepareRoute(head, waypoints, junction_goal,
+                                      route_override, cap_ref_override,
+                                      provenance);
+        if (!prepared) return false;
+        const auto &start_pos = head.pos_u;
+        const auto &start_vel = head.vel_u;
+        const auto &start_acc = head.acc_u;
+        auto &clean_path = prepared->route.path;
+        const auto &cap_ref = prepared->route.cap;
+        const auto &wps = prepared->absolute_waypoints;
         if (front_end_only) {
             // [CHAIN-PAR] route-based contract authoring needs only the
             // committed front-end products retained above.
@@ -1299,13 +1180,13 @@ std::string PathManager::stateEnvelopeProblem(
         // [LEG-POLICY] last_route_edge_leg_, not the local edge_leg: the
         // inherited-route branch leaves the local empty and the member is the
         // one place that has already been size-checked against clean_path.
-        bool opt_ok = optimizeStage(clean_path, full_route,
+        bool opt_ok = optimizeStage(clean_path,
                                     start_pos, start_vel_eff, start_acc, wps,
-                                    cap_ref, tail, last_route_edge_leg_);
+                                    cap_ref, prepared->raw_max_z, tail, last_route_edge_leg_);
 
         auto t_total_end = std::chrono::steady_clock::now();
         log_manager_->infof("[TIMING] === TOTAL planGlobalTraj: %.1f ms ===",
-            std::chrono::duration<double, std::milli>(t_total_end - t_total_start).count());
+            std::chrono::duration<double, std::milli>(t_total_end - prepared->total_start).count());
 
         // Second half of the anti-fragmentation pair (see setTerrainData):
         // the FM2 fields are re-allocated INSIDE the plan, so the post-swap
@@ -1316,15 +1197,152 @@ std::string PathManager::stateEnvelopeProblem(
         return opt_ok;
     }
 
-bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
-                               const std::vector<Eigen::Vector3d> &waypoints,
-                               std::vector<Eigen::Vector3d> &full_route,
-                               std::vector<Eigen::Vector3d> &clean_path,
-                               std::vector<double> &cap_ref,
-                               std::vector<size_t> &edge_leg,
-                               bool takeoff_start)
+bool PathManager::configureFrontEnd(RouteSearchProblem &problem)
 {
-    edge_leg.clear();
+    bindRiskZonesToSearcher();
+    searcher_.setLogManager(log_manager_);
+    searcher_.setSDF(&sdf_manager_, map_lower_bound_,
+                     map_upper_bound_ - map_lower_bound_, sdf_voxel_size_, sdf_voxel_z_);
+    log_manager_->infof("[PM DBG] setRiskZones: %zu zones weight=%.3f",
+        astar_risks_.size(), risk_weight_);
+    bindRiskZonesToOptimizer();
+
+    problem = RouteSearchProblem{};
+    problem.identity.context_id = nextRouteSearchIdentity();
+    problem.identity.environment_revision = environmentRevision();
+    problem.identity.zone_generation = zone_policy_generation_;
+    problem.identity.policy_epoch = zone_policy_epoch_;
+    problem.constraints.obstacle_clearance = obstacle_clearance_;
+    problem.constraints.ground_height = ground_height_;
+    problem.constraints.virtual_ceiling = virtual_ceil_height_;
+    problem.constraints.dynamic_obstacle_margin = dyn_obstacle_margin_;
+    problem.model = vehicle_model_override_ ? vehicle_model_override_ : vehicleModel();
+    {
+        double fpa_deg = 30.0;
+        if (!node_->has_parameter(
+                "optimization/dynamics_flight_path_max_deg"))
+            node_->declare_parameter(
+                "optimization/dynamics_flight_path_max_deg", 30.0);
+        node_->get_parameter("optimization/dynamics_flight_path_max_deg",
+                             fpa_deg);
+        // Explicit models own this limit. The legacy ROS path deliberately
+        // reads the live parameter at each search, even before optimizer
+        // initialization or after a runtime parameter update.
+        const auto &model = vehicle_model_override_;
+        problem.constraints.flight_path_angle_max_rad = model
+            ? model->limits().flight_path_angle_max_rad
+            : fpa_deg * M_PI / 180.0;
+    }
+
+    auto &environment = problem.environment;
+    environment.distance_field = &sdf_manager_;
+    environment.lower = map_lower_bound_;
+    environment.upper = map_upper_bound_;
+    environment.voxel_xy = sdf_voxel_size_;
+    environment.voxel_z = sdf_voxel_z_;
+    environment.fine_grid_shape = sdf_manager_.shape();
+    environment.terrain_cell_u = terrain_data_.valid ? terrain_data_.resolution : 0.0;
+    for (const auto &zone : astar_risks_)
+        environment.zones.push_back({zone.center, zone.reach, zone.peak, zone.vertical_reach});
+    environment.elevation = [this](double x, double y) -> float {
+        return terrain_data_.valid ? terrain_data_.getElevation(x, y)
+            : -std::numeric_limits<float>::infinity();
+    };
+    environment.elevation_gradient =
+        [this](double x, double y, float *h, float *gx, float *gy) {
+            return terrain_data_.getElevationAndGrad(x, y, h, gx, gy);
+        };
+    environment.risk_visibility = [this](size_t i, const Eigen::Vector3d &p) {
+        return riskVisibilityValue(i, p);
+    };
+    // This object still supplies canonical occupancy/risk queries even when
+    // another backend generates the route. Its algorithm tuning is private
+    // to the built-in adapter; an external backend needs no FM2/A* options.
+    return builtin_route_search_->prepare(problem, !route_search_backend_);
+}
+
+void PathManager::publishFrontEndRoute(
+    const std::vector<Eigen::Vector3d> &route, double search_ms)
+{
+    log_manager_->infof("A* route: %zu waypoints (%.1f ms)",
+        route.size(),
+        search_ms);
+    // DEBUG: annotate each A* waypoint with the SAME risk field every
+    // consumer uses (dyn_a_star.h getRiskNorm and poly_traj_optimizer
+    // RiskGradCostP share it verbatim): terrain-masked ellipsoidal
+    // quadratic moat m_i = visibility_i*peak*(1-q_i)^2,
+    // OR-composed risk
+    // = 1 - prod_i (1 - m_i), in [0,1]. (Previously this logged a Gaussian *
+    // risk_weight — and later a 3D-sphere distance — neither matched the
+    // planner and made edge passes look far riskier than they are.)
+    // Full per-waypoint dump only for small routes: at FM2 k=1 the raw
+    // route is 30k+ points and 30k formatted log lines cost ~10 s/plan.
+    const size_t kRiskDumpMax = 200;
+    double dbg_risk_max = 0.0, dbg_risk_sum = 0.0;
+    for (size_t ri = 0; ri < route.size(); ++ri) {
+        const auto &p = route[ri];
+        double survival = 1.0;
+        std::string per_zone;
+        const bool dump = route.size() <= kRiskDumpMax;
+        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
+            const auto &tz = risk_zones_[zi];
+            const double q = riskEllipsoidRadius(tz, p);
+            double moat = 0.0;
+            double visibility = 0.0;
+            if (q < 1.0) {
+                visibility = riskVisibilityValue(zi, p);
+                moat = tz.peak * mmp::risk::shape(q) * visibility;
+            }
+            survival *= (1.0 - std::min(moat, mmp::risk::kMoatCap));
+            if (dump) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf),
+                              " tz%zu(q=%.2f,v=%.2f,m=%.3f)",
+                              zi, q, visibility, moat);
+                per_zone += buf;
+            }
+        }
+        const double r = 1.0 - survival;
+        dbg_risk_max = std::max(dbg_risk_max, r);
+        dbg_risk_sum += r;
+        if (dump) {
+            log_manager_->infof("  A*[%zu]: (%.2f, %.2f, %.2f) risk=%.3f%s",
+                ri, p.x(), p.y(), p.z(), r, per_zone.c_str());
+        }
+    }
+    if (route.size() > kRiskDumpMax) {
+        log_manager_->infof(
+            "  A* route risk: %zu wp, max=%.3f mean=%.4f (per-wp dump skipped)",
+            route.size(), dbg_risk_max,
+            dbg_risk_sum / std::max<size_t>(1, route.size()));
+    }
+
+    // Front-end route: nav_msgs/Path for programmatic consumers plus the
+    // tube marker render (/viz/front_end_path).
+    nav_msgs::msg::Path path_msg;
+    path_msg.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
+    path_msg.header.frame_id = "map";
+    for (const auto &point : route) {
+        geometry_msgs::msg::PoseStamped pose;
+        pose.header = path_msg.header;
+        pose.pose.position.x = point.x();
+        pose.pose.position.y = point.y();
+        pose.pose.position.z = point.z();
+        pose.pose.orientation.w = 1.0;
+        path_msg.poses.push_back(pose);
+    }
+    front_end_path_pub_->publish(path_msg);
+    // ns matches the retired bridge node ("opt_path_drone_<id>" — the
+    // shipped RViz configs filter on it).
+    publishTubeMarker(front_end_tube_pub_, route, "opt_path_drone_",
+                      0.12f, 0.39f, 1.0f, 0.7f);
+}
+
+std::optional<RouteProfileResult> PathManager::planFrontEnd(
+    const Eigen::Vector3d &start_pos,
+    const std::vector<Eigen::Vector3d> &waypoints, bool takeoff_start)
+{
+    std::vector<Eigen::Vector3d> full_route;
     // [S13] policy epoch: dispositions are per-search state, so every
     // front-end run invalidates outstanding zone-policy snapshots; the
     // recorded generation says WHICH zone data this search saw.
@@ -1332,558 +1350,208 @@ bool PathManager::planFrontEnd(const Eigen::Vector3d &start_pos,
     zone_policy_epoch_generation_ = zone_policy_generation_;
     zone_policy_epoch_searches_ = 0;
     leg_policies_.clear();
+    last_search_policy_ = RouteSearchPolicy{};
+    last_search_policy_measured_ = false;
 
-        // Segment list: start -> wp1 -> ... -> wpN
-        std::vector<Eigen::Vector3d> all_points;
-        all_points.push_back(start_pos);
-        for (const auto& wp : waypoints) {
-            all_points.push_back(wp);
-        }
+    const MissionRouteSearchRequest request{
+        start_pos, waypoints, 1.0, traj_.local_traj.drone_id,
+        takeoff_start};
+    // The backend only borrows this input during synchronous calls. Keep it
+    // local so its model reference is released on every return/exception;
+    // an idle route cache must not retain a previously replaced model.
+    RouteSearchProblem problem;
+    if (!configureFrontEnd(problem)) return std::nullopt;
 
-        // === STEP 2: 3D A* search + visibility-thinning simple_path ===
-        // Bind SDF + risk zones to the A* front-end. A* collision check uses
-        // the ESDF (distance < obstacle_clearance_ == blocked), and risk
-        // cost is added to the A* g-score per visited cell.
-        // Member, not a local: the searcher keeps a raw pointer to this
-        // vector past the end of this call (see astar_risks_ in the header).
-        bindRiskZonesToSearcher();
-        Eigen::Vector3d map_size = map_upper_bound_ - map_lower_bound_;
-        searcher_.setLogManager(log_manager_);
-        searcher_.setSDF(&sdf_manager_, map_lower_bound_, map_size,
-                         sdf_voxel_size_, sdf_voxel_z_);
-        log_manager_->infof("[PM DBG] setRiskZones: %zu zones weight=%.3f",
-            astar_risks_.size(), risk_weight_);
-        // Re-bind the optimizer with the SAME zone set every plan, symmetric
-        // with the searcher_ re-bind above. initOptimizer() only snapshots the
-        // set active at startup, so without this per-plan push a runtime zone
-        // update (setRiskZonesRuntime) reaches the front-end and the metrics
-        // panel but never MINCO — which then smooths trajectories into freshly
-        // added zones (and keeps dodging removed ones). An empty list
-        // intentionally clears stale zones.
-        bindRiskZonesToOptimizer();
-        // A* must see obstacles so the simple_path it returns is already an
-        // avoidance path. Feeding that into MINCO makes the initial inner
-        // points sit OUTSIDE the obstacle, and L-BFGS only has to smooth the
-        // detour — no saddle problem. If A* is blinded (search_ignores=true)
-        // the optimiser gets a straight line through the obstacle centre and
-        // the cylinder's rotational symmetry pins it at a zero-gradient
-        // saddle, which matches what main-branch would also suffer under the
-        // same debug configuration.
-        searcher_.setObstacleMargin(obstacle_clearance_);
-        searcher_.setZoneAvoidLexico(zone_avoid_lexico_);
-        searcher_.setGroundHeight(ground_height_);
-        searcher_.setVirtualCeilHeight(virtual_ceil_height_);
-        // 2.5D terrain heightmap for the front end (FM2 speed map / A* / shortcut):
-        // exact terrain z, so the route no longer cuts through hills the coarse
-        // voxel SDF under-saw. Same source as the optimizer's terrain term.
-        searcher_.setTerrainHeightmap(
-            [this](double x, double y) -> float {
-                return terrain_data_.valid
-                         ? terrain_data_.getElevation(x, y)
-                         : -std::numeric_limits<float>::infinity();
-            },
-            // DEM cell in frame units: the searcher scales its chord-sampling
-            // pitch to half a cell (corridor 30 m crops need ~0.15 u, not the
-            // legacy 0.5 u sized for the 250 m full_map grid).
-            terrain_data_.valid ? terrain_data_.resolution : 0.0);
-        searcher_.setRiskAlpha(risk_weight_);
-        searcher_.setRiskBarrier(risk_barrier_);
-        searcher_.setRiskGoalTaperRadius(risk_goal_taper_radius_);
-        // Fixed-wing slope cap for the geodesic extraction, from the SHARED
-        // dynamics model's flight-path-angle limit (single authority — the
-        // same number the optimizer's envelope terms enforce).
-        {
-            double fpa_deg = 30.0;
-            if (!node_->has_parameter(
-                    "optimization/dynamics_flight_path_max_deg"))
-                node_->declare_parameter(
-                    "optimization/dynamics_flight_path_max_deg", 30.0);
-            node_->get_parameter("optimization/dynamics_flight_path_max_deg",
-                                 fpa_deg);
-            searcher_.setGeodesicSlopeTanMax(
-                std::tan(fpa_deg * M_PI / 180.0));
-        }
-        searcher_.setSmhaW(risk_smha_w_);
-        searcher_.setFrontEnd(front_end_str_ == "fm2"
-            ? path_planner::search::PathSearcher::FrontEnd::FM2
-            : path_planner::search::PathSearcher::FrontEnd::ASTAR);
-        searcher_.setFm2CoarseK(fm2_coarse_k_);
-        searcher_.setFm2MaxCells(static_cast<size_t>(fm2_max_cells_));
-        searcher_.setFm2Star(fm2_star_);
-        searcher_.setFm2AltPenalty(fm2_alt_penalty_, fm2_alt_zscale_, fm2_alt_zscale_dn_);
-        // [ROUGH] slope field for the roughness pseudo-moat (same TerrainData
-        // surface as the heightmap above; thread_local memo, OMP-safe).
-        searcher_.setTerrainHeightGrad(
-            [this](double x, double y, float *h, float *gx, float *gy) -> bool {
-                return terrain_data_.getElevationAndGrad(x, y, h, gx, gy);
-            });
-        searcher_.setRoughness(fm2_rough_weight_, fm2_rough_slope0_);
-        searcher_.setDynObstacleMargin(dyn_obstacle_margin_);
-        searcher_.setBypassShortcut(astar_bypass_shortcut_);
-
-        // A* fine pool is only used by the A* front-end. FM2 runs on its
-        // own coarse grid (fm2_F_, fm2_T_) and never touches pool_, so
-        // skip the ~2 GB / 655 ms allocation in FM2 mode.
-        if (front_end_str_ != "fm2") {
-            Eigen::Vector3i sdf_shape = sdf_manager_.shape();
-            if (sdf_shape.minCoeff() <= 0) {
-                log_manager_->errorf("SDF shape not available, cannot size A* pool");
-                return false;
+    auto t_astar_start = std::chrono::steady_clock::now();
+    bool leg_capture_voided = false;
+    const RouteLegSearch search = [this, &problem](const RouteLegSearchRequest &leg) {
+        problem.start = leg.start;
+        problem.goal = leg.goal;
+        problem.drone_id = leg.drone_id;
+        problem.is_takeoff_leg = leg.is_takeoff_leg;
+        problem.identity.request_id = nextRouteSearchIdentity();
+        problem.identity.search_serial = zone_policy_epoch_searches_ + 1;
+        problem.identity.leg = leg.leg;
+        const auto backend = route_search_backend_ ? route_search_backend_
+            : std::static_pointer_cast<RouteSearchBackend>(builtin_route_search_);
+        RouteSearchResult result;
+        if (route_search_backend_) {
+            try {
+                result = backend->search(problem);
+            } catch (const std::exception &error) {
+                result.status = RouteSearchStatus::BACKEND_FAILURE;
+                result.detail = std::string("external backend exception: ") + error.what();
+            } catch (...) {
+                result.status = RouteSearchStatus::BACKEND_FAILURE;
+                result.detail = "external backend threw an unknown exception";
             }
-            Eigen::Vector3i desired = sdf_shape;
-            if (!astar_initialized_) {
-                astar_pool_size_ = desired;
-                searcher_.initGridMap(astar_pool_size_);
-                astar_initialized_ = true;
-                log_manager_->infof("A* pool allocated: (%d,%d,%d)",
-                    astar_pool_size_.x(), astar_pool_size_.y(), astar_pool_size_.z());
-            } else if (desired != astar_pool_size_) {
-                astar_pool_size_ = desired;
-                searcher_.resizePool(astar_pool_size_);
-                log_manager_->infof("A* pool resized: (%d,%d,%d)",
-                    astar_pool_size_.x(), astar_pool_size_.y(), astar_pool_size_.z());
-            }
+        } else {
+            result = backend->search(problem);
+        }
+        last_search_policy_ = std::move(result.policy);
+        last_search_policy_measured_ = routeSearchPolicyMeasured(problem, last_search_policy_) &&
+            problem.identity.environment_revision == environmentRevision() &&
+            problem.identity.zone_generation == zone_policy_generation_;
+        if (!routeSearchGeometryUsable(result)) {
+            last_search_policy_measured_ = false;
+            if (!result.detail.empty())
+                log_manager_->errorf("[ROUTE-SEARCH] %s", result.detail.c_str());
+            return std::vector<Eigen::Vector3d>{};
+        }
+        return std::move(result.points);
+    };
+    // Capture live policy immediately after each actual search, including
+    // failed attempts. The next leg must not overwrite the searcher buffers
+    // before this observer has recorded or voided their attribution.
+    const LegSearchObserver observe = [&](const RouteLegSearchRequest &leg,
+                                           size_t point_count) {
+        const size_t seg = leg.leg;
+        ++zone_policy_epoch_searches_;
+
+        log_manager_->infof("A* segment %zu: simple_path_size=%zu",
+            seg, point_count);
+
+        if (point_count < 2)
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                "A* failed for segment %zu: (%.2f,%.2f,%.2f) -> (%.2f,%.2f,%.2f)",
+                seg, leg.start.x(), leg.start.y(), leg.start.z(),
+                leg.goal.x(), leg.goal.y(), leg.goal.z());
+            // [LEG-POLICY] A leg that produced no path produced no policy
+            // either. Everything captured so far described a route that is
+            // now not going to exist, and the legs after this one will
+            // never run — so the EPOCH is void, not merely incomplete. A
+            // surviving prefix would be a set of snapshots for a plan that
+            // failed, sitting behind an accessor whose only size check is
+            // against a trajectory from some other plan.
+            leg_policies_.clear();
+            return;
         }
 
-        auto t_astar_start = std::chrono::steady_clock::now();
-        full_route.clear();
-        full_route.push_back(start_pos);
-        // [LEG-POLICY] route_leg[i] owns the edge full_route[i] -> [i+1].
-        // Recorded as the geometry is built, not reconstructed later: after
-        // the fillets and the subdivision below, nearest-leg projection would
-        // pick the wrong leg wherever two legs run close or the route doubles
-        // back on itself.
-        std::vector<size_t> route_leg;
-        // [LEG-POLICY] Latched once any leg fails to yield a snapshot; see
-        // the capture block below.
-        bool leg_capture_voided = false;
-        for (size_t seg = 0; seg < all_points.size() - 1; ++seg)
+        // [LEG-POLICY] Captured only now — AFTER this leg is known to have
+        // produced a path, and still while its search owns the searcher
+        // buffers (the next leg overwrites them, which is exactly why the
+        // plan-wide snapshot refuses a multi-leg epoch). Capturing before
+        // the success check recorded a policy for a search that failed.
         {
-            std::vector<Eigen::Vector3d> seg_path =
-                searcher_.astarSearchAndGetSimplePath(
-                    astar_step_size_, all_points[seg], all_points[seg + 1],
-                    traj_.local_traj.drone_id,
-                    // BOTH conditions. seg == 0 is the route's first leg;
-                    // takeoff_start is whether this call begins where the
-                    // AIRCRAFT is. planGlobalTraj is re-entered for chain
-                    // junctions and transition handoffs, and each of those
-                    // has its own leg 0 — seg == 0 alone handed them an
-                    // allowance meant for a mission start.
-                    /*is_takeoff_leg=*/seg == 0 && takeoff_start);
-            ++zone_policy_epoch_searches_;
-
-            log_manager_->infof("A* segment %zu: simple_path_size=%zu",
-                seg, seg_path.size());
-
-            if (seg_path.size() < 2)
-            {
-                RCLCPP_ERROR(node_->get_logger(),
-                    "A* failed for segment %zu: (%.2f,%.2f,%.2f) -> (%.2f,%.2f,%.2f)",
-                    seg, all_points[seg].x(), all_points[seg].y(), all_points[seg].z(),
-                    all_points[seg+1].x(), all_points[seg+1].y(), all_points[seg+1].z());
-                // [LEG-POLICY] A leg that produced no path produced no policy
-                // either. Everything captured so far described a route that is
-                // now not going to exist, and the legs after this one will
-                // never run — so the EPOCH is void, not merely incomplete. A
-                // surviving prefix would be a set of snapshots for a plan that
-                // failed, sitting behind an accessor whose only size check is
-                // against a trajectory from some other plan.
+            LegPolicySnapshot lp;
+            if (captureLegPolicySnapshot(seg, zone_policy_epoch_searches_,
+                                         &lp) && !leg_capture_voided) {
+                leg_policies_.push_back(lp);
+            } else if (!leg_capture_voided) {
+                // A hole is not a set. Note the LATCH: without it the
+                // legs after the failure would append and leave a TAIL —
+                // snapshots whose leg numbers no longer line up with
+                // anything, and which a per-leg reader would index by
+                // position. Voided means voided for the epoch, not until
+                // the next success.
+                //
+                // The PLAN is not failed here: a configuration where no
+                // capture is possible at all (the 3-pass off, with zones
+                // present) is a supported one, and it is the audit's job
+                // to refuse what it cannot attribute — see wpzonepass0.
                 leg_policies_.clear();
-                return false;
-            }
-
-            // [LEG-POLICY] Captured only now — AFTER this leg is known to have
-            // produced a path, and still while its search owns the searcher
-            // buffers (the next leg overwrites them, which is exactly why the
-            // plan-wide snapshot refuses a multi-leg epoch). Capturing before
-            // the success check recorded a policy for a search that failed.
-            {
-                LegPolicySnapshot lp;
-                if (captureLegPolicySnapshot(seg, zone_policy_epoch_searches_,
-                                             &lp) && !leg_capture_voided) {
-                    leg_policies_.push_back(lp);
-                } else if (!leg_capture_voided) {
-                    // A hole is not a set. Note the LATCH: without it the
-                    // legs after the failure would append and leave a TAIL —
-                    // snapshots whose leg numbers no longer line up with
-                    // anything, and which a per-leg reader would index by
-                    // position. Voided means voided for the epoch, not until
-                    // the next success.
-                    //
-                    // The PLAN is not failed here: a configuration where no
-                    // capture is possible at all (the 3-pass off, with zones
-                    // present) is a supported one, and it is the audit's job
-                    // to refuse what it cannot attribute — see wpzonepass0.
-                    leg_policies_.clear();
-                    leg_capture_voided = true;
-                    log_manager_->warnf(
-                        "[LEG-POLICY] leg %zu could not be captured — the "
-                        "epoch is void, not partial", seg);
-                }
-            }
-
-            for (size_t i = (seg == 0 ? 0 : 1); i < seg_path.size(); ++i)
-            {
-                if (!full_route.empty() &&
-                    (full_route.back() - seg_path[i]).norm() < 1e-3) {
-                    continue;
-                }
-                full_route.push_back(seg_path[i]);
-                route_leg.push_back(seg);   // the edge this push just created
+                leg_capture_voided = true;
+                log_manager_->warnf(
+                    "[LEG-POLICY] leg %zu could not be captured — the "
+                    "epoch is void, not partial", seg);
             }
         }
+    };
+    auto searched = searchMissionRoute(request, search, observe);
+    if (searched.status != MissionRouteSearchStatus::SUCCESS) return std::nullopt;
+    full_route = std::move(searched.route.points);
+    std::vector<size_t> route_leg = std::move(searched.route.edge_leg);
 
-        // === Corner fillets: replace each polyline kink with a circular arc ===
-        // The back-end has no minimum-speed/curvature constraint (quadrotor
-        // heritage): given a kinked polyline it just brakes at the kink, so
-        // the optimized geometry stays angular no matter the accel limit. A
-        // fixed-radius fillet bakes the coordinated-turn shape into the input
-        // instead. Arcs that would clip terrain (SDF below clearance) or
-        // enter a risk zone the corner itself avoids shrink R and retry.
-        if (corner_fillet_radius_ > 1e-6 && full_route.size() >= 3) {
-            auto sample_ok = [&](const Eigen::Vector3d &p,
-                                 const Eigen::Vector3d &corner) {
-                if (sdf_manager_.hasData() &&
-                    sdf_manager_.getDistance(p) < obstacle_clearance_) return false;
-                for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-                    const auto &tz = risk_zones_[zi];
-                    const bool corner_in =
-                        riskEllipsoidRadius(tz, corner) < 1.0 &&
-                        riskVisibilityValue(zi, corner) > 0.5;
-                    const bool p_in =
-                        riskEllipsoidRadius(tz, p) < 1.0 &&
-                        riskVisibilityValue(zi, p) > 0.5;
-                    if (p_in && !corner_in) return false;  // arc dips INTO a zone
-                }
-                return true;
-            };
-
-            std::vector<Eigen::Vector3d> rounded;
-            std::vector<size_t> rounded_leg;
-            rounded.reserve(full_route.size() * 4);
-            rounded_leg.reserve(full_route.size() * 4);
-            rounded.push_back(full_route.front());
-            // Every push below adds exactly one edge, so one tag per push
-            // keeps rounded_leg.size() + 1 == rounded.size() by construction.
-            for (size_t n = 1; n + 1 < full_route.size(); ++n) {
-                const Eigen::Vector3d &A = full_route[n - 1];
-                const Eigen::Vector3d &B = full_route[n];
-                const Eigen::Vector3d &C = full_route[n + 1];
-                const size_t leg_in = route_leg[n - 1];    // edge A->B
-                const size_t leg_out = route_leg[n];       // edge B->C
-                const double d1 = (A - B).norm(), d2 = (C - B).norm();
-                if (d1 < 1e-6 || d2 < 1e-6) {
-                    rounded.push_back(B); rounded_leg.push_back(leg_in); continue;
-                }
-                const Eigen::Vector3d u = (A - B) / d1, w = (C - B) / d2;
-                const double cosphi = std::clamp(u.dot(w), -1.0, 1.0);
-                const double phi = std::acos(cosphi);   // interior angle at B
-                if (phi > M_PI - 0.05) {                // ~straight
-                    rounded.push_back(B); rounded_leg.push_back(leg_in); continue;
-                }
-
-                bool placed = false;
-                for (double R = corner_fillet_radius_; R > 1.0; R *= 0.5) {
-                    double t = R / std::tan(0.5 * phi);
-                    const double t_cap = 0.45 * std::min(d1, d2);
-                    double R_eff = R;
-                    if (t > t_cap) { t = t_cap; R_eff = t * std::tan(0.5 * phi); }
-                    const Eigen::Vector3d P1 = B + u * t, P2 = B + w * t;
-                    // Quadratic Bezier P1->B->P2 approximates the arc and is
-                    // tangent to both segments; sample every ~3 units.
-                    int N = std::max(3, (int)std::ceil((P1 - P2).norm() / 3.0));
-                    // [LEG-POLICY] B is a leg junction when the two edges it
-                    // joins came from different searches. The fillet deletes B
-                    // and replaces it with an arc that belongs to neither leg
-                    // alone, so force an EVEN sample count: a = 0.5 is then a
-                    // real vertex, the arc apex stands in for the junction B
-                    // used to be, and the two halves become separate pieces.
-                    // Without it one piece would straddle two policies and the
-                    // audit would have to pick one of them arbitrarily.
-                    const bool junction = (leg_in != leg_out);
-                    if (junction && (N % 2) != 0) ++N;
-                    std::vector<Eigen::Vector3d> arc;
-                    bool ok = true;
-                    for (int k = 1; k < N; ++k) {
-                        const double a = (double)k / N, b = 1.0 - a;
-                        const Eigen::Vector3d p = b * b * P1 + 2 * a * b * B + a * a * P2;
-                        if (!sample_ok(p, B)) { ok = false; break; }
-                        arc.push_back(p);
-                    }
-                    if (!ok) continue;            // shrink R, retry
-                    rounded.push_back(P1);        // lies on A->B
-                    rounded_leg.push_back(leg_in);
-                    for (int k = 1; k < N; ++k) {
-                        rounded.push_back(arc[k - 1]);
-                        // The edge ARRIVING at the apex (k == N/2) is still
-                        // the incoming leg's; everything past it is outgoing.
-                        rounded_leg.push_back(
-                            (junction && k > N / 2) ? leg_out : leg_in);
-                    }
-                    rounded.push_back(P2);        // lies on B->C
-                    rounded_leg.push_back(leg_out);
-                    placed = true;
-                    (void)R_eff;
-                    break;
-                }
-                if (!placed) {                   // keep the kink
-                    rounded.push_back(B); rounded_leg.push_back(leg_in);
-                }
-            }
-            rounded.push_back(full_route.back());
-            rounded_leg.push_back(route_leg.back());
-            log_manager_->infof("corner fillet R=%.1f: %zu -> %zu pts",
-                                corner_fillet_radius_, full_route.size(),
-                                rounded.size());
-            full_route.swap(rounded);
-            route_leg.swap(rounded_leg);
-        }
-
-        auto t_rrt_end = std::chrono::steady_clock::now();
-        log_manager_->infof("A* route: %zu waypoints (%.1f ms)",
-            full_route.size(),
-            std::chrono::duration<double, std::milli>(t_rrt_end - t_astar_start).count());
-        // DEBUG: annotate each A* waypoint with the SAME risk field every
-        // consumer uses (dyn_a_star.h getRiskNorm and poly_traj_optimizer
-        // RiskGradCostP share it verbatim): terrain-masked ellipsoidal
-        // quadratic moat m_i = visibility_i*peak*(1-q_i)^2,
-        // OR-composed risk
-        // = 1 - prod_i (1 - m_i), in [0,1]. (Previously this logged a Gaussian *
-        // risk_weight — and later a 3D-sphere distance — neither matched the
-        // planner and made edge passes look far riskier than they are.)
-        // Full per-waypoint dump only for small routes: at FM2 k=1 the raw
-        // route is 30k+ points and 30k formatted log lines cost ~10 s/plan.
-        const size_t kRiskDumpMax = 200;
-        double dbg_risk_max = 0.0, dbg_risk_sum = 0.0;
-        for (size_t ri = 0; ri < full_route.size(); ++ri) {
-            const auto &p = full_route[ri];
-            double survival = 1.0;
-            std::string per_zone;
-            const bool dump = full_route.size() <= kRiskDumpMax;
+    // === Corner fillets: replace each polyline kink with a circular arc ===
+    // The back-end has no minimum-speed/curvature constraint (quadrotor
+    // heritage): given a kinked polyline it just brakes at the kink, so
+    // the optimized geometry stays angular no matter the accel limit. A
+    // fixed-radius fillet bakes the coordinated-turn shape into the input
+    // instead. Arcs that would clip terrain (SDF below clearance) or
+    // enter a risk zone the corner itself avoids shrink R and retry.
+    if (corner_fillet_radius_ > 1e-6 && full_route.size() >= 3) {
+        auto sample_ok = [&](const Eigen::Vector3d &p,
+                             const Eigen::Vector3d &corner) {
+            if (sdf_manager_.hasData() &&
+                sdf_manager_.getDistance(p) < obstacle_clearance_) return false;
             for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
                 const auto &tz = risk_zones_[zi];
-                const double q = riskEllipsoidRadius(tz, p);
-                double moat = 0.0;
-                double visibility = 0.0;
-                if (q < 1.0) {
-                    visibility = riskVisibilityValue(zi, p);
-                    moat = tz.peak * mmp::risk::shape(q) * visibility;
-                }
-                survival *= (1.0 - std::min(moat, mmp::risk::kMoatCap));
-                if (dump) {
-                    char buf[64];
-                    std::snprintf(buf, sizeof(buf),
-                                  " tz%zu(q=%.2f,v=%.2f,m=%.3f)",
-                                  zi, q, visibility, moat);
-                    per_zone += buf;
-                }
+                const bool corner_in =
+                    riskEllipsoidRadius(tz, corner) < 1.0 &&
+                    riskVisibilityValue(zi, corner) > 0.5;
+                const bool p_in =
+                    riskEllipsoidRadius(tz, p) < 1.0 &&
+                    riskVisibilityValue(zi, p) > 0.5;
+                if (p_in && !corner_in) return false;  // arc dips INTO a zone
             }
-            const double r = 1.0 - survival;
-            dbg_risk_max = std::max(dbg_risk_max, r);
-            dbg_risk_sum += r;
-            if (dump) {
-                log_manager_->infof("  A*[%zu]: (%.2f, %.2f, %.2f) risk=%.3f%s",
-                    ri, p.x(), p.y(), p.z(), r, per_zone.c_str());
-            }
-        }
-        if (full_route.size() > kRiskDumpMax) {
-            log_manager_->infof(
-                "  A* route risk: %zu wp, max=%.3f mean=%.4f (per-wp dump skipped)",
-                full_route.size(), dbg_risk_max,
-                dbg_risk_sum / std::max<size_t>(1, full_route.size()));
-        }
+            return true;
+        };
 
-        // Front-end route: nav_msgs/Path for programmatic consumers plus the
-        // tube marker render (/viz/front_end_path).
-        nav_msgs::msg::Path path_msg;
-        path_msg.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
-        path_msg.header.frame_id = "map";
-        for (const auto &point : full_route) {
-            geometry_msgs::msg::PoseStamped pose;
-            pose.header = path_msg.header;
-            pose.pose.position.x = point.x();
-            pose.pose.position.y = point.y();
-            pose.pose.position.z = point.z();
-            pose.pose.orientation.w = 1.0;
-            path_msg.poses.push_back(pose);
-        }
-        front_end_path_pub_->publish(path_msg);
-        // ns matches the retired bridge node ("opt_path_drone_<id>" — the
-        // shipped RViz configs filter on it).
-        publishTubeMarker(front_end_tube_pub_, full_route, "opt_path_drone_",
-                          0.12f, 0.39f, 1.0f, 0.7f);
+        const size_t original_points = full_route.size();
+        TaggedRoute rounded = roundRouteCorners(
+            {std::move(full_route), std::move(route_leg)},
+            corner_fillet_radius_, sample_ok);
+        log_manager_->infof("corner fillet R=%.1f: %zu -> %zu pts",
+                            corner_fillet_radius_, original_points,
+                            rounded.points.size());
+        full_route = std::move(rounded.points);
+        route_leg = std::move(rounded.edge_leg);
+    }
 
-        // === STEP 2.5: z-denoise of the shortcut vertices ===
-        // The FM2 grid has only a few dozen z-cells over the whole map, so
-        // the geodesic's z carries quantization noise on the order of a full
-        // cell — comparable to the mission altitude band itself. The long
-        // min-jerk pieces (50-100 s) RING through those jittery pins,
-        // amplifying tens of metres of noise into slow z-waves that bounce
-        // off the clearance floor (the jerk term is T^5 scale-starved at
-        // mission scale and cannot iron them out — see
-        // optimization/weight_smoothness). Smooth z ONLY — xy is real
-        // geometry (obstacle/risk avoidance). Terrain-forced climbs survive
-        // via the elevation clamp; a smoothed vertex that would lose
-        // obstacle clearance keeps its original z. Endpoints stay fixed.
-        // Cap reference = the PRE-denoise COMMITTED profile. The altitude
-        // cap's contract is "no ballooning above the FRONT-END'S COMMITTED
-        // profile"; the z-denoise below is a numerical filter (FM2 grid
-        // sawtooth), not a commitment change — yet its moving average planes
-        // the profile's defining features (crest max: observed 11.90 -> 11.56,
-        // i.e. the cap reference lost 34 m). Snapshot the raw z PER VERTEX
-        // before the filter; after it, take the elementwise max with the
-        // filtered value (the filter's terrain/water CLAMPS may legitimately
-        // RAISE z — that lift is part of the commitment too). This vector
-        // becomes the arc-varying cap's reference through the subdivision
-        // below; its max feeds the scalar fallback.
-        std::vector<double> raw_z;
-        raw_z.reserve(full_route.size());
-        fe_raw_max_z_ = -1e9;
-        for (const auto &p : full_route) {
-            raw_z.push_back(p.z());
-            fe_raw_max_z_ = std::max(fe_raw_max_z_, p.z());
-        }
+    auto t_rrt_end = std::chrono::steady_clock::now();
+    publishFrontEndRoute(full_route,
+        std::chrono::duration<double, std::milli>(t_rrt_end - t_astar_start).count());
 
-        if (full_route.size() >= 3) {
-            const size_t n = full_route.size();
-            std::vector<double> zs(n);
-            for (size_t i = 0; i < n; ++i) zs[i] = full_route[i].z();
-            double z_lo0 = zs[0], z_hi0 = zs[0];
-            for (double z : zs) { z_lo0 = std::min(z_lo0, z); z_hi0 = std::max(z_hi0, z); }
-
-            size_t adjusted = 0;
-            // Water-pin floor = the MISSION's own minimum altitude (not a
-            // clearance multiple). The old 0.5*obstacle_clearance floor was
-            // tuned when clearance was 0.2 (= 10 m, "so 10 m-cruise missions
-            // are not distorted upward"); the ridge-graze retune to 0.38
-            // silently raised it to 19 m and every low-altitude over-water
-            // mission grew a mid-route hump to 19 m between its 10 m
-            // endpoints. Anchoring to min(start, goal/waypoints) restores the
-            // intent for ANY altitude and matches the system-wide rule
-            // ("nothing ever requires diving below the mission altitude" —
-            // FM2 stiff down-side, optimizer alt floor): over water, a pin
-            // below the mission minimum is grid noise by definition. The 2 m
-            // absolute guard only defends against underwater start inputs.
-            double mission_min_z = start_pos.z();
-            for (const auto &wp : waypoints)
-                mission_min_z = std::min(mission_min_z, wp.z());
-            const double water_pin_floor = std::max(0.02, mission_min_z);
-            const int W = 2;  // +-2 vertex moving average
-            for (size_t i = 1; i + 1 < n; ++i) {
-                double acc = 0.0;
-                int cnt = 0;
-                for (int k = -W; k <= W; ++k) {
-                    const long j = static_cast<long>(i) + k;
-                    if (j < 0 || j >= static_cast<long>(n)) continue;
-                    acc += zs[j];
-                    ++cnt;
-                }
-                double z_new = acc / cnt;
-                if (terrain_data_.valid) {
-                    const float elev = terrain_data_.getElevation(
-                        full_route[i].x(), full_route[i].y());
-                    // Land: hold terrain + full clearance. Water (invalid
-                    // elev): the mission-min floor (see water_pin_floor
-                    // above) — keeps the geodesic's z-noise pins (observed
-                    // -0.40, conflicting with the ground plane) above water WITHOUT
-                    // distorting low-altitude cruises upward.
-                    if (elev > -1e9f) {
-                        z_new = std::max(z_new,
-                                         static_cast<double>(elev) + obstacle_clearance_);
-                    } else {
-                        z_new = std::max(z_new, water_pin_floor);
-                    }
-                }
-                const Eigen::Vector3d cand(full_route[i].x(), full_route[i].y(), z_new);
-                if (sdf_manager_.hasData()) {
-                    const float d = sdf_manager_.getDistance(cand);
-                    if (!(std::isfinite(d) && d >= obstacle_clearance_)) continue;  // keep raw z
-                }
-                if (std::abs(z_new - zs[i]) > 1e-9) ++adjusted;
-                full_route[i].z() = z_new;
-            }
-            double z_lo1 = full_route[0].z(), z_hi1 = z_lo1;
-            for (const auto &p : full_route) {
-                z_lo1 = std::min(z_lo1, p.z());
-                z_hi1 = std::max(z_hi1, p.z());
-            }
-            log_manager_->infof(
-                "[Z-DENOISE] shortcut z: %zu/%zu vertices smoothed, range [%.2f, %.2f] -> [%.2f, %.2f]",
-                adjusted, n, z_lo0, z_hi0, z_lo1, z_hi1);
-        }
-        // Committed profile = elementwise max(raw, filtered): neither the
-        // filter's crest planing nor its safety clamps may LOWER the cap
-        // reference (see the raw_z snapshot comment above).
-        for (size_t i = 0; i < raw_z.size() && i < full_route.size(); ++i)
-            raw_z[i] = std::max(raw_z[i], full_route[i].z());
-
-        // === STEP 3: Sparse piece boundaries (reference-style). ===
-        // The shortcut vertices ARE the geometry; we only subdivide long
-        // segments so the optimizer's per-piece obstacle sampling stays dense
-        // enough. NO corner densification: pinning extra points at corners is
-        // what kept the min-jerk pieces from rounding them — with long free
-        // pieces the quintic sweeps through a corner waypoint on a wide arc
-        // by itself (Swarm-Formation / GCOPTER structure).
-        const double max_seg = std::max(1.0, length_per_piece_ * 4.0);
-        clean_path.clear();
-        clean_path.reserve(full_route.size() * 4);
-        clean_path.push_back(full_route.front());
-        // cap_ref mirrors clean_path vertex-for-vertex (SAME skip rule, SAME
-        // interpolation) so the optimizer's index pairing holds by
-        // construction — it hard-checks sizes and falls back to the scalar
-        // cap on mismatch.
-        cap_ref.clear();
-        cap_ref.reserve(full_route.size() * 4);
-        cap_ref.push_back(raw_z.empty() ? full_route.front().z() : raw_z.front());
-        // [LEG-POLICY] The subdivision splits an edge; it never merges two, so
-        // every sub-edge inherits its parent's leg unchanged. Refuse to guess
-        // if the tags and the geometry ever disagree on length.
-        const bool leg_tags_ok = (route_leg.size() + 1 == full_route.size());
-        if (!leg_tags_ok)
-            log_manager_->errorf(
-                "[LEG-POLICY] edge tags %zu do not match route %zu — route "
-                "provenance dropped",
-                route_leg.size(), full_route.size());
-        edge_leg.clear();
-        edge_leg.reserve(full_route.size() * 4);
-        for (size_t i = 0; i + 1 < full_route.size(); ++i) {
-            const Eigen::Vector3d &a = full_route[i];
-            const Eigen::Vector3d &b = full_route[i + 1];
-            const double seg_len = (b - a).norm();
-            if (seg_len < 1e-6) continue;
-            const int n_sub = std::max(1, (int)std::ceil(seg_len / max_seg));
-            const double ra = (i < raw_z.size()) ? raw_z[i] : a.z();
-            const double rb = (i + 1 < raw_z.size()) ? raw_z[i + 1] : b.z();
-            for (int kk = 1; kk <= n_sub; ++kk) {
-                const double t = (double)kk / n_sub;
-                clean_path.push_back(a + (b - a) * t);
-                cap_ref.push_back(ra + (rb - ra) * t);
-                if (leg_tags_ok) edge_leg.push_back(route_leg[i]);
-            }
-        }
-        if (!leg_tags_ok || edge_leg.size() + 1 != clean_path.size())
-            edge_leg.clear();
+    // Publish the filleted front-end route above before denoising its
+    // optimization pins. The value result preserves the pre-filter cap
+    // reference and edge provenance through every subdivision.
+    ElevationQuery elevation;
+    if (terrain_data_.valid) {
+        elevation = [this](double x, double y) {
+            return terrain_data_.getElevation(x, y);
+        };
+    }
+    const size_t input_tag_count = route_leg.size();
+    RouteProfileResult profile = prepareRouteProfile(
+        {std::move(full_route), std::move(route_leg)}, start_pos, waypoints,
+        {length_per_piece_, obstacle_clearance_}, elevation, &sdf_manager_);
+    const auto &filtered_route = profile.filtered_route;
+    const auto &clean_path = profile.path;
+    if (profile.denoise.applied) {
+        const auto &stats = profile.denoise;
         log_manager_->infof(
-            "A* shortcut %zu pts → sparse pieces %zu pts (max_seg %.1f)",
-            full_route.size(), clean_path.size(), max_seg);
+            "[Z-DENOISE] shortcut z: %zu/%zu vertices smoothed, range [%.2f, %.2f] -> [%.2f, %.2f]",
+            stats.adjusted, filtered_route.size(), stats.min_before,
+            stats.max_before, stats.min_after, stats.max_after);
+    }
+    if (!profile.input_tags_match) {
+        log_manager_->errorf(
+            "[LEG-POLICY] edge tags %zu do not match route %zu — route "
+            "provenance dropped",
+            input_tag_count, filtered_route.size());
+    }
+    log_manager_->infof(
+        "A* shortcut %zu pts → sparse pieces %zu pts (max_seg %.1f)",
+        filtered_route.size(), clean_path.size(), profile.max_segment_length);
 
-        publishPipelineDebug(full_route, clean_path);
+    publishPipelineDebug(filtered_route, clean_path);
 
-        if (clean_path.size() < 2) {
-            log_manager_->errorf("clean_path too short");
-            return false;
-        }
+    if (clean_path.size() < 2) {
+        log_manager_->errorf("clean_path too short");
+        return std::nullopt;
+    }
 
-        return true;
+    return profile;
 }
 
 bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
-                                const std::vector<Eigen::Vector3d> &full_route,
                                 const Eigen::Vector3d &start_pos,
                                 const Eigen::Vector3d &start_vel,
                                 const Eigen::Vector3d &start_acc,
                                 const std::vector<Eigen::Vector3d> &waypoints,
                                 const std::vector<double> &cap_ref,
+                                double raw_max_z,
                                 const ego_planner::TailBoundary &tail,
                                 const std::vector<size_t> &edge_leg)
 {
@@ -1898,111 +1566,51 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         auto t_opt_start = std::chrono::steady_clock::now();
 
         double global_time = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-        poly_traj::Trajectory global_traj, local_traj;
-        // Altitude cap reference for the optimizer's z-cap: the FRONT-END
-        // GEODESIC's own max z (not just the endpoints). The eikonal already
-        // priced climb-vs-detour in one metric and committed to this profile
-        // (its alt band makes it leave mission altitude only where terrain
-        // demands), so capping at endpoint+1 re-litigated that decision: a
-        // terrain-forced ridge crossing paid ~77k/plan in altitude cost and
-        // the down-pressure pushed the crest segment into the terrain
-        // (d<0 collision warnings at the crest). The cap's actual job is only
-        // to stop the sparse-piece quintic ballooning ABOVE the committed
-        // profile — same no-re-litigation rule as the shared risk field.
-        {
-            double path_max_z = std::max(start_pos.z(), waypoints.back().z());
-            double path_min_z = std::min(start_pos.z(), waypoints.back().z());
-            for (const auto &p : clean_path) {
-                path_max_z = std::max(path_max_z, p.z());
-                path_min_z = std::min(path_min_z, p.z());
-            }
-            // Restore the PRE-denoise committed max (see planFrontEnd): the
-            // z-denoise filter planes crests (~0.34 u observed), and a cap
-            // referenced to the planed value under-caps the crossing the
-            // front-end actually committed to — shoulder grind vs the terrain
-            // band, -1004. The filter smooths the PINS; the CAP keeps the
-            // committed ceiling. (No symmetric fix for the floor: min-side
-            // denoise error only makes the floor laxer, never a conflict.)
-            const double path_max_z_denoised = path_max_z;
-            path_max_z = std::max(path_max_z, fe_raw_max_z_);
-            if (path_max_z - path_max_z_denoised > 1e-6) {
-                log_manager_->infof(
-                    "[ALT] cap reference restored to pre-denoise max: "
-                    "%.3f (denoised profile max %.3f)",
-                    path_max_z, path_max_z_denoised);
-            }
-            // Headroom must leave the quintic a workable vertical corridor
-            // above the obstacle-clearance floor: a +1 slack over a sea-level
-            // route squeezed the trajectory into a ~4 m band, and the
-            // optimizer bought z-compliance with duration (1.8x) until the
-            // line search died (-1005). Default 5 ~ the front-end's own alt
-            // band tolerance (one FM2 coarse cell).
-            //
-            // NO terrain floor on the scalar cap (removed). A chord-sampled
-            // "terrain max under the route" floor was added while the
-            // clearance band was 0.12 to resolve cap-vs-terrain contradictions,
-            // but (a) it barely moved the crest dip (-0.117 -> -0.084; the
-            // 0.30 band sizing was the actual fix), (b) its 1-D chord/inner-
-            // chord sampling provably missed corner-cut knobs anyway, and
-            // (c) a single tall islet anywhere on the route raised the GLOBAL
-            // ceiling by its full height, licensing high-altitude wandering
-            // everywhere else. Terrain safety is owned pointwise by the
-            // heightmap-gated cap (zero press within 2*clearance of terrain)
-            // plus the 0.30 penalty band sized above the soft-penalty
-            // equilibrium (~0.21) — measured invariant to cap weight, so the
-            // cap's shoulder pressure cannot drag a crest through the band.
-            const double z_hi = path_max_z + alt_cap_headroom_;
-            // Floor: mirror of the cap, and the missing LOWER half of the
-            // FM2 alt band ("stiff down-side: nothing ever requires diving
-            // below mission altitude"). Without it z is only bounded below
-            // by the 0.5 collision clearance, so min-jerk pieces sag in big
-            // smooth waves and bounce off the water/valley floor. Nothing
-            // terrain-forced ever needs to go BELOW the mission endpoints,
-            // so a global soft floor is always safe.
-            // Floor inherits the GEODESIC MIN, symmetric with the cap: FM2's
-            // own down-side band is soft, so its committed profile can dip
-            // below the mission endpoints (observed 0.53 vs mission 1.0). A
-            // floor pinned to the endpoints then sits ABOVE front-end pins
-            // and conflicts with them together with obstacle/risk — a multi-way
-            // cost conflict that caused line-search failure on high-altitude
-            // missions (low-z missions hid it: their floor was < 0).
-            // Keep the soft floor ABOVE the hard ground half-space: for a
-            // low mission (cruise 0.1) path_min - headroom went negative, so
-            // z in [0, cruise] was penalty-free and the first soft thing a
-            // sagging iterate met was the ground plane's unit-gradient CLIFF
-            // at z ~ 0 — line searches die on that kink (-1005) and the
-            // published mid-iterate shows waves "bouncing off" sea level.
-            // A quadratic cushion from half a headroom above the plane
-            // catches sag softly before the cliff.
-            double z_lo = path_min_z - alt_floor_headroom_;
-            if (ground_height_ > -0.5) {
-                z_lo = std::max(z_lo, ground_height_ + 0.5 * alt_floor_headroom_);
-            }
-            // NB: this floor may sit ABOVE a hard-pinned endpoint
-            // (low-altitude complex-field stress case: start z 0.05 <
-            // cushion top 0.09). Lowering the SCALAR
-            // floor to the pin would disable the sag cushion and expose the
-            // ground-plane cliff (-1005, tried); instead the optimizer tapers
-            // the floor penalty toward pinned endpoints pointwise — see
-            // [TERRAIN-TAPER] in poly_traj_optimizer.
-            poly_traj_opt_->setAltitudeBand(z_lo, z_hi, weight_altitude_);
+        // Keep the direct solve's pre-denoise ceiling restoration distinct
+        // from slice solving: cap_ref values do not expand this scalar band.
+        const DirectAltitudeConfig altitude_config{
+            raw_max_z, alt_cap_headroom_, alt_floor_headroom_,
+            ground_height_, weight_altitude_};
+        const DirectAltitudeBand band = computeDirectAltitudeBand(
+            clean_path, start_pos, waypoints.back(), altitude_config);
+        if (band.path_max_z - band.path_max_z_denoised > 1e-6) {
             log_manager_->infof(
-                "[ALT] optimizer z-band [%.2f, %.2f] (mission min - %.2f, "
-                "path max %.2f + %.2f; terrain owned by gated cap + 0.30 band)",
-                z_lo, z_hi, alt_floor_headroom_, path_max_z, alt_cap_headroom_);
+                "[ALT] cap reference restored to pre-denoise max: "
+                "%.3f (denoised profile max %.3f)",
+                band.path_max_z, band.path_max_z_denoised);
         }
-        // [ZONE-AVOID] pass-1 = committed full avoidance: keep every zone
-        // barrier armed (see suppress_crossing_exempt_ in the optimizer).
-        poly_traj_opt_->setSuppressCrossingExempt(
-            searcher_.zoneAvoidPass() == 1);
+        log_manager_->infof(
+            "[ALT] optimizer z-band [%.2f, %.2f] (mission min - %.2f, "
+            "path max %.2f + %.2f; terrain owned by gated cap + 0.30 band)",
+            band.z_lo, band.z_hi, alt_floor_headroom_, band.path_max_z,
+            alt_cap_headroom_);
+
+        DirectTrajectoryRequest request;
+        request.path = std::move(clean_path);
+        request.waypoints = waypoints;
+        request.cap_ref = cap_ref;
+        request.edge_leg = edge_leg;
+        request.head_pos = start_pos;
+        request.head_vel = start_vel;
+        request.head_acc = start_acc;
+        request.tail = tail;
+        request.band = band;
+        request.max_vel = max_vel_;
+        // Pass 1 committed full avoidance: retain all zone barriers.
+        request.suppress_crossing_exempt = suppressCrossingExemptNow();
         last_piece_leg_.clear();
-        bool opt_success = poly_traj_opt_->optimizeFromPath(
-            clean_path, start_pos, start_vel, start_acc, waypoints, max_vel_,
-            global_traj, local_traj, cap_ref, tail, edge_leg, &last_piece_leg_);
-        if (!opt_success) {
+        DirectTrajectoryResult solved =
+            solveDirectTrajectory(*poly_traj_opt_, std::move(request));
+        // optimizeFromPath may insert points before it fails. Retain those
+        // diagnostics and the exact piece mapping on both result paths.
+        clean_path = std::move(solved.optimizer_path);
+        last_piece_leg_ = std::move(solved.piece_leg);
+        if (!solved.hasTrajectory()) {
             log_manager_->errorf("Trajectory optimization failed");
             return false;
         }
+        poly_traj::Trajectory global_traj = std::move(solved.seed);
+        poly_traj::Trajectory local_traj = std::move(solved.trajectory);
 
         // Local traj start_time is the trajectory-following reference; stamp it
         // after optimization (matches pre-refactor behavior).
@@ -2046,12 +1654,9 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         return true;
 }
 
-// [CHAIN-PAR] One slice, one optimizer instance, no shared mutable state:
-// the z-band is a compact per-slice rendition of optimizeStage's (committed
-// max from slice+cap plus headroom; floor from the slice minimum with the
-// ground cushion), and everything else the solve needs lives inside the
-// given instance. No traj_ writes, no viz, no timing members — thread-safe
-// against siblings by construction.
+// Existing callers keep the bool/out-parameter contract. Computation and its
+// owned result live in solveRouteSlice; this adapter only snapshots settings
+// and transfers a successful trajectory to the caller.
 bool PathManager::solveSlice(ego_planner::PolyTrajOptimizer &opt,
                              std::vector<Eigen::Vector3d> slice,
                              std::vector<double> cap,
@@ -2063,29 +1668,13 @@ bool PathManager::solveSlice(ego_planner::PolyTrajOptimizer &opt,
                              bool suppress_crossing_exempt,
                              poly_traj::Trajectory *out) const
 {
-    if (slice.size() < 2 || !out) return false;
-    double path_max_z = std::max(head_pos.z(), goal_pos.z());
-    double path_min_z = std::min(head_pos.z(), goal_pos.z());
-    for (const auto &p : slice) {
-        path_max_z = std::max(path_max_z, p.z());
-        path_min_z = std::min(path_min_z, p.z());
-    }
-    // cap_ref carries the committed (pre-denoise-restored) ceiling per
-    // vertex — the slice-local stand-in for fe_raw_max_z_.
-    for (const double c : cap) path_max_z = std::max(path_max_z, c);
-    const double z_hi = path_max_z + alt_cap_headroom_;
-    double z_lo = path_min_z - alt_floor_headroom_;
-    if (ground_height_ > -0.5) {
-        z_lo = std::max(z_lo, ground_height_ + 0.5 * alt_floor_headroom_);
-    }
-    opt.setAltitudeBand(z_lo, z_hi, weight_altitude_);
-    opt.setSuppressCrossingExempt(suppress_crossing_exempt);
-
-    poly_traj::Trajectory out_global;
-    const std::vector<Eigen::Vector3d> goal_wps{goal_pos};
-    return opt.optimizeFromPath(slice, head_pos, head_vel, head_acc,
-                                goal_wps, max_vel_, out_global, *out, cap,
-                                tail);
+    if (!out) return false;
+    RouteSliceResult result = solveRouteSlice(
+        opt, {std::move(slice), std::move(cap), head_pos, head_vel, head_acc,
+              goal_pos, tail, suppress_crossing_exempt}, sliceSolveConfig());
+    if (!result.hasTrajectory()) return false;
+    *out = std::move(result.trajectory);
+    return true;
 }
 
 // [CHAIN-VIZ] see the header comment. Tube sampling matches
@@ -4103,28 +3692,19 @@ bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
                                            LegPolicySnapshot *out) const
 {
     if (!out) return false;
-    // The plan-wide rule ("exactly one search this epoch") is deliberately
-    // NOT reused here — it exists to refuse a plan-wide answer for a
-    // multi-leg mission, which is the very case this function serves. What
-    // must still hold is everything that makes the searcher's CURRENT
-    // buffers describe THIS leg:
-    //   - the 3-pass actually ran, when there are zones to have a policy
-    //     about (pass 0 means the override buffer may hold a previous
-    //     search's values — reading it would be fiction, same as above)
-    //   - the search ran on the current zone/terrain data
-    //   - the policy buffers are sized for the zones they describe
-    const int pass = searcher_.zoneAvoidPass();
-    const auto &nb = searcher_.zoneNoBarrier();
-    const auto &so = searcher_.zoneSoftOverride();
+    // Capture the owned policy returned by THIS invocation. The admission
+    // check already matched request identity, ordered zones and diagnostics.
+    // A backend without canonical policy remains unmeasured; the default
+    // adapter only attests the existing FM2 three-pass (or no-zone case).
+    // This per-leg capture deliberately does not require a single-leg epoch.
+    const int pass = zoneAvoidPassNow();
+    const auto &nb = last_search_policy_.endpoint_exempt;
+    const auto &so = last_search_policy_.soft_override;
     const bool ok =
-        (risk_zones_.empty() || pass != 0) &&
-        zone_policy_epoch_generation_ == zone_policy_generation_ &&
-        (risk_zones_.empty() ||
-         // EXACTLY one entry per zone. ">= zone count" accepted a buffer left
-         // over from a search that saw MORE zones; the extra entries are
-         // never read, but their presence means the buffer was not rebuilt
-         // for this zone set and the entries that ARE read may be stale.
-         (nb.size() == risk_zones_.size() && so.size() == risk_zones_.size()));
+        (risk_zones_.empty() || (last_search_policy_measured_ &&
+          last_search_policy_.identity.leg == leg &&
+          last_search_policy_.identity.search_serial == search_serial)) &&
+        zone_policy_epoch_generation_ == zone_policy_generation_;
     if (!ok) {
         if (log_manager_)
             log_manager_->warnf(
@@ -4147,13 +3727,8 @@ bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
     for (size_t i = 0; i < risk_zones_.size(); ++i) {
         ZonePolicySnapshot::Entry e;
         e.zone = risk_zones_[i];
-        const bool endpoint = i < nb.size() && nb[i];
-        const bool soft_override = i < so.size() && so[i];
-        e.disposition = endpoint ? ZoneDisposition::SOFT_ENDPOINT
-                        : pass == 2
-                            ? ZoneDisposition::SOFT_FALLBACK
-                            : soft_override ? ZoneDisposition::SOFT_UNAVOIDABLE
-                                            : ZoneDisposition::HARD_AVOID;
+        e.disposition = last_search_policy_measured_ && i < last_search_policy_.dispositions.size()
+            ? last_search_policy_.dispositions[i] : ZoneDisposition::HARD_AVOID;
         out->policy.zones.push_back(e);
     }
     return true;
@@ -4164,42 +3739,30 @@ PathManager::ZonePolicySnapshot PathManager::zonePolicySnapshot() const
     ZonePolicySnapshot snap;
     snap.generation = zone_policy_generation_;
     snap.epoch = zone_policy_epoch_;
-    const int pass = searcher_.zoneAvoidPass();
-    // INVALID, fail-closed:
-    //  - zones exist but the 3-pass never ran (pass 0: policy off or a
-    //    different front end; zone_soft_override_ may hold a PREVIOUS
-    //    search's values — reading it would be fiction)
-    //  - no search has run since the last zone/terrain change (the
-    //    searcher still holds the previous zone binding)
-    // Multi-leg searches rewrite the policy buffers once per leg, so a
-    // snapshot after such an epoch would publish the LAST leg's policy as
-    // plan-wide — fail-closed instead (review find).
+    const int pass = zoneAvoidPassNow();
+    // A plan-wide answer requires one measured search on current data.
+    // Multi-leg epochs still need their separately captured leg policies;
+    // an unknown external policy must never borrow the canonical searcher's
+    // last FM2 buffers. Empty zones retain the existing trivial verdict.
     snap.valid = (risk_zones_.empty() ||
-                  (pass != 0 && zone_policy_epoch_searches_ == 1)) &&
+                  (last_search_policy_measured_ && zone_policy_epoch_searches_ == 1)) &&
                  zone_policy_epoch_generation_ == zone_policy_generation_;
     if (!snap.valid && log_manager_) {
         log_manager_->warnf(
             "[ZONE-POLICY] snapshot INVALID (pass %d, %zu zones, %lu leg "
             "searches this epoch, search generation %lu vs data %lu) — "
-            "contract 2 requires ONE single-goal 3-pass on current data",
+            "contract 2 requires ONE measured single-goal search on current data",
             pass, risk_zones_.size(),
             static_cast<unsigned long>(zone_policy_epoch_searches_),
             static_cast<unsigned long>(zone_policy_epoch_generation_),
             static_cast<unsigned long>(zone_policy_generation_));
     }
-    const auto &nb = searcher_.zoneNoBarrier();
-    const auto &so = searcher_.zoneSoftOverride();
     snap.zones.reserve(risk_zones_.size());
     for (size_t i = 0; i < risk_zones_.size(); ++i) {
         ZonePolicySnapshot::Entry e;
         e.zone = risk_zones_[i];
-        const bool endpoint = i < nb.size() && nb[i];
-        const bool soft_override = i < so.size() && so[i];
-        e.disposition = endpoint ? ZoneDisposition::SOFT_ENDPOINT
-                        : pass == 2
-                            ? ZoneDisposition::SOFT_FALLBACK
-                            : soft_override ? ZoneDisposition::SOFT_UNAVOIDABLE
-                                            : ZoneDisposition::HARD_AVOID;
+        e.disposition = last_search_policy_measured_ && i < last_search_policy_.dispositions.size()
+            ? last_search_policy_.dispositions[i] : ZoneDisposition::HARD_AVOID;
         snap.zones.push_back(e);
     }
     return snap;
@@ -4262,26 +3825,26 @@ void PathManager::bindRiskZonesToOptimizer()
     // the optimizer only learned about a zone update at the next plan, so
     // nothing could read what the BACK END prices without running a solve.
     if (!poly_traj_opt_) return;
-    std::vector<ego_planner::RiskZone> opt_zones;
-    opt_zones.reserve(risk_zones_.size());
+    ego_planner::OptimizerRiskEnvironment environment;
+    environment.zones.reserve(risk_zones_.size());
     for (const auto &tz : risk_zones_) {
         ego_planner::RiskZone oz;
         oz.center = tz.center;
         oz.reach = tz.reach;
         oz.peak = tz.peak;
         oz.vertical_reach = tz.reach * risk_vertical_ratio_;
-        opt_zones.push_back(oz);
+        environment.zones.push_back(oz);
     }
-    poly_traj_opt_->setRiskZones(opt_zones);
-    poly_traj_opt_->setRiskVisibility(
+    environment.visibility =
         [this](size_t zi, const Eigen::Vector3d &p,
                Eigen::Vector3d *grad) -> double {
             return riskVisibility(zi, p, grad);
-        });
-    poly_traj_opt_->setRiskShadowCeiling(
+        };
+    environment.shadow_ceiling =
         [this](size_t zi, const Eigen::Vector3d &p) -> double {
             return riskShadowCeiling(zi, p);
-        });
+        };
+    poly_traj_opt_->setRiskEnvironment(std::move(environment));
 }
 
 void PathManager::bindRiskZonesToSearcher()

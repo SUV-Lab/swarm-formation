@@ -1,0 +1,17 @@
+{
+  "checks": {
+    "identical_empty_zone_publish_acknowledged": true,
+    "identical_empty_zones_no_abort": true,
+    "changed_zone_abort_exact_identity": true,
+    "changed_zone_action_abort": true,
+    "changed_zone_reason_policy_unevaluated": true,
+    "clear_after_abort_no_second_abort": true,
+    "same_recovery_input_except_identity": true,
+    "recovery_fresh_identity": true,
+    "recovery_positive_duration": true,
+    "exactly_one_abort": true
+  },
+  "same_checks": true,
+  "recovery_numeric_exact_vs_original": true,
+  "pass": true
+}

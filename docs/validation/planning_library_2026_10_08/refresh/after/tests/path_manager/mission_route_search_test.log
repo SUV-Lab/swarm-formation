@@ -1,0 +1,34 @@
+20/30 Testing: mission_route_search_test
+20/30 Test: mission_route_search_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/mission_route_search_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/mission_route_search_test"
+Directory: /ws/build/path_manager
+"mission_route_search_test" start time: Oct 08 06:55 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/mission_route_search_test
+[OK] all legs form one owned route with duplicate removal and exact edge provenance
+[OK] each observer runs while its leg still owns the backend, before the next search
+[OK] original callback objects receive explicit leg inputs and pre-filter point counts
+[OK] waypoint inputs retain their absolute values
+[OK] editing caller and backend scratch storage cannot rewrite the result
+[OK] route geometry and leg provenance survive all inputs and callbacks
+[OK] a failed leg is observed once, clears the adapter's captures, and returns no prefix
+[OK] a junction or handoff mission never receives first-leg takeoff relief
+[OK] an empty first-leg result obeys the same failure and observer contract
+[OK] an empty mission makes no backend or observer calls
+[OK] the duplicate gate uses full 3-D distance and its original strict threshold
+[OK] postprocessing retains responsibility for rejecting an entirely collapsed route
+[OK] search and observer run synchronously before return
+[OK] owned route retains neither the search provider nor its observer
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/mission_route_search_test.xml' with successful test
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"mission_route_search_test" end time: Oct 08 06:55 UTC
+"mission_route_search_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

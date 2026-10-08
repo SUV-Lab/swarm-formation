@@ -1,0 +1,180 @@
+{
+  "before_file": "/tmp/mmp_modularization/baseline_mission.json",
+  "after_file": "/tmp/mmp_modularization_final/after/mission.json",
+  "units": "Published PolyTraj units; no coordinate/unit conversion performed",
+  "tolerances": {
+    "coefficient_atol": 1e-06,
+    "coefficient_rtol": 1e-06,
+    "duration_atol": 0.0001,
+    "position_atol": 0.001,
+    "velocity_atol": 0.0001,
+    "acceleration_atol": 0.0001,
+    "path_length_atol": 0.001
+  },
+  "sample_count": 10001,
+  "command_equal_ignoring_identity": true,
+  "environment": {
+    "terrain_ready_equal": true,
+    "obstacles_equal": true,
+    "risk_zones_equal": true
+  },
+  "counts": {
+    "commands": [
+      1,
+      1
+    ],
+    "trajectories": [
+      1,
+      1
+    ],
+    "initial_trajectories": [
+      1,
+      1
+    ],
+    "execution_control": [
+      0,
+      0
+    ]
+  },
+  "final": {
+    "before": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "after": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "numeric_exact": true,
+    "duration_abs_difference": 0.0,
+    "path_length_abs_difference": 0.0,
+    "coefficient_checks": {
+      "duration": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_x": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_y": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_z": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      }
+    },
+    "common_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "normalized_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "pass": true
+  },
+  "initial": {
+    "before": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "after": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "numeric_exact": true,
+    "duration_abs_difference": 0.0,
+    "path_length_abs_difference": 0.0,
+    "coefficient_checks": {
+      "duration": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_x": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_y": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_z": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      }
+    },
+    "common_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "normalized_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "pass": true
+  },
+  "pass": true
+}

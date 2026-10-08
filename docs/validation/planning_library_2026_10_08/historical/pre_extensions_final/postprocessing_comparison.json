@@ -1,0 +1,11 @@
+{
+  "before_count": 2,
+  "after_count": 2,
+  "ordered": true,
+  "exact": true,
+  "lines": [
+    "[replan_fsm_drone_0] [Z-DENOISE] shortcut z: 177/180 vertices smoothed, range [2.12, 10.52] -> [2.12, 10.17]",
+    "[replan_fsm_drone_0] [Z-DENOISE] shortcut z: 177/180 vertices smoothed, range [2.12, 10.52] -> [2.12, 10.17]"
+  ],
+  "pass": true
+}

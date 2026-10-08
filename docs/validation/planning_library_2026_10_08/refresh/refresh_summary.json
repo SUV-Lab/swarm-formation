@@ -1,0 +1,155 @@
+{
+  "created_utc": "2026-10-08T06:59:07.157147+00:00",
+  "scope": "Fresh current-source incremental build, registered tests, externally linked R2 consumer, and actual RViz R2/live ABORT/recovery. GUI/R2 were executed by the parent task; this summary verifies and links their recorded outcomes.",
+  "repositories": {
+    "superproject": {
+      "base_commit": "531ebb70bd962b070a4fd76ac0484d82a83eeaa1",
+      "branch": "lgh/dev"
+    },
+    "planning_submodule": {
+      "base_commit": "ef4fc293f013a4f22be9cc345a0ad9c9d9eadc93",
+      "branch": "mmp_dev"
+    }
+  },
+  "source_file_count": 147,
+  "source_stable_during_validation": true,
+  "build": {
+    "packages": [
+      "mmp_vehicle_dynamics",
+      "path_optimizer",
+      "path_manager"
+    ],
+    "exit_code": 0,
+    "elapsed_s": 47.293113997002365,
+    "pass": true
+  },
+  "ctest": {
+    "ros_domain_id": 85,
+    "count": 37,
+    "package_counts": {
+      "path_manager": 30,
+      "path_optimizer": 2,
+      "mmp_vehicle_dynamics": 5
+    },
+    "chain_risk": {
+      "chain_pass_count": 71,
+      "chain_failure_count": 0,
+      "chain_log_count": 71,
+      "all_chain_logs_written_after_start": true,
+      "chain_tally_last_line": "DONE 71/71",
+      "risk_154_0": true
+    },
+    "pass": true
+  },
+  "installed_headers_and_config": {
+    "count": 54,
+    "pass": true
+  },
+  "fresh_r2_consumer": {
+    "ros_domain_id": 84,
+    "pass": true,
+    "bound_node_owned_double_exact": true,
+    "value_input_owned_double_exact": true,
+    "initial_environment_contract": {
+      "baseline_generation": 6,
+      "actual_generation": 4,
+      "expected_delta": -2,
+      "actual_delta": -2,
+      "reason": "Constructor receives the actual terrain directly, so no prior empty-world clear increments terrain and effective-zone generations.",
+      "other_identity_fields_exact": {
+        "trajectory_id": true,
+        "drone_id": true
+      },
+      "pass": true
+    }
+  },
+  "historical_identity": {
+    "historical_source_manifest_available": false,
+    "historical_source_identity_claimed": false,
+    "reason": "The inspected final ext_c evidence records test results and GUI executable SHA256, but no ext_c working-tree source manifest. The ext_baseline source manifest precedes A/B/C and cannot identify the final C source.",
+    "historical_gui_binary_path": "/ws/install/path_manager/lib/path_manager/path_manager_node",
+    "historical_gui_binary_sha256": "494644a07ec00bf5bc8a600436a9917aeb90fe436abe6a08c3b27747c338e025",
+    "installed_before_equals_historical_gui_binary": true,
+    "installed_after_equals_historical_gui_binary": false,
+    "changed_installed_paths": [
+      "/ws/install/path_manager/lib/path_manager/path_manager_node",
+      "/ws/install/path_manager/lib/libpath_manager_lib.a"
+    ],
+    "runtime_rerun_recommended": true,
+    "limitation": "Current incremental rebuild changed the manager executable/archive. A fresh current-source runtime numeric comparison is required to bind current source to R2 behavior; historical GUI success remains historical evidence.",
+    "fresh_runtime_rerun_resolution": "Fresh R2 in three modes and actual RViz/live ABORT/recovery passed against the rebuilt manager; the running GUI node hash equals the post-build manifest."
+  },
+  "limitations": [
+    "Historical ext_c lacks a working-tree source manifest; no retroactive exact source identity is asserted.",
+    "Build is incremental for three affected packages using existing installed dependencies; this is not a clean build or a cross-machine reproducibility claim.",
+    "The source manifest covers the explicit allowlist, not every repository or system file. path_planner headers/config and installed archive hashes are recorded, but its unchanged dependency archive is not rebuilt in this three-package run."
+  ],
+  "evidence_sha256": {
+    "source_manifest_before.json": "b1a487d0a466e69548d5702904e8bcfb1b968934d057ae4da5edd56931617e28",
+    "source_manifest_after.json": "950820812db0ad3afa66efbfee9e3170506735843887c0ec86e00161d55e5e00",
+    "source_comparison.json": "5bfaccedb259de5b8a061c2e825c65060db94a4771ca73187453d4f1ee14d872",
+    "installed_manifest_before.json": "6c3f88a95b7253260f6f874912204e3575c76edca7d7d9100bc0e3f8c6bb943a",
+    "installed_manifest_after.json": "063918c6eb8cbc0fe011ba10f8143cfa2bd454433abe7834c8437176cd40852b",
+    "installed_input_comparison.json": "a2c84e101a58ad8e1f919def17954ad2a21563b9d688ffc6430aff7c7fa5d17c",
+    "historical_identity.json": "8059cb6404ffc0f27df3a89c4bd56c5c8b9a9dcb60c1254d6dfe497b3a241ba9",
+    "build_environment.json": "6af8f241f78c885080e8ebda6d14dbf6071c48337690d42b23c75bf0bd6ce005",
+    "build_summary.json": "0b15dec9bb897aa5c0bd3f54db84aa2da2aafc6d78eb45aaf1961e67f920566c",
+    "build.log": "6ff3480ab4d7a5fbd1c2b3575573de81a295747fac9e4ec7074cc58e3194e022",
+    "after/tests/summary.json": "001f2e05a48b073cb7d32ac8b91f51d9d92ac404420b4c652f1bf31892848648",
+    "run_fresh_tests.py": "5a5e3fe9620a18e968db44c9fd858d2dc5c6267e4df1a058bbef08015d96a425",
+    "prior_registered_tests.json": "c388a5e86a39516ecfe63d4c0a5d7797b227b4599054e57bb60b68231ba1aee9",
+    "r2_consumer/summary.json": "e1f3ca93a56a2d18081e2f80cb5788da8facb62e399badd538548fcc3a28a1fb",
+    "gui/summary.json": "75f69850b2b6403dfc20ea555bd8a82100f6bf2bf6d4367110cfd6289e665d16",
+    "gui/comparison.json": "5d27898e50ef2ed2276035e5f210595973bd1d2acd1fc331c9b5af2ef63bc241",
+    "gui/frontend_comparison.json": "bdc77f62ba333f6ad7d1774e71e674b284f5e9d478c27b9ffaaab90853f2a375",
+    "gui/abort.json": "6762250fca543cd0daed37cf048601a5786c4d854d74aed2bfc14080027af672",
+    "gui/binary_hashes.txt": "f3d8c844756b98bcdb324b8a10e2637b2b4c2852e3410ed4b788edb97cb5e346"
+  },
+  "pass": true,
+  "fresh_gui": {
+    "pass": true,
+    "ros_domain_id": 82,
+    "comparison_pass": true,
+    "frontend_comparison_pass": true,
+    "summary": {
+      "evaluation": {
+        "before_count": 38,
+        "after_count": 38,
+        "ordered": true,
+        "pass": true
+      },
+      "postprocessing": {
+        "before_count": 2,
+        "after_count": 2,
+        "ordered": true,
+        "pass": true
+      },
+      "cost_profile": {
+        "before_count": 10,
+        "after_count": 10,
+        "ordered": false,
+        "pass": true
+      },
+      "abort": {
+        "pass": true,
+        "numeric_exact": true
+      },
+      "pass": true
+    },
+    "live_abort_checks": {
+      "identical_empty_zone_publish_acknowledged": true,
+      "identical_empty_zones_no_abort": true,
+      "changed_zone_abort_exact_identity": true,
+      "changed_zone_action_abort": true,
+      "changed_zone_reason_policy_unevaluated": true,
+      "clear_after_abort_no_second_abort": true,
+      "same_recovery_input_except_identity": true,
+      "recovery_fresh_identity": true,
+      "recovery_positive_duration": true,
+      "exactly_one_abort": true
+    },
+    "recovery_numeric_exact_vs_original": true,
+    "executed_node_equals_post_build_sha256": true,
+    "executed_node_sha256": "6f95d8ffb5ed461f278dc4dd7afd2c9a145e55d15182a69dbbec2f70f894ffc5"
+  }
+}

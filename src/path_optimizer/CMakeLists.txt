@@ -48,7 +48,13 @@ find_package(OpenMP)
 
 add_library(${PROJECT_NAME}_lib
   src/poly_traj_optimizer.cpp
+  src/route_cost_profile.cpp
+  src/optimizer_session.cpp
+  ../common/log_manager.cpp
 )
+# The optimizer's public solve API and logging implementation are usable
+# through this target alone; no path_manager link is required.
+target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_17)
 if(OpenMP_CXX_FOUND)
   target_compile_options(${PROJECT_NAME}_lib PRIVATE ${OpenMP_CXX_FLAGS})
   target_link_libraries(${PROJECT_NAME}_lib ${OpenMP_CXX_LIBRARIES})
@@ -78,6 +84,30 @@ install(TARGETS ${PROJECT_NAME}_lib
 install(DIRECTORY include/
   DESTINATION include
 )
+
+# Required by the installed public optimizer header's relative include.
+install(FILES ../common/log_manager.hpp DESTINATION common)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_test REQUIRED)
+  # Compile the actual calculation source using only Eigen. This keeps the
+  # reusable profile calculations independent of the ROS optimizer adapter.
+  add_executable(route_cost_profile_test
+    test/route_cost_profile_test.cpp src/route_cost_profile.cpp)
+  target_include_directories(route_cost_profile_test PRIVATE include)
+  target_link_libraries(route_cost_profile_test Eigen3::Eigen)
+  ament_add_test(route_cost_profile_test
+    COMMAND $<TARGET_FILE:route_cost_profile_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  add_executable(optimizer_session_test test/optimizer_session_test.cpp)
+  target_link_libraries(optimizer_session_test ${PROJECT_NAME}_lib)
+  ament_add_test(optimizer_session_test
+    COMMAND $<TARGET_FILE:optimizer_session_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/../path_manager/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(rclcpp Eigen3 swarm_graph path_planner mmp_vehicle_dynamics)

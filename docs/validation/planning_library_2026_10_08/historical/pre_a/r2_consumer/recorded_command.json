@@ -1,0 +1,64 @@
+{
+  "drone_id": 0,
+  "sequence": 1,
+  "mission_id": "r2_ridge_crossing#1",
+  "start_position": {
+    "x": 14724.6468,
+    "y": 18218.68,
+    "z": 2.0
+  },
+  "target_position": {
+    "x": 15165.8971,
+    "y": 17382.9601,
+    "z": 2.0
+  },
+  "waypoints": [
+    {
+      "x": 15165.8971,
+      "y": 17382.9601,
+      "z": 2.0
+    }
+  ],
+  "formation_type": "none",
+  "formation_scale": 0.0,
+  "formation_offset": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "formation_pattern": [
+    {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    }
+  ],
+  "length_per_piece": 0.0,
+  "obstacle_clearance": 0.0,
+  "initial_speed": 200.0,
+  "use_initial_velocity": false,
+  "initial_velocity": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "use_initial_acceleration": false,
+  "initial_acceleration": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "use_final_velocity": false,
+  "final_velocity": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "use_final_acceleration": false,
+  "final_acceleration": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "use_initial_speed": true
+}

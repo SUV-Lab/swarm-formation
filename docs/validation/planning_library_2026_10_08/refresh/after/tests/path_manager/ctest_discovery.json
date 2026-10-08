@@ -1,0 +1,1308 @@
+{
+  "backtraceGraph" : 
+  {
+    "commands" : 
+    [
+      "add_test",
+      "ament_add_test"
+    ],
+    "files" : 
+    [
+      "/opt/ros/humble/share/ament_cmake_test/cmake/ament_add_test.cmake",
+      "/ws/src/mmp_path_planning/src/path_manager/CMakeLists.txt"
+    ],
+    "nodes" : 
+    [
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 356,
+        "parent" : 0
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 1
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 360,
+        "parent" : 3
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 4
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 368,
+        "parent" : 6
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 7
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 375,
+        "parent" : 9
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 10
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 379,
+        "parent" : 12
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 13
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 385,
+        "parent" : 15
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 16
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 389,
+        "parent" : 18
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 19
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 394,
+        "parent" : 21
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 22
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 400,
+        "parent" : 24
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 25
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 406,
+        "parent" : 27
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 28
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 412,
+        "parent" : 30
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 31
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 418,
+        "parent" : 33
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 34
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 422,
+        "parent" : 36
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 37
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 428,
+        "parent" : 39
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 40
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 434,
+        "parent" : 42
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 43
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 439,
+        "parent" : 45
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 46
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 445,
+        "parent" : 48
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 49
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 450,
+        "parent" : 51
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 52
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 455,
+        "parent" : 54
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 55
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 461,
+        "parent" : 57
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 58
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 465,
+        "parent" : 60
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 61
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 470,
+        "parent" : 63
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 64
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 475,
+        "parent" : 66
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 67
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 479,
+        "parent" : 69
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 70
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 483,
+        "parent" : 72
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 73
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 488,
+        "parent" : 75
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 76
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 498,
+        "parent" : 78
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 79
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 507,
+        "parent" : 81
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 82
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 528,
+        "parent" : 84
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 85
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 542,
+        "parent" : 87
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 88
+      }
+    ]
+  },
+  "kind" : "ctestInfo",
+  "tests" : 
+  [
+    {
+      "backtrace" : 2,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/load_obstacles_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/load_obstacles_test"
+      ],
+      "name" : "load_obstacles_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 5,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/start_claim_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/start_claim_test"
+      ],
+      "name" : "start_claim_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 8,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/risk_contract_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/risk_contract_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "risk_contract_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 300.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 11,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/terrain_pitch_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/terrain_pitch_test"
+      ],
+      "name" : "terrain_pitch_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 14,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/terrain_risk_mask_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/terrain_risk_mask_test"
+      ],
+      "name" : "terrain_risk_mask_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 300.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 17,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/waypoint_experiment_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/waypoint_experiment_test"
+      ],
+      "name" : "waypoint_experiment_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 300.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 20,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/transition_experiment_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/transition_experiment_test"
+      ],
+      "name" : "transition_experiment_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 23,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/unit_guard_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/unit_guard_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "unit_guard_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 26,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/param_contract_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/param_contract_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "param_contract_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 29,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/route_slice_solver_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/route_slice_solver_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "route_slice_solver_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 32,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/mission_planner_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/mission_planner_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "mission_planner_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 300.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 35,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/mission_planner_core_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/mission_planner_core_test"
+      ],
+      "name" : "mission_planner_core_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 38,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/ros_planning_backend_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/ros_planning_backend_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "ros_planning_backend_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 41,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/route_slice_batch_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/route_slice_batch_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "route_slice_batch_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 44,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/flight_assembly_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/flight_assembly_test"
+      ],
+      "name" : "flight_assembly_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 47,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/direct_trajectory_solver_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/direct_trajectory_solver_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "direct_trajectory_solver_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 50,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/mission_geometry_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/mission_geometry_test"
+      ],
+      "name" : "mission_geometry_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 53,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/route_postprocessing_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/route_postprocessing_test"
+      ],
+      "name" : "route_postprocessing_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 56,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/committed_route_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/committed_route_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "committed_route_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 59,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/mission_route_search_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/mission_route_search_test"
+      ],
+      "name" : "mission_route_search_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 62,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/route_search_backend_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/route_search_backend_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "route_search_backend_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 180.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 65,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/vehicle_model_injection_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/vehicle_model_injection_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "vehicle_model_injection_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 180.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 68,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/terrain_memo_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/terrain_memo_test"
+      ],
+      "name" : "terrain_memo_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 71,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/trajectory_message_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/trajectory_message_test"
+      ],
+      "name" : "trajectory_message_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 74,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/fsm_scenarios_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/fsm_scenarios_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "fsm_scenarios_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 90.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 77,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/exec_abort_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/exec_abort_test"
+      ],
+      "name" : "exec_abort_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 80,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/mission_sequence_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/mission_sequence_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "mission_sequence_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 300.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 83,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/log_visibility_test.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_manager/log_visibility_test",
+        "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "log_visibility_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 300.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 86,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/chain_variants.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "bash",
+        "/ws/src/mmp_path_planning/src/path_manager/../../scripts/run_chain_variants.sh",
+        "/ws",
+        "/ws/build/path_manager/chain_variants",
+        "/ws/build/path_manager/chain_experiment_test"
+      ],
+      "name" : "chain_variants",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 900.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    },
+    {
+      "backtrace" : 89,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_manager/test_results/path_manager/risk_scenarios.xml",
+        "--package-name",
+        "path_manager",
+        "--generate-result-on-success",
+        "--command",
+        "bash",
+        "/ws/src/mmp_path_planning/src/path_manager/../../tools/run_risk_harness.sh",
+        "NONE",
+        "/ws/build/path_manager/risk_scenarios_test"
+      ],
+      "name" : "risk_scenarios",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 300.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_manager"
+        }
+      ]
+    }
+  ],
+  "version" : 
+  {
+    "major" : 1,
+    "minor" : 0
+  }
+}

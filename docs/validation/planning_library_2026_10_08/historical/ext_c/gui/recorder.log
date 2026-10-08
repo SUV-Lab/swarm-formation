@@ -1,0 +1,9 @@
+RECORDER_READY output=/tmp/mmp_modularization_ext_c/gui/mission.json
+CAPTURE terrain_ready elapsed=1.41
+CAPTURE terrain_ready elapsed=4.935
+CAPTURE commands elapsed=8.052
+CAPTURE front_end_paths elapsed=8.605
+CAPTURE front_end_tubes elapsed=8.613
+CAPTURE trajectories elapsed=9.083
+CAPTURE initial_trajectories elapsed=9.092
+RECORDER_DONE completion=trajectory_received commands=1 final=1 initial=1

@@ -1,0 +1,88 @@
+19/30 Testing: committed_route_test
+19/30 Test: committed_route_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/committed_route_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/committed_route_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"committed_route_test" start time: Oct 08 05:34 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/committed_route_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[INFO] [1791437648.789067200] [committed_route_api]: Initializing optimizer for drone 7...
+[WARN] [1791437648.789120661] [committed_route_api]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791437648.789127754] [committed_route_api]: Obstacle avoidance: enabled
+[INFO] [1791437648.789130820] [committed_route_api]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791437648.789234456] [committed_route_api]: [POLY_TRAJ_OPT][drone 7] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791437648.789301784] [committed_route_api]: [POLY_TRAJ_OPT][drone 7] Setting initial formation type: 2
+[INFO] [1791437648.789340607] [committed_route_api]: Optimizer initialized successfully for drone 7
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.877281350] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.889091516] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.902021752] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.914084826] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=160 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.926473437] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.938098262] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[ERROR] [1791437648.938441933] [committed_route_api]: planGlobalTraj: No waypoints provided!
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.950010451] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.962115576] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] fixture clears configured risk zones
+[OK] one public call returns a committed route
+[OK] geometry, altitude caps and edge provenance are returned together
+[OK] head remains absolute and goal AGL is resolved against the supplied map
+[OK] route preparation leaves the caller's mission inputs unchanged
+[OK] both mission legs keep their own edge attribution in flight order
+[OK] the returned epoch identifies the two actual front-end captures
+[OK] route-only result includes measured preparation time
+[OK] route preparation does not run head optimization policy or adopt a flight
+[OK] legacy front-end-only entry returns exactly the same route products
+[OK] a repeated search advances its epoch once, even for identical geometry
+[OK] inherited current-epoch provenance preserves captures without a search
+[OK] stale inherited provenance loses attribution while geometry remains usable
+[OK] legacy route-only compatibility and provenance checks preserve execution storage
+[OK] another mission returns a new owned route without rewriting the retained result
+[OK] invalid initial state 0 returns no route
+[OK] entry refusal clears all products attributed to the refused call
+[OK] entry refusal preserves existing policy captures, execution and owned results
+[OK] invalid initial state 1 returns no route
+[OK] entry refusal clears all products attributed to the refused call
+[OK] entry refusal preserves existing policy captures, execution and owned results
+[OK] invalid initial state 2 returns no route
+[OK] entry refusal clears all products attributed to the refused call
+[OK] entry refusal preserves existing policy captures, execution and owned results
+[OK] invalid initial state 3 returns no route
+[OK] entry refusal clears all products attributed to the refused call
+[OK] entry refusal preserves existing policy captures, execution and owned results
+[OK] empty mission refuses before any front-end epoch is created
+[OK] the manager can prepare the original mission again after all refusals
+[OK] returned route, caps, provenance and timing outlive manager and node destruction
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.979877343] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.993046651] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437649.004797945] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437649.017163823] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] backend-free fixture clears configured zones
+[OK] route-only preparation works before an optimizer is initialized
+[OK] legacy backend refusal retains this call's successfully committed route products
+[OK] backend refusal does not replace or renumber an already stored flight
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/committed_route_test.xml' with successful test
+<end of output>
+Test time =   0.42 sec
+----------------------------------------------------------
+Test Passed.
+"committed_route_test" end time: Oct 08 05:34 UTC
+"committed_route_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

@@ -1,0 +1,18 @@
+{
+  "ignored_fields": "ROS header timestamps only",
+  "topics": {
+    "front_end_paths": {
+      "before_count": 1,
+      "after_count": 1,
+      "exact": true,
+      "sha256": "cd32175843abb76de7490d4ad4236d0aacaaf1a80f1854c92762d10ec9289c45"
+    },
+    "front_end_tubes": {
+      "before_count": 1,
+      "after_count": 1,
+      "exact": true,
+      "sha256": "cc7f606f6c707b082f4fc441f1c70ea267c7db1bc0385f8ffb3277bd9966bb6d"
+    }
+  },
+  "pass": true
+}

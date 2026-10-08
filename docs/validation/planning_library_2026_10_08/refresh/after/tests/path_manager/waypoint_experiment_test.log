@@ -1,0 +1,153 @@
+6/30 Testing: waypoint_experiment_test
+6/30 Test: waypoint_experiment_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/waypoint_experiment_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/waypoint_experiment_test"
+Directory: /ws/build/path_manager
+"waypoint_experiment_test" start time: Oct 08 06:55 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/waypoint_experiment_test
+[WPE] project-defined neutral 3DOF benchmark follower — waypoint structure validation, not real-platform physics validation
+[WPE] follower: pointmass_pursuit_v1 (transition law), integrator: rk4 non-clamping
+[WPE] follower: bank 0.794 rad, min turn radius 2896 m at 170 m/s, accept radius 153 m
+[OK]   source path built
+[OK]   arc table monotone
+source_path: len 16124 m, conv rel 4.57894e-08
+[OK]   chordal arc converged under sample doubling
+[OK]   empty trajectory yields empty source path (no UB probing)
+[OK]   uniform: requested count
+[OK]   uniform: last waypoint is the exact trajectory endpoint
+[OK]   uniform: arc spacing even within 2% of a slot
+[OK]   adaptive(lambda=0) reproduces uniform exactly
+extract: bend waypoints adaptive=8 uniform=5
+[OK]   adaptive concentrates on curvature
+[OK]   reference layout extracts
+[OK]   anchored extraction succeeds
+anchors: collision at arc 9213.7 m -> kept=1, other points inside 500 m: 0, total=8
+[OK]   the anchor survives the collision verbatim (MANDATORY)
+[OK]   the colliding automatic waypoint is the one removed
+[OK]   n is the final total (removed points are replaced)
+[OK]   the anchor's position and speed pass through untouched
+[OK]   duplicate anchors collapse and the total still holds
+[OK]   anchor order does not change the result — every field, not just the arc
+anchors: non-finite arc -> invalid-anchor (anchor has a non-finite field)
+[OK]   rejected explicitly: non-finite arc
+anchors: non-finite time -> invalid-anchor (anchor has a non-finite field)
+[OK]   rejected explicitly: non-finite time
+anchors: at the trajectory endpoint -> invalid-anchor (anchor is at or beyond a trajectory endpoint (both are produced by every strategy already))
+[OK]   rejected explicitly: at the trajectory endpoint
+anchors: beyond the endpoint -> invalid-anchor (anchor is at or beyond a trajectory endpoint (both are produced by every strategy already))
+[OK]   rejected explicitly: beyond the endpoint
+anchors: at the start -> invalid-anchor (anchor is at or beyond a trajectory endpoint (both are produced by every strategy already))
+[OK]   rejected explicitly: at the start
+[OK]   conflicting anchors at the same arc are rejected
+anchors: 8 anchors into n=8 -> anchors-exceed-budget
+[OK]   anchors that would fill the budget are refused, not squeezed in past n
+[OK]   a negative separation is refused
+[OK]   a non-finite separation is refused
+[OK]   n < 1 is refused
+anchors: separation 0.4L with an anchor -> underfilled (reached 3 of 8)
+[OK]   an unsatisfiable separation reports kUnderfilled
+[OK]   a failed extraction hands back NO waypoints (the partial count is diagnostic only)
+[OK]   the diagnostic count says how far it got
+[OK]   lambda = 0 is exactly the uniform mode
+[OK]   non-finite lambda is refused, not silently uniform
+[OK]   negative lambda is refused
+[OK]   non-finite eps_straight is refused
+[OK]   negative eps_straight is refused
+[OK]   same arc with a different TIME is a conflict too
+[OK]   curvature-adaptive: anchored, total holds
+[OK]   curvature-adaptive honours anchors too
+follower: completed=1 fail=none steps=4704 arrivals=8
+[OK]   follower reaches every waypoint
+[OK]   one arrival per waypoint
+[OK]   arrival times strictly increasing (no orbiting)
+[OK]   rollout is deterministic (no clock, no RNG)
+selftest xtrack-skip: skipped=1 gate=0 verdict=INCOMPLETE
+[OK]   no deviation tolerance -> the gate is recorded as SKIPPED
+[OK]   a verdict that never measured deviation is not a PASS — the same rule agl and zone already followed
+selftest xtrack-meas: skipped=0 gate=1 xtrack=0.000 verdict=INCOMPLETE
+[OK]   with a tolerance set the gate is MEASURED and holds
+selftest xtrack-answer: skip=INCOMPLETE meas=PASS
+[OK]   with terrain, zone AND deviation all measured and holding, the verdict is PASS
+[OK]   drop ONLY the deviation tolerance and the same flight reads INCOMPLETE — the skip reaches the answer, which is the whole of PA-3
+[OK]   an offset rollout against a tight tolerance FAILS the gate, so the gate can still refuse
+[OK]   ...and that refusal reaches the verdict as FAIL
+selftest perfect: xtrack 0 len_ratio 1
+[OK]   identity rollout measures ~zero deviation
+[OK]   identity rollout measures unit length ratio
+[OK]   offset rollout measures the offset
+selftest shortcut(hairpin): xtrack 400 len_ratio 0.0476751 gate_len 0
+[OK]   hairpin shortcut REFUSED by the length-ratio gate (a small deviation did not buy it a pass)
+[OK]   hairpin shortcut verdict is FAIL
+selftest shortcut(gentle): xtrack 969.199 len_ratio 0.980722
+[OK]   chord across a curving path shows large deviation (length cannot catch this one; deviation must)
+[OK]   incomplete flight is unmeasured (no quality claim)
+[OK]   absent terrain hook reads SKIPPED, not PASS
+baseline: lead 0.5 s -> 298.765952 m
+baseline: lead 1.0 s -> 301.727572 m
+baseline: lead 2.0 s -> 394.153021 m
+baseline: lead 4.0 s -> 417.305771 m
+baseline: lead 8.0 s -> 352.732376 m
+baseline: continuous-reference 417.3 m at the SAME lead as the rows (4.0 s), 298.8 m at its own best lead (0.5 s) | dense-waypoint N=64 299.5 m
+[OK]   continuous-reference rollout completes
+[OK]   both baselines are measurable
+[OK]   dense-waypoint rollout completes
+
+[WPE] continuous-reference baseline: 417.3 m at the rows' own lead, 298.8 m tuned | dense N=64: 299.5 m.
+[WPE] A reference point, NOT a bound — beats-baseline rows do exactly that, because leg-line
+[WPE] and curve aiming differ. Only the matched-lead number compares to the rows.
+
+strategy    N   maxXT[m]  rmsXT[m]  arcMt[m]  lenR  wpMiss[m]  endErr[m]
+[OK]   extraction ok (ok)
+uniform     4     407.1    216.6    410.1  0.992   153.0   152.9  INCOMPLETE beats-baseline
+WPE_CSV,uniform,4,1,407.140,216.605,410.132,0.9925,152.969,152.943,1.0002,0,0.0000
+[OK]   extraction ok (ok)
+adaptive    4     405.4    201.0    441.2  0.995   406.1   153.2  INCOMPLETE beats-baseline
+WPE_CSV,adaptive,4,1,405.443,201.020,441.173,0.9953,406.094,153.202,1.0030,0,0.0000
+[OK]   extraction ok (ok)
+uniform     8     261.4    122.9    268.5  1.002   214.2   151.8  INCOMPLETE beats-baseline
+WPE_CSV,uniform,8,1,261.352,122.890,268.528,1.0024,214.213,151.759,0.9994,0,0.0000
+[OK]   extraction ok (ok)
+adaptive    8     441.8    191.6    447.8  1.013   428.6   151.6  INCOMPLETE
+WPE_CSV,adaptive,8,1,441.796,191.649,447.779,1.0129,428.607,151.568,1.0128,0,0.0000
+[OK]   extraction ok (ok)
+uniform    16     419.2    196.1    421.1  1.018   402.3   152.7  INCOMPLETE
+WPE_CSV,uniform,16,1,419.187,196.108,421.079,1.0175,402.345,152.684,1.0162,0,0.0000
+[OK]   extraction ok (ok)
+adaptive   16     453.5    213.1    455.5  1.020   430.4   153.0  INCOMPLETE
+WPE_CSV,adaptive,16,1,453.492,213.050,455.525,1.0199,430.391,152.958,1.0200,0,0.0000
+[OK]   extraction ok (ok)
+uniform    32     360.6    162.3    364.9  1.015   359.8   152.4  INCOMPLETE beats-baseline
+WPE_CSV,uniform,32,1,360.605,162.317,364.932,1.0150,359.764,152.379,1.0153,0,0.0000
+[OK]   extraction ok (ok)
+adaptive   32     331.1    146.1    339.7  1.012   327.1   151.3  INCOMPLETE beats-baseline
+WPE_CSV,adaptive,32,1,331.149,146.096,339.728,1.0115,327.129,151.332,1.0121,0,0.0000
+refine     11     357.6    166.5    359.0  1.010   354.7   151.6  INCOMPLETE beats-baseline
+WPE_CSV,refine,11,1,357.599,166.521,359.031,1.0101,354.726,151.643,1.0117,0,0.0000
+refine: converged=0 iters=16 waypoints=11
+[OK]   most strategy/count rows complete
+table: best uniform row 261.4 m vs matched-lead baseline 417.3 m (ratio 0.63)
+[OK]   the best row came from measured data, not the seed
+refine vs uniform at the SAME count (11): 357.6 vs 394.3 m
+[OK]   error-driven refinement is not worse than uniform at the same waypoint count
+sensitivity[nominal     ]  N4=407  N8=261  N16=419  N32=361
+[OK]   sensitivity[nominal]: every count completes
+sensitivity[lag0.5s     ]  N4=435  N8=280  N16=478  N32=394
+[OK]   sensitivity[lag0.5s]: every count completes
+sensitivity[tight-accept]  N4=309  N8=107  N16=301  N32=272
+[OK]   sensitivity[tight-accept]: every count completes
+sensitivity: best-to-worst order [nominal: 8 32 4 16] [lag0.5s: 8 32 4 16] [tight-accept: 8 32 16 4]
+sensitivity: 0 clear rank inversion(s) across 3 followers (tie band 10%)
+[OK]   no clear rank inversion across these three follower configurations on this curve (evidence for the ordering transferring; NOT a proof across follower families)
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/waypoint_experiment_test.xml' with successful test
+<end of output>
+Test time =   0.17 sec
+----------------------------------------------------------
+Test Passed.
+"waypoint_experiment_test" end time: Oct 08 06:55 UTC
+"waypoint_experiment_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

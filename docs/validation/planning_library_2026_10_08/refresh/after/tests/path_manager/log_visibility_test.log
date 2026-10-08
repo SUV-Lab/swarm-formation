@@ -1,0 +1,53 @@
+28/30 Testing: log_visibility_test
+28/30 Test: log_visibility_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/log_visibility_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/log_visibility_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"log_visibility_test" start time: Oct 08 06:56 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/log_visibility_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+
+── enable_debug_logs=false  file_logging=false ──
+  [V7] console  REJECTED=1 DEGRADED=1 normalINFO=1
+  [OK]   MALFORMED 거부가 콘솔에 정확히 한 번
+  [OK]   DEGRADED 가 콘솔에 정확히 한 번
+  [OK]   정상 INFO 가 콘솔에 두 번 나오지 않는다
+  [V7] file     files=0 (기대 0)
+  [OK]   파일 로깅이 꺼져 있으면 파일은 만들어지지 않는다 — 그래도 위의 콘솔 기록은 남았다
+
+── enable_debug_logs=false  file_logging=true  ──
+  [V7] console  REJECTED=1 DEGRADED=1 normalINFO=1
+  [OK]   MALFORMED 거부가 콘솔에 정확히 한 번
+  [OK]   DEGRADED 가 콘솔에 정확히 한 번
+  [OK]   정상 INFO 가 콘솔에 두 번 나오지 않는다
+  [V7] file     files=18 contains_rejection=1
+  [OK]   파일 로깅이 켜져 있으면 파일에도 기록된다
+
+── enable_debug_logs=true   file_logging=false ──
+  [V7] console  REJECTED=1 DEGRADED=1 normalINFO=0
+  [OK]   MALFORMED 거부가 콘솔에 정확히 한 번
+  [OK]   DEGRADED 가 콘솔에 정확히 한 번
+  [OK]   정상 INFO 가 콘솔에 두 번 나오지 않는다
+  [V7] file     files=0 (기대 0)
+  [OK]   파일 로깅이 꺼져 있으면 파일은 만들어지지 않는다 — 그래도 위의 콘솔 기록은 남았다
+
+── enable_debug_logs=true   file_logging=true  ──
+  [V7] console  REJECTED=1 DEGRADED=1 normalINFO=0
+  [OK]   MALFORMED 거부가 콘솔에 정확히 한 번
+  [OK]   DEGRADED 가 콘솔에 정확히 한 번
+  [OK]   정상 INFO 가 콘솔에 두 번 나오지 않는다
+  [V7] file     files=18 contains_rejection=1
+  [OK]   파일 로깅이 켜져 있으면 파일에도 기록된다
+
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/log_visibility_test.xml' with successful test
+<end of output>
+Test time =  22.05 sec
+----------------------------------------------------------
+Test Passed.
+"log_visibility_test" end time: Oct 08 06:56 UTC
+"log_visibility_test" time elapsed: 00:00:22
+----------------------------------------------------------
+

@@ -1,0 +1,205 @@
+{
+  "reference": "/tmp/mmp_modularization_stage9/after/mission.json",
+  "result": "/tmp/mmp_modularization_ext_c/r2_consumer/initial_environment_result.json",
+  "comparison_ignores": "wire identity/start stamps; owned double result is explicitly narrowed to the existing PolyTraj float32 coefficient/duration format before comparing to recorded wire data; raw double coefficients remain in result.json",
+  "input_unchanged": true,
+  "owned_after_destruction": true,
+  "status": {
+    "outcome": 1,
+    "reason": 0,
+    "detail": ""
+  },
+  "phases": [
+    {
+      "t_end": 21.29334791960558,
+      "kind": 0,
+      "name": "departure"
+    },
+    {
+      "t_end": 155.33835344711133,
+      "kind": 0,
+      "name": "cruise-1"
+    },
+    {
+      "t_end": 363.09826147880943,
+      "kind": 0,
+      "name": "cruise-2"
+    },
+    {
+      "t_end": 500.0533018354152,
+      "kind": 0,
+      "name": "cruise-3"
+    },
+    {
+      "t_end": 521.062524731252,
+      "kind": 0,
+      "name": "arrival"
+    }
+  ],
+  "evaluation": {
+    "evaluated": true,
+    "clean": true,
+    "underground": false,
+    "no_cruise": false,
+    "viol_pct": 0.0,
+    "util_peak": 0.9830079501665802,
+    "envelope_bad": false,
+    "zone_hard_n": 0,
+    "zone_standoff_n": 0,
+    "zone_soft_n": 0,
+    "zone_junction_n": 0,
+    "zone_junction_hard_n": 0,
+    "policy_measurable": true
+  },
+  "terrain": {
+    "resolution_u": 0.3,
+    "length_x": 841.1999999999999,
+    "length_y": 1235.7,
+    "origin_x": 14524.6468,
+    "origin_y": 17182.9601,
+    "mission_sha256": "940aaeefa13091608b155216863cb1474e77d807171373d394125f2c8fba0e94",
+    "frame_digest": "c619610f3785404ea72cc5939d06ed0f4435e95435650a3e74b7e2ed9eee6c4c"
+  },
+  "final": {
+    "before": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "after": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "numeric_exact": true,
+    "duration_abs_difference": 0.0,
+    "path_length_abs_difference": 0.0,
+    "coefficient_checks": {
+      "duration": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_x": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_y": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_z": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      }
+    },
+    "common_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "normalized_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "pass": true
+  },
+  "reference_trajectory": {
+    "before": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "after": {
+      "pieces": 190,
+      "duration": 521.0625259429216,
+      "sampled_path_length": 1033.6650207694775,
+      "start_position": [
+        14724.646484375,
+        18218.6796875,
+        3.531822681427002
+      ],
+      "end_position": [
+        15165.896706608579,
+        17382.960449942908,
+        2.1211331450522892
+      ],
+      "numeric_sha256": "8d87546a0f29e4b077feed67917ad7f11d498b158ef4ef845a3fa7c3f35f29e4"
+    },
+    "numeric_exact": true,
+    "duration_abs_difference": 0.0,
+    "path_length_abs_difference": 0.0,
+    "coefficient_checks": {
+      "duration": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_x": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_y": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      },
+      "coef_z": {
+        "same_shape": true,
+        "within_tolerance": true,
+        "max_abs_difference": 0.0
+      }
+    },
+    "common_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "normalized_time_max_norm_difference": {
+      "position": 0.0,
+      "velocity": 0.0,
+      "acceleration": 0.0
+    },
+    "pass": true
+  },
+  "terrain_geometry_exact": true,
+  "pass": true
+}

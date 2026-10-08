@@ -1,0 +1,69 @@
+14/30 Testing: route_slice_batch_test
+14/30 Test: route_slice_batch_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/route_slice_batch_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/route_slice_batch_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"route_slice_batch_test" start time: Oct 08 06:55 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/route_slice_batch_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[WARN] [1791442537.685932621] [route_slice_batch_test]: [POLY_TRAJ_OPT][drone 0] [COLLISION] t=0.000 pos=(30.000, 60.000, 4.000) d=-1.000 inside obstacle
+[WARN] [1791442537.686952986] [route_slice_batch_test]: [POLY_TRAJ_OPT][drone 0] [COLLISION] t=0.000 pos=(30.000, 60.000, 4.000) d=-1.000 inside obstacle
+[OK] sequential empty batch needs no workers
+[OK] sequential rejects mismatched worker count before a solve
+[OK] sequential rejects mismatched skip count before a solve
+[OK] sequential rejects a later null worker before running the first slot
+[OK] sequential validates null workers even when their slots are skipped
+[OK] sequential skipped slot has no optimizer verdict or trajectory
+[OK] parallel empty batch needs no workers
+[OK] parallel rejects mismatched worker count before a solve
+[OK] parallel rejects mismatched skip count before a solve
+[OK] parallel rejects a later null worker before running the first slot
+[OK] parallel validates null workers even when their slots are skipped
+[OK] parallel skipped slot has no optimizer verdict or trajectory
+[OK] both batch modes return exactly one ordered slot per request
+[OK] real optimizers solve every distinct straight-route fixture
+[OK] batch timing is finite in both execution modes
+[OK] successful slot 0 records its own attempt and timing
+[OK] slot 0 has identical sequential/parallel coefficients, durations and evaluation
+[OK] slot 0 retains its input position in the batch
+[OK] slot 0 leaves the caller's complete request unchanged
+[OK] successful slot 1 records its own attempt and timing
+[OK] slot 1 has identical sequential/parallel coefficients, durations and evaluation
+[OK] slot 1 retains its input position in the batch
+[OK] slot 1 leaves the caller's complete request unchanged
+[OK] successful slot 2 records its own attempt and timing
+[OK] slot 2 has identical sequential/parallel coefficients, durations and evaluation
+[OK] slot 2 retains its input position in the batch
+[OK] slot 2 leaves the caller's complete request unchanged
+[OK] sequential partial failure keeps every result slot
+[OK] sequential successful siblings retain their exact trajectories around failed slices
+[OK] sequential empty and one-point slices are attempted input failures with no trajectory
+[OK] sequential real collision rejection is a distinct attempted optimizer failure
+[OK] sequential mixed input slot 0 remains unchanged
+[OK] sequential mixed input slot 1 remains unchanged
+[OK] sequential mixed input slot 2 remains unchanged
+[OK] sequential mixed input slot 3 remains unchanged
+[OK] sequential mixed input slot 4 remains unchanged
+[OK] parallel partial failure keeps every result slot
+[OK] parallel successful siblings retain their exact trajectories around failed slices
+[OK] parallel empty and one-point slices are attempted input failures with no trajectory
+[OK] parallel real collision rejection is a distinct attempted optimizer failure
+[OK] parallel mixed input slot 0 remains unchanged
+[OK] parallel mixed input slot 1 remains unchanged
+[OK] parallel mixed input slot 2 remains unchanged
+[OK] parallel mixed input slot 3 remains unchanged
+[OK] parallel mixed input slot 4 remains unchanged
+[OK] reusing every worker for different routes preserves retained results and evaluations
+[OK] all retained batch results remain evaluable after workers, manager and node destruction
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/route_slice_batch_test.xml' with successful test
+<end of output>
+Test time =   0.15 sec
+----------------------------------------------------------
+Test Passed.
+"route_slice_batch_test" end time: Oct 08 06:55 UTC
+"route_slice_batch_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

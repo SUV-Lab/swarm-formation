@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+project(mmp_vehicle_model_consumer LANGUAGES CXX)
+find_package(path_manager REQUIRED)
+add_executable(vehicle_model_consumer main.cpp)
+target_link_libraries(vehicle_model_consumer PRIVATE path_manager::path_manager_lib)

@@ -1,4 +1,6 @@
 #include "path_manager/replan_fsm.h"
+#include "path_manager/trajectory_message.h"
+#include "path_manager/ros_planning_backend.h"
 #include "path_planner/risk_shape.h"
 #include <cmath>
 #include <sys/resource.h>
@@ -23,7 +25,7 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
       next_mission_id_(""),
       is_final_mission_(false)
     {
-        log_manager_ = std::make_unique<swarm_formation::LogManager>(
+        log_manager_ = std::make_shared<swarm_formation::LogManager>(
             node->get_name(), "./logs/runtime", swarm_formation::LogManager::INFO);
 
     node_->declare_parameter("enable_debug_logs", false);
@@ -157,25 +159,19 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     log_manager_->infof("Initial position set to: (%.2f, %.2f, %.2f)", 
                 current_pos_(0), current_pos_(1), current_pos_(2));
 
-    // Initialize PathManager in constructor to avoid nullptr access
-    path_manager_ = std::make_shared<PathManager>(node_);
+    // Planning initialization and dispatch belong to the library. Keep a
+    // manager alias for the existing ROS execution/environment callbacks.
+    auto backend = makeRosPlanningBackend(node_, log_manager_);
+    auto *ros_backend = backend.get();
+    mission_planner_ = std::make_unique<MissionPlanner>(
+        PlanSettings{}, PlanningEnvironment{}, std::move(backend));
+    path_manager_ = ros_backend->executionManager();
 
     RCLCPP_INFO(node_->get_logger(), "PathManager initialized, waiting for trajectory command");
     log_manager_->infof("PathManager initialized, waiting for trajectory command");
 
-    // [CHAIN] Stage-1 segment-chained planning experiment (default off).
-    node_->declare_parameter("chain/enable", false);
-    node_->get_parameter("chain/enable", chain_enable_);
-    int chain_segments = 3;
-    node_->declare_parameter("chain/segments", 3);
-    node_->get_parameter("chain/segments", chain_segments);
-    bool chain_inherit_route = true;
-    node_->declare_parameter("chain/inherit_route", true);
-    node_->get_parameter("chain/inherit_route", chain_inherit_route);
-    chain_planner_ = std::make_unique<SegmentChainPlanner>(
-        node_, path_manager_, log_manager_.get(), chain_segments,
-        chain_inherit_route);
-    if (chain_enable_) {
+    const int chain_segments = ros_backend->configuredSegments();
+    if (ros_backend->chainEnabled()) {
         const std::string seg_desc = chain_segments > 0
             ? std::to_string(chain_segments) + " segments per mission"
             : "auto-sized segments";
@@ -470,6 +466,18 @@ void ReplanFSM::computeAndPublishPaths() {
     }
 }
 
+namespace {
+builtin_interfaces::msg::Time storedTrajectoryTime(double seconds)
+{
+    // Preserve the local trajectory wire timestamp's existing rounding.
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = static_cast<int32_t>(std::floor(seconds));
+    stamp.nanosec = static_cast<uint32_t>(
+        std::llround((seconds - stamp.sec) * 1e9));
+    return stamp;
+}
+}  // namespace
+
 void ReplanFSM::polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
 {
     if (!path_manager_) {
@@ -477,35 +485,10 @@ void ReplanFSM::polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
         log_manager_->errorf("PathManager is not initialized!");
         return;
     }
-    auto data = &path_manager_->traj_.local_traj;
-    msg.trajectory_id = data->traj_id;
-
-    msg.drone_id = drone_id_;
-    msg.order = 5;
-
-    const double s = data->start_time;
-    msg.start_time.sec     = static_cast<int32_t>(std::floor(s));
-    msg.start_time.nanosec = static_cast<uint32_t>(std::llround((s - msg.start_time.sec) * 1e9));
-
-    Eigen::VectorXd durs = data->traj.getDurations();
-    int piece_num = data->traj.getPieceNum();
-    msg.duration.resize(piece_num);
-    msg.coef_x.resize(6 * piece_num);
-    msg.coef_y.resize(6 * piece_num);
-    msg.coef_z.resize(6 * piece_num);
-    for (int i = 0; i < piece_num; ++i)
-    {
-      msg.duration[i] = durs(i);
-
-      poly_traj::CoefficientMat cMat = data->traj.getPiece(i).getCoeffMat();
-      int i6 = i * 6;
-      for (int j = 0; j < 6; j++)
-      {
-        msg.coef_x[i6 + j] = cMat(0, j);
-        msg.coef_y[i6 + j] = cMat(1, j);
-        msg.coef_z[i6 + j] = cMat(2, j);
-      }
-    }
+    // Emergency replacement and compatibility callers use the current slot.
+    const auto &data = path_manager_->traj_.local_traj;
+    msg = makeTrajectoryMessage(data.traj, drone_id_, data.traj_id,
+                                storedTrajectoryTime(data.start_time));
 }
 
 void ReplanFSM::globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
@@ -515,61 +498,52 @@ void ReplanFSM::globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
         log_manager_->errorf("PathManager is not initialized!");
         return;
     }
-    msg.drone_id = drone_id_;
-
-    auto data = &path_manager_->traj_.global_traj;
-
-    rclcpp::Time now = rclcpp::Clock(RCL_ROS_TIME).now();
-    msg.start_time.sec = now.seconds();
-    msg.start_time.nanosec = now.nanoseconds() % 1000000000;
-    msg.order = 5;
-
-    Eigen::VectorXd durs = data->traj.getDurations();
-    int piece_num = data->traj.getPieceNum();
-    msg.duration.resize(piece_num);
-    msg.coef_x.resize(6 * piece_num);
-    msg.coef_y.resize(6 * piece_num);
-    msg.coef_z.resize(6 * piece_num);
-    for (int i = 0; i < piece_num; ++i)
-    {
-      msg.duration[i] = durs(i);
-
-      poly_traj::CoefficientMat cMat = data->traj.getPiece(i).getCoeffMat();
-      int i6 = i * 6;
-      for (int j = 0; j < 6; j++)
-      {
-        msg.coef_x[i6 + j] = cMat(0, j);
-        msg.coef_y[i6 + j] = cMat(1, j);
-        msg.coef_z[i6 + j] = cMat(2, j);
-      }
-    }
+    const rclcpp::Time now = rclcpp::Clock(RCL_ROS_TIME).now();
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = now.seconds();
+    stamp.nanosec = now.nanoseconds() % 1000000000;
+    msg = makeTrajectoryMessage(path_manager_->traj_.global_traj.traj,
+                                drone_id_, msg.trajectory_id, stamp);
 }
 
 bool ReplanFSM::planFromGlobalTraj(int trial_times) {
-    // In SFC single-shot mode, planGlobalTraj() already optimized and set local_traj.
-    // Just verify local_traj exists and publish it.
-    auto local_traj = &path_manager_->traj_.local_traj;
-    if (local_traj->duration > 0 && local_traj->start_time > 0)
+    // The live execution slot still decides whether a flight was withdrawn.
+    // The normal publication consumes the owned library result, so packaging
+    // does not depend on the planner's coefficient storage or scratch values.
+    const auto &local_traj = path_manager_->traj_.local_traj;
+    if (local_traj.duration > 0 && local_traj.start_time > 0)
     {
-        // local_traj was already set by planGlobalTraj() — publish and go
-        log_manager_->infof("[planFromGlobalTraj] Using pre-optimized trajectory (duration=%.3f)", local_traj->duration);
+        if (pending_plan_ && pending_plan_->trajectory_id != local_traj.traj_id)
+            pending_plan_.reset();  // a legacy caller replaced the live slot
+        const auto &trajectory = pending_plan_
+            ? pending_plan_->trajectory : local_traj.traj;
+        const double start_time = pending_plan_
+            ? pending_plan_->start_time : local_traj.start_time;
+        const auto &reference = pending_plan_
+            ? pending_plan_->reference_trajectory : path_manager_->traj_.global_traj.traj;
+        log_manager_->infof("[planFromGlobalTraj] Using pre-optimized trajectory (duration=%.3f)", local_traj.duration);
 
-        mmp_traj_msgs::msg::PolyTraj msg;
-        polyTraj2ROSMsg(msg);
+        const auto msg = makeTrajectoryMessage(
+            trajectory, drone_id_, local_traj.traj_id,
+            storedTrajectoryTime(start_time));
         optimized_path_pub_->publish(msg);
-
         have_local_traj_ = true;
 
         if (enable_global_trajectory_pub_) {
-            mmp_traj_msgs::msg::PolyTraj msg2;
-            globalTraj2ROSMsg(msg2);
-            global_path_pub_->publish(msg2);
+            // Reference messages retain publication time and id zero, rather
+            // than adopting the final flight's identity or stored seed time.
+            const rclcpp::Time now = rclcpp::Clock(RCL_ROS_TIME).now();
+            builtin_interfaces::msg::Time stamp;
+            stamp.sec = now.seconds();
+            stamp.nanosec = now.nanoseconds() % 1000000000;
+            global_path_pub_->publish(
+                makeTrajectoryMessage(reference, drone_id_, 0, stamp));
         }
-
+        pending_plan_.reset();
         return true;
     }
 
-    // local_traj not set (shouldn't happen in normal flow)
+    pending_plan_.reset();
     log_manager_->errorf("[planFromGlobalTraj] local_traj not ready — planGlobalTraj() may have failed");
     return false;
 }
@@ -628,31 +602,6 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
         next_mission_id_.clear();  // Empty means we need new mission data
         FSM_LOG_INFO("Mission progressed: now executing %s, next mission cleared (will request new data)",
                     current_mission_id_.c_str());
-    }
-
-    // Initialize optimizer if not already initialized
-    if (!path_manager_->isOptimizerInitialized()) {
-        auto opt_init_start = std::chrono::high_resolution_clock::now();
-        try {
-            RCLCPP_INFO(node_->get_logger(), "Initializing optimizer for drone %d...", drone_id_);
-            log_manager_->infof("Initializing optimizer for drone %d...", drone_id_);
-            FSM_LOG_INFO("[TIMING] Optimizer initialization started");
-
-            path_manager_->initOptimizer();
-            path_manager_->deliverTrajToOptimizer();
-
-            auto opt_init_end = std::chrono::high_resolution_clock::now();
-            auto opt_init_duration = std::chrono::duration_cast<std::chrono::milliseconds>(opt_init_end - opt_init_start).count();
-
-            RCLCPP_INFO(node_->get_logger(), "Optimizer initialized successfully for drone %d", drone_id_);
-            log_manager_->infof("Optimizer initialized successfully for drone %d", drone_id_);
-            FSM_LOG_INFO("[TIMING] Optimizer initialization took %ld ms", opt_init_duration);
-
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to initialize optimizer for drone %d: %s", drone_id_, e.what());
-            log_manager_->errorf("Failed to initialize optimizer for drone %d: %s", drone_id_, e.what());
-            return;
-        }
     }
 
     if (have_local_traj_) {
@@ -878,144 +827,27 @@ void ReplanFSM::resolveCommandedStartAgl()
 
 void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints) {
     last_plan_succeeded_ = false;
-    // This planner covers the initial phase, not just the midcourse one, so
-    // how the flight BEGINS is mission input — not something to invent. A
-    // mission that states neither an initial velocity vector nor an initial
-    // speed used to be completed on its behalf: the derived rest state fell
-    // below the platform margin-backed cruise floor and [STALL-FLOOR] / [CHAIN-PAR] raised
-    // it to ~132 m/s along the first leg, logging "commanded start speed
-    // 0.000" for a speed nothing had commanded. The published flight then
-    // began at cruise for a mission that never said so.
-    if (start_head_.src == path_manager::StartStateSource::UNSPECIFIED) {
-        const std::string why =
-            "mission stated no initial state (neither use_initial_velocity "
-            "with initial_velocity_mps, nor initial_speed_mps) — the initial "
-            "phase is planned, not assumed, so the planner will not invent "
-            "one";
-        FSM_LOG_ERROR("[ENVELOPE] %s (INITIAL_STATE_UNSPECIFIED)",
-                      why.c_str());
-        // Same bookkeeping the planning tail does for a FAILED result;
-        // last_plan_succeeded_ is already false, so the caller's
-        // [PLAN REJECTED] rollback runs and a corrected resend retries.
-        last_plan_outcome_ = PlanOutcome::FAILED;
-        last_plan_reason_ = PlanReason::INITIAL_STATE_UNSPECIFIED;
-        FSM_LOG_ERROR("[PLAN] FAILED: %s", why.c_str());
-        return;
-    }
-    resolveCommandedStartAgl();
-    // Use formation pattern received via TrajectoryCommand
-    auto formation_setup_start = std::chrono::high_resolution_clock::now();
-    path_manager_->setFormationInfo(drone_id_, current_formation_type_, current_formation_pattern_);
+    // Only the ROS adapter consumes the once-per-command AGL flag and
+    // updates the execution start position. The library also supports AGL
+    // requests directly for callers without this state machine.
+    if (start_head_.src != StartStateSource::UNSPECIFIED)
+        resolveCommandedStartAgl();
+    start_head_.pos_u = start_pt_;
+    start_head_.vel_u = start_vel_;
+    start_head_.acc_u = start_acc_;
+
+    MissionPlanRequest request;
+    request.head = start_head_;
+    request.waypoints = waypoints;
+    request.tail = mission_tail_;
+    request.formation_type = current_formation_type_;
+    request.formation_pattern = current_formation_pattern_;
+    request.formation_size = num_drones_;
 
     auto global_traj_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TIMING] Starting global trajectory planning");
-    PlanResult plan_res;
-    if (chain_enable_ && chain_planner_) {
-        // [CHAIN] baseline + N chained segment runs; the planner forwards
-        // the synthesized flag itself (per-run semantics differ) and
-        // envelope-validates a commanded start at its entry ([ENVELOPE]).
-        // [HEAD-POLICY] The head is assembled HERE, where the claim was
-        // resolved, and travels as one value. The three booleans it replaces
-        // were assembled at every call and had already produced an illegal
-        // combination: a prescribed acceleration was silently dropped
-        // whenever the velocity arrived in the scalar form.
-        start_head_.pos_u = start_pt_;
-        start_head_.vel_u = start_vel_;
-        start_head_.acc_u = start_acc_;
-        plan_res = chain_planner_->plan(start_head_, waypoints, mission_tail_);
-    } else {
-        // [PHASE] The single path validates the boundaries HERE (the chain
-        // planner validates inside plan()) — same frozen policy: a
-        // commanded initial state outside the envelope fails before any
-        // planning (contract 1, never clamped); an invalid final boundary
-        // without the opt-in fails, the opt-in relaxes + degrades.
-        ego_planner::TailBoundary eff_tail = mission_tail_;
-        bool head_rejected = false;
-        bool tail_rejected = false, relaxed = false;
-        std::string relax_why;
-        // Same two head rules the chain planner applies at its entry, so
-        // "the planner does not rewrite a stated initial state" holds in
-        // BOTH modes. It previously held only in chain mode: a synthesized
-        // sub-floor head fell through here untouched and [STALL-FLOOR]
-        // raised it downstream, which is the rewrite the whole gate exists
-        // to prevent.
-        // The scalar form is judged by the SAME validator as the vector
-        // form, minus the acceleration it did not state. It used to get
-        // statedStartSpeedProblem, which tested the margin-backed cruise floor alone — no
-        // handoff ceiling, no flight-path cone — so the two forms disagreed
-        // about the identical physical state, and disagreed differently
-        // again with the dynamics model off (one returns {} on a
-        // non-positive floor, the other on !dynamicsEnabled()).
-        // Keyed on the SOURCE and on whether an acceleration was actually
-        // prescribed — the two independent facts. The boolean pair could not
-        // express "scalar speed WITH a prescribed acceleration", so that
-        // message's acceleration reached the optimizer head unjudged.
-        const bool judge_pva =
-            path_manager::judgeFullPva(start_head_.src,
-                                       start_head_.acc_prescribed);
-        const std::string head_prob =
-            !path_manager::isOperatorInput(start_head_.src)
-                ? std::string{}
-                : (judge_pva ? path_manager_->pvaEnvelopeProblem(
-                                   start_pt_, start_vel_, start_acc_)
-                             : path_manager_->stateEnvelopeProblem(start_vel_));
-        {
-            const std::string &prob = head_prob;
-            if (!prob.empty()) {
-                FSM_LOG_ERROR("[ENVELOPE] commanded initial state REJECTED: "
-                              "%s (INITIAL_MODE_UNSUPPORTED)", prob.c_str());
-                head_rejected = true;
-                plan_res = PlanResult::failedBecause(
-                    PlanReason::INITIAL_MODE_UNSUPPORTED,
-                    "initial state unsupported: " + prob);
-            }
-        }
-        if (!head_rejected && mission_tail_.anyPrescribed()) {
-            std::string problem;
-            if (!mission_tail_.allFinite()) {
-                problem = "non-finite final boundary";
-            } else if (mission_tail_.prescribe_vel) {
-                const std::string ep =
-                    path_manager_->stateEnvelopeProblem(mission_tail_.vel);
-                if (!ep.empty())
-                    problem = "final velocity outside the cruise validity "
-                              "region: " + ep;
-            }
-            if (!problem.empty()) {
-                bool allow = false;
-                if (!node_->has_parameter(
-                        "planning/allow_final_boundary_relaxation"))
-                    node_->declare_parameter(
-                        "planning/allow_final_boundary_relaxation", false);
-                node_->get_parameter(
-                    "planning/allow_final_boundary_relaxation", allow);
-                if (!allow) {
-                    FSM_LOG_ERROR("[PHASE] final boundary REJECTED: %s",
-                                  problem.c_str());
-                    tail_rejected = true;
-                    plan_res = PlanResult::failed(problem);
-                } else {
-                    FSM_LOG_WARN("[PHASE] final boundary relaxed (opt-in): "
-                                 "%s", problem.c_str());
-                    eff_tail = ego_planner::TailBoundary{};
-                    relaxed = true;
-                    relax_why = problem + " — final boundary relaxed (opt-in)";
-                }
-            }
-        }
-        if (!head_rejected && !tail_rejected) {
-            start_head_.pos_u = start_pt_;
-            start_head_.vel_u = start_vel_;
-            start_head_.acc_u = start_acc_;
-            plan_res = path_manager_->planGlobalTraj(start_head_, waypoints,
-                                                     eff_tail)
-                           ? PlanResult::success()
-                           : PlanResult::failed("single plan failed");
-            if (relaxed)
-                plan_res.degrade(PlanReason::FINAL_BOUNDARY_RELAXED,
-                                 relax_why);
-        }
-    }
+    MissionPlanResult result = mission_planner_->plan(std::move(request));
+    const PlanResult &plan_res = result.status;
     // [PLAN-OUTCOME] the tri-state is the planner contract; the bool below
     // stays the execution gate (DEGRADED flies, loudly).
     last_plan_outcome_ = plan_res.outcome;
@@ -1039,22 +871,8 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     FSM_LOG_INFO("[TIMING] Global trajectory planning took %ld ms", global_traj_duration);
 
     if (success) {
-        // Pass formation pattern to optimizer for formation cost calculation
+        pending_plan_ = std::move(result);
         FSM_LOG_INFO("Trajectory planning successful for formation type: %s", current_formation_type_.c_str());
-
-        if (!current_formation_pattern_.empty()) {
-            log_manager_->infof("Formation pattern for optimizer (relative coordinates):");
-            for (size_t i = 0; i < current_formation_pattern_.size(); ++i) {
-                log_manager_->infof("  Drone %zu: [%.3f, %.3f, %.3f]",
-                                   i, current_formation_pattern_[i].x(),
-                                   current_formation_pattern_[i].y(),
-                                   current_formation_pattern_[i].z());
-            }
-            path_manager_->setFormationToOptimizer(current_formation_pattern_, num_drones_);
-        } else {
-            FSM_LOG_WARN("Formation pattern is empty, optimizer may not apply formation constraints");
-            path_manager_->setFormationToOptimizer(current_formation_pattern_, num_drones_);
-        }
 
         have_target_ = true;
         last_plan_succeeded_ = true;
@@ -1104,6 +922,7 @@ void ReplanFSM::publishExecutionAbort(
     double t_detected)
 {
     if (!exec_control_pub_ || !path_manager_) return;
+    pending_plan_.reset();
     using Ctl = mmp_traj_msgs::msg::TrajectoryExecutionControl;
     using R = path_manager::PathManager::EnvChangeReason;
     Ctl msg;
@@ -1151,6 +970,7 @@ bool ReplanFSM::callEmergencyStop(const Eigen::Vector3d& stop_pos) {
         return false;
     }
 
+    pending_plan_.reset();
     path_manager_->EmergencyStop(stop_pos);
 
     mmp_traj_msgs::msg::PolyTraj msg;

@@ -1,0 +1,26 @@
+=== Log started at 2026-10-08 05:34:53.254 for node: route_backend_second_owner ===
+[2026-10-08 05:34:53.254] [INFO ] [route_backend_second_owner] dyn_yaw_seed: RANDOM -> 946730771 (pin manager/dyn_yaw_seed to this to reproduce)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] world='small_island' (no ESDF disk cache; boxes-only SDF builds on demand)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] Risk zone params size: 0
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] No risk zones configured
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] [SDF] xy voxel auto-set to DEM cell: 2.000 units
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] Terrain data loaded: 150x180, resolution=2.000, origin=(0.00,0.00), center=(180.00,150.00)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] [TERRAIN-ALIGN] peak cell (c=0,r=0) h=2.0000 -> world (359.00,299.00) -> getElevation=2.0000 delta=0.0000 (ALIGNED)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] SDF built: shape=(180,150,320) voxel=(2.00,2.00,0.10) blocks=0
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] [risk_zones] runtime update: 0 zones now active
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] Planning global trajectory with 2 waypoints
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] [GOAL AGL] waypoint (180.0, 150.0) z=4.00 AGL -> absolute 6.00 (terrain 2.00 + agl 4.00)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] [GOAL AGL] waypoint (330.0, 150.0) z=4.00 AGL -> absolute 6.00 (terrain 2.00 + agl 4.00)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] [BBOX] headroom=20.00 terrain_peak=2.00 zone_top=0.00 (0 zones, not covered) -> ceiling 26.00
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] Map bounds: lower=(20.00,140.00,1.00), upper=(340.00,160.00,26.00)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] SDF probe: start=360.000 m, goal=360.000 m (margin=0.60)
+[2026-10-08 05:34:53.255] [INFO ] [route_backend_second_owner] [PM DBG] setRiskZones: 0 zones weight=30.000
+[2026-10-08 05:34:53.266] [INFO ] [route_backend_second_owner] A* segment 0: simple_path_size=2
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner] A* segment 1: simple_path_size=2
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner] A* route: 3 waypoints (23.2 ms)
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner]   A*[0]: (30.00, 150.00, 6.00) risk=0.000
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner]   A*[1]: (180.00, 150.00, 6.00) risk=0.000
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner]   A*[2]: (330.00, 150.00, 6.00) risk=0.000
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner] [Z-DENOISE] shortcut z: 0/3 vertices smoothed, range [6.00, 6.00] -> [6.00, 6.00]
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner] A* shortcut 3 pts → sparse pieces 13 pts (max_seg 25.0)
+[2026-10-08 05:34:53.278] [INFO ] [route_backend_second_owner] [CHAIN-PAR] front-end only: 13 vertices committed, optimization skipped

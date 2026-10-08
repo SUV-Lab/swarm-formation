@@ -8,8 +8,14 @@
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
 #include "path_manager/start_state.h"
+#include "path_manager/route_slice_solver.h"
+#include "path_manager/risk_zone.h"
+#include "path_manager/committed_route.h"
+#include "path_manager/route_postprocessing.h"
+#include "path_manager/route_search_backend.h"
 #include <Eigen/Eigen>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -18,6 +24,7 @@
 #include <string>
 #include <chrono>
 #include <random>
+#include <optional>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -34,15 +41,7 @@ using namespace ego_planner;
 
 namespace path_manager
 {
-  // Terrain-occluded risk zone. The authored reach is the horizontal
-  // reach; PathManager derives a vertical reach from risk_vertical_ratio_ and
-  // supplies the resulting ellipsoid consistently to the front/back ends.
-  struct RiskZone {
-    Eigen::Vector3d center; // frame units (1 unit = 100 m)
-    double reach;   // horizontal reach in FRAME UNITS (typ. 90 = 9 km)
-    double peak;    // dimensionless in (0, 1]; values >1 are field-capped
-  };
-
+  class BuiltinRouteSearchBackend;
   // Terrain elevation data extracted from GridMap
   // [TERRAIN-FRAME] grid_map core convention (what the RViz plugin renders):
   //   wx = origin_x + length_x - (row + 0.5) * res   (matrix ROW spans X, mirrored)
@@ -162,16 +161,25 @@ namespace path_manager
       // values into the same buffer, so a data()-pointer key would wrongly
       // hit and serve a stale sample. thread_local: the optimizer runs on one
       // thread; other threads just get their own slot.
-      struct ElevMemo { uint64_t gen; double x, y; float h, gx, gy; bool ok; };
+      struct ElevMemo {
+        uint64_t identity, gen;
+        bool valid;
+        double x, y;
+        float h, gx, gy;
+        bool ok;
+      };
       static thread_local ElevMemo memo{
-          std::numeric_limits<uint64_t>::max(), 0.0, 0.0, 0.f, 0.f, 0.f, false};
-      if (memo.gen == generation && memo.x == world_x && memo.y == world_y) {
+          0, std::numeric_limits<uint64_t>::max(), false,
+          0.0, 0.0, 0.f, 0.f, 0.f, false};
+      if (memo.identity == cache_identity_.value && memo.gen == generation &&
+          memo.valid == valid && memo.x == world_x && memo.y == world_y) {
         *h = memo.h; *dhdx = memo.gx; *dhdy = memo.gy;
         return memo.ok;
       }
       float th = 0.f, tgx = 0.f, tgy = 0.f;
       const bool ok = getElevationAndGradUncached(world_x, world_y, &th, &tgx, &tgy);
-      memo = ElevMemo{generation, world_x, world_y, th, tgx, tgy, ok};
+      memo = ElevMemo{cache_identity_.value, generation, valid,
+                      world_x, world_y, th, tgx, tgy, ok};
       *h = th; *dhdx = tgx; *dhdy = tgy;
       return ok;
     }
@@ -245,6 +253,33 @@ namespace path_manager
       const double wy = origin_y + length_y - (col + 0.5) * resolution;
       return Eigen::Vector3d(wx, wy, static_cast<double>(elev));
     }
+
+  private:
+    // The memo is shared by all TerrainData objects on a thread. A local
+    // generation (or an address that an allocator may reuse) is not an
+    // instance identity. Copies, moves and assignments receive a fresh key;
+    // public terrain/environment generation counters retain their meaning.
+    struct CacheIdentity {
+      static uint64_t next() {
+        static std::atomic<uint64_t> sequence{0};
+        return sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+      }
+      uint64_t value{next()};
+      CacheIdentity() = default;
+      CacheIdentity(const CacheIdentity &) : CacheIdentity() {}
+      CacheIdentity(CacheIdentity &&other) noexcept : CacheIdentity() {
+        other.value = next();
+      }
+      CacheIdentity &operator=(const CacheIdentity &) {
+        value = next();
+        return *this;
+      }
+      CacheIdentity &operator=(CacheIdentity &&other) noexcept {
+        value = next();
+        other.value = next();
+        return *this;
+      }
+    } cache_identity_;
   };
 
   class PathManager
@@ -254,9 +289,10 @@ namespace path_manager
 
     void initOptimizer(bool force_reinit = false);
     bool isOptimizerInitialized() const { return is_optimizer_initialized_ && poly_traj_opt_ != nullptr; }
-    // end_vel/end_acc: [CHAIN] prescribed tail boundary state, forwarded to
-    // the optimizer. Zero end_vel (what every non-chain caller passes) keeps
-    // the arrival contract — see optimizeFromPath. junction_goal marks the
+    // TailBoundary forwards explicit velocity/acceleration prescription
+    // flags to the optimizer. The default unprescribed boundary keeps the
+    // arrival contract; a prescribed zero value remains prescribed.
+    // junction_goal marks the
     // final waypoint as a mid-route junction between chained segment plans:
     // its z is ABSOLUTE (sampled from a trajectory that already flies there),
     // so the [GOAL AGL] reinterpretation must not re-add the terrain under it.
@@ -300,6 +336,9 @@ namespace path_manager
     // travels with the geometry — re-deriving it by projecting the slice back
     // onto the legs picks the wrong one at a U-turn, a self-crossing, or two
     // legs running parallel a short distance apart.
+    // Legacy borrowed overrides must not alias the compatibility accessor
+    // buffers: entry clears those buffers before consuming this call's
+    // inputs. Prefer an owned CommittedRoute from planCommittedRoute.
     struct RouteProvenance {
         const std::vector<size_t> *edge_leg{nullptr};  // size == points - 1
         uint64_t epoch{0};                             // 0 = none, refuse
@@ -314,14 +353,41 @@ namespace path_manager
                         bool front_end_only = false,
                         const RouteProvenance *provenance = nullptr);
 
+    // Prepare one owned front-end route without optimizing or adopting a
+    // new trajectory. This uses the live manager: calls and environment
+    // updates must be serialized, and a search advances the policy epoch.
+    // SDF preparation/deferred obstacles retain their existing environment
+    // hooks, which may invalidate/abort an earlier flight. Owned geometry
+    // survives reuse; its epoch refers to live policy captures, not to an
+    // environment snapshot. Compatibility route accessors remain populated.
+    std::optional<CommittedRoute> planCommittedRoute(
+        const StartHead &head,
+        const std::vector<Eigen::Vector3d> &waypoints);
+
     // [CHAIN-PAR] A fully configured, INDEPENDENT optimizer instance (same
     // configuration sequence initOptimizer applies to the member instance:
     // params, SDF, terrain callbacks, risk zones, gates). Workers own one
     // each so segment solves can run concurrently; the shared surfaces they
     // read are safe by design (SDF static layer read-only, dynamic patches
     // under shared_mutex, terrain ELEV-MEMO thread_local, risk masks const).
+    // Each optimizer borrows this manager's SDF/terrain/risk providers:
+    // the manager must outlive it and its solves, and environment updates
+    // must wait until every worker has finished.
     std::unique_ptr<ego_planner::PolyTrajOptimizer> makeConfiguredOptimizer();
+    // Configure between missions, after all workers/execution have stopped.
+    // Null restores ROS-configured fixed-wing models. Explicit models are
+    // shared unchanged by every worker, including forced optimizer re-init.
+    void setVehicleModel(mmp_vehicle_dynamics::VehicleModel::Ptr model);
+    // Serialized setup between searches. Null restores the built-in backend.
+    // Canonical collision/risk queries and execution safety stay with manager.
+    void setRouteSearchBackend(std::shared_ptr<RouteSearchBackend> backend);
 
+    RouteSliceConfig sliceSolveConfig() const {
+        return {max_vel_, alt_cap_headroom_, alt_floor_headroom_,
+                ground_height_, weight_altitude_};
+    }
+
+    // Compatibility adapter for the value-returning solveRouteSlice function.
     // [CHAIN-PAR] Solve ONE route slice with pinned boundary states on the
     // GIVEN optimizer instance. Touches no PathManager mutable state (no
     // traj_, no viz, no per-plan member writes) — safe to call from worker
@@ -420,7 +486,13 @@ namespace path_manager
     // in bypassed classifyStartState entirely, making TRANSITION_REQUIRED
     // unreachable from the scalar form. Both stated forms now go through
     // stateEnvelopeProblem / pvaEnvelopeProblem and classifyStartState.
-    int zoneAvoidPassNow() { return searcher_.zoneAvoidPass(); }
+    int zoneAvoidPassNow() const {
+        return last_search_policy_measured_ ? last_search_policy_.legacy_pass : 0;
+    }
+    bool suppressCrossingExemptNow() const {
+        return last_search_policy_measured_ &&
+               last_search_policy_.suppress_crossing_exempt;
+    }
 
     // [CHAIN] committed front-end products of the most recent plan, retained
     // for the chain planner to slice (clean_path as handed to the optimizer,
@@ -576,12 +648,7 @@ namespace path_manager
     // outcome WITH the shapes plus generation AND epoch ids, so a later
     // zone-list/terrain change or ANY later search can never be silently
     // consulted through stale indices.
-    enum class ZoneDisposition {
-        HARD_AVOID,        // contact disqualifies a transition candidate
-        SOFT_UNAVOIDABLE,  // pass-3 kept soft: crossing the global route needed
-        SOFT_ENDPOINT,     // start/goal containment exemption
-        SOFT_FALLBACK,     // pass-2 final field: everything soft
-    };
+    using ZoneDisposition = RouteZoneDisposition;
     struct ZonePolicySnapshot {
         // DATA generation (zone list / terrain re-derivation) AND policy
         // epoch (per front-end search) — dispositions are PER-SEARCH state
@@ -590,11 +657,9 @@ namespace path_manager
         // snapshot (review find: generation alone missed that).
         uint64_t generation{0};
         uint64_t epoch{0};
-        // False when the snapshot cannot express a policy: zones exist but
-        // the 3-pass never ran (pass 0 — policy off or a different front
-        // end; the soft-override buffer may hold a PREVIOUS search's
-        // values then), no search has run since the last zone/terrain
-        // change, or the epoch's front-end ran MORE than one segment
+        // False when the backend did not return measured canonical policy,
+        // no search has run since the last zone/terrain change, or the
+        // epoch's front-end ran MORE than one segment
         // search (multi-waypoint mission: each leg rewrites the whole
         // policy state, so the buffers describe only the LAST leg —
         // publishing that as plan-wide policy is fail-open; review find).
@@ -625,7 +690,7 @@ namespace path_manager
         ZonePolicySnapshot policy;
     };
 
-    // Capture the policy for `leg` from the searcher's CURRENT state. Call
+    // Capture the owned backend policy for this invocation of `leg`. Call
     // immediately after that leg's search succeeded and before the next one
     // runs. Returns false when the state cannot express a policy, which is
     // fail-closed: no snapshot rather than a wrong one.
@@ -725,10 +790,17 @@ namespace path_manager
 
     // [FINAL-EVAL] shared flight-dynamics model pass-through (null when the
     // optimizer is uninitialized or the dynamics model is off).
-    const mmp_vehicle_dynamics::Parameters* dynamicsParams() const {
+    mmp_vehicle_dynamics::VehicleModel::Ptr vehicleModel() const {
         return (isOptimizerInitialized() && poly_traj_opt_->dynamicsEnabled())
-                   ? &poly_traj_opt_->dynamicsParams()
+                   ? poly_traj_opt_->vehicleModel()
                    : nullptr;
+    }
+    // Compatibility/capability accessor for the fixed-wing transition law.
+    // Other model families return null rather than supplying unrelated ROS
+    // fixed-wing settings to that law.
+    const mmp_vehicle_dynamics::Parameters* dynamicsParams() const {
+        const auto model = vehicleModel();
+        return model ? model->fixedWingTransitionParameters() : nullptr;
     }
     // Read-only inspection hooks for metrics/tests. These expose the same
     // precomputed field consumed by FM2/A* and MINCO; no second LOS model.
@@ -753,7 +825,7 @@ namespace path_manager
                             const Eigen::Vector3d &pos) const {
       return riskZoneValue(zone_index, pos);
     }
-    // The FRONT END's composed field at pos. Paired with getEffectiveRisk this
+    // The canonical MMP composed field at pos (also for external backends). Paired with getEffectiveRisk this
     // is what makes the cross-layer identity checkable: the two are separate
     // transcriptions of one contract, and mutating either alone splits them.
     double getFrontEndRisk(const Eigen::Vector3d &pos) const {
@@ -805,7 +877,6 @@ namespace path_manager
     bool risk_zone_agl_{false};
     void refreshEffectiveRiskZones();
     double risk_weight_;
-    double risk_barrier_{100.0};   // front-end finite "hard wall" inside zones
     // [GNRON] endpoint moat taper radius, frame units (<=0 off). Fed to BOTH
     // the front-end field and the optimizer cost so they price one field.
     double risk_goal_taper_radius_{30.0};
@@ -921,19 +992,6 @@ namespace path_manager
                                     double *lower_z,
                                     double *floor_z, double *top_z) const;
     void publishRiskProfile(const poly_traj::Trajectory &traj);
-    double risk_smha_w_{2.0};
-    std::string front_end_str_{"fm2"};
-    int fm2_coarse_k_{4};
-    int fm2_max_cells_{8000000};  // FMM grid cell-count cap (tunable)
-    bool fm2_star_{true};
-    double fm2_alt_penalty_{2.0};  // wave slowdown above mission altitude
-    double fm2_alt_zscale_{10.0};  // up-side ramp (gentle: climbs allowed)
-    double fm2_alt_zscale_dn_{2.0};// down-side ramp (stiff: no diving)
-    // [ROUGH] H2 terrain-roughness routing: additive slope cost in the FE
-    // shared field (FM2 speed + A* edges + shortcut acceptance), own currency
-    // (NOT risk_weight-scaled — keeps zone sensitivity intact). 0 = off.
-    double fm2_rough_weight_{0.0};
-    double fm2_rough_slope0_{0.20};
     double dyn_obstacle_margin_{3.0};  // berth around dynamic obstacles
     double opt_obstacle_clearance_{0.7};  // optimizer penalty onset (< front-end margin)
     double weight_altitude_{1000.0};      // optimizer z-cap weight above mission band
@@ -944,15 +1002,7 @@ namespace path_manager
     // on StartHead::src, not on a member of this class.
     bool align_start_vel_to_route_{true};
     HeadPolicy last_head_policy_{};
-    // [ZONE-AVOID] lexicographic zone policy (see dyn_a_star.h).
-    bool zone_avoid_lexico_{true};
     double corner_fillet_radius_{0.0};    // legacy geometric fallback; 0 = off
-    bool astar_bypass_shortcut_{false};
-    // Max z of the front-end route BEFORE the z-denoise filter (per plan, set
-    // in planFrontEnd). The altitude cap must reference the COMMITTED profile,
-    // not the filtered one — the moving average planes crest maxima (~34 m
-    // observed) and an under-referenced cap grinds against the terrain band.
-    double fe_raw_max_z_{-1e9};
     // [CHAIN] see lastCommittedRoute().
     std::vector<Eigen::Vector3d> last_clean_path_;
     std::vector<double> last_cap_ref_;
@@ -996,16 +1046,14 @@ namespace path_manager
     double sdf_voxel_size_ = 1.0;  // frame units
     bool sdf_voxel_size_auto_ = false;   // param was <=0: track the DEM cell on map change
     double sdf_voxel_z_{0.0};             // vertical voxel size; <=0 -> isotropic (= sdf_voxel_size_)
-    // A* search step size (frame units between neighboring path nodes). Kept
-    // independent of sdf_voxel_size_ so we can coarsen A* path density
-    // without touching SDF resolution. Must be a multiple of voxel size
-    // for the grid-aligned neighbor set to make sense.
-    double astar_step_size_ = 1.0;  // frame units
-
-    // 3D A* front-end. Uses ESDF for collision, risk_zones_ for soft cost.
+    // Canonical collision/risk queries retain the shared ESDF semantics.
+    // The built-in route backend borrows this query object; an injected
+    // backend supplies geometry without replacing execution safety queries.
     path_planner::search::PathSearcher searcher_;
-    bool astar_initialized_ = false;
-    Eigen::Vector3i astar_pool_size_ = Eigen::Vector3i(120, 120, 40);
+    std::shared_ptr<BuiltinRouteSearchBackend> builtin_route_search_;
+    std::shared_ptr<RouteSearchBackend> route_search_backend_;
+    RouteSearchPolicy last_search_policy_;
+    bool last_search_policy_measured_{false};
 
     // Precomputed-ESDF paths (both optional, via yaml).
     //   load: if set and file present, skip voxelization on first plan.
@@ -1029,41 +1077,51 @@ namespace path_manager
     // bounding box given in world coords. Returns true on success.
     bool buildSDFForBounds(const Eigen::Vector3d &lo, const Eigen::Vector3d &hi);
 
-    // Stage 1 (front-end): A*/FM2 search + corner-adaptive densification.
-    // Produces the route (full_route) and densified path (clean_path) the
-    // optimizer consumes, plus cap_ref: the COMMITTED z per clean_path vertex
-    // (pre-z-denoise profile elementwise-maxed with the safety-clamped one,
-    // interpolated through the same subdivision) — the arc-varying altitude
-    // cap's reference. SDF must already be built. Returns true on success.
-    bool planFrontEnd(const Eigen::Vector3d &start_pos,
-                      const std::vector<Eigen::Vector3d> &waypoints,
-                      std::vector<Eigen::Vector3d> &full_route,
-                      std::vector<Eigen::Vector3d> &clean_path,
-                      std::vector<double> &cap_ref,
-                      // [LEG-POLICY] edge provenance, built alongside the
-                      // geometry through concatenation, corner fillets and
-                      // densification — never re-derived afterwards.
-                      std::vector<size_t> &edge_leg,
-                      // Whether THIS call starts where the aircraft is (see
-                      // allowsTakeoffRelief). Only leg 0 of such a call may
-                      // begin inside the terrain clearance margin.
-                      bool takeoff_start);
+    struct PreparedRoute {
+        std::vector<Eigen::Vector3d> absolute_waypoints;
+        CommittedRoute route;
+        // Maximum before z-denoising, passed explicitly to the direct solve.
+        double raw_max_z{-1e9};
+        std::chrono::steady_clock::time_point total_start;
+    };
 
-    // Stage 2 (trajectory optimization): MINCO initial trajectory + L-BFGS.
-    // Takes the front-end path; sets traj_ global/local. Returns true on
-    // success. end_vel/end_acc: prescribed tail BC, forwarded verbatim to
-    // optimizeFromPath (zero end_vel = arrival contract).
+    // Shared live preparation for route-only and full planning. It retains
+    // existing admission resets, SDF/obstacle effects and policy capture;
+    // route/cap/tag compatibility copies precede any optimizer path edits.
+    std::optional<PreparedRoute> prepareRoute(
+        const StartHead &head,
+        const std::vector<Eigen::Vector3d> &waypoints, bool junction_goal,
+        const std::vector<Eigen::Vector3d> *route_override,
+        const std::vector<double> *cap_ref_override,
+        const RouteProvenance *provenance);
+
+    // SDF must already be prepared. Search, raw-route publication, profile
+    // processing and pipeline debug retain their ordering. Geometry, cap,
+    // provenance and pre-denoise maximum return together on success. Only
+    // leg 0 with takeoff_start may begin inside terrain clearance.
+    bool configureFrontEnd(RouteSearchProblem &problem);
+    void publishFrontEndRoute(const std::vector<Eigen::Vector3d> &route,
+                              double search_ms);
+    std::optional<RouteProfileResult> planFrontEnd(
+        const Eigen::Vector3d &start_pos,
+        const std::vector<Eigen::Vector3d> &waypoints, bool takeoff_start);
+
+    // Stage 2 adapter: supplies explicit values to the direct solver, then
+    // stores and publishes successful seed/optimized trajectories. The tail
+    // flags retain their explicit prescribed-boundary meaning. Optimizer path
+    // edits and piece attribution are retained on both success and failure.
     bool optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
-                       const std::vector<Eigen::Vector3d> &full_route,
                        const Eigen::Vector3d &start_pos,
                        const Eigen::Vector3d &start_vel,
                        const Eigen::Vector3d &start_acc,
                        const std::vector<Eigen::Vector3d> &waypoints,
                        const std::vector<double> &cap_ref,
+                       double raw_max_z,
                        const ego_planner::TailBoundary &tail,
                        const std::vector<size_t> &edge_leg = {});
 
     ego_planner::PolyTrajOptimizer::Ptr poly_traj_opt_;
+    mmp_vehicle_dynamics::VehicleModel::Ptr vehicle_model_override_;
     bool is_optimizer_initialized_;
 
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr front_end_path_pub_;

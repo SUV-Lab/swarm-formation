@@ -1,0 +1,15 @@
+{
+  "historical_source_manifest_available": false,
+  "historical_source_identity_claimed": false,
+  "reason": "The inspected final ext_c evidence records test results and GUI executable SHA256, but no ext_c working-tree source manifest. The ext_baseline source manifest precedes A/B/C and cannot identify the final C source.",
+  "historical_gui_binary_path": "/ws/install/path_manager/lib/path_manager/path_manager_node",
+  "historical_gui_binary_sha256": "494644a07ec00bf5bc8a600436a9917aeb90fe436abe6a08c3b27747c338e025",
+  "installed_before_equals_historical_gui_binary": true,
+  "installed_after_equals_historical_gui_binary": false,
+  "changed_installed_paths": [
+    "/ws/install/path_manager/lib/path_manager/path_manager_node",
+    "/ws/install/path_manager/lib/libpath_manager_lib.a"
+  ],
+  "runtime_rerun_recommended": true,
+  "limitation": "Current incremental rebuild changed the manager executable/archive. A fresh current-source runtime numeric comparison is required to bind current source to R2 behavior; historical GUI success remains historical evidence."
+}

@@ -1,0 +1,19 @@
+[INFO] [1791442633.136236043] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791442633.136327735] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791442633.136336161] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791442633.136339117] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791442633.136455235] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791442633.136524555] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791442633.136563648] [chain_experiment]: Optimizer initialized successfully for drone 0
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[GEODESIC] points=41 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791442633.238731290] [astar]: [FM2-SWEEP] lifted=6 cap=512 clean_exit=true pts=19
+  [PA5] route pts=13
+[OK]   a route whose RAW form grazes terrain but carries no obstacle still plans — the lift sweep is allowed to do its job
+[OK]   ...and the returned route passes the FINAL rule (terrain + obstacles), so the repair really happened
+[OK]   the route carries repair vertices — a 2-point route here would mean the geodesic cleared the ridge on its own and this fixture no longer reproduces the condition
+[OK]   the corridor carries no obstacle at all — so anything the raw stage refuses here, it refuses for TERRAIN
+  [PA5] blocked pts=0
+[OK]   an obstacle ON the raw path produces NO route — there is no A* pool to fall back to, so this must be a refusal and not a straight line through the slab
+[OK]   ...and it was refused at the RAW stage, not carried to the final gate — the final gate never had to speak
+PASS: 0 failed check(s)

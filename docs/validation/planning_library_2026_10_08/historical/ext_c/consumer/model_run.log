@@ -1,0 +1,71 @@
+[ERROR] [1791437685.533911738] [vehicle_reset_invalid_default]: [POLY_TRAJ_OPT][drone 0] invalid fixed-wing dynamics parameters; disabling dynamics term
+[OK] invalid ROS defaults initially disable dynamics while retaining the requested setting
+[OK] valid custom injection restores the originally requested dynamics enable after invalid defaults
+[OK] recovered model rejects an invalid dormant ROS default on reset
+[OK] recovered model reset refusal preserves both custom identity and enable state
+[OK] custom model configured before invalid ROS physical settings remains authoritative and enabled
+[OK] preconfigured custom model rejects an invalid dormant ROS default on reset
+[OK] preconfigured custom model reset refusal preserves both custom identity and enable state
+[OK] explicit ROS dynamics disable is honored with a previously injected valid model
+[OK] valid custom reinjection cannot override an explicit ROS dynamics disable
+[OK] reset to valid ROS defaults preserves the explicit dynamics disable
+[INFO] [1791437685.543199953] [vehicle_model_external]: Initializing optimizer for drone 0...
+[INFO] [1791437685.543445538] [vehicle_model_external]: Optimizer initialized successfully for drone 0
+[OK] installed facade constructs a valid default fixed-wing model
+[OK] facade and manager retain the exact model after caller ownership is released
+[OK] generic model does not inherit a fixed-wing transition capability
+[OK] facade rejects an invalid model before replacing the current binding
+[OK] facade refusal preserves the prior identity
+[OK] manager rejects an invalid model before replacing the current binding
+[OK] manager refusal preserves the prior identity
+[INFO] [1791437685.543465215] [vehicle_model_external]: Force reinitializing optimizer for drone 0
+[INFO] [1791437685.543468121] [vehicle_model_external]: Initializing optimizer for drone 0...
+[INFO] [1791437685.543496354] [vehicle_model_external]: Optimizer initialized successfully for drone 0
+[OK] forced optimizer setup preserves the injected model identity
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[OK] model consumer accepts owned terrain through the generic facade
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437685.618374678] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] real route search succeeds with the injected model
+[OK] front-end route preparation queries injected model limits without running optimizer cost
+[OK] new independent optimizer shares the exact manager model
+[OK] optimizer rejects an invalid model before replacing the current binding
+[OK] optimizer refusal preserves the prior identity
+[OK] configured independent worker solves with the custom model
+[OK] solver calls the custom gradient and audit in physical SI coordinates
+[OK] owned optimizer result carries the injected model's audit metric
+[OK] model injection preserves the owning solve request contract
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437685.631545199] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437685.636418891] [vehicle_model_external]: Setting formation with 0 positions to optimizer
+[WARN] [1791437685.636436925] [vehicle_model_external]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] public facade plans a complete mission with a generic model: 
+[OK] custom model participates in the real parallel three-span plan
+[OK] whole-flight final evaluation uses the same injected model's metric
+[OBSERVED] geometry_delta=1 velocity_calls=2 handoff_calls=0
+[OK] chain authoring and velocity admission query the same custom model
+[OK] an explicit valid PVA admission calls the same custom model's handoff verdict
+[OK] parallel segment optimizers call the shared model from multiple threads
+[OK] a generic model refuses an unsupported transition without partial flight products
+[OK] serial replacement updates the manager while a completed pre-existing worker retains its model
+[OK] pre-existing worker owns its old model after manager replacement
+[OK] old model is released after its last completed worker is destroyed
+[OK] workers created after replacement receive the new identity
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437685.648240279] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437685.652585461] [vehicle_model_external]: Setting formation with 0 positions to optimizer
+[WARN] [1791437685.652596792] [vehicle_model_external]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] next mission uses the replacement model throughout final evaluation
+[OK] new solves stop calling the old model and use the replacement cost
+[OK] null restores the configured fixed-wing model and releases the replacement
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437685.664242718] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437685.668177433] [vehicle_model_external]: Setting formation with 0 positions to optimizer
+[WARN] [1791437685.668188174] [vehicle_model_external]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] default model remains usable after reset
+[OK] current model remains owned until planner destruction
+[OK] later models and solves do not rewrite retained trajectory storage
+[OK] planner destruction releases its current model without a cycle
+[OK] mission and optimizer outputs remain evaluable after model, planner and node destruction
+[OK] retained mission evaluates without a live vehicle model
+PASS: 0 failed check(s)

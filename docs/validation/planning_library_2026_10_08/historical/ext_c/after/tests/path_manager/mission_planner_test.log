@@ -1,0 +1,87 @@
+11/30 Testing: mission_planner_test
+11/30 Test: mission_planner_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/mission_planner_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/mission_planner_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"mission_planner_test" start time: Oct 08 05:34 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/mission_planner_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791437647.843824241] [mission_api_direct]: Initializing optimizer for drone 7...
+[INFO] [1791437647.844091126] [mission_api_direct]: Optimizer initialized successfully for drone 7
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437647.963585311] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437647.966151587] [mission_api_direct]: Setting formation with 0 positions to optimizer
+[WARN] [1791437647.966173057] [mission_api_direct]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[ERROR] [1791437647.966200920] [mission_api_direct]: [ENVELOPE] commanded initial state REJECTED: speed 400.0 m/s above the effective maximum 200.0 m/s (default planning cap) (INITIAL_MODE_UNSUPPORTED)
+[ERROR] [1791437647.966277665] [mission_api_direct]: [PHASE] final boundary REJECTED: final velocity outside the cruise validity region: speed 0.0 m/s below the margin-backed cruise floor 131.8 m/s
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437647.980315316] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437647.982776012] [mission_api_direct]: Setting formation with 0 positions to optimizer
+[WARN] [1791437647.982788996] [mission_api_direct]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] direct accepts an empty risk-zone set
+[OK] direct plans through one public call: 
+[OK] direct returns final and reference trajectories
+[OK] direct returns the existing identity, times and environment revision
+[OK] direct resolves start and waypoint AGL against the supplied terrain
+[OK] direct preserves the supplied initial PVA and final velocity
+[OK] direct leaves the caller's mission input unchanged
+[OK] direct result does not claim an unavailable whole-flight audit
+[OK] direct unspecified initial state returns a failed result with a reason
+[OK] direct unspecified initial state does not return the previous flight or evaluation
+[OK] direct preserves the unspecified-state reason
+[OK] direct unsupported 400 m/s initial state returns a failed result with a reason
+[OK] direct unsupported 400 m/s initial state does not return the previous flight or evaluation
+[OK] direct preserves the unsupported-state reason
+[OK] direct invalid final velocity returns a failed result with a reason
+[OK] direct invalid final velocity does not return the previous flight or evaluation
+[OK] direct successfully retries after refusals with a newer identity
+[OK] direct keeps an absolute head absolute
+[OK] direct accepts owned terrain refresh
+[OK] direct later plans and environment changes cannot rewrite a retained result
+[OK] direct result remains usable after planner and node destruction
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791437647.987490131] [mission_api_chain]: Initializing optimizer for drone 7...
+[INFO] [1791437647.987719075] [mission_api_chain]: Optimizer initialized successfully for drone 7
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437647.999359810] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437648.004196461] [mission_api_chain]: Setting formation with 0 positions to optimizer
+[WARN] [1791437648.004214375] [mission_api_chain]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437648.019319927] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791437648.023059072] [mission_api_chain]: Setting formation with 0 positions to optimizer
+[WARN] [1791437648.023077296] [mission_api_chain]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] chain accepts an empty risk-zone set
+[OK] chain plans through one public call: 
+[OK] chain returns final and reference trajectories
+[OK] chain returns the existing identity, times and environment revision
+[OK] chain resolves start and waypoint AGL against the supplied terrain
+[OK] chain preserves the supplied initial PVA and final velocity
+[OK] chain leaves the caller's mission input unchanged
+[OK] chain returns the actual three-span whole-flight evaluation
+[OK] phase spans cover the returned flight
+[OK] chain unspecified initial state returns a failed result with a reason
+[OK] chain unspecified initial state does not return the previous flight or evaluation
+[OK] chain preserves the unspecified-state reason
+[OK] chain unsupported 400 m/s initial state returns a failed result with a reason
+[OK] chain unsupported 400 m/s initial state does not return the previous flight or evaluation
+[OK] chain preserves the unsupported-state reason
+[OK] chain invalid final velocity returns a failed result with a reason
+[OK] chain invalid final velocity does not return the previous flight or evaluation
+[OK] chain successfully retries after refusals with a newer identity
+[OK] chain keeps an absolute head absolute
+[OK] chain accepts owned terrain refresh
+[OK] chain later plans and environment changes cannot rewrite a retained result
+[OK] chain result remains usable after planner and node destruction
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/mission_planner_test.xml' with successful test
+<end of output>
+Test time =   0.36 sec
+----------------------------------------------------------
+Test Passed.
+"mission_planner_test" end time: Oct 08 05:34 UTC
+"mission_planner_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

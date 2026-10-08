@@ -1,0 +1,27 @@
+24/30 Testing: trajectory_message_test
+24/30 Test: trajectory_message_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/trajectory_message_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/trajectory_message_test"
+Directory: /ws/build/path_manager
+"trajectory_message_test" start time: Oct 08 05:34 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/trajectory_message_test
+[OK] caller-selected identity and exact ROS timestamp survive serialization
+[OK] wire arrays keep one duration and six coefficients per piece
+[OK] published polynomial order and piece boundaries reproduce analytic positions
+[OK] serialization leaves the supplied owned trajectory unchanged
+[OK] reference publication can select separate identity/time for the same coefficients
+[OK] wire result remains valid after the source trajectory is destroyed
+[OK] an empty result cannot retain coefficients from a prior serialization
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/trajectory_message_test.xml' with successful test
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"trajectory_message_test" end time: Oct 08 05:34 UTC
+"trajectory_message_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

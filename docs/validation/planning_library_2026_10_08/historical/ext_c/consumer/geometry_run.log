@@ -1,0 +1,26 @@
+[OK] no terrain preserves authored heights, including values below the AGL floor
+[OK] AGL conversion preserves negative terrain and uses zero for sentinel/NaN/negative infinity
+[OK] waypoint terrain queries retain authored order and coordinates
+[OK] altitude diagnostics include only changed waypoints in original index order
+[OK] altitude diagnostics own the original, terrain, AGL and absolute values
+[OK] resolving waypoints leaves the caller's command values unchanged
+[OK] only the final junction goal bypasses terrain queries and AGL floor
+[OK] sub-threshold altitude changes are applied without a diagnostic row
+[OK] empty waypoint input performs no terrain lookup
+[OK] mission points expand XY/lower Z while high waypoint Z leaves the existing start-only ceiling
+[OK] terrain-free, zone-free bounds have empty diagnostics
+[OK] transitive zone inclusion reaches the reverse-ordered chain and excludes distant large zones
+[OK] zone order does not change the fixpoint and zone tops remain diagnostic only
+[OK] explicit headroom and vertical ratio independently set ceiling and zone-top diagnostic
+[OK] a zone touching the mission footprint is included at the exact boundary
+[OK] zone contact uses radial distance at a mission-box corner
+[OK] expanded waypoint berth does not trigger another zone inclusion pass
+[OK] XY translation preserves zone membership and translates only the XY bounds
+[OK] terrain sampling retains exact lateral/axis order and duplicate center queries
+[OK] a lateral ridge sample sets the ceiling using configured headroom
+[OK] multi-leg terrain sampling repeats the shared endpoint before advancing
+[OK] zero XY-length leg still performs the existing three sample stations
+[OK] bounds with only a start perform no terrain queries
+[OK] invalid and negative terrain samples retain the existing zero terrain maximum
+[OK] computed outputs keep their values after the terrain provider changes
+[OK] results retain no terrain callback and survive provider destruction

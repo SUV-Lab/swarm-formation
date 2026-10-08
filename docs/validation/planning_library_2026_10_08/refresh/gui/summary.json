@@ -1,0 +1,25 @@
+{
+  "evaluation": {
+    "before_count": 38,
+    "after_count": 38,
+    "ordered": true,
+    "pass": true
+  },
+  "postprocessing": {
+    "before_count": 2,
+    "after_count": 2,
+    "ordered": true,
+    "pass": true
+  },
+  "cost_profile": {
+    "before_count": 10,
+    "after_count": 10,
+    "ordered": false,
+    "pass": true
+  },
+  "abort": {
+    "pass": true,
+    "numeric_exact": true
+  },
+  "pass": true
+}

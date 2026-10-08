@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+project(mmp_route_search_consumer LANGUAGES CXX)
+find_package(path_manager REQUIRED)
+add_executable(route_search_consumer main.cpp)
+target_link_libraries(route_search_consumer PRIVATE path_manager::path_manager_lib)

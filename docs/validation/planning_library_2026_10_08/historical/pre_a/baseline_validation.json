@@ -1,0 +1,22 @@
+{
+  "created_utc": "2026-10-08T01:30:32.205695+00:00",
+  "ctest_manager": 26,
+  "ctest_optimizer": 2,
+  "total_ctest": 28,
+  "ctest_pass": true,
+  "chain": {
+    "permission_denied_count": 0,
+    "chain_pass_count": 71,
+    "chain_failure_count": 0,
+    "chain_tally_last_line": "DONE 71/71",
+    "all_chain_logs_written_after_start": true,
+    "chain_log_count": 71,
+    "oldest_chain_log_mtime": 1791422996.7722044,
+    "risk_154_0": true
+  },
+  "external_consumer_pass": true,
+  "r2_pass": true,
+  "r2_owned_double_exact": true,
+  "runtime_follower": "C++ mmp_vehicle_dynamics/src/dynamics_sim_node.cpp; rviz_path_manager.launch.py defaults to shared_3dof",
+  "pass": true
+}

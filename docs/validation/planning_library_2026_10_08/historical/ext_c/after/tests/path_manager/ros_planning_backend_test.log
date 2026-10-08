@@ -1,0 +1,56 @@
+13/30 Testing: ros_planning_backend_test
+13/30 Test: ros_planning_backend_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/ros_planning_backend_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/ros_planning_backend_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"ros_planning_backend_test" start time: Oct 08 05:34 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/ros_planning_backend_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[OK] encoder preserves explicit non-normalized geometry and original center
+[OK] decoder retains rectangular column-major raw float/NaN bits and extra cells
+[OK] legacy cell centers, boundaries, bilinear heights and gradients remain bit-identical
+[OK] null no-change is distinct from explicit empty-world clear
+[OK] malformed nonempty message is rejection rather than terrain clear
+[OK] missing elevation layer is explicitly rejected
+[OK] uninitialized ROS backend refuses planning
+[OK] explicit typed settings override NodeOptions and YAML before original declarations
+[OK] unconsumed overrides are not eagerly declared
+[OK] every supported scalar/array type reaches ROS without coercion
+[OK] ROS backend rejects repeated initialization
+[OK] strict existing int declaration rejects double instead of silently coercing
+[OK] eager automatic declarations are refused before legacy duplicate declarations
+[OK] empty bound-node settings/environment preserve declared values, pending overrides and zones
+[OK] subsequent plans do not reapply startup settings over live node values
+[OK] bound-node scalar settings rejection occurs before legacy parameter declarations
+[OK] invalid initial terrain is refused before manager construction
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(8,8,320) voxel=(0.3,0.3,0.1) free_distance=32
+[OK] owned terrain reaches real manager ingest
+[OK] rejected value terrain preserves accepted data and environment revision
+[OK] same-size value terrain refresh uses the existing generation/cache invalidation
+[OK] explicit value clear removes terrain through existing world-none path
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(8,8,340) voxel=(0.3,0.3,0.1) free_distance=34
+[WARN] [1791437648.255665728] [rclcpp]: logging was initialized more than once
+[INFO] [1791437648.261995945] [initial_injection]: Initializing optimizer for drone 0...
+[INFO] [1791437648.262290262] [initial_injection]: Optimizer initialized successfully for drone 0
+[OK] initial terrain then AGL zones and obstacles initialize successfully in order
+[OK] no-map pending obstacles are accepted as -2 rather than failed initialization
+[OK] explicit empty zone update clears active zones
+[OK] present-empty initial zones override nonempty YAML/NodeOptions values
+[OK] backend refuses uninitialized context without implicit global init/shutdown
+[OK] explicit non-global context runs the existing refusal pipeline
+[OK] backend destruction leaves caller-owned ROS contexts initialized
+[OK] bound-node initial injection handles survive caller release and share one model with workers
+[OK] planner/backend destruction releases initial injection handles
+[OK] invalid initial model is refused before bound-node declarations
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/ros_planning_backend_test.xml' with successful test
+<end of output>
+Test time =   0.17 sec
+----------------------------------------------------------
+Test Passed.
+"ros_planning_backend_test" end time: Oct 08 05:34 UTC
+"ros_planning_backend_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

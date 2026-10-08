@@ -7,7 +7,7 @@
 #include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <swarm_graph/swarm_graph.hpp>
-#include <mmp_vehicle_dynamics/flight_dynamics.hpp>
+#include <mmp_vehicle_dynamics/vehicle_model.hpp>
 #include "../../common/log_manager.hpp"
 
 // Forward declaration for LogManager
@@ -15,6 +15,9 @@ using LogManager = swarm_formation::LogManager;
 #include "lbfgs.hpp"
 #include "plan_container.hpp"
 #include "poly_traj_utils.hpp"
+#include "tail_boundary.h"
+#include "optimizer_environment.h"
+#include "optimizer_request.h"
 #include "path_planner/sdf/distance_field.h"
 
 #define LOG_INFO(msg, ...) do { \
@@ -45,40 +48,6 @@ using LogManager = swarm_formation::LogManager;
 
 namespace ego_planner
 {
-  // [PHASE] Explicit tail boundary for one solve. Replaces the old
-  // "end_vel != 0 means prescribed" sentinel, which could not express a
-  // zero-velocity tail or an acceleration-only prescription (design review
-  // find). prescribe_vel pins the velocity verbatim; prescribe_acc pins the
-  // acceleration (defaults to zero when only the velocity is pinned —
-  // contract semantics). Neither flag = the legacy arrival-contract tail
-  // (level entry at cruise speed).
-  struct TailBoundary
-  {
-    bool prescribe_vel{false};
-    bool prescribe_acc{false};
-    Eigen::Vector3d vel{Eigen::Vector3d::Zero()};
-    Eigen::Vector3d acc{Eigen::Vector3d::Zero()};
-
-    bool anyPrescribed() const { return prescribe_vel || prescribe_acc; }
-    bool allFinite() const
-    {
-      return vel.allFinite() && acc.allFinite();
-    }
-    static TailBoundary pinned(const Eigen::Vector3d &v,
-                               const Eigen::Vector3d &a)
-    {
-      return TailBoundary{true, true, v, a};
-    }
-  };
-
-  // risk zone (shared definition with path_manager / front-end RiskZoneLite).
-  struct RiskZone {
-    Eigen::Vector3d center;
-    double reach;            // horizontal semi-axis, frame units
-    double peak;             // raw yaml max_risk_level
-    double vertical_reach{0.0}; // vertical semi-axis; <=0 falls back to reach
-  };
-
   enum FORMATION_TYPE
   {
     NONE_FORMATION = 0,
@@ -221,6 +190,7 @@ namespace ego_planner
     bool diag_vertical_{false};
 
     rclcpp::Node::SharedPtr node_;
+    bool parameters_initialized_{false};
 
     // SDF-based obstacle avoidance (replaces SFC corridor penalty).
     const path_planner::sdf::IDistanceField *sdf_manager_{nullptr};
@@ -519,10 +489,14 @@ namespace ego_planner
     double min_vel_{0.0};
 
     bool dynamics_enable_{true};
+    bool dynamics_requested_{true};
     double wei_dynamics_{0.0};
     double dyn_unit_xy_m_{100.0};
     double dyn_unit_z_m_{100.0};
     mmp_vehicle_dynamics::Parameters dynamics_params_;
+    mmp_vehicle_dynamics::VehicleModel::Ptr vehicle_model_{
+        std::make_shared<mmp_vehicle_dynamics::FixedWingModel>()};
+    bool vehicle_model_override_{false};
 
   public:
     PolyTrajOptimizer() {}
@@ -530,6 +504,28 @@ namespace ego_planner
     ~PolyTrajOptimizer() = default;
 
     void setParam(const rclcpp::Node::SharedPtr &node);
+    // Serial setup only. An explicit immutable model survives setParam and
+    // is the physical authority; ROS dynamics_* physical overrides do not
+    // replace it. Null restores the current ROS fixed-wing parameter model.
+    // An invalid candidate (including invalid ROS settings on reset) throws
+    // before changing the current binding or enable state.
+    void setVehicleModel(mmp_vehicle_dynamics::VehicleModel::Ptr model);
+    const mmp_vehicle_dynamics::VehicleModel::Ptr &vehicleModel() const {
+        return vehicle_model_;
+    }
+    // Stable numerical parameters still enter through setParam. Runtime
+    // setup and the live environment are separate, explicit bindings; old
+    // individual setters remain available for compatibility.
+    void setRuntimeSettings(const OptimizerRuntimeSettings &settings);
+    void setEnvironment(OptimizerEnvironment environment);
+    // Replace only ordered risk geometry/providers, retaining SDF/terrain.
+    void setRiskEnvironment(OptimizerRiskEnvironment environment);
+    // One synchronous solve on an exclusively held configured instance.
+    // Per-plan band/crossing policy arrive with the owned route, so callers
+    // cannot accidentally inherit them from a previous solve. Numerical
+    // scratch, swarm/formation state and ROS logging remain session-owned.
+    // Results own their storage and may outlive both session and providers.
+    OptimizerSolveResult solve(OptimizerSolveRequest request);
     void setLogManager(swarm_formation::LogManager::Ptr log_manager);
     void setSDFManager(const path_planner::sdf::IDistanceField *sdf) { sdf_manager_ = sdf; }
     void setObstacleClearance(double c) { obstacle_clearance_ = c; }
@@ -578,8 +574,7 @@ namespace ego_planner
         // The product itself is defined once, beside the handoff verdict
         // that enforces it (mmp_vehicle_dynamics), so the planner frame and
         // any off-line harness cannot disagree about the cruise floor.
-        return mmp_vehicle_dynamics::marginBackedSpeedFloorMps(
-                   dynamics_params_) / dyn_unit_xy_m_;
+        return vehicle_model_->limits().cruise_floor_mps / dyn_unit_xy_m_;
     }
     // [FINAL-EVAL] the shared flight-dynamics model, for whole-flight audits
     // outside the solver (the stitched chain+terminal product includes a
@@ -587,6 +582,8 @@ namespace ego_planner
     bool dynamicsEnabled() const { return dynamics_enable_; }
     // [PHASE] last solve's peak envelope utilization (1.0 = at limit).
     double lastEnvPeak() const { return last_env_peak_; }
+    // Compatibility snapshot of ROS fixed-wing settings. With a custom
+    // model, use vehicleModel(); this snapshot is not its physical contract.
     const mmp_vehicle_dynamics::Parameters& dynamicsParams() const {
         return dynamics_params_;
     }
@@ -668,15 +665,12 @@ namespace ego_planner
     // warning and falls back to the scalar cap (never silently mis-indexed).
     // Empty = scalar cap only.
     //
-    // end_vel/end_acc: [CHAIN] prescribed tail boundary state. A non-zero
-    // end_vel pins the tail PVA verbatim (end_acc rides the same gate; zero
-    // acceleration is a legitimate prescribed value) instead of deriving the
-    // arrival contract — used when the "goal" is a mid-route junction between
-    // chained segment plans, where the neighbouring segment starts from this
-    // exact state. Zero end_vel (the default) keeps the arrival contract:
-    // level entry along the final chord at full cruise speed, acc = 0. A
-    // zero PRESCRIBED velocity cannot be expressed — it is sub-stall and
-    // unflyable for this platform, so the sentinel costs nothing.
+    // tail: explicit boundary flags. prescribe_vel pins velocity verbatim,
+    // including zero; otherwise use the legacy level cruise arrival heading.
+    // prescribe_acc independently pins acceleration, including when velocity
+    // is derived; an unspecified acceleration is zero. The caller applies
+    // flight admissibility policy. Junction callers supply the neighbouring
+    // segment's exact boundary so the joined trajectory remains C2.
     bool optimizeFromPath(std::vector<Eigen::Vector3d> &clean_path,
                           const Eigen::Vector3d &start_pos,
                           const Eigen::Vector3d &start_vel,

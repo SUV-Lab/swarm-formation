@@ -151,6 +151,9 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
+# Required by the installed public searcher header's relative include.
+install(FILES ../common/log_manager.hpp DESTINATION common)
+
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 # OpenMP exported so downstream packages linking path_planner_sdf (via the
 # exported target set) can resolve the OpenMP::OpenMP_CXX link dependency.

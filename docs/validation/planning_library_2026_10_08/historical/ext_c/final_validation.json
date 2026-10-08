@@ -1,0 +1,258 @@
+{
+  "stages": {
+    "a": {
+      "runtime": {
+        "created_utc": "2026-10-08T01:49:58.241237+00:00",
+        "ctest_count": 33,
+        "suite_counts": {
+          "path_manager": 26,
+          "path_optimizer": 2,
+          "mmp_vehicle_dynamics": 5
+        },
+        "ctest_pass": true,
+        "chain": {
+          "chain_pass_count": 71,
+          "chain_failure_count": 0,
+          "chain_log_count": 71,
+          "all_chain_logs_written_after_start": true,
+          "chain_tally_last_line": "DONE 71/71",
+          "risk_154_0": true
+        },
+        "external_consumer_pass": true,
+        "model_consumer": {
+          "ok_checks": 47,
+          "failed_checks": 0,
+          "reset_contract_checks": 10,
+          "initial_attempt": "model_consumer/attempt1_unrequested_pva_assertion",
+          "rerun_only_model_consumer": true,
+          "fixture_correction": "Unprescribed acceleration uses velocity-only admission. Observed geometry_delta=1, velocity_calls=2, handoff_calls=0; added a separate explicit valid PVA admission assertion instead of expecting an unrequested path.",
+          "production_changed_for_rerun": false,
+          "build_log": "/tmp/mmp_modularization_ext_a/consumer/model_build_rerun.log"
+        },
+        "r2_pass": true,
+        "r2_owned_double_exact": true,
+        "pass": true
+      },
+      "gui": {
+        "evaluation": {
+          "before_count": 38,
+          "after_count": 38,
+          "ordered": true,
+          "pass": true
+        },
+        "postprocessing": {
+          "before_count": 2,
+          "after_count": 2,
+          "ordered": true,
+          "pass": true
+        },
+        "cost_profile": {
+          "before_count": 10,
+          "after_count": 10,
+          "ordered": false,
+          "pass": true
+        },
+        "abort": {
+          "pass": true,
+          "numeric_exact": true
+        },
+        "pass": true
+      }
+    },
+    "b": {
+      "runtime": {
+        "created_utc": "2026-10-08T05:28:01.536869+00:00",
+        "ctest_count": 35,
+        "suite_counts": {
+          "path_manager": 28,
+          "path_optimizer": 2,
+          "mmp_vehicle_dynamics": 5
+        },
+        "ctest_pass": true,
+        "chain": {
+          "chain_pass_count": 71,
+          "chain_failure_count": 0,
+          "chain_log_count": 71,
+          "all_chain_logs_written_after_start": true,
+          "chain_tally_last_line": "DONE 71/71",
+          "risk_154_0": true
+        },
+        "external_consumer_pass": true,
+        "pure_header_count": 16,
+        "model_consumer": {
+          "ok_checks": 47,
+          "failed_checks": 0
+        },
+        "route_consumer": {
+          "ok_checks": 83,
+          "failed_checks": 0,
+          "actual_astar_grid_shapes": [
+            [
+              33,
+              33,
+              13
+            ],
+            [
+              41,
+              33,
+              13
+            ]
+          ],
+          "tests": "Real FM2 backend replacement and complete mission, owned results, stale/unknown/malformed policy, pass-zero canonical projection, actual small A* selection/generation/UNKNOWN/empty policy/pool resize."
+        },
+        "r2_pass": true,
+        "r2_owned_double_exact": true,
+        "direct_default_exact": true,
+        "first_attempt": "attempt1_retained_route_problem",
+        "fixed_regression": "PathManager cached RouteSearchProblem retained replaced VehicleModel; input is now stack owned and released at the end of each synchronous search.",
+        "pass": true
+      },
+      "gui": {
+        "evaluation": {
+          "before_count": 38,
+          "after_count": 38,
+          "ordered": true,
+          "pass": true
+        },
+        "postprocessing": {
+          "before_count": 2,
+          "after_count": 2,
+          "ordered": true,
+          "pass": true
+        },
+        "cost_profile": {
+          "before_count": 10,
+          "after_count": 10,
+          "ordered": false,
+          "pass": true
+        },
+        "abort": {
+          "pass": true,
+          "numeric_exact": true
+        },
+        "pass": true
+      }
+    },
+    "c": {
+      "runtime": {
+        "created_utc": "2026-10-08T05:36:45.377388+00:00",
+        "ctest_count": 37,
+        "suite_counts": {
+          "path_manager": 30,
+          "path_optimizer": 2,
+          "mmp_vehicle_dynamics": 5
+        },
+        "ctest_pass": true,
+        "chain": {
+          "chain_pass_count": 71,
+          "chain_failure_count": 0,
+          "chain_log_count": 71,
+          "all_chain_logs_written_after_start": true,
+          "chain_tally_last_line": "DONE 71/71",
+          "risk_154_0": true
+        },
+        "external_consumer_pass": true,
+        "pure_header_count": 20,
+        "pure_headers_ros_includes": false,
+        "pure_core_ros_includes": false,
+        "direct_default_exact": true,
+        "r2_pass": true,
+        "r2_bound_and_value_update_owned_double_exact": true,
+        "r2_modes": {
+          "bound_node": {
+            "own_loader_pid": 104553,
+            "owned_double_exact": true,
+            "pass": true
+          },
+          "value_input": {
+            "own_loader_pid": 104753,
+            "owned_double_exact": true,
+            "pass": true,
+            "owned_setting_count": 148
+          },
+          "initial_environment": {
+            "own_loader_pid": 105083,
+            "owned_double_exact": false,
+            "pass": true,
+            "initial_environment_contract": {
+              "baseline_generation": 6,
+              "actual_generation": 4,
+              "expected_delta": -2,
+              "actual_delta": -2,
+              "reason": "Constructor receives the actual terrain directly, so no prior empty-world clear increments terrain and effective-zone generations.",
+              "other_identity_fields_exact": {
+                "trajectory_id": true,
+                "drone_id": true
+              },
+              "pass": true
+            },
+            "owned_setting_count": 148
+          }
+        },
+        "mission_core_consumer": {
+          "ok_checks": 23,
+          "failed_checks": 0
+        },
+        "model_consumer": {
+          "ok_checks": 48,
+          "failed_checks": 0
+        },
+        "route_consumer": {
+          "ok_checks": 83,
+          "failed_checks": 0
+        },
+        "repository_new_tests": {
+          "mission_planner_core_test": {
+            "ok_checks": 23,
+            "failed_checks": 0,
+            "pass": true
+          },
+          "ros_planning_backend_test": {
+            "ok_checks": 31,
+            "failed_checks": 0,
+            "pass": true
+          }
+        },
+        "pass": true
+      },
+      "gui": {
+        "evaluation": {
+          "before_count": 38,
+          "after_count": 38,
+          "ordered": true,
+          "pass": true
+        },
+        "postprocessing": {
+          "before_count": 2,
+          "after_count": 2,
+          "ordered": true,
+          "pass": true
+        },
+        "cost_profile": {
+          "before_count": 10,
+          "after_count": 10,
+          "ordered": false,
+          "pass": true
+        },
+        "abort": {
+          "pass": true,
+          "numeric_exact": true
+        },
+        "pass": true
+      }
+    }
+  },
+  "pass": true,
+  "branches": {
+    "superproject": "lgh/dev",
+    "planning_submodule": "mmp_dev"
+  },
+  "minco_lbfgs_body_kept": true,
+  "reports_experiments_not_read": true,
+  "evidence_files": {
+    "stage_validation.json": "e8fad2f0d52563fc79aeab6a55d4fd33fde209ecaebeae81942ac4a4bf52f040",
+    "gui/summary.json": "75f69850b2b6403dfc20ea555bd8a82100f6bf2bf6d4367110cfd6289e665d16",
+    "gui/comparison.json": "e28bc8431b820f3d978d163c5bd753881757f6e69f4ec512995a9627fbe6f065",
+    "gui/abort.json": "0bc7b03665a0232a2c3b35860293053c23657271c6e8063d90e778ede5caf681"
+  }
+}

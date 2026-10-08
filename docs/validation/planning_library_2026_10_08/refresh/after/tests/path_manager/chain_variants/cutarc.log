@@ -1,0 +1,21 @@
+[INFO] [1791442616.895039617] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791442616.895126841] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791442616.895135447] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791442616.895138403] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791442616.895260232] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791442616.895332477] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791442616.895373554] [chain_experiment]: Optimizer initialized successfully for drone 0
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[OK]   a cut inside the first edge succeeds
+[OK]   ...one tag per surviving edge
+[OK]   ...and the tail is the whole tag list
+[OK]   a cut exactly on a vertex succeeds
+[OK]   ...and the tail starts on the edge LEAVING that vertex
+[OK]   a cut a hair short of a vertex succeeds
+[OK]   ...and lands on the same tail as landing on the vertex would
+[OK]   a cut inside the last edge succeeds
+[OK]   ...leaving only that edge's tag
+[OK]   a cut with a short tag list still cuts
+[OK]   ...but publishes NO provenance for it
+[OK]   a cut at or past the total arc length fails
+PASS: 0 failed check(s)

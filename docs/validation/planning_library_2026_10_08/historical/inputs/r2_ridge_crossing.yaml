@@ -1,0 +1,22 @@
+# Full-map scenario R2 — low-altitude ridge-crossing route
+# 직선거리 95 km | 경로 최고지형 1195 m, 평균 626 m (30m DEM 실측)
+# z는 AGL(지면·수면 위 높이, m): 시작·목표 200 m AGL — 능선 통과 상승은
+# 플래너 지형추종이 담당 ([START AGL]/[GOAL AGL] 규약).
+# 회랑 모드에서는 대응하는 광역 지형 지도와 이 파일을 함께 사용한다.
+mission:
+  start: [14724.6468, 18218.6800, 200.0]
+  start_lonlat: [127.949982, 37.339986, 200]
+  goal:  [15165.8971, 17382.9601, 200.0]
+  goal_lonlat: [128.900038, 37.750035, 200]
+  formation_type: "none"
+  formation_scale: 0.0
+  # 초기 상태(필수). 플래너는 초기 단계도 계획하므로 비행의 시작을
+  # 미션이 말해야 한다 — 말하지 않으면 FAILED(INITIAL_STATE_UNSPECIFIED).
+  # 이 시나리오들은 순항 인계를 전제로 작성됐으므로 그 사실을 명시한다.
+  # initial_speed_mps는 첫 구간 방향으로 수평 조준된다(벡터가 필요하면
+  # use_initial_velocity + initial_velocity_mps). 200 m/s = 계획 상한
+  # optimization/max_vel(2.0 u/s), 물리 대역 122~230 m/s 안.
+  # 이전에는 이 값을 쓰지 않으면 정지 상태가 실속 바닥 131.8 m/s로
+  # 조용히 재작성됐다.
+  initial_speed_mps: 200.0
+  use_initial_velocity: false

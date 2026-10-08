@@ -1,0 +1,30 @@
+[INFO] [1791437746.161195018] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791437746.161292181] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791437746.161303172] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791437746.161307080] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791437746.161476500] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791437746.161580537] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791437746.161638557] [chain_experiment]: Optimizer initialized successfully for drone 0
+route-sequential mode
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[GEODESIC] points=164 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791437746.318276642] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[WARN] [1791437746.318764606] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791437746.318779895] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791437746.318783371] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791437746.318802808] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791437746.318817115] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[WARN] [1791437746.318829459] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791437746.318832294] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791437746.318834508] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791437746.318842443] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791437746.318848975] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[WARN] [1791437746.318857692] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791437746.318860066] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791437746.318862090] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791437746.318869003] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791437746.318874754] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[OK]   commitRoute produces the route
+[OK]   transition-active: single-shot fallback refused (FAILED)
+[OK]   reason states the fallback prohibition
+PASS: 0 failed check(s)

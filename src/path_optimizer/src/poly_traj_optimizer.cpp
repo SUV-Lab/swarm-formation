@@ -1,4 +1,5 @@
 #include "path_optimizer/poly_traj_optimizer.h"
+#include "path_optimizer/route_cost_profile.h"
 #include "path_planner/risk_shape.h"
 #include <algorithm>
 #include <iomanip>
@@ -10,6 +11,18 @@
 
 namespace ego_planner
 {
+  void PolyTrajOptimizer::setVehicleModel(
+      mmp_vehicle_dynamics::VehicleModel::Ptr model)
+  {
+    auto candidate = model ? model
+        : std::make_shared<mmp_vehicle_dynamics::FixedWingModel>(dynamics_params_);
+    if (!candidate->valid())
+      throw std::invalid_argument("invalid vehicle model");
+    vehicle_model_override_ = static_cast<bool>(model);
+    vehicle_model_ = std::move(candidate);
+    dynamics_enable_ = dynamics_requested_;
+  }
+
   void PolyTrajOptimizer::setLogManager(swarm_formation::LogManager::Ptr log_manager)
   {
     log_manager_ = log_manager;
@@ -126,217 +139,38 @@ namespace ego_planner
                       lead_in_inserted ? 2 : 1);
     }
 
-    // === Arc-varying altitude cap (per-piece ceiling) ===
-    // Restores the z trust-region lost with the SFC corridor: the committed
-    // FE profile governs the ceiling LOCALLY instead of one global scalar
-    // licensing 100 m of dead band over open water. Steps:
-    //  1. slope-cone envelope over the reference profile (1-D grayscale
-    //     dilation, exact in two passes): env[i] = max_j(ref[j] −
-    //     slope * dist_xy(i, j)). High values bleed sideways at
-    //     alt_cap_slope_, licensing the physically necessary climb/descent
-    //     anticipation; the envelope never clips the profile itself
-    //     (env >= ref by the j = i term).
-    //  2. per-piece cap = max of the piece's two boundary envelopes +
-    //     headroom. Constant per piece w.r.t. decision variables, so the
-    //     cap block's gradients keep their exact form.
-    // Inner points can drift along the route during optimization; the cone's
-    // sideways bleed is what makes a piece-index correspondence tolerant to
-    // that drift (a hard window would cliff).
+    // Freeze the per-piece cap from the committed route. Clear all three
+    // solve-local tables before this stage, including the roughness tables
+    // whose calculation follows the H4 diagnostic below.
     alt_zhi_pieces_.resize(0);
     time_relief_pieces_.resize(0);
     ride_rough_pieces_.resize(0);
-    if (!cap_ref.empty() && piece_num >= 1 &&
-        static_cast<int>(cap_ref.size()) == piece_num + 1) {
-      std::vector<double> env = cap_ref;
-      for (int i = 1; i <= piece_num; ++i) {   // forward pass
-        const double d = (clean_path[i] - clean_path[i - 1]).head<2>().norm();
-        env[i] = std::max(env[i], env[i - 1] - alt_cap_slope_ * d);
-      }
-      for (int i = piece_num - 1; i >= 0; --i) { // backward pass
-        const double d = (clean_path[i + 1] - clean_path[i]).head<2>().norm();
-        env[i] = std::max(env[i], env[i + 1] - alt_cap_slope_ * d);
-      }
-      // SWATH-TERRAIN FLOOR on the cap reference. The FE-profile envelope
-      // alone under-caps where the back-end deviates LATERALLY from the FE
-      // route (risk-zone moats bend the trajectory off the committed xy):
-      // if the FE dodged a hill sideways, its z at that arc is LOW, and the
-      // cap then pins the water pieces FLANKING the hill so hard that the
-      // hill-crossing piece cannot arch between its low endpoints — observed
-      // as a converged 0.6-0.8 m graze on the serpentine mission (terrain
-      // gate protects points NEAR terrain, not flank pins over water).
-      // Contract completion: never cap below what terrain within the
-      // corridor's lateral slack demands — cap_ref floor = max terrain
-      // within kSwathR of the piece chord + the clearance band. Computed
-      // once from clean_path (decision-variable independent, gradients keep
-      // their exact form); over open water it adds nothing, so the hump
-      // suppression is untouched, and the lift is LOCAL (a tall islet no
-      // longer raises the whole route's ceiling — only its own +-kSwathR).
-      const double kSwathR = 25.0;      // ~ one piece length of deviation slack
-      // Sampling pitch = one DEM cell (2.3 u matched the 250 m
-      // full_map grid;
-      // corridor crops are 30-40 m, and a coarser-than-cell stride can step
-      // clean over a one-cell ridge — the exact failure this floor guards).
-      // Runs once per plan on a decision-variable-independent quantity, so
-      // the finer pitch costs ~0.1-0.2 s worst case, not per-iteration time.
-      const double kStepMax = 2.3;
-      const double step = (terrain_cell_u_ > 0.0)
-                              ? std::min(kStepMax, terrain_cell_u_)
-                              : kStepMax;
-      const double kStepS = step, kStepL = step;
-      auto swath_terr = [&](const Eigen::Vector3d &a,
-                            const Eigen::Vector3d &b) -> double {
-        double hmax = -1e30;
-        const Eigen::Vector2d ab(b.x() - a.x(), b.y() - a.y());
-        const double L = ab.norm();
-        const Eigen::Vector2d u = (L > 1e-9) ? Eigen::Vector2d(ab / L)
-                                             : Eigen::Vector2d(1.0, 0.0);
-        const Eigen::Vector2d n(-u.y(), u.x());
-        for (double s = 0.0; s <= L + 1e-9; s += kStepS) {
-          for (double l = -kSwathR; l <= kSwathR + 1e-9; l += kStepL) {
-            const double x = a.x() + u.x() * s + n.x() * l;
-            const double y = a.y() + u.y() * s + n.y() * l;
-            if (terrain_hgrad_) {
-              float h, gx, gy;
-              if (terrain_hgrad_(x, y, &h, &gx, &gy) && h > hmax) hmax = h;
-            } else if (terrain_height_) {
-              const float h = terrain_height_(x, y);
-              if (std::isfinite(h) && h > hmax) hmax = h;
-            }
-          }
-        }
-        return hmax;   // -1e30 over pure water
-      };
-
-      // [ZONE-RELAX] (z-redesign Stage 3) zone-proximity cap relaxation.
-      // The altitude campaign quantified a global weight_altitude tradeoff:
-      // tighter band tracking cuts ridge altitude_cost -81% but squeezes the
-      // zone-crossing climb (kzone surplus margin 0.848 -> 0.535), because the
-      // cap presses the arch back toward the committed profile exactly where
-      // the risk field needs vertical freedom. The freedom is only needed NEAR
-      // zones, so grant extra headroom there and nowhere else: relax * infl,
-      // infl = max over zones of a linear fade of the piece chord's xy
-      // distance to the zone center (1 inside the rim, 0 beyond 1.5x reach).
-      // Computed once from clean_path — decision-variable independent, cap
-      // gradients keep their exact form; zone-free ridge terrain-following
-      // missions are
-      // untouched by construction. Default 0 = off (legacy cap).
-      auto zone_infl = [&](const Eigen::Vector3d &a,
-                           const Eigen::Vector3d &b) -> double {
-        if (!use_risk_zones_ || alt_cap_zone_relax_ <= 0.0) return 0.0;
-        double infl = 0.0;
-        const Eigen::Vector2d p0 = a.head<2>(), p1 = b.head<2>();
-        const Eigen::Vector2d ab = p1 - p0;
-        const double L2 = ab.squaredNorm();
-        for (const auto &tz : risk_zones_) {
-          if (!(tz.reach > 0.0)) continue;
-          const Eigen::Vector2d c = tz.center.head<2>();
-          double t = (L2 > 1e-12) ? (c - p0).dot(ab) / L2 : 0.0;
-          t = std::max(0.0, std::min(1.0, t));
-          const double d = (p0 + t * ab - c).norm();
-          const double s = 1.0 - (d - tz.reach) / (0.5 * tz.reach);
-          infl = std::max(infl, std::max(0.0, std::min(1.0, s)));
-        }
-        return infl;
-      };
-
-      // [OCCLUSION-CAP] (H3) visibility-aware cap: sample the same swath the
-      // terrain floor uses; at each point take the min over zones IN XY REACH
-      // of the LOS shadow ceiling (PathManager's per-zone radial-horizon
-      // table). Below (min - margin) the piece is terrain-occluded from every
-      // zone that
-      // could reach it, so the band's downward pressure owns nothing there
-      // and the cap may rise ("only low where visible"). A sample with an
-      // in-reach zone but no finite ceiling (mask off, bare over-water ray,
-      // at-center query) kills the min — a piece with ANY unshadowed in-reach
-      // sample never relaxes, and pieces no zone can reach keep the legacy
-      // band (its hump-suppression role is untouched). The swath, not just
-      // the chord, keeps the license consistent with the lateral drift the
-      // cap floor already budgets for: the trajectory may deviate kSwathR
-      // sideways, so the relax must hold in the lit seams it could drift
-      // into. Computed once from clean_path — decision-variable independent,
-      // cap gradients keep their exact form.
-      auto shadow_ceil = [&](const Eigen::Vector3d &a,
-                             const Eigen::Vector3d &b) -> double {
-        const double kNegInf = -std::numeric_limits<double>::infinity();
-        if (!use_risk_zones_ || alt_cap_shadow_margin_ <= 0.0 ||
-            !risk_shadow_ceiling_)
-          return kNegInf;
-        const Eigen::Vector2d p0 = a.head<2>(), p1 = b.head<2>();
-        const Eigen::Vector2d ab = p1 - p0;
-        const double L = ab.norm(), L2 = ab.squaredNorm();
-        std::vector<size_t> cand;
-        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-          const auto &tz = risk_zones_[zi];
-          if (!(tz.reach > 0.0)) continue;
-          const Eigen::Vector2d c = tz.center.head<2>();
-          double t = (L2 > 1e-12) ? (c - p0).dot(ab) / L2 : 0.0;
-          t = std::max(0.0, std::min(1.0, t));
-          if ((p0 + t * ab - c).norm() <= tz.reach + kSwathR) cand.push_back(zi);
-        }
-        if (cand.empty()) return kNegInf;
-        const Eigen::Vector2d u = (L > 1e-9) ? Eigen::Vector2d(ab / L)
-                                             : Eigen::Vector2d(1.0, 0.0);
-        const Eigen::Vector2d n(-u.y(), u.x());
-        double ceil_min = std::numeric_limits<double>::infinity();
-        bool reached = false;
-        for (double s = 0.0; s <= L + 1e-9; s += kStepS) {
-          for (double l = -kSwathR; l <= kSwathR + 1e-9; l += kStepL) {
-            const Eigen::Vector3d p(p0.x() + u.x() * s + n.x() * l,
-                                    p0.y() + u.y() * s + n.y() * l, 0.0);
-            for (size_t zi : cand) {
-              const auto &tz = risk_zones_[zi];
-              if ((p.head<2>() - tz.center.head<2>()).norm() > tz.reach)
-                continue;
-              reached = true;
-              ceil_min = std::min(ceil_min, risk_shadow_ceiling_(zi, p));
-              if (!(ceil_min > kNegInf)) return kNegInf;  // unshadowed sample
-            }
-          }
-        }
-        return reached ? ceil_min : kNegInf;
-      };
-
-      alt_zhi_pieces_.resize(piece_num);
-      double cap_min = 1e30, cap_max = -1e30;
-      int relaxed_pieces = 0;
-      int shadow_pieces = 0;
-      double shadow_lift_max = 0.0;
-      for (int i = 0; i < piece_num; ++i) {
-        double ref = std::max(env[i], env[i + 1]);
-        const double terr = swath_terr(clean_path[i], clean_path[i + 1]);
-        if (terr > -1e29) {
-          ref = std::max(ref, terr + obstacle_clearance_);
-        }
-        const double zr =
-            alt_cap_zone_relax_ * zone_infl(clean_path[i], clean_path[i + 1]);
-        if (zr > 1e-9) ++relaxed_pieces;
-        alt_zhi_pieces_(i) = ref + alt_cap_headroom_opt_ + zr;
-        const double sc = shadow_ceil(clean_path[i], clean_path[i + 1]);
-        if (std::isfinite(sc)) {
-          const double cand_cap = sc - alt_cap_shadow_margin_;
-          if (cand_cap > alt_zhi_pieces_(i)) {
-            shadow_lift_max =
-                std::max(shadow_lift_max, cand_cap - alt_zhi_pieces_(i));
-            alt_zhi_pieces_(i) = cand_cap;
-            ++shadow_pieces;
-          }
-        }
-        cap_min = std::min(cap_min, alt_zhi_pieces_(i));
-        cap_max = std::max(cap_max, alt_zhi_pieces_(i));
-      }
+    std::vector<RouteCostZone> cap_zones;
+    cap_zones.reserve(risk_zones_.size());
+    for (const auto &zone : risk_zones_)
+      cap_zones.push_back({zone.center, zone.reach});
+    const PieceAltitudeCapConfig cap_config{
+        alt_cap_slope_, alt_cap_headroom_opt_, alt_cap_zone_relax_,
+        alt_cap_shadow_margin_, obstacle_clearance_, terrain_cell_u_,
+        use_risk_zones_};
+    auto cap_profile = buildPieceAltitudeCaps(
+        clean_path, cap_ref, cap_zones, cap_config,
+        terrain_height_, terrain_hgrad_, risk_shadow_ceiling_);
+    alt_zhi_pieces_ = std::move(cap_profile.ceilings);
+    if (cap_profile.status == PieceAltitudeCapStatus::ACTIVE) {
       LOG_INFO("[ALT-CAP] arc-varying cap active: %d pieces, cap=[%.3f, %.3f] "
                "(slope=%.2f, headroom=%.2f, zone-relax=%.2f on %d pieces; "
                "scalar fallback %.3f)",
-               piece_num, cap_min, cap_max, alt_cap_slope_,
-               alt_cap_headroom_opt_, alt_cap_zone_relax_, relaxed_pieces,
+               piece_num, cap_profile.cap_min, cap_profile.cap_max, alt_cap_slope_,
+               alt_cap_headroom_opt_, alt_cap_zone_relax_, cap_profile.relaxed_pieces,
                alt_zhi_);
       if (alt_cap_shadow_margin_ > 0.0 && use_risk_zones_) {
         LOG_INFO("[OCCLUSION-CAP] visibility-aware cap: %d/%d pieces lifted above "
                  "the band to LOS shadow - %.2f margin (max lift %.3f)",
-                 shadow_pieces, piece_num, alt_cap_shadow_margin_,
-                 shadow_lift_max);
+                 cap_profile.shadow_pieces, piece_num, alt_cap_shadow_margin_,
+                 cap_profile.shadow_lift_max);
       }
-    } else if (!cap_ref.empty()) {
+    } else if (cap_profile.status == PieceAltitudeCapStatus::REFERENCE_MISMATCH) {
       LOG_WARN("[ALT-CAP] cap_ref/piece mismatch after insertions (%zu vs %d)"
                " — scalar cap only", cap_ref.size(), piece_num + 1);
     }
@@ -356,68 +190,19 @@ namespace ego_planner
       innerPts.col(i) = clean_path[i + 1];
     }
 
-    // [RIDE] (H1) per-piece time-weight relief over rough terrain. The time
-    // cost is otherwise piece-uniform (wei_time * sum T_i), so the optimizer
-    // has ZERO incentive to slow down locally — 200 m/s terrain-following
-    // over a ridge demands the same time price as cruising over water. Relief
-    // makes time spent on rough pieces cheaper: factor_i = 1 - relief *
-    // rough_i with rough_i in [0, 1] from the mean slope excess along the
-    // piece chord (deadband tan 0.2 ~ 11 deg, full at 0.8 ~ 39 deg — same
-    // deadband as the FE [ROUGH] field). Frozen per solve from clean_path
-    // (decision-variable independent; VirtualTGradCost keeps its exact
-    // gradient form), consumed by BOTH the seed allocation below and the
-    // running time cost. Default 0 = off (legacy uniform time price).
-    if ((time_rough_relief_ > 0.0 || wei_ride_ > 0.0) &&
-        (terrain_hgrad_ || terrain_height_)) {
-      constexpr double kSlope0 = 0.2, kSlopeFull = 0.8;
-      const double rstep = (terrain_cell_u_ > 0.0)
-                               ? std::min(2.3, terrain_cell_u_)
-                               : 2.3;
-      ride_rough_pieces_.resize(piece_num);
-      if (time_rough_relief_ > 0.0) time_relief_pieces_.resize(piece_num);
-      int relieved = 0;
-      double factor_min = 1.0;
-      for (int i = 0; i < piece_num; ++i) {
-        const Eigen::Vector3d &a = clean_path[i], &b = clean_path[i + 1];
-        const double L = (b - a).head<2>().norm();
-        double excess_sum = 0.0;
-        int n = 0;
-        for (double s = 0.0; s <= L + 1e-9; s += rstep) {
-          const double t = (L > 1e-9) ? s / L : 0.0;
-          const double x = a.x() + (b.x() - a.x()) * t;
-          const double y = a.y() + (b.y() - a.y()) * t;
-          float h = 0.f, gx = 0.f, gy = 0.f;
-          if (terrain_hgrad_ && terrain_hgrad_(x, y, &h, &gx, &gy)) {
-            const double slope = std::hypot(static_cast<double>(gx),
-                                            static_cast<double>(gy));
-            // AGL fade (same 1.0 -> 2.5 u band as the FE [ROUGH] field,
-            // evaluated on the COMMITTED profile z — frozen per solve): a
-            // high transit over a ridge is not terrain-following and gets
-            // no relief; only the terrain-following regime does.
-            constexpr double kAglNear = 1.0, kAglFar = 2.5;
-            const double z = a.z() + (b.z() - a.z()) * t;
-            const double agl = z - static_cast<double>(h);
-            double fade = 1.0;
-            if (agl >= kAglFar) fade = 0.0;
-            else if (agl > kAglNear)
-              fade = (kAglFar - agl) / (kAglFar - kAglNear);
-            excess_sum += fade * std::max(0.0, slope - kSlope0);
-          }
-          ++n;
-        }
-        const double rough = std::min(
-            1.0, (n > 0 ? excess_sum / n : 0.0) / (kSlopeFull - kSlope0));
-        ride_rough_pieces_(i) = rough;
-        if (rough > 1e-9) ++relieved;
-        if (time_rough_relief_ > 0.0) {
-          const double f = 1.0 - time_rough_relief_ * rough;
-          time_relief_pieces_(i) = f;
-          factor_min = std::min(factor_min, f);
-        }
-      }
+    // Frozen roughness prices and seed time factors use the same committed
+    // route after the H4 diagnostic/inner-point preparation, as before.
+    const PieceRoughnessConfig rough_config{
+        time_rough_relief_, wei_ride_, terrain_cell_u_};
+    auto rough_profile = buildPieceRoughness(
+        clean_path, rough_config, terrain_height_, terrain_hgrad_);
+    ride_rough_pieces_ = std::move(rough_profile.roughness);
+    time_relief_pieces_ = std::move(rough_profile.time_factors);
+    if (rough_profile.active) {
       LOG_INFO("[RIDE] rough table: %d/%d pieces rough "
                "(relief=%.2f min factor %.3f, wei_ride=%.1f)",
-               relieved, piece_num, time_rough_relief_, factor_min, wei_ride_);
+               rough_profile.rough_pieces, piece_num, time_rough_relief_,
+               rough_profile.factor_min, wei_ride_);
     }
 
     const double des_vel = max_vel;
@@ -1976,9 +1761,9 @@ namespace ego_planner
         const Eigen::Vector3d pm = S.cwiseProduct(traj.getPos(tt));
         const Eigen::Vector3d vm = S.cwiseProduct(traj.getVel(tt));
         const Eigen::Vector3d am = S.cwiseProduct(traj.getAcc(tt));
-        const auto eval = mmp_vehicle_dynamics::evaluateInverseDynamics(
-            dynamics_params_, pm, vm, am);
+        const auto eval = vehicle_model_->evaluate(pm, vm, am);
         if (!eval.valid) continue;
+        const auto domain = vehicle_model_->domain(eval);
         // Below activation speed the model outputs are still finite (q-floor)
         // but not meaningful as envelope demands — count the TIME into the
         // ramp so the reported initial-acceleration duration covers
@@ -1986,19 +1771,17 @@ namespace ego_planner
         // just activation -> speed_min (the old skip under-reported a
         // rest-start ramp by the 0-40 m/s third), while keeping such samples
         // out of ramp_peak/utilization.
-        if (eval.speed_mps < dynamics_params_.model_activation_speed_mps) {
+        if (!domain.active) {
           ramp_s += 0.01;
           if (reached_cruise) { ++n_samp; ++n_viol; }
           continue;
         }
         mmp_vehicle_dynamics::EnvelopeLimit limit;
-        const double util = mmp_vehicle_dynamics::envelopeUtilization(
-            dynamics_params_, eval, &limit);
-        if (eval.load_factor <
-            mmp_vehicle_dynamics::kBankMeaningfulLoadFactor) {
+        const double util = vehicle_model_->utilization(eval, &limit);
+        if (domain.low_lift) {
           low_lift_s += 0.01;
         }
-        if (eval.speed_mps < dynamics_params_.speed_min_mps) {
+        if (!domain.cruise) {
           ramp_s += 0.01;
           if (util > ramp_peak) ramp_peak = util;
           if (reached_cruise) { ++n_samp; ++n_viol; }
@@ -2008,7 +1791,7 @@ namespace ego_planner
         ++n_samp;
         util_sum += util;
         utilization_all.push_back(util);
-        if (!mmp_vehicle_dynamics::isWithinEnvelope(dynamics_params_, eval)) {
+        if (!vehicle_model_->withinEnvelope(eval)) {
           ++n_viol;
         }
         if (util > util_peak) {
@@ -2611,7 +2394,8 @@ namespace ego_planner
         opt->log_manager_->infof("  feasibility_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(4), opt->wei_feas_);
         if (opt->wei_ride_ > 0.0)
             opt->log_manager_->infof("  ride_cost=%.6f (weight=%.3f)", obs_swarm_feas_qvar_costs(9), opt->wei_ride_);
-        opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, V=[%.0f,%.0f] m/s, n<=%.2f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, opt->dynamics_params_.speed_min_mps, opt->dynamics_params_.speed_max_mps, opt->dynamics_params_.load_factor_max,
+        const auto model_limits = opt->vehicle_model_->limits();
+        opt->log_manager_->infof("  dynamics_cost=%.6f (weight=%.3f, V=[%.0f,%.0f] m/s, n<=%.2f, %s)", obs_swarm_feas_qvar_costs(7), opt->wei_dynamics_, model_limits.speed_min_mps, model_limits.speed_max_mps, model_limits.load_factor_max,
                                  (opt->dynamics_enable_ && opt->wei_dynamics_ > 0.0) ? "on" : "off");
         opt->log_manager_->infof("  terrain_cost=%.6f (weight=%.3f, heightmap 2.5D, %s)", obs_swarm_feas_qvar_costs(8), opt->wei_obs_, opt->terrain_height_ ? "on" : "off");
         opt->log_manager_->infof("  time_cost=%.6f (weight=%.3f)", time_cost, opt->wei_time_);
@@ -3785,8 +3569,7 @@ namespace ego_planner
     const Eigen::Vector3d pm = S.cwiseProduct(p);
     const Eigen::Vector3d vm = S.cwiseProduct(v);
     const Eigen::Vector3d am = S.cwiseProduct(a);
-    const auto result = mmp_vehicle_dynamics::flightEnvelopePenalty(
-        dynamics_params_, pm, vm, am, wei_dynamics_);
+    const auto result = vehicle_model_->penalty(pm, vm, am, wei_dynamics_);
     if (result.cost <= 0.0) return false;
 
     cost = result.cost;
@@ -4102,6 +3885,7 @@ namespace ego_planner
 
   void PolyTrajOptimizer::setParam(const rclcpp::Node::SharedPtr &node)
   {
+    parameters_initialized_ = false;
     node_ = node;
     // Re-entrant declare: setParam runs AGAIN on every forced optimizer
     // re-init ([CHAIN] per-segment requirement overrides re-read the whole
@@ -4194,7 +3978,8 @@ namespace ego_planner
     node_->get_parameter("optimization/weight_Risk_barrier", wei_risk_barrier_);
 
     declare_once("optimization/dynamics_enable", true);
-    node_->get_parameter("optimization/dynamics_enable", dynamics_enable_);
+    node_->get_parameter("optimization/dynamics_enable", dynamics_requested_);
+    dynamics_enable_ = dynamics_requested_;
     declare_once("optimization/weight_dynamics", 0.0);
     node_->get_parameter("optimization/weight_dynamics", wei_dynamics_);
     declare_once("optimization/dynamics_unit_xy_m", 100.0);
@@ -4280,7 +4065,7 @@ namespace ego_planner
     // n = load_factor_max: if the required thrust at cruise exceeds
     // thrust_max the n-limit is INSTANTANEOUS-only — worth knowing when
     // tuning, not an error.
-    {
+    if (!vehicle_model_override_) {
       const auto &dp = dynamics_params_;
       const double rho0 = dp.sea_level_density_kgpm3;
       const double wl = dp.mass_kg * dp.gravity_mps2 / dp.wing_area_m2;
@@ -4312,7 +4097,10 @@ namespace ego_planner
                  dp.load_factor_max, v_c, t_n, dp.thrust_max_n);
       }
     }
-    if (!mmp_vehicle_dynamics::parametersAreValid(dynamics_params_)) {
+    if (!vehicle_model_override_)
+      vehicle_model_ = std::make_shared<mmp_vehicle_dynamics::FixedWingModel>(
+          dynamics_params_);
+    if (!vehicle_model_->valid()) {
       LOG_ERROR("invalid fixed-wing dynamics parameters; disabling dynamics term");
       dynamics_enable_ = false;
     }
@@ -4338,15 +4126,13 @@ namespace ego_planner
     declare_once("optimization/diag_vertical", false);
     node_->get_parameter("optimization/diag_vertical", diag_vertical_);
 
-    // Arc-varying cap: cone slope + headroom. alt_cap_headroom is DECLARED by
-    // path_manager on this same node (shared value: scalar cap and the
-    // envelope must use one headroom), so only read it here; declaring twice
-    // throws ParameterAlreadyDeclared.
+    // Arc-varying cap: cone slope + headroom. PathManager may already have
+    // declared the shared headroom; standalone optimizer users must also
+    // have their YAML/NodeOptions override declared and consumed here.
     declare_once("optimization/alt_cap_slope", 0.10);
     node_->get_parameter("optimization/alt_cap_slope", alt_cap_slope_);
-    if (node_->has_parameter("optimization/alt_cap_headroom")) {
-      node_->get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_opt_);
-    }
+    declare_once("optimization/alt_cap_headroom", 0.4);
+    node_->get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_opt_);
     // [ZONE-RELAX] Stage 3: zone-proximity cap relaxation (0 = off/legacy).
     declare_once("optimization/alt_cap_zone_relax", 0.0);
     node_->get_parameter("optimization/alt_cap_zone_relax", alt_cap_zone_relax_);
@@ -4405,6 +4191,7 @@ namespace ego_planner
 
     LOG_INFO("Setting initial formation type: %d", initial_formation_type);
     setDesiredFormation(initial_formation_type);
+    parameters_initialized_ = true;
   }
 
   void PolyTrajOptimizer::setControlPoints(const Eigen::MatrixXd &points)

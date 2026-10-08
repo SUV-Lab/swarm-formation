@@ -1,0 +1,134 @@
+7/30 Testing: transition_experiment_test
+7/30 Test: transition_experiment_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/transition_experiment_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/transition_experiment_test"
+Directory: /ws/build/path_manager
+"transition_experiment_test" start time: Oct 08 06:55 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/transition_experiment_test
+[OK]   level trim: straight line to machine precision
+[OK]   level trim: V and gamma exactly held
+[OK]   level trim: no saturation, representable throughout
+[OK]   steady turn: heading rate g tan(mu)/V
+[OK]   steady turn: radius V^2/(g tan mu) (RK4 4th-order error)
+[OK]   steady turn: V and gamma exactly held
+[OK]   climb trim: fixed-gamma line (const-density trim)
+[OK]   climb trim: V held (const-density trim)
+open-loop convergence: errs 1.25656e-05 7.8691e-07 4.92309e-08 3.07902e-09 slopes [3.99713, 3.99902]
+[OK]   open-loop RK4 end-state error is O(dt^4)
+closed-loop convergence: errs 8.50154 4.26557 2.12846 1.05501 slopes [0.994987, 1.01255]
+[OK]   closed-loop effective order measured and >= 1 (commands held per step bound the order; dt budget derives from THIS, the system actually integrated)
+roundtrip: max thrust err 9.09495e-13 N, lift err 7.27596e-12 N, bank err 1.11022e-15 rad
+[OK]   inverse dynamics recovers the applied thrust and bank
+[OK]   inverse dynamics recovers the applied lift
+[OK]   interior trajectory judged within envelope throughout
+hermite: knot_dt 0.5 interior max err 3.90059e-11 m
+hermite: knot_dt 0.25 interior max err 9.00149e-13 m
+hermite: knot_dt 0.1 interior max err 4.68958e-13 m
+[OK]   knot PVA matched at machine precision
+[OK]   interior error decreases with knot density
+[OK]   starved lift authority: disqualified as saturated demand, never accepted with clamped inputs
+[OK]   near-singular start disqualified BEFORE the EOM's silent guards can distort a flyable-looking answer
+[OK]   terrain wall: AGL floor disqualifies every candidate
+[OK]   no terrain source while AGL floor required: generation refused outright
+[OK]   hard-retained zone across the corridor disqualifies
+[OK]   zone policy going stale mid-generation aborts EVERYTHING (never read as no-contact)
+[OK]   handoff envelope problem refuses the capture
+[OK]   end-PVA failures are generation failures, not adapter ones
+feasibility: ok=1 reason='' winner=8 enumerated=9 duration=32.7739 s
+  disq: fin=0 pre=0 rep=0 sat=3 ter=0 zone=0 time=5 pva=0 adapter=0
+  dwell=26.68 s, adapter errs p/v/a=0.00104995/0.00917562/0.253237, start acc repro/model=0/3.64585
+[OK]   gamma=32 deg start recovers to a route entry
+[OK]   transition duration sane
+[OK]   handoff speed inside the computed window (never hardcoded)
+[OK]   trajectory tail touches the entry state exactly (blend)
+[OK]   exposure statistics present and zero in a zone-free field
+[OK]   unprescribed start: model-implied acc measured and reported, never hidden
+[OK]   energy-deficient 32-deg climb honestly refused (stall gate)
+acc_preserve_lat: lat=3 bank=0.3462 repro err=1.40433e-15
+[OK]   signed inverse reproduces the commanded acceleration
+[OK]   bank sign follows the commanded turn direction
+[OK]   reproduction used interior commands
+acc_preserve_lat: lat=-3 bank=-0.3462 repro err=1.40433e-15
+[OK]   signed inverse reproduces the commanded acceleration
+[OK]   bank sign follows the commanded turn direction
+[OK]   reproduction used interior commands
+acc_preserve_lat: lat=0 bank=0 repro err=1.40433e-15
+[OK]   signed inverse reproduces the commanded acceleration
+[OK]   bank sign follows the commanded turn direction
+[OK]   reproduction used interior commands
+[OK]   unprescribed internal zero: mission generates
+[OK]   prescribed zero at the same PVA refused — the bool, never the value, decides
+[OK]   prescribed zero acc at a steep climb honestly refused
+[OK]   flyable commanded start acceleration accepted
+acc_preserve: |acc(0) - a0| = 0 u/s^2, repro err = 4.44089e-16 m/s^2, winner 16
+[OK]   trajectory leaves with the COMMANDED acceleration exactly
+[OK]   signed-inverse commands reproduce the commanded acc
+[OK]   unflyable commanded start acceleration refused
+[OK]   baseline winner exists
+[OK]   winner passes the standalone validator at BARE limits
+[OK]   interior terrain dip REFUSED by the validator
+[OK]   interior thrust/load excursion REFUSED by the validator
+[OK]   level entry mid-band generates — the boundary points below measure the gate, not the fixture
+  [V5-GEN] ref      v0= 190.0000 ok=1 | fin=0 preg=0 repr=0 sat=0 terr=0 zone=0 lim=0 to=0 endpva=0 adap=0
+  [V5-GEN] ceil@    v0= 230.0000 ok=1 | fin=0 preg=0 repr=0 sat=0 terr=0 zone=0 lim=0 to=0 endpva=0 adap=0
+  [V5-GEN] ceil-in  v0= 230.0000 ok=1 | fin=0 preg=0 repr=0 sat=0 terr=0 zone=0 lim=0 to=0 endpva=0 adap=0
+  [V5-GEN] ceil-out v0= 230.0010 ok=0 | fin=0 preg=0 repr=0 sat=0 terr=0 zone=0 lim=24 to=0 endpva=0 adap=0
+[OK]   V0 EXACTLY at the model ceiling is not disqualified on limits
+[OK]   V0 inside the shared boundary tolerance is not disqualified
+[OK]   V0 outside the tolerance IS disqualified on limits
+  [V5-GEN] floor@   v0= 170.0000 ok=1 | fin=0 preg=0 repr=0 sat=0 terr=0 zone=0 lim=0 to=0 endpva=0 adap=0
+  [V5-GEN] floor-in v0= 170.0000 ok=1 | fin=0 preg=0 repr=0 sat=0 terr=0 zone=0 lim=0 to=0 endpva=0 adap=0
+  [V5-GEN] floor-out v0= 169.9990 ok=0 | fin=0 preg=0 repr=0 sat=0 terr=0 zone=0 lim=24 to=0 endpva=0 adap=0
+[OK]   V0 EXACTLY at the activation floor is not disqualified on limits
+[OK]   V0 inside the tolerance below the floor is not disqualified
+[OK]   V0 outside the tolerance below the floor IS disqualified
+[OK]   speed above the model ceiling dies at the limit gate
+[OK]   V below the activation floor refused
+[OK]   V AT the activation floor accepted (inclusive)
+[OK]   V above the activation floor accepted
+[OK]   V below the model ceiling accepted
+[OK]   V AT the model ceiling accepted (inclusive)
+[OK]   V above the model ceiling refused
+[OK]   V inside the shared tolerance above the ceiling accepted
+[OK]   V outside the shared tolerance above the ceiling refused
+[OK]   V inside the shared tolerance below the floor accepted
+[OK]   V outside the shared tolerance below the floor refused
+[OK]   the fixture's bad set IS invalid
+[OK]   an invalid parameter set is refused before any comparison
+[OK]   ...and the same trajectory passes once the set is valid again
+[OK]   q above the pressure cap refused
+[OK]   q AT the pressure cap accepted (inclusive)
+[OK]   q below the pressure cap accepted
+[OK]   load below the limit accepted
+[OK]   load AT the boundary (within drift) accepted
+[OK]   load above the limit refused
+[OK]   CL below the limit (just above stall speed) accepted
+[OK]   CL AT the limit accepted (inclusive)
+[OK]   CL above the limit (below stall speed) refused
+[OK]   gamma below the policy cone accepted
+[OK]   gamma AT the policy cone accepted (inclusive; ballistic drift is downward)
+[OK]   gamma above the policy cone refused
+[OK]   bank below the limit accepted
+[OK]   bank AT the boundary (within drift) accepted
+[OK]   bank above the limit refused
+[OK]   thrust below the ceiling accepted
+[OK]   thrust AT the ceiling accepted (inclusive)
+[OK]   thrust above the ceiling refused
+[OK]   thrust above the floor accepted
+[OK]   thrust AT the floor accepted (inclusive)
+[OK]   thrust below the floor (harder than idle drag) refused
+[OK]   both runs succeed
+[OK]   byte-identical outcome on identical requests (no clock, no RNG, no unordered state)
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/transition_experiment_test.xml' with successful test
+<end of output>
+Test time =   0.11 sec
+----------------------------------------------------------
+Test Passed.
+"transition_experiment_test" end time: Oct 08 06:55 UTC
+"transition_experiment_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

@@ -1,0 +1,413 @@
+value_headers rc=0
+mission_core_compile rc=0
+mission_core_run rc=0
+geometry_compile rc=0
+geometry_run rc=0
+postprocessing_compile rc=0
+postprocessing_run rc=0
+route_cost_profile_compile rc=0
+route_cost_profile_run rc=0
+mission_route_search_compile rc=0
+mission_route_search_run rc=0
+configure_after rc=0
+facade_header rc=0
+build_after rc=0
+run_direct rc=0
+run_default rc=0
+optimizer_configure rc=0
+optimizer_build rc=0
+optimizer_run rc=0
+model_configure rc=0
+model_build rc=0
+model_run rc=0
+route_configure rc=0
+route_build rc=0
+route_run rc=0
+{
+  "started_utc": "2026-10-08T05:34:05.455196+00:00",
+  "ros_domain_id": 83,
+  "checks": {
+    "value_headers": {
+      "command": [
+        "/usr/bin/c++",
+        "-std=c++17",
+        "-fsyntax-only",
+        "-H",
+        "-I/ws/install/path_manager/include",
+        "-I/ws/install/path_optimizer/include",
+        "-I/ws/install/path_planner/include",
+        "-I/ws/install/mmp_vehicle_dynamics/include",
+        "-I/usr/include/eigen3",
+        "/tmp/mmp_modularization_ext_c/consumer/value_headers.cpp"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 3.3197754660068313,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/value_headers.log",
+      "ros_dependency_seen_in_header_trace": false
+    },
+    "mission_core_compile": {
+      "command": [
+        "/usr/bin/c++",
+        "-std=c++17",
+        "-O2",
+        "-H",
+        "-I/ws/install/path_manager/include",
+        "-I/ws/install/path_optimizer/include",
+        "-I/ws/install/mmp_vehicle_dynamics/include",
+        "-I/usr/include/eigen3",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_planner.cpp",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_planning_environment.cpp",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_planner_core_test.cpp",
+        "-o",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_core_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 8.13952424499439,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/mission_core_compile.log",
+      "ros_dependency_seen_in_header_trace": false
+    },
+    "mission_core_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_core_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.0014363380032591522,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/mission_core_run.log"
+    },
+    "geometry_compile": {
+      "command": [
+        "/usr/bin/c++",
+        "-std=c++17",
+        "-O2",
+        "-H",
+        "-I/ws/install/path_manager/include",
+        "-I/usr/include/eigen3",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_geometry.cpp",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_geometry_test.cpp",
+        "-o",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_geometry_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 1.1658098570042057,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/geometry_compile.log",
+      "ros_dependency_seen_in_header_trace": false
+    },
+    "geometry_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_geometry_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.0013542819942813367,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/geometry_run.log"
+    },
+    "postprocessing_compile": {
+      "command": [
+        "/usr/bin/c++",
+        "-std=c++17",
+        "-O2",
+        "-H",
+        "-I/ws/install/path_manager/include",
+        "-I/ws/install/path_planner/include",
+        "-I/usr/include/eigen3",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_route_postprocessing.cpp",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_route_postprocessing_test.cpp",
+        "-o",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_postprocessing_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 1.3659669940097956,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/postprocessing_compile.log",
+      "ros_dependency_seen_in_header_trace": false
+    },
+    "postprocessing_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_postprocessing_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.0013560660008806735,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/postprocessing_run.log"
+    },
+    "route_cost_profile_compile": {
+      "command": [
+        "/usr/bin/c++",
+        "-std=c++17",
+        "-O2",
+        "-H",
+        "-I/ws/install/path_optimizer/include",
+        "-I/usr/include/eigen3",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_route_cost_profile.cpp",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_route_cost_profile_test.cpp",
+        "-o",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_route_cost_profile_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 1.4161865290079731,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/route_cost_profile_compile.log",
+      "ros_dependency_seen_in_header_trace": false
+    },
+    "route_cost_profile_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_route_cost_profile_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.0013717559922952205,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/route_cost_profile_run.log"
+    },
+    "mission_route_search_compile": {
+      "command": [
+        "/usr/bin/c++",
+        "-std=c++17",
+        "-O2",
+        "-H",
+        "-I/ws/install/path_manager/include",
+        "-I/usr/include/eigen3",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_route_search.cpp",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_route_search_test.cpp",
+        "-o",
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_route_search_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 1.2154928949894384,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/mission_route_search_compile.log",
+      "ros_dependency_seen_in_header_trace": false
+    },
+    "mission_route_search_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/consumer/standalone_mission_route_search_test"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.0013738499983446673,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/mission_route_search_run.log"
+    },
+    "configure_after": {
+      "command": [
+        "cmake",
+        "-S",
+        "/tmp/mmp_modularization_ext_c/consumer",
+        "-B",
+        "/tmp/mmp_modularization_ext_c/consumer/build_after",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.564527291993727,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/configure_after.log"
+    },
+    "facade_header": {
+      "command": [
+        "cmake",
+        "--build",
+        "/tmp/mmp_modularization_ext_c/consumer/build_after",
+        "--target",
+        "facade_header_probe",
+        "-j2"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 3.0194697650003945,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/facade_header.log"
+    },
+    "build_after": {
+      "command": [
+        "cmake",
+        "--build",
+        "/tmp/mmp_modularization_ext_c/consumer/build_after",
+        "--target",
+        "exact_mission_consumer",
+        "-j2"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 6.27484320300573,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/build_after.log"
+    },
+    "run_direct": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/consumer/build_after/exact_mission_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+        "direct",
+        "/tmp/mmp_modularization_ext_c/after/direct.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.26397348899627104,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/run_direct.log"
+    },
+    "run_default": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/consumer/build_after/exact_mission_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+        "default",
+        "/tmp/mmp_modularization_ext_c/after/default.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.2647721190005541,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/run_default.log"
+    },
+    "optimizer_configure": {
+      "command": [
+        "cmake",
+        "-S",
+        "/tmp/mmp_modularization_ext_c/optimizer_consumer",
+        "-B",
+        "/tmp/mmp_modularization_ext_c/optimizer_consumer/build",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.5143156850099331,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/optimizer_configure.log"
+    },
+    "optimizer_build": {
+      "command": [
+        "cmake",
+        "--build",
+        "/tmp/mmp_modularization_ext_c/optimizer_consumer/build",
+        "-j2"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 5.323718959989492,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/optimizer_build.log"
+    },
+    "optimizer_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/optimizer_consumer/build/optimizer_only_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.16381920399726368,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/optimizer_run.log"
+    },
+    "model_configure": {
+      "command": [
+        "cmake",
+        "-S",
+        "/tmp/mmp_modularization_ext_c/model_consumer",
+        "-B",
+        "/tmp/mmp_modularization_ext_c/model_consumer/build",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.5645238440047251,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/model_configure.log"
+    },
+    "model_build": {
+      "command": [
+        "cmake",
+        "--build",
+        "/tmp/mmp_modularization_ext_c/model_consumer/build",
+        "-j2"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 6.47600001799583,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/model_build.log"
+    },
+    "model_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/model_consumer/build/vehicle_model_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.3159780579881044,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/model_run.log"
+    },
+    "route_configure": {
+      "command": [
+        "cmake",
+        "-S",
+        "/tmp/mmp_modularization_ext_c/route_consumer",
+        "-B",
+        "/tmp/mmp_modularization_ext_c/route_consumer/build",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.5644649810128612,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/route_configure.log"
+    },
+    "route_build": {
+      "command": [
+        "cmake",
+        "--build",
+        "/tmp/mmp_modularization_ext_c/route_consumer/build",
+        "-j2"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 6.625945630003116,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/route_build.log"
+    },
+    "route_run": {
+      "command": [
+        "/tmp/mmp_modularization_ext_c/route_consumer/build/route_search_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.4644908589980332,
+      "log": "/tmp/mmp_modularization_ext_c/consumer/route_run.log"
+    }
+  },
+  "standalone_core_source_sha256": {
+    "src/mission_planner.cpp": "79af5526015110f4a3de98fd39554e9bce1dac9405b11f58436f7d760870bcdf",
+    "src/planning_environment.cpp": "da5c1680cd8f65de5fa123ea590d9b5684dca0d844113ea5b7511348e31428fc",
+    "test/mission_planner_core_test.cpp": "b3bccc7e8f6710d39e4ce6df61242806a2f048cbb19b85809b5c3e465d85920f"
+  },
+  "standalone_geometry_source_sha256": "4805100ad556f8b5748a9fc70b52fd6390cc0748e14523cae0fe051cd030c20a",
+  "standalone_geometry_test_sha256": "c165f2260ee7cde042c40ceb86d19176be13e38eab50726f033e44c6228e5089",
+  "standalone_postprocessing_source_sha256": "e6351704669e03cbc7a3478baecf8cc1f802d06b7bfdb999b574a3e7441918c7",
+  "standalone_postprocessing_test_sha256": "b4e9cacb919a159672317fb36b96dc3974fb0f1354bdf6b6b2f5d4bd57d876fe",
+  "standalone_route_cost_profile_source_sha256": "3e2e18d472196e8eb68a87b7f04997d69bde1456813cae9ca99d8e1ffa55e229",
+  "standalone_route_cost_profile_test_sha256": "4a4f6b6d48e0d2690975ba339b89c10baf8255b244f4edf4a797812c0298d11e",
+  "standalone_mission_route_search_source_sha256": "f5afd540a1f807d5c071382af280372ad4384249a9d55dae3d9c6e21b2d94d05",
+  "standalone_mission_route_search_test_sha256": "61ed35fa71084cdc1911273f0f31acedde80f701ae92f2bf838386edadf31804",
+  "comparisons": {
+    "direct": {
+      "same_fields_ignoring_times": {
+        "schema": true,
+        "mode": true,
+        "input": true,
+        "status": true,
+        "final": true,
+        "reference": true,
+        "phases": true,
+        "evaluation": true,
+        "identity": true
+      },
+      "pass": true,
+      "final_sha256": "3c08cff5289b09e4f839f62efe8bd935785541590ae70946f4ea493120f5031e",
+      "reference_sha256": "c8948ce0f340a647eb5a23e8eb861058a39c409dd892459c25765875cd5ec707",
+      "final_piece_count": 12,
+      "final_duration": 149.43304244853704,
+      "reference_duration": 150.0
+    },
+    "default": {
+      "same_fields_ignoring_times": {
+        "schema": true,
+        "mode": true,
+        "input": true,
+        "status": true,
+        "final": true,
+        "reference": true,
+        "phases": true,
+        "evaluation": true,
+        "identity": true
+      },
+      "pass": true,
+      "final_sha256": "3c08cff5289b09e4f839f62efe8bd935785541590ae70946f4ea493120f5031e",
+      "reference_sha256": "c8948ce0f340a647eb5a23e8eb861058a39c409dd892459c25765875cd5ec707",
+      "final_piece_count": 12,
+      "final_duration": 149.43304244853704,
+      "reference_duration": 150.0
+    }
+  },
+  "optimizer_consumer_source_sha256": "5764d7c4f918f8baafee034dc9844c73fee122742d4d8f42f3aa1b66a78fe568",
+  "optimizer_link_has_path_manager": false,
+  "route_consumer_source_sha256": "1fa271f0d49ede086c9fa56b892fb5d3d0441d6b4c96b3ca7f2d28b56bb2eca0",
+  "facade_header_isolation": {
+    "source_includes_only": "path_manager/mission_planner.h",
+    "forbidden_headers": [
+      "path_manager/path_manager.h",
+      "path_optimizer/poly_traj_optimizer.h",
+      "path_planner/dyn_a_star.h",
+      "path_planner/sdf/"
+    ],
+    "found": [],
+    "pass": true
+  },
+  "finished_utc": "2026-10-08T05:34:53.497294+00:00",
+  "pass": true
+}

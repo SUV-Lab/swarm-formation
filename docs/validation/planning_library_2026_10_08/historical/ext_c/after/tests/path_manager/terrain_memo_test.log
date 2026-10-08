@@ -1,0 +1,56 @@
+23/30 Testing: terrain_memo_test
+23/30 Test: terrain_memo_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/terrain_memo_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/terrain_memo_test"
+Directory: /ws/build/path_manager
+"terrain_memo_test" start time: Oct 08 05:34 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/terrain_memo_test
+  generation=1 expected=2 actual=2 valid=1
+  generation=1 expected=8 actual=8 valid=1
+  generation=1 expected=2 actual=2 valid=1
+[OK] distinct manager terrain values at the same generation never share cached samples
+  generation=1 expected=2 actual=2 valid=1
+  generation=1 expected=8 actual=8 valid=1
+[OK] copy assignment changes cache identity without changing the public generation
+  generation=2 expected=8 actual=8 valid=1
+  generation=2 expected=9 actual=9 valid=1
+  generation=2 expected=8 actual=8 valid=1
+[OK] a copied terrain remains independent after both values advance to the same generation
+  generation=1 expected=3 actual=3 valid=1
+  generation=1 expected=7 actual=7 valid=1
+[OK] move assignment cannot reuse the destination's previous cached value
+  generation=1 expected=7 actual=7 valid=1
+  generation=1 expected=11 actual=11 valid=1
+  generation=1 expected=7 actual=7 valid=1
+[OK] move construction and reuse of the source keep independent identities
+  generation=1 expected=13 actual=13 valid=1
+  generation=1 expected=13 actual=13 valid=1
+[OK] a moved-from terrain cannot return the cache of its transferred elevation buffer
+  generation=1 expected=14 actual=14 valid=1
+  generation=1 expected=14 actual=14 valid=1
+[OK] move assignment also invalidates the source object's memo
+  generation=1 expected=14 actual=14 valid=1
+[OK] self-move assignment cannot leave a sample for storage the vector released
+  generation=1 expected=4 actual=4 valid=1
+  generation=1 expected=12 actual=12 valid=1
+[OK] a new terrain at the exact same address cannot inherit the destroyed object's memo
+  generation=1 expected=5 actual=5 valid=1
+[OK] invalid terrain cannot receive a previously cached valid sample
+  generation=1 expected=5 actual=5 valid=1
+[OK] restoring validity recomputes the existing terrain
+  generation=2 expected=6 actual=6 valid=1
+  generation=2 expected=6 actual=6 valid=1
+[OK] generation changes still invalidate same-buffer updates and repeated reads remain valid
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/terrain_memo_test.xml' with successful test
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"terrain_memo_test" end time: Oct 08 05:34 UTC
+"terrain_memo_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

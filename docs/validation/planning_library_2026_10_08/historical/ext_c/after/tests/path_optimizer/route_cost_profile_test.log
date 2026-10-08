@@ -1,0 +1,48 @@
+1/2 Testing: route_cost_profile_test
+1/2 Test: route_cost_profile_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_optimizer/test_results/path_optimizer/route_cost_profile_test.xml" "--package-name" "path_optimizer" "--generate-result-on-success" "--command" "/ws/build/path_optimizer/route_cost_profile_test"
+Directory: /ws/build/path_optimizer
+"route_cost_profile_test" start time: Oct 08 05:35 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_optimizer':
+ - /ws/build/path_optimizer/route_cost_profile_test
+[OK] a peak licenses the following pieces through the XY slope cone
+[OK] a later peak licenses climb anticipation before reaching that peak
+[OK] cone distance ignores vertical excursion and inputs remain unchanged
+[OK] explicit slope and headroom change only their expected cone limits
+[OK] absent and malformed references return explicit empty outcomes without queries
+[OK] cell-pitch swath samples along then across the chord and finds a one-cell ridge
+[OK] terrain functor state changes in the borrowed original callback
+[OK] default 2.3 pitch preserves floating-step positions without forcing the chord endpoint
+[OK] a coarse terrain cell retains the 2.3 maximum sampling pitch
+[OK] a present failed gradient provider prevents height fallback for every swath sample
+[OK] height fallback rejects infinity while a successful gradient retains legacy height handling
+[OK] a zero-XY chord uses the fixed positive-X chord direction once
+[OK] zone relief uses maximum XY proximity, rim fade and finite chord endpoints
+[OK] shadow queries retain original ordered zone indices and minimum ceiling across the swath
+[OK] one unshadowed in-reach sample cancels the entire piece lift and stops sampling
+[OK] negative infinity short-circuits before later zones at the same sample
+[OK] unreached and disabled zones cannot reuse an earlier shadow lift
+[OK] committed AGL at near, half-fade and far samples averages to one-quarter roughness
+[OK] terrain-following relief fades completely at the 2.5 AGL boundary
+[OK] a failed gradient counts in the denominator and never falls back to height
+[OK] height-only terrain enables zero roughness without calling the height provider
+[OK] ride cost can request roughness without creating time relief factors
+[OK] slope deadband and full-roughness saturation keep the expected bounds
+[OK] roughness uses the same maximum pitch and does not append an unsampled endpoint
+[OK] disabled, missing and short inputs return fresh inactive tables without queries
+[OK] terrain-aware profile construction leaves geometry and references unchanged
+[OK] mutating caller storage and live callback backing data cannot rewrite completed tables
+[OK] owned results outlive all inputs without retaining terrain callbacks
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_optimizer/test_results/path_optimizer/route_cost_profile_test.xml' with successful test
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"route_cost_profile_test" end time: Oct 08 05:35 UTC
+"route_cost_profile_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

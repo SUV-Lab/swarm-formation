@@ -1,0 +1,24 @@
+[OK] rectangular geometry, negative/NaN/infinite cells and extra payload remain valid
+[OK] zero dimensions rejected
+[OK] index overflow rejected before multiplication/narrowing
+[OK] short payload rejected
+[OK] nonpositive/nonfinite resolution rejected
+[OK] nonpositive/nonfinite resolution rejected
+[OK] nonpositive/nonfinite resolution rejected
+[OK] nonpositive/nonfinite resolution rejected
+[OK] nonfinite center rejected
+[OK] zero physical length rejected
+[OK] overflowing upper bound rejected
+[OK] overflowing lower bound rejected
+[OK] generic facade refuses an unspecified backend
+[OK] construction forwards one owned settings/environment copy with exact variant types
+[OK] absent environment field remains distinct from explicitly empty field
+[OK] planning neither reapplies settings nor rewrites previous owned results
+[OK] terrain refusal and old-map retention cross the facade unchanged
+[OK] successful terrain update clears synchronous error
+[OK] terrain clear is explicit
+[OK] zone clear forwards explicitly
+[OK] obstacle arguments/order and deferred/add IDs reach the caller
+[OK] obstacle clear forwarded
+[OK] owned final/reference results survive all planner/backend input lifetimes
+PASS: 0 failed check(s)

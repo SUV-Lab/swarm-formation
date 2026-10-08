@@ -1,0 +1,90 @@
+2/30 Testing: start_claim_test
+2/30 Test: start_claim_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/start_claim_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/start_claim_test"
+Directory: /ws/build/path_manager
+"start_claim_test" start time: Oct 08 06:55 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/start_claim_test
+[OK]     both sources stated is MALFORMED
+[OK]     ...and the message says which two sources collided
+[OK]     a non-finite stated speed is MALFORMED, not downgraded
+[OK]     a non-finite stated speed is MALFORMED, not downgraded
+[OK]     a non-finite stated speed is MALFORMED, not downgraded
+[OK]     a negative stated speed is MALFORMED
+[OK]     ...while a stated ZERO is well-formed — the two must not collapse
+[OK]     a stated speed parses as STATED_SPEED
+[OK]     ...converted to planner units (150 m/s / 100 = 1.5 u/s)
+[OK]     ...with no velocity vector: the direction is the first route leg and does not exist yet
+[OK]     a stated REST start is legal to SAY (it is refused later, not here, and never raised to the floor)
+[OK]     a non-finite stated vector is MALFORMED, not a WARN-and-downgrade
+[OK]     a stated vector parses as STATED_VECTOR
+[OK]     ...converted componentwise into planner units
+[OK]     a stated ZERO vector is legal to say, like a stated zero speed
+[OK]     a scalar with no claim bit is MALFORMED — an un-updated publisher must break loudly, not have its stale field flown
+[OK]     an empty command is UNSPECIFIED — read, and it said nothing
+[OK]     ...with no acceleration prescribed
+[OK]     a non-finite prescribed acceleration is MALFORMED
+[OK]     a non-zero acceleration with no claim bit is MALFORMED
+[OK]     a prescribed acceleration of exactly zero is PRESCRIBED — the bool decides, the value never does
+[OK]     a stale scalar beside a claimed vector is NOT malformed — old and new contracts agree the vector wins, so nothing is misread
+[OK]     ...but it is reportable, so the ignored value can be named
+[OK]     a non-positive or non-finite unit is MALFORMED — converting by it would silently change the magnitude that was stated
+[OK]     a non-positive or non-finite unit is MALFORMED — converting by it would silently change the magnitude that was stated
+[OK]     a non-positive or non-finite unit is MALFORMED — converting by it would silently change the magnitude that was stated
+[OK]     only a stated SPEED with no prescribed acceleration may be re-aimed onto the route
+[OK]     ...a prescribed acceleration pins the direction
+[OK]     ...a stated vector already has a direction
+[OK]     only our own in-flight trajectory may be raised to the stall floor
+[OK]     ...never STATED_SPEED: raising a stated speed answers a different question than the one asked
+[OK]     ...never STATED_VECTOR: raising a stated speed answers a different question than the one asked
+[OK]     ...never TEST_INJECTED: raising a stated speed answers a different question than the one asked
+[OK]     ...never CHAIN_JUNCTION: raising a stated speed answers a different question than the one asked
+[OK]     ...never UNSPECIFIED: raising a stated speed answers a different question than the one asked
+[OK]     a start the operator STATED may begin inside the terrain clearance margin — the mission put the aircraft there
+[OK]     ...never CHAIN_JUNCTION: that point is one the planner produced, and a route it authored has no business starting inside the margin
+[OK]     ...never TRANSITION_HANDOFF: that point is one the planner produced, and a route it authored has no business starting inside the margin
+[OK]     ...never TRAJECTORY_DERIVED: that point is one the planner produced, and a route it authored has no business starting inside the margin
+[OK]     ...never TEST_INJECTED: that point is one the planner produced, and a route it authored has no business starting inside the margin
+[OK]     ...never UNSPECIFIED: that point is one the planner produced, and a route it authored has no business starting inside the margin
+[OK]     STATED_SPEED IS re-aimed onto the route
+[OK]     STATED_SPEED is NOT raised — it may not be rewritten
+[OK]     STATED_SPEED: the declined correction is REPORTED, not silent
+[OK]     STATED_VECTOR is NOT re-aimed
+[OK]     STATED_VECTOR is NOT raised — it may not be rewritten
+[OK]     STATED_VECTOR: the declined correction is REPORTED, not silent
+[OK]     TEST_INJECTED is NOT re-aimed
+[OK]     TEST_INJECTED is NOT raised — it may not be rewritten
+[OK]     TEST_INJECTED: the declined correction is REPORTED, not silent
+[OK]     CHAIN_JUNCTION is NOT re-aimed
+[OK]     CHAIN_JUNCTION is NOT raised — it may not be rewritten
+[OK]     CHAIN_JUNCTION: the declined correction is REPORTED, not silent
+[OK]     TRAJECTORY_DERIVED is NOT re-aimed
+[OK]     TRAJECTORY_DERIVED IS raised to the cruise floor
+[OK]     a prescribed acceleration stops the re-aim
+[OK]     a head exactly AT the floor is not raised
+[OK]     half an epsilon under it is not raised either — that is rounding
+[OK]     ...and two epsilons under it IS raised
+[OK]     align disabled suppresses the re-aim
+[OK]     a stated SPEED with a prescribed acceleration is judged as a full PVA
+[OK]     ...and is NOT re-aimed — the acceleration pins the frame
+[OK]     ...while the same speed WITHOUT one is judged on velocity alone
+[OK]     ...and is re-aimed
+[OK]     an injected state with a prescribed acceleration is judged as a full PVA
+[OK]     ...because an injection is operator input, not our own product
+[OK]     a transition handoff is NOT re-aimed
+[OK]     ...and NOT floored — the generator validated it
+[OK]     ...and the declined correction is reported
+[OK]     ...because it is a state the planner already validated
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/start_claim_test.xml' with successful test
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"start_claim_test" end time: Oct 08 06:55 UTC
+"start_claim_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

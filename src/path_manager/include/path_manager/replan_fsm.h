@@ -10,6 +10,7 @@
 #include <mutex>
 #include <map>
 #include <vector>
+#include <optional>
 #include "mmp_traj_msgs/msg/poly_traj.hpp"
 #include "mmp_traj_msgs/msg/trajectory_execution_control.hpp"
 #include "mmp_mission_msgs/msg/trajectory_command.hpp"
@@ -20,7 +21,7 @@
 #include "path_manager/path_manager.h"
 #include "path_manager/planning_result.h"
 #include "path_manager/start_state.h"
-#include "path_manager/segment_chain_planner.h"
+#include "path_manager/mission_planner.h"
 #include "path_optimizer/plan_container.hpp"
 #include "../../common/log_manager.hpp"
 
@@ -120,13 +121,14 @@ private:
 
     std::shared_ptr<PathManager> path_manager_;
 
-    // [CHAIN] Stage-1 segment-chained planning (chain/enable, default off).
-    // Lives beside the state machine, not inside it: the FSM decides WHEN to
-    // plan, the chain planner knows how to turn one mission into N chained
-    // pipeline runs. When disabled, triggerGlobalPlan takes the single-shot
-    // path exactly as before.
-    std::unique_ptr<SegmentChainPlanner> chain_planner_;
-    bool chain_enable_{false};
+    // The library owns planning and its optimizer lifecycle. The manager
+    // alias above temporarily serves the existing execution/environment
+    // callbacks; they remain ROS responsibilities during this extraction.
+    std::unique_ptr<MissionPlanner> mission_planner_;
+    // Successful calculation waiting for its ROS publication tick. Consumed
+    // on publication; the manager remains the sole live execution/withdrawal
+    // authority. A refused replacement does not overwrite this value.
+    std::optional<MissionPlanResult> pending_plan_;
 
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr optimized_path_pub_;
     // [ABORT] Withdraws a trajectory already published. Same QoS as the
@@ -245,7 +247,7 @@ private:
     // to PathManager (setRiskZonesRuntime is replace-only by contract).
     std::vector<RiskZone> active_risk_zones_;
 
-    std::unique_ptr<swarm_formation::LogManager> log_manager_;
+    std::shared_ptr<swarm_formation::LogManager> log_manager_;
 };
 
 }  // namespace path_manager

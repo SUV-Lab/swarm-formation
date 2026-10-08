@@ -1,0 +1,70 @@
+27/30 Testing: mission_sequence_test
+27/30 Test: mission_sequence_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/mission_sequence_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/mission_sequence_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"mission_sequence_test" start time: Oct 08 06:56 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/mission_sequence_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[INFO] [1791442560.299795800] [mission_sequence]: ReplanFSM parameters:
+[INFO] [1791442560.299835694] [mission_sequence]:   Start position will be set from TrajectoryCommand
+[INFO] [1791442560.299841385] [mission_sequence]:   Waiting for trajectory command...
+[INFO] [1791442560.299845713] [mission_sequence]: Initial position set to: (0.00, 0.00, 0.00)
+[INFO] [1791442560.301598443] [mission_sequence]: PathManager initialized, waiting for trajectory command
+[INFO] [1791442560.313099982] [mission_sequence]: [FSM]: from INIT to WAIT_POSITION
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,300) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791442560.804265196] [mission_sequence]: Initializing optimizer for drone 0...
+[INFO] [1791442560.804534311] [mission_sequence]: Optimizer initialized successfully for drone 0
+[GEODESIC] points=84 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791442560.995186295] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791442561.011040083] [mission_sequence]: Setting formation with 0 positions to optimizer
+[WARN] [1791442561.011062536] [mission_sequence]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791442561.011079908] [mission_sequence]: [startMissionPlan]: from WAIT_POSITION to SEQUENTIAL_START
+[INFO] [1791442561.011085849] [mission_sequence]: Successfully generated global trajectory for drone 0
+[GEODESIC] points=82 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791442567.025191449] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791442567.035885293] [mission_sequence]: Setting formation with 0 positions to optimizer
+[WARN] [1791442567.035909228] [mission_sequence]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791442567.035926811] [mission_sequence]: [startMissionPlan]: from EXEC_TRAJ to SEQUENTIAL_START
+[INFO] [1791442567.035934185] [mission_sequence]: Successfully generated global trajectory for drone 0
+  [OK]   첫 미션이 계획되고 발행된다
+  .. 미션1  명령 (30, 150)  발행 (30, 150)  xy 차이 0 u
+  [OK]   첫 미션은 명령된 시작점에서 계획된다 — 관측 채널 확인
+[GEODESIC] points=80 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791442573.047410506] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791442573.053661120] [mission_sequence]: Setting formation with 0 positions to optimizer
+[WARN] [1791442573.053681398] [mission_sequence]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791442573.053699112] [mission_sequence]: [startMissionPlan]: from EXEC_TRAJ to SEQUENTIAL_START
+[INFO] [1791442573.053706235] [mission_sequence]: Successfully generated global trajectory for drone 0
+  [OK]   두 번째 미션도 계획되고 발행된다 — 거절이 아니다
+  .. 미션2(같은 id)  명령 (60, 60)  발행 (39.1599, 150)  xy 차이 92.3813 u
+  [OK]   같은 mission_id 로는 명령된 시작점이 무시된다 — V-2 재현
+[ERROR] [1791442579.054017761] [mission_sequence]: [ENVELOPE] commanded initial state REJECTED: speed 250.0 m/s above the effective maximum 200.0 m/s (default planning cap) (INITIAL_MODE_UNSUPPORTED)
+[ERROR] [1791442579.054064229] [mission_sequence]: [PLAN] FAILED reason=7: initial state unsupported: speed 250.0 m/s above the effective maximum 200.0 m/s (default planning cap)
+[ERROR] [1791442579.054077163] [mission_sequence]: Unable to generate global trajectory for drone 0!
+[ERROR] [1791442579.054088444] [mission_sequence]: [PLAN REJECTED] mission 'rejected#4' (seq 4) produced no trajectory — sequence rolled back, a resend will retry
+  [OK]   세 번째 미션도 발행된다
+  .. 미션3(다른 id)  명령 (60, 240)  발행 (60, 240)  xy 차이 0 u
+  [OK]   mission_id 만 바꾸면 명령된 시작점이 채택된다 — 단일변수 대조
+[GEODESIC] points=110 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791442585.067262055] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791442585.073119924] [mission_sequence]: Setting formation with 0 positions to optimizer
+[WARN] [1791442585.073139360] [mission_sequence]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791442585.073155060] [mission_sequence]: [startMissionPlan]: from EXEC_TRAJ to SEQUENTIAL_START
+[INFO] [1791442585.073162123] [mission_sequence]: Successfully generated global trajectory for drone 0
+  [OK]   상한을 넘는 진술 속도는 계획되지 않는다 — 거부 경로 확인
+  [OK]   거부 뒤의 연속 명령은 계획된다
+  .. 미션5(거부 뒤 연속)  명령 (60, 60)  발행 (77.9771, 234.008)  xy 차이 174.934 u
+  [OK]   거부된 미션의 시작점이 남아 있지 않다 — 롤백이 채택을 되돌린다
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/mission_sequence_test.xml' with successful test
+<end of output>
+Test time =  31.00 sec
+----------------------------------------------------------
+Test Passed.
+"mission_sequence_test" end time: Oct 08 06:56 UTC
+"mission_sequence_test" time elapsed: 00:00:30
+----------------------------------------------------------
+

@@ -1,0 +1,81 @@
+{
+  "created_utc": "2026-10-08T05:36:45.377388+00:00",
+  "ctest_count": 37,
+  "suite_counts": {
+    "path_manager": 30,
+    "path_optimizer": 2,
+    "mmp_vehicle_dynamics": 5
+  },
+  "ctest_pass": true,
+  "chain": {
+    "chain_pass_count": 71,
+    "chain_failure_count": 0,
+    "chain_log_count": 71,
+    "all_chain_logs_written_after_start": true,
+    "chain_tally_last_line": "DONE 71/71",
+    "risk_154_0": true
+  },
+  "external_consumer_pass": true,
+  "pure_header_count": 20,
+  "pure_headers_ros_includes": false,
+  "pure_core_ros_includes": false,
+  "direct_default_exact": true,
+  "r2_pass": true,
+  "r2_bound_and_value_update_owned_double_exact": true,
+  "r2_modes": {
+    "bound_node": {
+      "own_loader_pid": 104553,
+      "owned_double_exact": true,
+      "pass": true
+    },
+    "value_input": {
+      "own_loader_pid": 104753,
+      "owned_double_exact": true,
+      "pass": true,
+      "owned_setting_count": 148
+    },
+    "initial_environment": {
+      "own_loader_pid": 105083,
+      "owned_double_exact": false,
+      "pass": true,
+      "initial_environment_contract": {
+        "baseline_generation": 6,
+        "actual_generation": 4,
+        "expected_delta": -2,
+        "actual_delta": -2,
+        "reason": "Constructor receives the actual terrain directly, so no prior empty-world clear increments terrain and effective-zone generations.",
+        "other_identity_fields_exact": {
+          "trajectory_id": true,
+          "drone_id": true
+        },
+        "pass": true
+      },
+      "owned_setting_count": 148
+    }
+  },
+  "mission_core_consumer": {
+    "ok_checks": 23,
+    "failed_checks": 0
+  },
+  "model_consumer": {
+    "ok_checks": 48,
+    "failed_checks": 0
+  },
+  "route_consumer": {
+    "ok_checks": 83,
+    "failed_checks": 0
+  },
+  "repository_new_tests": {
+    "mission_planner_core_test": {
+      "ok_checks": 23,
+      "failed_checks": 0,
+      "pass": true
+    },
+    "ros_planning_backend_test": {
+      "ok_checks": 31,
+      "failed_checks": 0,
+      "pass": true
+    }
+  },
+  "pass": true
+}

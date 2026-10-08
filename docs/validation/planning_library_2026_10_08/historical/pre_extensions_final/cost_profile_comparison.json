@@ -1,0 +1,19 @@
+{
+  "before_count": 10,
+  "after_count": 10,
+  "ordered": false,
+  "exact": true,
+  "lines": [
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 2 pieces, cap=[3.932, 4.385] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 3.932)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 2 pieces, cap=[2.842, 3.484] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 3.484)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 47 pieces, cap=[3.909, 7.550] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 4.736)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 58 pieces, cap=[4.419, 12.038] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 10.608)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 81 pieces, cap=[4.656, 13.438] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 10.923)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 2 pieces, cap=[3.932, 4.385] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 3.932)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 2 pieces, cap=[2.842, 3.484] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 3.484)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 58 pieces, cap=[4.419, 12.038] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 10.608)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 47 pieces, cap=[3.909, 7.550] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 4.736)",
+    "[replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 81 pieces, cap=[4.656, 13.438] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 10.923)"
+  ],
+  "pass": true
+}

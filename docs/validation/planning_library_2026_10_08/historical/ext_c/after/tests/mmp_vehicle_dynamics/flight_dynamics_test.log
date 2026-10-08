@@ -1,0 +1,78 @@
+1/5 Testing: flight_dynamics_test
+1/5 Test: flight_dynamics_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/flight_dynamics_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/flight_dynamics_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"flight_dynamics_test" start time: Oct 08 05:35 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/flight_dynamics_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml
+Running main() from /opt/ros/humble/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 23 tests from 2 test suites.
+[----------] Global test environment set-up.
+[----------] 15 tests from FlightDynamics
+[ RUN      ] FlightDynamics.StraightLevelTrimIncludesGravity
+[       OK ] FlightDynamics.StraightLevelTrimIncludesGravity (0 ms)
+[ RUN      ] FlightDynamics.NearZeroLiftArcDoesNotTriggerBankLimit
+[       OK ] FlightDynamics.NearZeroLiftArcDoesNotTriggerBankLimit (0 ms)
+[ RUN      ] FlightDynamics.CoordinatedTurnMatchesClosedForm
+[       OK ] FlightDynamics.CoordinatedTurnMatchesClosedForm (0 ms)
+[ RUN      ] FlightDynamics.SteadyClimbMatchesEnergyBalance
+[       OK ] FlightDynamics.SteadyClimbMatchesEnergyBalance (0 ms)
+[ RUN      ] FlightDynamics.PenaltyGradientMatchesFiniteDifference
+[       OK ] FlightDynamics.PenaltyGradientMatchesFiniteDifference (0 ms)
+[ RUN      ] FlightDynamics.RepresentativeLevelCruiseIsInsideEnvelope
+[       OK ] FlightDynamics.RepresentativeLevelCruiseIsInsideEnvelope (0 ms)
+[ RUN      ] FlightDynamics.ConeBankEnforcesAtHighLift
+[       OK ] FlightDynamics.ConeBankEnforcesAtHighLift (0 ms)
+[ RUN      ] FlightDynamics.BankPenaltyBoundedNearZeroLift
+[       OK ] FlightDynamics.BankPenaltyBoundedNearZeroLift (0 ms)
+[ RUN      ] FlightDynamics.FlightPathComponentFormBoundedAndActive
+[       OK ] FlightDynamics.FlightPathComponentFormBoundedAndActive (0 ms)
+[ RUN      ] FlightDynamics.NoDeceleratingBarrierDuringInitialAcceleration
+[       OK ] FlightDynamics.NoDeceleratingBarrierDuringInitialAcceleration (0 ms)
+[ RUN      ] FlightDynamics.QFloorIsInertAboveStall
+[       OK ] FlightDynamics.QFloorIsInertAboveStall (0 ms)
+[ RUN      ] FlightDynamics.QFloorBlendBoundaries
+[       OK ] FlightDynamics.QFloorBlendBoundaries (0 ms)
+[ RUN      ] FlightDynamics.SubStallAeroIsBoundedAndSpeedFlat
+[       OK ] FlightDynamics.SubStallAeroIsBoundedAndSpeedFlat (0 ms)
+[ RUN      ] FlightDynamics.BankConeGuardsNegativeLiftPushover
+[       OK ] FlightDynamics.BankConeGuardsNegativeLiftPushover (0 ms)
+[ RUN      ] FlightDynamics.GentlePushoverStaysClean
+[       OK ] FlightDynamics.GentlePushoverStaysClean (0 ms)
+[----------] 15 tests from FlightDynamics (0 ms total)
+
+[----------] 8 tests from HandoffVerdict
+[ RUN      ] HandoffVerdict.MarginBackedFloorIsSpeedMinTimesOnePlusMargin
+[       OK ] HandoffVerdict.MarginBackedFloorIsSpeedMinTimesOnePlusMargin (0 ms)
+[ RUN      ] HandoffVerdict.KnownTrimPasses
+[       OK ] HandoffVerdict.KnownTrimPasses (0 ms)
+[ RUN      ] HandoffVerdict.SubActivationSpeedIsRefusedThoughUtilizationReadsZero
+[       OK ] HandoffVerdict.SubActivationSpeedIsRefusedThoughUtilizationReadsZero (0 ms)
+[ RUN      ] HandoffVerdict.SpeedBoundariesAreInclusiveWithinOneMicrometrePerSecond
+[       OK ] HandoffVerdict.SpeedBoundariesAreInclusiveWithinOneMicrometrePerSecond (0 ms)
+[ RUN      ] HandoffVerdict.FlightPathConeIsInclusiveExactlyAtTheLimit
+[       OK ] HandoffVerdict.FlightPathConeIsInclusiveExactlyAtTheLimit (1 ms)
+[ RUN      ] HandoffVerdict.NonFiniteComponentsAreNamedAndBeatOtherViolations
+[       OK ] HandoffVerdict.NonFiniteComponentsAreNamedAndBeatOtherViolations (0 ms)
+[ RUN      ] HandoffVerdict.ThrustExceededIsReportedByName
+[       OK ] HandoffVerdict.ThrustExceededIsReportedByName (0 ms)
+[ RUN      ] HandoffVerdict.DragPolarIsOneDefinitionSharedWithTheModel
+[       OK ] HandoffVerdict.DragPolarIsOneDefinitionSharedWithTheModel (0 ms)
+[----------] 8 tests from HandoffVerdict (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 23 tests from 2 test suites ran. (1 ms total)
+[  PASSED  ] 23 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml'
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"flight_dynamics_test" end time: Oct 08 05:35 UTC
+"flight_dynamics_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

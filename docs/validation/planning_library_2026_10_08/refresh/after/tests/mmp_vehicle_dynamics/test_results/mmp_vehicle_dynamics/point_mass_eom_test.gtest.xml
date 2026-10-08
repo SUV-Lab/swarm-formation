@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="7" failures="0" disabled="0" errors="0" time="0" timestamp="2026-10-08T06:57:22" name="AllTests">
+  <testsuite name="PointMassEom" tests="7" failures="0" disabled="0" errors="0" time="0" timestamp="2026-10-08T06:57:22">
+    <testcase name="VelocityComponents" status="run" result="completed" time="0" timestamp="2026-10-08T06:57:22" classname="mmp_vehicle_dynamics.PointMassEom" />
+    <testcase name="LevelSteadyFlightAllRatesZero" status="run" result="completed" time="0" timestamp="2026-10-08T06:57:22" classname="mmp_vehicle_dynamics.PointMassEom" />
+    <testcase name="SteadyTurnHeadingRate" status="run" result="completed" time="0" timestamp="2026-10-08T06:57:22" classname="mmp_vehicle_dynamics.PointMassEom" />
+    <testcase name="SteadyClimbRatesZero" status="run" result="completed" time="0" timestamp="2026-10-08T06:57:22" classname="mmp_vehicle_dynamics.PointMassEom" />
+    <testcase name="ForceClosureUnsaturated" status="run" result="completed" time="0" timestamp="2026-10-08T06:57:22" classname="mmp_vehicle_dynamics.PointMassEom" />
+    <testcase name="SaturationIsExplicit" status="run" result="completed" time="0" timestamp="2026-10-08T06:57:22" classname="mmp_vehicle_dynamics.PointMassEom" />
+    <testcase name="RepresentabilityIsExplicit" status="run" result="completed" time="0" timestamp="2026-10-08T06:57:22" classname="mmp_vehicle_dynamics.PointMassEom" />
+  </testsuite>
+</testsuites>

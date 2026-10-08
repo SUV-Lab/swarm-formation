@@ -1,0 +1,65 @@
+Test project /ws/build/path_manager
+      Start  1: load_obstacles_test
+ 1/30 Test  #1: load_obstacles_test ..............   Passed    0.03 sec
+      Start  2: start_claim_test
+ 2/30 Test  #2: start_claim_test .................   Passed    0.03 sec
+      Start  3: risk_contract_test
+ 3/30 Test  #3: risk_contract_test ...............   Passed    0.18 sec
+      Start  4: terrain_pitch_test
+ 4/30 Test  #4: terrain_pitch_test ...............   Passed    0.03 sec
+      Start  5: terrain_risk_mask_test
+ 5/30 Test  #5: terrain_risk_mask_test ...........   Passed    1.35 sec
+      Start  6: waypoint_experiment_test
+ 6/30 Test  #6: waypoint_experiment_test .........   Passed    0.17 sec
+      Start  7: transition_experiment_test
+ 7/30 Test  #7: transition_experiment_test .......   Passed    0.11 sec
+      Start  8: unit_guard_test
+ 8/30 Test  #8: unit_guard_test ..................   Passed    0.15 sec
+      Start  9: param_contract_test
+ 9/30 Test  #9: param_contract_test ..............   Passed    0.15 sec
+      Start 10: route_slice_solver_test
+10/30 Test #10: route_slice_solver_test ..........   Passed    0.14 sec
+      Start 11: mission_planner_test
+11/30 Test #11: mission_planner_test .............   Passed    0.36 sec
+      Start 12: mission_planner_core_test
+12/30 Test #12: mission_planner_core_test ........   Passed    0.03 sec
+      Start 13: ros_planning_backend_test
+13/30 Test #13: ros_planning_backend_test ........   Passed    0.17 sec
+      Start 14: route_slice_batch_test
+14/30 Test #14: route_slice_batch_test ...........   Passed    0.15 sec
+      Start 15: flight_assembly_test
+15/30 Test #15: flight_assembly_test .............   Passed    0.03 sec
+      Start 16: direct_trajectory_solver_test
+16/30 Test #16: direct_trajectory_solver_test ....   Passed    0.15 sec
+      Start 17: mission_geometry_test
+17/30 Test #17: mission_geometry_test ............   Passed    0.03 sec
+      Start 18: route_postprocessing_test
+18/30 Test #18: route_postprocessing_test ........   Passed    0.03 sec
+      Start 19: committed_route_test
+19/30 Test #19: committed_route_test .............   Passed    0.42 sec
+      Start 20: mission_route_search_test
+20/30 Test #20: mission_route_search_test ........   Passed    0.03 sec
+      Start 21: route_search_backend_test
+21/30 Test #21: route_search_backend_test ........   Passed    0.70 sec
+      Start 22: vehicle_model_injection_test
+22/30 Test #22: vehicle_model_injection_test .....   Passed    0.35 sec
+      Start 23: terrain_memo_test
+23/30 Test #23: terrain_memo_test ................   Passed    0.03 sec
+      Start 24: trajectory_message_test
+24/30 Test #24: trajectory_message_test ..........   Passed    0.03 sec
+      Start 25: fsm_scenarios_test
+25/30 Test #25: fsm_scenarios_test ...............   Passed   18.42 sec
+      Start 26: exec_abort_test
+26/30 Test #26: exec_abort_test ..................   Passed    2.46 sec
+      Start 27: mission_sequence_test
+27/30 Test #27: mission_sequence_test ............   Passed   30.87 sec
+      Start 28: log_visibility_test
+28/30 Test #28: log_visibility_test ..............   Passed   21.96 sec
+      Start 29: chain_variants
+29/30 Test #29: chain_variants ...................   Passed   27.72 sec
+      Start 30: risk_scenarios
+30/30 Test #30: risk_scenarios ...................   Passed    1.02 sec
+
+100% tests passed, 0 tests failed out of 30
+
+Total Test time (real) = 107.29 sec

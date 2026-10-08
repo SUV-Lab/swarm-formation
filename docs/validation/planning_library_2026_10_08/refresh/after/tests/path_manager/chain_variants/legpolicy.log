@@ -1,0 +1,53 @@
+[INFO] [1791442627.563279452] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791442627.563380662] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791442627.563391492] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791442627.563395650] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791442627.563568354] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791442627.563670176] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791442627.563727834] [chain_experiment]: Optimizer initialized successfully for drone 0
+route-sequential mode
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[GEODESIC] points=205 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=205 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791442627.759070622] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=65 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=65 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791442627.771597943] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791442627.771930348] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [RISK] zone 0 contains 1 mission point(s) -> barrier exempt (moat only, endpoint moat tapered)
+[INFO] [1791442627.772079288] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 14 pieces, cap=[3.306, 3.760] (slope=0.10, headroom=0.40, zone-relax=0.60 on 2 pieces; scalar fallback 3.760)
+[INFO] [1791442627.772114925] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [FEASIBILITY] FEASIBLE: terrain holds the clearance band along the route (no risk-driven duck-below predicted).
+[INFO] [1791442627.829143676] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] envelope(cruise) peak=87.5% (maximum speed) mean=87.3% p95=87.4% at t=137.9; state V=201.2 m/s n=1.12 CL=0.59 T=1606 N q=24097 Pa bank=24.0 deg; violations 0/15063; sub-stall ramp 0.0 s (peak 0%) low-lift 0.0 s (term on)
+[INFO] [1791442627.829860523] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN] min clearance 1.293 at t=101.480 pos=(232.482, 142.969, 2.366)
+[INFO] [1791442627.829873467] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   0% t=    0.0 xy=(   30.0,  150.0) z= 3.000 terrain=1.0984 near4=1.2016 clr=1.9015
+[INFO] [1791442627.829883776] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   5% t=    7.5 xy=(   44.1,  144.6) z= 2.987 terrain=0.9659 near4=1.0634 clr=2.0210
+[INFO] [1791442627.829892843] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  10% t=   15.1 xy=(   59.0,  142.5) z= 2.987 terrain=0.9589 near4=1.0062 clr=2.0279
+[INFO] [1791442627.829901450] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  15% t=   22.6 xy=(   74.1,  142.3) z= 3.086 terrain=1.0221 near4=1.0794 clr=2.0634
+[INFO] [1791442627.829910256] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  20% t=   30.1 xy=(   89.2,  142.2) z= 3.268 terrain=1.0793 near4=1.1791 clr=2.1886
+[INFO] [1791442627.829918902] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  25% t=   37.7 xy=(  104.4,  142.3) z= 3.428 terrain=1.0983 near4=1.1996 clr=2.3298
+[INFO] [1791442627.829927859] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  30% t=   45.2 xy=(  119.5,  142.7) z= 3.382 terrain=1.0655 near4=1.1621 clr=2.3168
+[INFO] [1791442627.829936315] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  35% t=   52.7 xy=(  134.6,  143.0) z= 3.121 terrain=1.0130 near4=1.0616 clr=2.1082
+[INFO] [1791442627.829944821] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  40% t=   60.3 xy=(  149.7,  142.9) z= 2.984 terrain=0.9589 near4=1.0133 clr=2.0247
+[INFO] [1791442627.829953678] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  45% t=   67.8 xy=(  164.8,  142.8) z= 3.167 terrain=0.9198 near4=1.0170 clr=2.2471
+[INFO] [1791442627.829974637] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  50% t=   75.3 xy=(  180.0,  142.9) z= 3.416 terrain=0.9232 near4=1.0217 clr=2.4930
+[INFO] [1791442627.829983664] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  55% t=   82.8 xy=(  195.1,  143.1) z= 3.297 terrain=0.9597 near4=1.0181 clr=2.3370
+[INFO] [1791442627.830008771] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  60% t=   90.4 xy=(  210.2,  143.0) z= 2.785 terrain=1.0101 near4=1.0552 clr=1.7752
+[INFO] [1791442627.830017387] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  65% t=   97.9 xy=(  225.3,  142.9) z= 2.395 terrain=1.0594 near4=1.1539 clr=1.3360
+[INFO] [1791442627.830025773] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  70% t=  105.4 xy=(  240.4,  143.0) z= 2.399 terrain=1.0781 near4=1.1799 clr=1.3206
+[INFO] [1791442627.830034770] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  75% t=  113.0 xy=(  255.6,  143.0) z= 2.422 terrain=1.0635 near4=1.1628 clr=1.3580
+[INFO] [1791442627.830043266] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  80% t=  120.5 xy=(  270.7,  143.1) z= 2.382 terrain=1.0202 near4=1.0772 clr=1.3614
+[INFO] [1791442627.830053836] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  85% t=  128.0 xy=(  285.8,  143.0) z= 2.369 terrain=0.9673 near4=1.0135 clr=1.4019
+[INFO] [1791442627.830062422] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  90% t=  135.6 xy=(  300.9,  143.0) z= 2.389 terrain=0.9289 near4=1.0229 clr=1.4600
+[INFO] [1791442627.830070968] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  95% t=  143.1 xy=(  315.9,  144.8) z= 2.505 terrain=0.9671 near4=1.0692 clr=1.5378
+[INFO] [1791442627.830079764] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE] 100% t=  150.6 xy=(  330.0,  150.0) z= 2.565 terrain=1.0654 near4=1.1567 clr=1.5000
+[OK]   the two-leg mission plans
+[OK]   one policy per leg was captured, not one for the mission
+[OK]   ...in leg order
+[OK]   ...each with its own search serial (no double-write)
+[OK]   ...and each is valid for ITS leg
+[OK]   ...describing the one zone installed
+[LEG-POLICY] leg0=0 leg1=2
+[OK]   leg 1 ends INSIDE the zone -> SOFT_ENDPOINT
+[OK]   leg 0 neither starts nor ends there -> not SOFT_ENDPOINT
+[OK]   ...the SAME zone has different dispositions per leg, which is what a plan-wide snapshot cannot express
+[OK]   the plan-wide snapshot is still INVALID for a multi-leg epoch
+PASS: 0 failed check(s)

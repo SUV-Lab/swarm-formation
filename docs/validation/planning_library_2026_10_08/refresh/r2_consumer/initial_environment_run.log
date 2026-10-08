@@ -1,0 +1,11 @@
+OWNED_SETTING_COUNT 148
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(2804,4120,457) voxel=(0.3,0.3,0.1) free_distance=1236
+OWNED_TERRAIN_AT_CONSTRUCTION true
+PLANNING_NODE_CREATED_BY_BACKEND true
+PLANNING_R2 chain=1 segments=0
+[INFO] [1791442583.004394450] [r2_external_value_input_consumer]: Initializing optimizer for drone 0...
+[INFO] [1791442583.004830148] [r2_external_value_input_consumer]: Optimizer initialized successfully for drone 0
+[GEODESIC] points=2263 recover_steps=152 (grad_fail=0 mono_rej=152) reached_goal=yes
+[INFO] [1791442583.461391835] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=180
+[INFO] [1791442583.694989702] [r2_external_value_input_consumer]: Setting formation with 1 positions to optimizer
+R2_RESULT has_trajectory=1 pieces=190 phases=5 input_unchanged=1

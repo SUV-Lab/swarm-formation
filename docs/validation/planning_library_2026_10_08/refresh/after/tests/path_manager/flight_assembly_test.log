@@ -1,0 +1,33 @@
+15/30 Testing: flight_assembly_test
+15/30 Test: flight_assembly_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/flight_assembly_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/flight_assembly_test"
+Directory: /ws/build/path_manager
+"flight_assembly_test" start time: Oct 08 06:55 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/flight_assembly_test
+[OK] route labels retain cruise judgment and cumulative run times
+[OK] plain labels and the single departure span retain their semantics
+[OK] exact analytic PVA seam joins at zero tolerance
+[OK] prefix shifts every original phase once, including terminal
+[OK] joining leaves both input prefix and retained unprefixed flight unchanged
+[OK] PVA component 0 refuses without altering the flight
+[OK] PVA component 1 refuses without altering the flight
+[OK] PVA component 2 refuses without altering the flight
+[OK] NaN tolerance refuses even a continuous seam
+[OK] quintic jerk discontinuity is measured without becoming a join gate
+[OK] constant trajectory assembles with zero derivatives
+[OK] owned flight retains analytic global PVA and phases after all inputs die
+[OK] empty assembly and either empty join side are handled without sampling
+PASS: 0 failed checks
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/flight_assembly_test.xml' with successful test
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"flight_assembly_test" end time: Oct 08 06:55 UTC
+"flight_assembly_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

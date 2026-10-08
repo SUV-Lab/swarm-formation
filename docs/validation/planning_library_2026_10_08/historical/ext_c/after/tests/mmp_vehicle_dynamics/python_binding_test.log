@@ -1,0 +1,51 @@
+4/5 Testing: python_binding_test
+4/5 Test: python_binding_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/python_binding_test.xml" "--package-name" "mmp_vehicle_dynamics" "--generate-result-on-success" "--env" "PYTHONPATH=/ws/install/mmp_vehicle_dynamics/local/lib/python3.10/dist-packages" "OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml" "--command" "/usr/bin/python3" "/ws/src/mmp_vehicle_dynamics/test/python_binding_test.py"
+Directory: /ws/build/mmp_vehicle_dynamics
+"python_binding_test" start time: Oct 08 05:35 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: extra environment variables:
+ - OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+ - PYTHONPATH=/ws/install/mmp_vehicle_dynamics/local/lib/python3.10/dist-packages
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /usr/bin/python3 /ws/src/mmp_vehicle_dynamics/test/python_binding_test.py
+[OK]   export: Parameters
+[OK]   export: Evaluation
+[OK]   export: CostGradient
+[OK]   export: EnvelopeLimit
+[OK]   export: BANK_MEANINGFUL_LOAD_FACTOR
+[OK]   export: BANK_NEGATIVE_NZ
+[OK]   export: parameters_are_valid
+[OK]   export: air_density
+[OK]   export: evaluate_inverse_dynamics
+[OK]   export: flight_envelope_penalty
+[OK]   export: envelope_utilization
+[OK]   export: is_within_envelope
+[OK]   export: envelope_limit_name
+[OK]   export: parameters_from_ros
+[OK]   export: load_planner_parameters
+[OK]   export: FrameUnits
+[OK]   default Parameters are valid
+[OK]   cruise 160 m/s sits inside the envelope
+[OK]   cruise thrust between limits
+[OK]   level cruise load factor ~1
+[OK]   sub-stall 80 m/s flagged as minimum-speed violation
+[OK]   sub-stall penalty positive, gradient favors speeding up
+[OK]   planner-yaml Parameters are valid
+[OK]   margin follows the LIVE config (0.08, not the header 0.02)
+[OK]   speed_min follows the live config (122)
+[OK]   bank limit deg->rad conversion
+[OK]   frame units read from config (100/100 today)
+[OK]   parameters_from_ros accepts bare suffixes
+==== python_binding_test: failures=0 ====
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/python_binding_test.xml' with successful test
+<end of output>
+Test time =   0.14 sec
+----------------------------------------------------------
+Test Passed.
+"python_binding_test" end time: Oct 08 05:35 UTC
+"python_binding_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

@@ -1,0 +1,35 @@
+2/5 Testing: vehicle_model_test
+2/5 Test: vehicle_model_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/vehicle_model_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/vehicle_model_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"vehicle_model_test" start time: Oct 08 06:57 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/vehicle_model_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml
+Running main() from /opt/ros/humble/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 3 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 3 tests from VehicleModel
+[ RUN      ] VehicleModel.FixedWingDelegationPreservesEveryNumericalOutput
+[       OK ] VehicleModel.FixedWingDelegationPreservesEveryNumericalOutput (0 ms)
+[ RUN      ] VehicleModel.GeometryUsesVehicleForcesAndNotOnlySpeedLimits
+[       OK ] VehicleModel.GeometryUsesVehicleForcesAndNotOnlySpeedLimits (0 ms)
+[ RUN      ] VehicleModel.OwnedImmutableParametersAndExplicitTransitionCapability
+[       OK ] VehicleModel.OwnedImmutableParametersAndExplicitTransitionCapability (0 ms)
+[----------] 3 tests from VehicleModel (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 3 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 3 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml'
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"vehicle_model_test" end time: Oct 08 06:57 UTC
+"vehicle_model_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

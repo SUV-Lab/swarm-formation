@@ -14,8 +14,8 @@
 // no-op case is supposed to be checked against — the first draft of this
 // ordering did exactly that.
 //
-// Not registered with ctest, for the same reason chain_experiment_test is
-// not: it runs real solves.
+// Registered regression: use a level, feasible flight so safety-gate refusal
+// cannot prevent the callback/ABORT scenarios below from being exercised.
 
 #include <chrono>
 #include <cmath>
@@ -99,7 +99,10 @@ mmp_mission_msgs::msg::TrajectoryCommand::SharedPtr makeMission(
   m->target_position.y = gy;
   m->target_position.z = gz;
   m->use_initial_speed = true;
-  m->initial_speed = 150.0;   // inside the cruise band (122..200 m/s)
+  m->initial_speed = 200.0;
+  m->start_position.x = 30.0;
+  m->start_position.y = 150.0;
+  m->start_position.z = 4.0;  // AGL; avoid an unintended ground-launch test
   return m;
 }
 
@@ -162,7 +165,7 @@ int main(int argc, char **argv) {
   expect(ctls.empty(), "installing zones with nothing flying aborts nothing");
 
   // (3) Fly.
-  fsm.trajectoryCommandCallback(makeMission(1, "A", 330.0, 150.0, 1.5));
+  fsm.trajectoryCommandCallback(makeMission(1, "A", 330.0, 150.0, 4.0));
   spin(node, 4000);
   expect(!trajs.empty(), "the mission is planned AND published");
   if (trajs.empty()) {
@@ -199,7 +202,7 @@ int main(int argc, char **argv) {
   // (6) A new mission after the abort. Without the recovery branch the FSM
   // sits in WAIT_EXTERNAL_RECOVERY and this plan is never published.
   const size_t trajs_before = trajs.size();
-  fsm.trajectoryCommandCallback(makeMission(2, "B", 320.0, 140.0, 1.5));
+  fsm.trajectoryCommandCallback(makeMission(2, "B", 320.0, 150.0, 4.0));
   spin(node, 4000);
   expect(trajs.size() > trajs_before,
          "a mission after an abort is published — the FSM leaves the "
@@ -232,9 +235,13 @@ int main(int argc, char **argv) {
   if (!ctls.empty()) {
     const uint64_t gen_before = ctls.back().environment_generation;
     const size_t ctls_before3 = ctls.size();
-    fsm.trajectoryCommandCallback(makeMission(3, "C", 300.0, 150.0, 1.5));
+    // Restore the ground before testing an obstacle at the original height.
+    fsm.terrainCallback(makeFlatMap(0.0));
+    const size_t before_third = trajs.size();
+    fsm.trajectoryCommandCallback(makeMission(3, "C", 300.0, 150.0, 4.0));
     spin(node, 4000);
-    if (trajs.size() > 0 && trajs.back().trajectory_id > 0) {
+    expect(trajs.size() > before_third, "obstacle scenario starts with a fresh flight");
+    if (trajs.size() > before_third && trajs.back().trajectory_id > 0) {
       const uint64_t id3 = trajs.back().trajectory_id;
       auto obstacles = std::make_shared<mmp_mission_msgs::msg::DynamicObstacleArray>();
       obstacles->replace = true;
@@ -259,6 +266,42 @@ int main(int argc, char **argv) {
       }
     }
   }
+
+  // (9) A valid result can wait for its publication tick while a replacement
+  // command is refused. The refusal must not discard the valid pending result.
+  auto empty_obstacles = std::make_shared<mmp_mission_msgs::msg::DynamicObstacleArray>();
+  empty_obstacles->replace = true;
+  fsm.loadObstaclesCallback(empty_obstacles);
+  fsm.terrainCallback(makeFlatMap(0.0));
+  const size_t before_pending = trajs.size();
+  fsm.trajectoryCommandCallback(makeMission(4, "D", 330.0, 150.0, 4.0));
+  auto rejected = makeMission(5, "invalid-replacement", 330.0, 150.0, 4.0);
+  rejected->initial_speed = 400.0;
+  fsm.trajectoryCommandCallback(rejected);
+  spin(node, 1200);
+  expect(trajs.size() == before_pending + 1,
+         "refused replacement retains and publishes the prior successful pending result once");
+
+  // (10) Invalidation before the timer publishes must discard the pending
+  // calculation too. This path is narrower than aborting an already flown ID.
+  const size_t before_withdrawn = trajs.size();
+  const size_t controls_before_pending = ctls.size();
+  const uint64_t last_published_id = trajs.empty() ? 0 : trajs.back().trajectory_id;
+  fsm.trajectoryCommandCallback(makeMission(5, "E", 320.0, 150.0, 4.0));
+  fsm.loadRiskZonesCallback(makeZones({{600.0, 600.0, 3.0, 35.0, 0.9}}));
+  spin(node, 800);
+  expect(trajs.size() == before_withdrawn,
+         "a result withdrawn before its publication tick is never emitted");
+  expect(ctls.size() == controls_before_pending + 1 &&
+             ctls.back().trajectory_id > last_published_id &&
+             ctls.back().reason == Ctl::REASON_POLICY_UNEVALUATED,
+         "pre-publication withdrawal names the newly allocated ID exactly once");
+  const uint64_t withdrawn_id = ctls.empty() ? 0 : ctls.back().trajectory_id;
+  fsm.trajectoryCommandCallback(makeMission(6, "F", 330.0, 150.0, 4.0));
+  spin(node, 1200);
+  expect(trajs.size() == before_withdrawn + 1 &&
+             trajs.back().trajectory_id > withdrawn_id,
+         "a fresh library result recovers after pending publication was withdrawn");
 
   rclcpp::shutdown();
   if (g_failed == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }

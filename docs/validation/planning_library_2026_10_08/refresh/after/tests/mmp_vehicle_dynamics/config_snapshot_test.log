@@ -1,0 +1,28 @@
+5/5 Testing: config_snapshot_test
+5/5 Test: config_snapshot_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/config_snapshot_test.xml" "--package-name" "mmp_vehicle_dynamics" "--generate-result-on-success" "--env" "OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml" "--command" "/usr/bin/python3" "/ws/src/mmp_vehicle_dynamics/test/config_snapshot_test.py"
+Directory: /ws/build/mmp_vehicle_dynamics
+"config_snapshot_test" start time: Oct 08 06:57 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: extra environment variables:
+ - OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /usr/bin/python3 /ws/src/mmp_vehicle_dynamics/test/config_snapshot_test.py
+  snapshot 19 optimization/* scalars  authority 56
+  [OK]   all 19 snapshot values equal the authority
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/config_snapshot_test.xml' with successful test
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"config_snapshot_test" end time: Oct 08 06:57 UTC
+"config_snapshot_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 08 06:57 UTC
+
+gtest =   0.11 sec*proc
+

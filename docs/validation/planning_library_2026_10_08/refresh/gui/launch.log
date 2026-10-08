@@ -1,0 +1,103 @@
+[INFO] [launch]: All log files can be found below /home/user/.ros/log/2026-10-08-06-56-49-295446-suv-X870-Pro-RS-WiFi-113201
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [tile_server-1]: process started with pid [113305]
+[INFO] [terrain_publisher-2]: process started with pid [113307]
+[INFO] [rviz2-3]: process started with pid [113309]
+[rviz2-3] QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-user'
+[rviz2-3] [INFO] [1791442609.412420337] [rviz2]: Stereo is NOT SUPPORTED
+[rviz2-3] [INFO] [1791442609.412557965] [rviz2]: OpenGl version: 4.5 (GLSL 4.5)
+[rviz2-3] [INFO] [1791442609.438766095] [rviz2]: Stereo is NOT SUPPORTED
+[tile_server-1] [scenes] 102/102 granules in /ws/src/mmp_terrain/tiles/data/s2_scenes.json do not exist — those tiles will fall back to the 250 m base
+[tile_server-1] [tiles] listening on http://0.0.0.0:8085  (cache sealed)
+[terrain_publisher-2] [INFO] [1791442609.472859293] [terrain_publisher]: Terrain publisher initializing...
+[terrain_publisher-2] [INFO] [1791442609.477449284] [terrain_publisher]: Publisher created on /terrain/grid_map with TRANSIENT_LOCAL QoS
+[terrain_publisher-2] [INFO] [1791442609.478234108] [terrain_publisher]: Service created on /terrain/load_map
+[terrain_publisher-2] [INFO] [1791442609.478900198] [terrain_publisher]: Subscribed to /mission/risk_zones + /mission/obstacles for corridor coverage
+[terrain_publisher-2] [INFO] [1791442609.479037496] [terrain_publisher]: Loading terrain data...
+[terrain_publisher-2] [INFO] [1791442609.479547715] [terrain_publisher]: World is set to "none", skipping terrain loading
+[terrain_publisher-2] [INFO] [1791442609.479799978] [terrain_publisher]: Terrain GridMap published successfully
+[terrain_publisher-2] [INFO] [1791442609.479929572] [terrain_publisher]: Node will keep running to serve TRANSIENT_LOCAL subscribers
+[rviz2-3] [INFO] [1791442609.660450267] [rviz2]: TrajectoryMetricsPanel initialized (trajectory, runtime obstacles, risk geometry/profile, terrain)
+[rviz2-3] [INFO] [1791442609.663945291] [rviz2]: AltitudeProfilePanel initialized (subscribed to /viz/opt_trajectory, /dynamics/sim_state, /terrain/grid_map)
+[rviz2-3] [INFO] [1791442609.694347067] [rviz2]: AltitudeProfilePanel: cleared terrain profile (no world loaded)
+[rviz2-3] [INFO] [launch]: All log files can be found below /home/user/.ros/log/2026-10-08-06-56-50-635079-suv-X870-Pro-RS-WiFi-113535
+[rviz2-3] [INFO] [launch]: Default logging verbosity is set to INFO
+[rviz2-3] File logging enabled (logs will be saved to ./logs/runtime)
+[rviz2-3] Loaded drone hardware config: drone_hardware.yaml (num_drones=1)
+[rviz2-3] Note: Start positions will be provided via TrajectoryCommand
+[rviz2-3] Running agents: [0]
+[rviz2-3] Found drone_0 with index=0
+[rviz2-3] ROSbag recording disabled
+[rviz2-3] Launch complete.
+[rviz2-3] [INFO] [dynamics_sim_node-1]: process started with pid [113536]
+[rviz2-3] [INFO] [path_manager_node-2]: process started with pid [113538]
+[rviz2-3] [path_manager_node-2] [INFO] [1791442610.672733279] [replan_fsm_drone_0]: ReplanFSM parameters:
+[rviz2-3] [path_manager_node-2] [INFO] [1791442610.672787421] [replan_fsm_drone_0]:   Start position will be set from TrajectoryCommand
+[rviz2-3] [path_manager_node-2] [INFO] [1791442610.672795897] [replan_fsm_drone_0]:   Waiting for trajectory command...
+[rviz2-3] [path_manager_node-2] [INFO] [1791442610.672802930] [replan_fsm_drone_0]: Initial position set to: (0.00, 0.00, 0.00)
+[rviz2-3] [dynamics_sim_node-1] [INFO] [1791442610.674165730] [dynamics_sim_node]: 3DOF fixed-wing dynamics simulator ready (V=[122, 230] m/s, n<=2.50, T<=3200 N)
+[rviz2-3] [path_manager_node-2] [INFO] [1791442610.676100503] [replan_fsm_drone_0]: PathManager initialized, waiting for trajectory command
+[rviz2-3] [path_manager_node-2] [WARN] [1791442610.676142202] [replan_fsm_drone_0]: [CHAIN] segment-chained planning ENABLED (auto-sized segments) — /planning/initial_trajectory carries the baseline OPTIMIZED trajectory in this mode (the chained flight itself under chain/author_from_route), not the MINCO seed
+[rviz2-3] [path_manager_node-2] [INFO] [1791442610.688314402] [replan_fsm_drone_0]: [FSM]: from INIT to WAIT_POSITION
+[terrain_publisher-2] [INFO] [1791442612.501681053] [terrain_publisher]: [load_map] world=full_map mission="/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml" halfwidth_u=0.0 res_m=0.0
+[terrain_publisher-2] [INFO] [1791442612.726156349] [terrain_publisher]: [corridor] /ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml: bbox u=(14524.6,17183.0)..(15365.8,18418.7) -> 2804x4119 cells @ 30m (11.5M)
+[terrain_publisher-2] [INFO] [1791442613.968804434] [terrain_publisher]: Cropped shape: 2804 x 4119
+[terrain_publisher-2] [INFO] [1791442613.976632035] [terrain_publisher]: Elevation range: 0.0m ~ 1569.3m
+[terrain_publisher-2] [INFO] [1791442613.986429265] [terrain_publisher]: NaN count: 654218
+[terrain_publisher-2] [INFO] [1791442613.987107169] [terrain_publisher]: Actual cell size: 30.0m | Target cell size: 100.0m | Scale factor: 0.3000
+[terrain_publisher-2] [INFO] [1791442613.987478556] [terrain_publisher]: Map size (grid): 4119 x 2804 cells
+[terrain_publisher-2] [INFO] [1791442613.987679063] [terrain_publisher]: Map size (actual): 84.1km x 123.6km (X x Y)
+[terrain_publisher-2] [INFO] [1791442614.027884093] [terrain_publisher]: GridMap created: 11549676 data points, 1 layers (elevation)
+[terrain_publisher-2] [INFO] [1791442614.056131816] [terrain_publisher]: [load_map] loaded corridor for /ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml @ 30 m, bbox u=(14524.6,17183.0)..(15365.8,18418.7)
+[rviz2-3] [path_manager_node-2] [SDFManager] built EMPTY (no occupancy grid materialized): shape=(2804,4120,457) voxel=(0.3,0.3,0.1) free_distance=1236
+[rviz2-3] [INFO] [1791442614.251976098] [rviz2]: Terrain map received for altitude profile: resolution=0.30, size=841.20 x 1235.70 m
+[rviz2-3] [path_manager_node-2] [INFO] [1791442617.273803948] [replan_fsm_drone_0]: Initializing optimizer for drone 0...
+[rviz2-3] [path_manager_node-2] [INFO] [1791442617.274595805] [replan_fsm_drone_0]: Optimizer initialized successfully for drone 0
+[rviz2-3] [path_manager_node-2] [GEODESIC] points=2263 recover_steps=152 (grad_fail=0 mono_rej=152) reached_goal=yes
+[rviz2-3] [path_manager_node-2] [INFO] [1791442617.840544527] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=180
+[rviz2-3] [path_manager_node-2] [INFO] [1791442618.673076907] [replan_fsm_drone_0]: Setting formation with 1 positions to optimizer
+[rviz2-3] [path_manager_node-2] [INFO] [1791442618.673538594] [replan_fsm_drone_0]: [startMissionPlan]: from WAIT_POSITION to SEQUENTIAL_START
+[rviz2-3] [path_manager_node-2] [INFO] [1791442618.673556909] [replan_fsm_drone_0]: Successfully generated global trajectory for drone 0
+[rviz2-3] [dynamics_sim_node-1] [INFO] [1791442618.841596403] [dynamics_sim_node]: integrated 521.1 s into 26055 states: peak tracking error 0.1 m, peak envelope 98.3%, violating steps 0, unrepresentable steps 0 (excluded from audit)
+[rviz2-3] [INFO] [1791442619.758103021] [rviz2]: TrajectoryMetricsPanel: dynamics params live-synced (V=[122,230] m/s, n<=2.50, T<=3200 N, terrain target=50 m, risk Rv/Rh=0.35)
+[terrain_publisher-2] [INFO] [1791442628.337277732] [terrain_publisher]: [corridor] mirrored 0 live risk zone(s) for crop coverage (replace)
+[terrain_publisher-2] [INFO] [1791442632.091905623] [terrain_publisher]: [corridor] mirrored 1 live risk zone(s) for crop coverage (replace)
+[rviz2-3] [path_manager_node-2] [WARN] [1791442632.093902534] [replan_fsm_drone_0]: [ABORT] trajectory 1 withdrawn (reason 3) at t=0.00 s, point (0.00, 0.00, 0.00) — the execution layer owns the recovery
+[rviz2-3] [path_manager_node-2] [INFO] [1791442632.093943692] [replan_fsm_drone_0]: [ENV-CHANGE]: from EXEC_TRAJ to WAIT_EXTERNAL_RECOVERY
+[rviz2-3] [path_manager_node-2] [WARN] [1791442632.093971324] [replan_fsm_drone_0]: loadRiskZones: the zone set CHANGED while a trajectory was executing — it cannot be re-judged against the new set (per-leg policy, not occupancy), so the flight is withdrawn
+[rviz2-3] [dynamics_sim_node-1] [WARN] [1791442632.097078630] [dynamics_sim_node]: [ABORT] trajectory 1 withdrawn by the planner (reason 3: risk zones changed; the remaining flight cannot be re-judged against the new set) — stopping polynomial following. The recovery manoeuvre is NOT the planner's to choose and is not performed here.
+[terrain_publisher-2] [INFO] [1791442635.113700718] [terrain_publisher]: [corridor] mirrored 0 live risk zone(s) for crop coverage (replace)
+[rviz2-3] [path_manager_node-2] [GEODESIC] points=2263 recover_steps=152 (grad_fail=0 mono_rej=152) reached_goal=yes
+[rviz2-3] [path_manager_node-2] [INFO] [1791442640.490160419] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=180
+[rviz2-3] [path_manager_node-2] [INFO] [1791442641.148084641] [replan_fsm_drone_0]: Setting formation with 1 positions to optimizer
+[rviz2-3] [path_manager_node-2] [INFO] [1791442641.148138642] [replan_fsm_drone_0]: [startMissionPlan (recovery)]: from WAIT_EXTERNAL_RECOVERY to SEQUENTIAL_START
+[rviz2-3] [path_manager_node-2] [INFO] [1791442641.148149042] [replan_fsm_drone_0]: Successfully generated global trajectory for drone 0
+[rviz2-3] [dynamics_sim_node-1] [INFO] [1791442641.318631346] [dynamics_sim_node]: integrated 521.1 s into 26055 states: peak tracking error 0.1 m, peak envelope 98.3%, violating steps 0, unrepresentable steps 0 (excluded from audit)
+[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)
+[INFO] [rviz2-3]: sending signal 'SIGINT' to process[rviz2-3]
+[INFO] [terrain_publisher-2]: sending signal 'SIGINT' to process[terrain_publisher-2]
+[INFO] [tile_server-1]: sending signal 'SIGINT' to process[tile_server-1]
+[rviz2-3] [INFO] [1791442648.961764895] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[terrain_publisher-2] Initializing rclpy...
+[terrain_publisher-2] Creating TerrainPublisher node...
+[terrain_publisher-2] Spinning node...
+[terrain_publisher-2] Traceback (most recent call last):
+[terrain_publisher-2]   File "/ws/install/mmp_terrain/lib/mmp_terrain/terrain_publisher", line 33, in <module>
+[terrain_publisher-2]     sys.exit(load_entry_point('mmp-terrain', 'console_scripts', 'terrain_publisher')())
+[terrain_publisher-2]   File "/ws/build/mmp_terrain/mmp_terrain/terrain_publisher.py", line 870, in main
+[terrain_publisher-2]     rclpy.spin(node)
+[terrain_publisher-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[terrain_publisher-2]     executor.spin_once()
+[terrain_publisher-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 776, in spin_once
+[terrain_publisher-2]     self._spin_once_impl(timeout_sec)
+[terrain_publisher-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 765, in _spin_once_impl
+[terrain_publisher-2]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[terrain_publisher-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 748, in wait_for_ready_callbacks
+[terrain_publisher-2]     return next(self._cb_iter)
+[terrain_publisher-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 645, in _wait_for_ready_callbacks
+[terrain_publisher-2]     wait_set.wait(timeout_nsec)
+[terrain_publisher-2] KeyboardInterrupt
+[tile_server-1] [cache-guard] /ws/assets/versions/20261007-190634-50567/imgcache_f/.map_fingerprint.json is SEALED and stays as sealed; re-identified ['anchor', 'dem'] by content this boot. The result is memoised outside the cache, so the next boot skips the read.
+[INFO] [tile_server-1]: process has finished cleanly [pid 113305]
+[ERROR] [terrain_publisher-2]: process has died [pid 113307, exit code -2, cmd '/ws/install/mmp_terrain/lib/mmp_terrain/terrain_publisher --ros-args -r __node:=terrain_publisher --params-file /tmp/launch_params_z9wkqmzn --params-file /tmp/launch_params_1oninokr'].
+[ERROR] [rviz2-3]: process has died [pid 113309, exit code -11, cmd '/opt/ros/humble/lib/rviz2/rviz2 -d /ws/install/mmp_launch/share/mmp_launch/rviz/mmp.rviz --ros-args -r __node:=rviz2'].

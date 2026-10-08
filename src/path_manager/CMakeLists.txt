@@ -54,18 +54,37 @@ find_package(ament_index_cpp REQUIRED)
 
 add_library(${PROJECT_NAME}_lib
   src/path_manager.cpp
+  src/mission_planner.cpp
+  src/planning_environment.cpp
+  src/ros_planning_backend.cpp
+  src/ros_terrain_grid.cpp
+  src/route_slice_solver.cpp
+  src/route_slice_batch.cpp
+  src/flight_assembly.cpp
+  src/direct_trajectory_solver.cpp
+  src/mission_geometry.cpp
+  src/route_postprocessing.cpp
+  src/mission_route_search.cpp
+  src/route_search_backend.cpp
+  src/builtin_route_search.cpp
+  src/ros_route_search.cpp
+  src/trajectory_message.cpp
   src/replan_fsm.cpp
   src/segment_chain_planner.cpp
   src/terminal_phase.cpp
   src/transition_phase.cpp
   src/waypoint_eval.cpp
-  ../common/log_manager.cpp
 )
+
+# Public planning contracts use C++17 values such as std::optional. Export
+# the requirement so downstream callers do not rely on compiler defaults.
+target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_17)
 
 set(PATH_MANAGER_DEPENDENCIES
   rclcpp
   std_msgs
   nav_msgs
+  builtin_interfaces
   Eigen3
   path_optimizer
   path_planner
@@ -177,8 +196,8 @@ ament_target_dependencies(chain_experiment_test
 # Covers what an in-process test cannot — that a second message goes out, that
 # a late joiner gets both, and that an abort binds to one trajectory id.
 # [ENV-CHANGE/ABORT] Production plumbing: stands up a real ReplanFSM and
-# drives its real callbacks. Manual harness (real solves), like
-# chain_experiment_test.
+# drives its real callbacks. Registered below with ctest alongside the
+# trajectory execution wire-contract harness.
 add_executable(fsm_scenarios_test test/fsm_scenarios_test.cpp)
 target_link_libraries(fsm_scenarios_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(fsm_scenarios_test
@@ -224,12 +243,89 @@ target_link_libraries(param_contract_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(param_contract_test
   ${PATH_MANAGER_DEPENDENCIES})
 
+# The extracted slice boundary runs the real optimizer and checks result
+# ownership after optimizer/manager destruction, failure and reuse.
+add_executable(route_slice_solver_test test/route_slice_solver_test.cpp)
+target_link_libraries(route_slice_solver_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(route_slice_solver_test
+  ${PATH_MANAGER_DEPENDENCIES})
+
+add_executable(route_slice_batch_test test/route_slice_batch_test.cpp)
+target_link_libraries(route_slice_batch_test ${PROJECT_NAME}_lib)
+
+add_executable(flight_assembly_test test/flight_assembly_test.cpp)
+target_link_libraries(flight_assembly_test ${PROJECT_NAME}_lib)
+
+add_executable(direct_trajectory_solver_test test/direct_trajectory_solver_test.cpp)
+target_link_libraries(direct_trajectory_solver_test ${PROJECT_NAME}_lib)
+
+# Compile the same production geometry source with Eigen alone. This guards
+# the computation boundary against accidental ROS/manager dependencies.
+add_executable(mission_geometry_test
+  test/mission_geometry_test.cpp src/mission_geometry.cpp)
+target_include_directories(mission_geometry_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(mission_geometry_test Eigen3::Eigen)
+target_compile_features(mission_geometry_test PRIVATE cxx_std_17)
+
+add_executable(route_postprocessing_test
+  test/route_postprocessing_test.cpp src/route_postprocessing.cpp)
+target_include_directories(route_postprocessing_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PATH_PLANNER_PREFIX}/include)
+target_link_libraries(route_postprocessing_test Eigen3::Eigen)
+target_compile_features(route_postprocessing_test PRIVATE cxx_std_17)
+
+add_executable(mission_route_search_test
+  test/mission_route_search_test.cpp src/mission_route_search.cpp)
+target_include_directories(mission_route_search_test PRIVATE include)
+target_link_libraries(mission_route_search_test Eigen3::Eigen)
+target_compile_features(mission_route_search_test PRIVATE cxx_std_17)
+
+add_executable(route_search_backend_test test/route_search_backend_test.cpp)
+target_link_libraries(route_search_backend_test ${PROJECT_NAME}_lib)
+
+add_executable(vehicle_model_injection_test test/vehicle_model_injection_test.cpp)
+target_link_libraries(vehicle_model_injection_test ${PROJECT_NAME}_lib)
+
+add_executable(terrain_memo_test test/terrain_memo_test.cpp)
+target_link_libraries(terrain_memo_test ${PROJECT_NAME}_lib)
+
+add_executable(trajectory_message_test test/trajectory_message_test.cpp)
+target_link_libraries(trajectory_message_test ${PROJECT_NAME}_lib)
+
+# Consumers use only the public facade and this library's transitive exports.
+add_executable(mission_planner_test test/mission_planner_test.cpp)
+target_link_libraries(mission_planner_test ${PROJECT_NAME}_lib)
+
+# Compile the production facade with Eigen/STL only; no ROS target or include
+# path is allowed to hide an accidental dependency in this primary boundary.
+get_filename_component(PATH_OPTIMIZER_PREFIX
+    "${path_optimizer_DIR}/../../.." ABSOLUTE)
+get_filename_component(MMP_VEHICLE_DYNAMICS_PREFIX
+    "${mmp_vehicle_dynamics_DIR}/../../.." ABSOLUTE)
+add_executable(mission_planner_core_test
+  test/mission_planner_core_test.cpp src/mission_planner.cpp
+  src/planning_environment.cpp)
+target_include_directories(mission_planner_core_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PATH_OPTIMIZER_PREFIX}/include
+  ${MMP_VEHICLE_DYNAMICS_PREFIX}/include)
+target_link_libraries(mission_planner_core_test Eigen3::Eigen)
+target_compile_features(mission_planner_core_test PRIVATE cxx_std_17)
+
+add_executable(ros_planning_backend_test test/ros_planning_backend_test.cpp)
+target_link_libraries(ros_planning_backend_test ${PROJECT_NAME}_lib)
+
+add_executable(committed_route_test test/committed_route_test.cpp)
+target_link_libraries(committed_route_test ${PROJECT_NAME}_lib)
+
+add_executable(mission_planner_example examples/mission_planner_example.cpp)
+target_link_libraries(mission_planner_example ${PROJECT_NAME}_lib)
+
 # [V-2] Command-adoption harness: stands up a real ReplanFSM and drives its
-# real callbacks, then reads the PUBLISHED trajectory. It is the first thing
-# in this tree that links replan_fsm.o at all — every other test binary has
-# zero ReplanFSM symbols, which is why trajectoryCommandCallback had never
-# been executed by anything. Manual harness (real solves), like
-# chain_experiment_test; ctest registration is decided separately.
+# real callbacks, then reads the PUBLISHED trajectory. Registered below
+# with ctest; the separate fsm_scenarios harness covers environment changes.
 add_executable(mission_sequence_test test/mission_sequence_test.cpp)
 target_link_libraries(mission_sequence_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(mission_sequence_test
@@ -306,6 +402,93 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 120)
+
+  ament_add_test(route_slice_solver_test
+    COMMAND $<TARGET_FILE:route_slice_solver_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(mission_planner_test
+    COMMAND $<TARGET_FILE:mission_planner_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 300)
+
+  ament_add_test(mission_planner_core_test
+    COMMAND $<TARGET_FILE:mission_planner_core_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  ament_add_test(ros_planning_backend_test
+    COMMAND $<TARGET_FILE:ros_planning_backend_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(route_slice_batch_test
+    COMMAND $<TARGET_FILE:route_slice_batch_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(flight_assembly_test
+    COMMAND $<TARGET_FILE:flight_assembly_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+
+  ament_add_test(direct_trajectory_solver_test
+    COMMAND $<TARGET_FILE:direct_trajectory_solver_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(mission_geometry_test
+    COMMAND $<TARGET_FILE:mission_geometry_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+
+  ament_add_test(route_postprocessing_test
+    COMMAND $<TARGET_FILE:route_postprocessing_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+
+  ament_add_test(committed_route_test
+    COMMAND $<TARGET_FILE:committed_route_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(mission_route_search_test
+    COMMAND $<TARGET_FILE:mission_route_search_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  ament_add_test(route_search_backend_test
+    COMMAND $<TARGET_FILE:route_search_backend_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 180)
+  ament_add_test(vehicle_model_injection_test
+    COMMAND $<TARGET_FILE:vehicle_model_injection_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 180)
+  ament_add_test(terrain_memo_test
+    COMMAND $<TARGET_FILE:terrain_memo_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  ament_add_test(trajectory_message_test
+    COMMAND $<TARGET_FILE:trajectory_message_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  ament_add_test(fsm_scenarios_test
+    COMMAND $<TARGET_FILE:fsm_scenarios_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 90)
+  ament_add_test(exec_abort_test
+    COMMAND $<TARGET_FILE:exec_abort_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60)
 
   # [V-2] The command-adoption harness. It was left unregistered when it was
   # written, which cost us: merging the abort layer changed replan_fsm.cpp by
@@ -409,6 +592,34 @@ install(TARGETS chain_experiment_test
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(TARGETS route_slice_solver_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS route_slice_batch_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS flight_assembly_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS direct_trajectory_solver_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS mission_geometry_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS route_postprocessing_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS mission_planner_test mission_planner_core_test
+  ros_planning_backend_test mission_planner_example
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS committed_route_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS mission_route_search_test route_search_backend_test vehicle_model_injection_test terrain_memo_test trajectory_message_test
+  DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS transition_experiment_test
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -420,6 +631,10 @@ install(TARGETS waypoint_experiment_test
 install(DIRECTORY include/
   DESTINATION include
 )
+
+# Public headers include ../../common/log_manager.hpp. Preserve that layout
+# in the install prefix so library consumers do not need the source tree.
+install(FILES ../common/log_manager.hpp DESTINATION common)
 
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}

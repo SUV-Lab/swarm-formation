@@ -1,0 +1,129 @@
+{
+  "started_utc": "2026-10-08T06:56:01.041110+00:00",
+  "ros_domain_id": 84,
+  "checks": {
+    "configure": {
+      "command": [
+        "cmake",
+        "-S",
+        "/tmp/mmp_modularization_finalize/r2_consumer",
+        "-B",
+        "/tmp/mmp_modularization_finalize/r2_consumer/build",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.564332544003264
+    },
+    "build": {
+      "command": [
+        "cmake",
+        "--build",
+        "/tmp/mmp_modularization_finalize/r2_consumer/build",
+        "-j2"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 9.230000626004767
+    },
+    "bound_node_run": {
+      "command": [
+        "/tmp/mmp_modularization_finalize/r2_consumer/build/r2_external_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+        "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+        "/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml",
+        "/tmp/mmp_modularization_finalize/r2_consumer/result.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 4.220270328994957
+    },
+    "bound_node_compare": {
+      "command": [
+        "python3",
+        "/tmp/mmp_modularization_finalize/r2_consumer/compare.py",
+        "/tmp/mmp_modularization_stage9/after/mission.json",
+        "/tmp/mmp_modularization_finalize/r2_consumer/result.json",
+        "/tmp/mmp_modularization_finalize/r2_consumer/bound_node_comparison.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.11390120400756132
+    },
+    "value_input_run": {
+      "command": [
+        "/tmp/mmp_modularization_finalize/r2_consumer/build/r2_external_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+        "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+        "/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml",
+        "/tmp/mmp_modularization_finalize/r2_consumer/value_result.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 4.170545077999122
+    },
+    "value_input_compare": {
+      "command": [
+        "python3",
+        "/tmp/mmp_modularization_finalize/r2_consumer/compare.py",
+        "/tmp/mmp_modularization_stage9/after/mission.json",
+        "/tmp/mmp_modularization_finalize/r2_consumer/value_result.json",
+        "/tmp/mmp_modularization_finalize/r2_consumer/value_input_comparison.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.11380585499864537
+    },
+    "initial_environment_run": {
+      "command": [
+        "/tmp/mmp_modularization_finalize/r2_consumer/build/r2_external_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+        "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+        "/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml",
+        "/tmp/mmp_modularization_finalize/r2_consumer/initial_environment_result.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 4.2207279909926
+    },
+    "initial_environment_compare": {
+      "command": [
+        "python3",
+        "/tmp/mmp_modularization_finalize/r2_consumer/compare.py",
+        "/tmp/mmp_modularization_stage9/after/mission.json",
+        "/tmp/mmp_modularization_finalize/r2_consumer/initial_environment_result.json",
+        "/tmp/mmp_modularization_finalize/r2_consumer/initial_environment_comparison.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.11388750799233094
+    }
+  },
+  "modes": {
+    "bound_node": {
+      "own_loader_pid": 112565,
+      "owned_double_exact": true,
+      "pass": true
+    },
+    "value_input": {
+      "own_loader_pid": 112733,
+      "owned_double_exact": true,
+      "pass": true,
+      "owned_setting_count": 148
+    },
+    "initial_environment": {
+      "own_loader_pid": 112885,
+      "owned_double_exact": false,
+      "pass": true,
+      "initial_environment_contract": {
+        "baseline_generation": 6,
+        "actual_generation": 4,
+        "expected_delta": -2,
+        "actual_delta": -2,
+        "reason": "Constructor receives the actual terrain directly, so no prior empty-world clear increments terrain and effective-zone generations.",
+        "other_identity_fields_exact": {
+          "trajectory_id": true,
+          "drone_id": true
+        },
+        "pass": true
+      },
+      "owned_setting_count": 148
+    }
+  },
+  "owned_double_exact": true,
+  "initial_environment_pass": true,
+  "finished_utc": "2026-10-08T06:56:24.087432+00:00",
+  "pass": true
+}

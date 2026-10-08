@@ -1,0 +1,13 @@
+[INFO] [1791437732.010897518] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791437732.010960808] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791437732.010967892] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791437732.010970537] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791437732.011121282] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791437732.011203297] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791437732.011241820] [chain_experiment]: Optimizer initialized successfully for drone 0
+route-sequential mode
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[OK]   undeliverable commanded acceleration FAILED (no trajectory)
+[OK]   reason is INITIAL_MODE_UNSUPPORTED
+[OK]   fault injection still armed — no front-end/optimizer work ran
+PASS: 0 failed check(s)

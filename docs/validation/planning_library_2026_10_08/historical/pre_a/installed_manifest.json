@@ -1,0 +1,53 @@
+{
+  "created_utc": "2026-10-08T01:27:59.597314+00:00",
+  "files": [
+    {
+      "path": "/ws/install/path_manager/lib/path_manager/path_manager_node",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/path_manager/lib/path_manager/path_manager_node",
+      "sha256": "0cf370d9bed313e01ec0f2dad67cd363a64768dd4a50455c6568d5aecc64807d",
+      "bytes": 138461560
+    },
+    {
+      "path": "/ws/install/path_manager/lib/libpath_manager_lib.a",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/path_manager/lib/libpath_manager_lib.a",
+      "sha256": "fcde35311b61b3fc9ee3a4fe984e9cf14bf85ad392fcb43b7d88ac97198dd4e5",
+      "bytes": 277032442
+    },
+    {
+      "path": "/ws/install/path_optimizer/lib/libpath_optimizer_lib.a",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/path_optimizer/lib/libpath_optimizer_lib.a",
+      "sha256": "736ffa1126385fa2854909759d3fbc433032338adc826efbc4814ed209e2844a",
+      "bytes": 63198028
+    },
+    {
+      "path": "/ws/install/path_planner/lib/libpath_planner_sdf.a",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/path_planner/lib/libpath_planner_sdf.a",
+      "sha256": "d52a1b031c448d5dda7f5c52577a88dbfc567ba4839e2ccc3fc689e666eab6fa",
+      "bytes": 86280
+    },
+    {
+      "path": "/ws/install/path_planner/lib/libpath_planner_lib.a",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/path_planner/lib/libpath_planner_lib.a",
+      "sha256": "9b279aa335a15fea6e82fc10fcacf57fe089d88e533cccf19372d970b8ecd117",
+      "bytes": 358082
+    },
+    {
+      "path": "/ws/install/mmp_vehicle_dynamics/lib/libmmp_vehicle_dynamics.a",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/mmp_vehicle_dynamics/lib/libmmp_vehicle_dynamics.a",
+      "sha256": "c34893d25e394ebd955c541a1a5be8c39426c5a6060e738f41998b517cb7ddf6",
+      "bytes": 21978
+    },
+    {
+      "path": "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/path_manager/share/path_manager/config/optimizer_params.yaml",
+      "sha256": "19ba60796a2107b970c10bc1a4857b32980415e7bf165e3d4d1e688a1a306455",
+      "bytes": 48303
+    },
+    {
+      "path": "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+      "snapshot": "/tmp/mmp_modularization_ext_baseline/installed/path_manager/share/path_manager/config/drone_hardware.yaml",
+      "sha256": "354fa396e3f7a8919b266c434d3345324659de5c513f4074655f3df8e8045ad6",
+      "bytes": 1567
+    }
+  ]
+}

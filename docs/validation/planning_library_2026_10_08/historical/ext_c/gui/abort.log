@@ -1,0 +1,8 @@
+setup: connected; current trajectory id=1
+identical_empty_zones: PASS: reliable empty-zone republish produced no ABORT over 3 seconds
+changed_far_zone: received controls id=1
+changed_far_zone: PASS: exact trajectory ABORT with POLICY_UNEVALUATED
+recovery_mission: recovery command delivered; waiting for fresh trajectory
+recovery_mission: received live_trajectories id=2
+recovery_mission: received live_initial_trajectories id=0
+recovery_mission: PASS: recovered with fresh trajectory id=2; numeric_exact_vs_original=True

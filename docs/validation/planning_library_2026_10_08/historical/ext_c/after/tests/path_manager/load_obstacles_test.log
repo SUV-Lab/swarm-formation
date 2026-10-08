@@ -1,0 +1,39 @@
+1/30 Testing: load_obstacles_test
+1/30 Test: load_obstacles_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/load_obstacles_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/load_obstacles_test"
+Directory: /ws/build/path_manager
+"load_obstacles_test" start time: Oct 08 05:34 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/load_obstacles_test
+[test_empty_array]
+  [OK]   empty: nothing added                                    
+  [OK]   empty: skipped == 0                                     
+  [OK]   empty: replace defaults to false (append)               
+[test_mixed_kinds]
+  [OK]   mixed: cube dispatches to addDynamicBox                 
+  [OK]   mixed: sphere dispatches to addDynamicSphere            
+  [OK]   mixed: unknown kind is the only skipped spec            
+[test_replace_flag]
+  [OK]   replace=true clears the existing set first              
+  [OK]   replace still dispatches the payload                    
+  [OK]   empty+replace acts as a pure clear                      
+[test_model_field_carried]
+  [OK]   model defaults to empty (analytic-only obstacle)        
+  [OK]   model string survives the wire format                   
+[test_constants_match_spec]
+  [OK]   KIND_SPHERE == 0                                        
+  [OK]   KIND_CUBE == 1                                          
+
+==== load_obstacles_test: passed=13 failed=0 ====
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/load_obstacles_test.xml' with successful test
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"load_obstacles_test" end time: Oct 08 05:34 UTC
+"load_obstacles_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

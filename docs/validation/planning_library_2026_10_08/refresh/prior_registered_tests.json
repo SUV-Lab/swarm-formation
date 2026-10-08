@@ -1,0 +1,53 @@
+{
+  "suites": {
+    "path_manager": {
+      "registered_names": [
+        "chain_variants",
+        "committed_route_test",
+        "direct_trajectory_solver_test",
+        "exec_abort_test",
+        "flight_assembly_test",
+        "fsm_scenarios_test",
+        "load_obstacles_test",
+        "log_visibility_test",
+        "mission_geometry_test",
+        "mission_planner_core_test",
+        "mission_planner_test",
+        "mission_route_search_test",
+        "mission_sequence_test",
+        "param_contract_test",
+        "risk_contract_test",
+        "risk_scenarios",
+        "ros_planning_backend_test",
+        "route_postprocessing_test",
+        "route_search_backend_test",
+        "route_slice_batch_test",
+        "route_slice_solver_test",
+        "start_claim_test",
+        "terrain_memo_test",
+        "terrain_pitch_test",
+        "terrain_risk_mask_test",
+        "trajectory_message_test",
+        "transition_experiment_test",
+        "unit_guard_test",
+        "vehicle_model_injection_test",
+        "waypoint_experiment_test"
+      ]
+    },
+    "path_optimizer": {
+      "registered_names": [
+        "optimizer_session_test",
+        "route_cost_profile_test"
+      ]
+    },
+    "mmp_vehicle_dynamics": {
+      "registered_names": [
+        "config_snapshot_test",
+        "flight_dynamics_test",
+        "point_mass_eom_test",
+        "python_binding_test",
+        "vehicle_model_test"
+      ]
+    }
+  }
+}

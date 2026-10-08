@@ -1,0 +1,25 @@
+[INFO] [1791442621.550738005] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791442621.550837432] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791442621.550848893] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791442621.550852580] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791442621.551024874] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791442621.551130963] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791442621.551191106] [chain_experiment]: Optimizer initialized successfully for drone 0
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[OK]   the takeoff allowance is 5 x the 0.60 u margin
+[OK]   the RAW stage passes a terrain-violating seed -- the sweep has not run yet
+[OK]   ...and the FINAL stage refuses the same polyline
+[OK]   ...naming a point on the ridge, not the first vertex
+[OK]   a terrain violation wholly inside the takeoff allowance is permitted
+[OK]   ...and the SAME violation is refused when no allowance applies
+[OK]   a terrain violation past the allowance is refused
+[OK]   an obstacle inside the takeoff allowance is still refused -- the allowance is for TERRAIN clearance only
+[OK]   ...naming a point within the margin of the slab
+[OK]   ...and the RAW stage refuses it too: geometry cannot be lifted out of
+[OK]   the allowance is spent along the ROUTE, not inside a ball around the start
+[OK]   ...and the point it refuses is CLOSER to the start than the allowance is long -- which is what makes this an arc rule
+[OK]   the allowance is consumed across vertices, not restarted at each one
+[OK]   ...while a violation genuinely inside the first 3.0 u still passes, whichever segment it falls on
+[OK]   a single-point polyline is refused, not called clear
+[OK]   ...by the raw stage as well
+PASS: 0 failed check(s)

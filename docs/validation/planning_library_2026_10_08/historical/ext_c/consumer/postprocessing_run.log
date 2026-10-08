@@ -1,0 +1,31 @@
+[OK] junction fillet inserts an exact apex with incoming tags through it and outgoing tags after it
+[OK] acceptance sees internal arc samples in order, with original corner and no endpoint probes
+[OK] rounding leaves the caller's route and provenance unchanged
+[OK] a rejected sample stops its candidate immediately and radius-halving retries the next arc
+[OK] exhausted radius candidates retain the kink and original policy tags
+[OK] an ordinary corner retains the odd sample count without inventing a leg junction
+[OK] oversized radius keeps the existing 45-percent segment trim cap
+[OK] straight, zero-length and radius-at-retry-floor corners make no acceptance calls
+[OK] inactive fillets preserve malformed or absent tags without narrowing prior geometry acceptance
+[OK] active fillet refuses malformed provenance before unchecked indexing or callback use
+[OK] fewer than three points bypass fillet validation and sampling
+[OK] denoise uses the immutable original window and preserves the raw crest in cap reference
+[OK] denoise statistics and segment limit describe the returned profile
+[OK] profile preparation does not modify caller geometry or provenance
+[OK] terrain clamps raise committed caps but retain pre-denoise raw maximum and fixed endpoints
+[OK] absent terrain skips clamping; invalid water uses mission floor; valid zero terrain uses clearance
+[OK] water floor includes every absolute mission waypoint, not only route endpoints
+[OK] water floor retains the absolute guard while leaving even low endpoints fixed
+[OK] malformed profile tags drop attribution while preserving accepted geometry and caps
+[OK] each interior candidate queries terrain, readiness and distance in original order
+[OK] clearance equality is accepted while NaN and positive infinity retain raw height
+[OK] failed clearance queries preserve every original interior height
+[OK] an unavailable distance field is checked per interior but never sampled
+[OK] subdivision measures full 3D length and interpolates caps with inherited edge tags
+[OK] subdivided caps follow committed raw heights rather than smoothed path heights
+[OK] duplicate edges are skipped in geometry, caps and tags without shifting remaining attribution
+[OK] fully duplicate route leaves the one-point product for the caller's acceptance check
+[OK] nonpositive piece length retains the existing one-unit subdivision minimum
+[OK] outputs own their geometry independently of source mutation and later terrain changes
+[OK] results survive input/provider destruction without retaining borrowed callbacks or distance field
+[OK] empty route produces empty owned values without querying providers

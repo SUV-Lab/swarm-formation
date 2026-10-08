@@ -1,0 +1,42 @@
+3/5 Testing: point_mass_eom_test
+3/5 Test: point_mass_eom_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/point_mass_eom_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/point_mass_eom_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"point_mass_eom_test" start time: Oct 08 06:57 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/point_mass_eom_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml
+[==========] Running 7 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 7 tests from PointMassEom
+[ RUN      ] PointMassEom.VelocityComponents
+[       OK ] PointMassEom.VelocityComponents (0 ms)
+[ RUN      ] PointMassEom.LevelSteadyFlightAllRatesZero
+[       OK ] PointMassEom.LevelSteadyFlightAllRatesZero (0 ms)
+[ RUN      ] PointMassEom.SteadyTurnHeadingRate
+[       OK ] PointMassEom.SteadyTurnHeadingRate (0 ms)
+[ RUN      ] PointMassEom.SteadyClimbRatesZero
+[       OK ] PointMassEom.SteadyClimbRatesZero (0 ms)
+[ RUN      ] PointMassEom.ForceClosureUnsaturated
+[       OK ] PointMassEom.ForceClosureUnsaturated (0 ms)
+[ RUN      ] PointMassEom.SaturationIsExplicit
+[       OK ] PointMassEom.SaturationIsExplicit (0 ms)
+[ RUN      ] PointMassEom.RepresentabilityIsExplicit
+[       OK ] PointMassEom.RepresentabilityIsExplicit (0 ms)
+[----------] 7 tests from PointMassEom (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 7 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 7 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml'
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"point_mass_eom_test" end time: Oct 08 06:57 UTC
+"point_mass_eom_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
