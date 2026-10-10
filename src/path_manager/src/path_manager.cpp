@@ -26,6 +26,13 @@ namespace path_manager
           is_optimizer_initialized_(false),
           current_formation_type_("")
     {
+        // A calculation need not ever populate execution storage now. The
+        // const execution view must therefore have a defined empty state.
+        traj_.global_traj = GlobalTrajData{};
+        traj_.global_traj.last_glb_t_of_lc_tgt = -1.0;
+        traj_.local_traj = LocalTrajData{};
+        traj_.local_traj.start_pos.setZero();
+        traj_.local_traj.drone_id = -1;
         log_manager_ = std::make_shared<swarm_formation::LogManager>(
             node_->get_name(), "./logs/runtime", swarm_formation::LogManager::INFO);
         
@@ -439,11 +446,13 @@ namespace path_manager
             throw std::invalid_argument("invalid vehicle model");
         if (poly_traj_opt_) poly_traj_opt_->setVehicleModel(model);
         vehicle_model_override_ = std::move(model);
+        ++execution_revision_;
     }
 
     void PathManager::setRouteSearchBackend(std::shared_ptr<RouteSearchBackend> backend)
     {
         route_search_backend_ = std::move(backend);
+        ++execution_revision_;
         // Existing flight/policy captures remain meaningful until the next
         // actual search advances the epoch. Do not treat algorithm selection
         // as a physical environment change or emit a synthetic ABORT.
@@ -848,6 +857,7 @@ std::string PathManager::stateEnvelopeProblem(
         const std::vector<double> *cap_ref_override,
         const RouteProvenance *provenance)
     {
+        beginPlanningComputation();
         PreparedRoute prepared;
         const Eigen::Vector3d &start_pos = head.pos_u;
         const Eigen::Vector3d &start_vel = head.vel_u;
@@ -1109,24 +1119,98 @@ std::string PathManager::stateEnvelopeProblem(
                                      bool front_end_only,
                                      const RouteProvenance *provenance)
     {
+        if (front_end_only) {
+            auto prepared = prepareRoute(head, waypoints, junction_goal,
+                route_override, cap_ref_override, provenance);
+            if (!prepared) return false;
+            log_manager_->infof("[CHAIN-PAR] front-end only: %zu vertices "
+                                "committed, optimization skipped",
+                                prepared->route.path.size());
+            return true;
+        }
+        auto product = computeGlobalTrajectory(head, waypoints, tail,
+            junction_goal, route_override, cap_ref_override, provenance);
+        if (!product) return false;
+        PlanningComputation computed;
+        computed.status = PlanResult::success();
+        computed.recordProduct(std::move(*product));
+        return applyPlanningComputation(
+            sealPlanningComputation(std::move(computed))).applied;
+    }
+
+    PlanningComputation PathManager::sealPlanningComputation(
+        PlanningComputation value) const
+    {
+        // Route preparation can legitimately invalidate an earlier flight
+        // through environment hooks. Capture the context AFTER calculation;
+        // restoring a pre-call storage snapshot would resurrect that flight.
+        value.execution_context = execution_context_;
+        value.execution_revision = execution_revision_;
+        value.previous_identity_counter = traj_.next_traj_id_;
+        value.environment_generation = environmentRevision();
+        return value;
+    }
+
+    ExecutionReceipt PathManager::applyPlanningComputation(
+        const PlanningComputation &value)
+    {
+        if (value.execution_context != execution_context_ ||
+            value.execution_revision != execution_revision_ ||
+            value.previous_identity_counter != traj_.next_traj_id_ ||
+            value.environment_generation != environmentRevision())
+            return {};
+        // A refused post-solve candidate may reproduce the historical
+        // invalidated slot, but must never become executable by accident.
+        if ((value.status.hasTrajectory() &&
+             (!value.product || value.invalidate_execution)) ||
+            (value.product && (value.identity_advances == 0 ||
+             value.product->trajectory.getPieceNum() == 0 ||
+             value.product->reference_trajectory.getPieceNum() == 0)) ||
+            (!value.product && value.identity_advances != 0) ||
+            (!value.status.hasTrajectory() && value.product &&
+             !value.invalidate_execution) ||
+            value.identity_advances >
+                std::numeric_limits<uint64_t>::max() - traj_.next_traj_id_)
+            return {};
+
+        ++execution_revision_;  // Consume even an accepted no-product failure.
+        if (value.product) {
+            const auto &product = *value.product;
+            // Preserve identities historically consumed by intermediate
+            // baseline and segment solves without exposing those solves as
+            // executable trajectories during computation.
+            traj_.next_traj_id_ += value.identity_advances - 1;
+            traj_.setGlobalTraj(product.reference_trajectory,
+                                product.reference_start_time);
+            traj_.setLocalTraj(product.trajectory, product.start_time,
+                               traj_.local_traj.drone_id);
+        }
+        if (value.invalidate_execution) {
+            traj_.local_traj.duration = 0.0;
+            traj_.local_traj.start_time = 0.0;
+            clearTrajectoryViz();
+        }
+        return {true, traj_.local_traj.traj_id, traj_.local_traj.drone_id};
+    }
+
+    std::optional<PlannedTrajectory> PathManager::computeGlobalTrajectory(const StartHead &head,
+                                     const std::vector<Eigen::Vector3d> &waypoints,
+                                     const ego_planner::TailBoundary &tail,
+                                     bool junction_goal,
+                                     const std::vector<Eigen::Vector3d> *route_override,
+                                     const std::vector<double> *cap_ref_override,
+                                     const RouteProvenance *provenance)
+    {
         auto prepared = prepareRoute(head, waypoints, junction_goal,
                                       route_override, cap_ref_override,
                                       provenance);
-        if (!prepared) return false;
+        if (!prepared) return std::nullopt;
         const auto &start_pos = head.pos_u;
         const auto &start_vel = head.vel_u;
         const auto &start_acc = head.acc_u;
         auto &clean_path = prepared->route.path;
         const auto &cap_ref = prepared->route.cap;
         const auto &wps = prepared->absolute_waypoints;
-        if (front_end_only) {
-            // [CHAIN-PAR] route-based contract authoring needs only the
-            // committed front-end products retained above.
-            log_manager_->infof("[CHAIN-PAR] front-end only: %zu vertices "
-                                "committed, optimization skipped",
-                                clean_path.size());
-            return true;
-        }
 
         // [HEAD-POLICY] One implementation, in start_state.h. This block
         // and its twin in SegmentChainPlanner::planOverRoute were the same
@@ -1180,7 +1264,7 @@ std::string PathManager::stateEnvelopeProblem(
         // [LEG-POLICY] last_route_edge_leg_, not the local edge_leg: the
         // inherited-route branch leaves the local empty and the member is the
         // one place that has already been size-checked against clean_path.
-        bool opt_ok = optimizeStage(clean_path,
+        auto product = optimizeStage(clean_path,
                                     start_pos, start_vel_eff, start_acc, wps,
                                     cap_ref, prepared->raw_max_z, tail, last_route_edge_leg_);
 
@@ -1194,7 +1278,7 @@ std::string PathManager::stateEnvelopeProblem(
         // transient allocations are dead. ~ms on a GB heap vs a 0.5-3 s plan.
         malloc_trim(0);
 
-        return opt_ok;
+        return product;
     }
 
 bool PathManager::configureFrontEnd(RouteSearchProblem &problem)
@@ -1545,7 +1629,7 @@ std::optional<RouteProfileResult> PathManager::planFrontEnd(
     return profile;
 }
 
-bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
+std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                                 const Eigen::Vector3d &start_pos,
                                 const Eigen::Vector3d &start_vel,
                                 const Eigen::Vector3d &start_acc,
@@ -1557,10 +1641,10 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
 {
         // Stage 2 = trajectory optimization. The optimizer owns the MINCO
         // initial-trajectory build + L-BFGS; we only pass the front-end path
-        // and store the results. Swap optimizeFromPath() to replace the backend.
+        // and return owned results. Swap optimizeFromPath() to replace the backend.
         if (!isOptimizerInitialized()) {
             log_manager_->errorf("Optimizer not initialized");
-            return false;
+            return std::nullopt;
         }
 
         auto t_opt_start = std::chrono::steady_clock::now();
@@ -1607,7 +1691,7 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         last_piece_leg_ = std::move(solved.piece_leg);
         if (!solved.hasTrajectory()) {
             log_manager_->errorf("Trajectory optimization failed");
-            return false;
+            return std::nullopt;
         }
         poly_traj::Trajectory global_traj = std::move(solved.seed);
         poly_traj::Trajectory local_traj = std::move(solved.trajectory);
@@ -1615,8 +1699,6 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
         // Local traj start_time is the trajectory-following reference; stamp it
         // after optimization (matches pre-refactor behavior).
         double local_time = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-        traj_.setGlobalTraj(global_traj, global_time);
-        traj_.setLocalTraj(local_traj, local_time, traj_.local_traj.drone_id);
 
         // [VIZ-TRAJ] The along-trajectory diagnostics (experienced risk and
         // the risk-visibility profile) must sample the OPTIMIZED trajectory
@@ -1651,7 +1733,8 @@ bool PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
             std::chrono::duration<double, std::milli>(t_opt_end - t_opt_start).count(),
             local_traj.getTotalDuration(), local_traj.getMaxVelRate());
 
-        return true;
+        return PlannedTrajectory{std::move(local_traj), std::move(global_traj),
+                                 local_time, global_time};
 }
 
 // Existing callers keep the bool/out-parameter contract. Computation and its
@@ -1807,6 +1890,7 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
     stopMJO.reset(headState, tailState, 2);
     stopMJO.generate(stop_pos, Eigen::Vector2d(1.0, 1.0));
 
+    ++execution_revision_;
     traj_.setLocalTraj(stopMJO.getTraj(), rclcpp::Clock(RCL_ROS_TIME).now().seconds(), traj_.local_traj.drone_id);
 
     // The stop trajectory replaces the previous route, so every latched
@@ -3460,6 +3544,7 @@ int PathManager::addDynamicSphere(const Eigen::Vector3d& center, double radius,
         // cache it is not ready yet, so queue and add once it exists.
         pending_obstacles_.push_back({false, center,
             Eigen::Vector3d(radius, radius, radius), radius, model});
+        ++execution_revision_;  // Deferred input also stales an unadopted result.
         log_manager_->infof("addDynamicSphere: SDF not ready, deferred "
                             "(center=%.2f,%.2f,%.2f r=%.2f)",
                             center.x(), center.y(), center.z(), radius);
@@ -3500,6 +3585,7 @@ int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vecto
     if (!sdf_manager_.hasData()) {
         // Defer until the SDF is built (see addDynamicSphere).
         pending_obstacles_.push_back({true, center, size, 0.0, model});
+        ++execution_revision_;
         log_manager_->infof("addDynamicBox: SDF not ready, deferred "
                             "(center=%.2f,%.2f,%.2f)",
                             center.x(), center.y(), center.z());
@@ -3592,6 +3678,7 @@ bool PathManager::revalidateStoredTrajectory(double t_from,
         env_change_hook_(reason, bad, t0);
     // The same two fields SegmentChainPlanner::invalidateStoredTrajectory
     // zeroes, and the same fields ReplanFSM gates execution on.
+    ++execution_revision_;
     lt.duration = 0.0;
     lt.start_time = 0.0;
     clearTrajectoryViz();
@@ -3647,6 +3734,7 @@ void PathManager::invalidateStoredTrajectoryForEnvChange()
     if (env_change_hook_ && traj_.local_traj.duration > 0.0)
         env_change_hook_(EnvChangeReason::POLICY_UNEVALUATED,
                          Eigen::Vector3d::Zero(), 0.0);
+    ++execution_revision_;
     traj_.local_traj.duration = 0.0;
     traj_.local_traj.start_time = 0.0;
     clearTrajectoryViz();

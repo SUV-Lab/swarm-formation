@@ -210,15 +210,47 @@ std::unique_ptr<RosPlanningBackend> makeRosPlanningBackend(
 
 MissionPlanResult RosPlanningBackend::plan(MissionPlanRequest request)
 {
+  PlanningComputation computation = compute(std::move(request));
+  const ExecutionReceipt receipt =
+      manager_->applyPlanningComputation(computation);
+  MissionPlanResult result;
+  result.drone_id = drone_id_;
+  result.environment_generation = computation.environment_generation;
+  if (!receipt.applied) {
+    result.status = PlanResult::failed(
+        "planning computation became stale before execution adoption");
+    return result;
+  }
+  result.status = std::move(computation.status);
+  // Failed computations can retain an intermediate product only for the
+  // compatibility invalidation receipt. Never expose it as a new flight.
+  if (!result.status.hasTrajectory()) return result;
+  if (!computation.product) {
+    result.status = PlanResult::failed("planning computation has no trajectory");
+    return result;
+  }
+  auto &product = *computation.product;
+  result.trajectory = std::move(product.trajectory);
+  result.reference_trajectory = std::move(product.reference_trajectory);
+  result.trajectory_id = receipt.trajectory_id;
+  result.drone_id = receipt.drone_id;
+  result.start_time = product.start_time;
+  result.reference_start_time = product.reference_start_time;
+  result.evaluation = std::move(computation.evaluation);
+  result.phases = std::move(computation.phases);
+  return result;
+}
+
+PlanningComputation RosPlanningBackend::compute(MissionPlanRequest request)
+{
   requireInitialized();
+  manager_->beginPlanningComputation();
   // A fresh result for every attempt. A refusal must never package the
   // previous execution slot or the chain's previous evaluation as this plan.
   const auto failed = [&](PlanResult status) {
-    MissionPlanResult result;
+    PlanningComputation result;
     result.status = std::move(status);
-    result.drone_id = drone_id_;
-    result.environment_generation = manager_->environmentRevision();
-    return result;
+    return manager_->sealPlanningComputation(std::move(result));
   };
   if (request.head.src == StartStateSource::UNSPECIFIED)
     return failed(PlanResult::failedBecause(
@@ -272,37 +304,26 @@ MissionPlanResult RosPlanningBackend::plan(MissionPlanRequest request)
 
   manager_->setFormationInfo(drone_id_, request.formation_type,
                              request.formation_pattern);
-  PlanResult status = chain_enabled_
-      ? chain_->plan(request.head, request.waypoints, request.tail)
-      : planDirect(request.head, request.waypoints, request.tail);
-  if (!status.hasTrajectory()) return failed(std::move(status));
+  PlanningComputation computation;
+  if (chain_enabled_)
+    computation = chain_->compute(request.head, request.waypoints, request.tail);
+  else
+    computation.status = planDirect(request.head, request.waypoints,
+                                    request.tail, computation);
+  if (!computation.status.hasTrajectory())
+    return manager_->sealPlanningComputation(std::move(computation));
 
   // Preserve the existing ordering: formation reaches the optimizer after
   // this successful solve, not before it. Moving this earlier changes solves.
   manager_->setFormationToOptimizer(request.formation_pattern,
                                     request.formation_size);
 
-  MissionPlanResult result;
-  result.status = std::move(status);
-  const auto &local = manager_->traj_.local_traj;
-  const auto &reference = manager_->traj_.global_traj;
-  result.trajectory = local.traj;
-  result.reference_trajectory = reference.traj;
-  result.trajectory_id = local.traj_id;
-  result.drone_id = local.drone_id;
-  result.start_time = local.start_time;
-  result.reference_start_time = reference.global_start_time;
-  result.environment_generation = manager_->environmentRevision();
-  if (chain_enabled_) {
-    result.evaluation = chain_->lastFlightVerdict();
-    result.phases = chain_->lastPhaseSpans();
-  }
-  return result;
+  return manager_->sealPlanningComputation(std::move(computation));
 }
 
 PlanResult RosPlanningBackend::planDirect(
     const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
-    const ego_planner::TailBoundary &tail)
+    const ego_planner::TailBoundary &tail, PlanningComputation &computation)
 {
   // The chain-disabled dispatch retains the FSM's boundary rules. In
   // particular it does not dispatch a transition or add a whole-flight gate.
@@ -361,9 +382,12 @@ PlanResult RosPlanningBackend::planDirect(
     }
   }
 
-  PlanResult result =
-      manager_->planGlobalTraj(head, waypoints, effective_tail)
-          ? PlanResult::success() : PlanResult::failed("single plan failed");
+  auto product = manager_->computeGlobalTrajectory(head, waypoints,
+                                                    effective_tail);
+  const bool solved = product.has_value();
+  if (product) computation.recordProduct(std::move(*product));
+  PlanResult result = solved ? PlanResult::success()
+                            : PlanResult::failed("single plan failed");
   if (relaxed)
     result.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
   return result;

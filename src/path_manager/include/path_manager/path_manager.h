@@ -13,6 +13,8 @@
 #include "path_manager/committed_route.h"
 #include "path_manager/route_postprocessing.h"
 #include "path_manager/route_search_backend.h"
+#include "path_manager/zone_policy.h"
+#include "path_manager/planning_computation.h"
 #include <Eigen/Eigen>
 #include <algorithm>
 #include <atomic>
@@ -344,6 +346,30 @@ namespace path_manager
         uint64_t epoch{0};                             // 0 = none, refuse
     };
 
+    // Calculation owns its trajectories and never adopts them into traj_.
+    // The live environment, policy diagnostics and ROS previews still belong
+    // to this adapter. Serialize calls and environment/settings updates.
+    std::optional<PlannedTrajectory> computeGlobalTrajectory(
+        const StartHead &head,
+        const std::vector<Eigen::Vector3d> &waypoints,
+        const ego_planner::TailBoundary &tail = {},
+        bool junction_goal = false,
+        const std::vector<Eigen::Vector3d> *route_override = nullptr,
+        const std::vector<double> *cap_ref_override = nullptr,
+        const RouteProvenance *provenance = nullptr);
+
+    // Trusted in-process protocol, sealed only when calculation finishes.
+    // Beginning another calculation supersedes pending results, including
+    // when that new calculation fails before a route exists.
+    void beginPlanningComputation() { ++execution_revision_; }
+    // Rejects foreign, stale or previously applied computations with no
+    // mutation. An accepted failure may explicitly invalidate execution.
+    PlanningComputation sealPlanningComputation(PlanningComputation value) const;
+    ExecutionReceipt applyPlanningComputation(const PlanningComputation &value);
+    const LocalTrajData &executionTrajectory() const { return traj_.local_traj; }
+    const GlobalTrajData &referenceTrajectory() const { return traj_.global_traj; }
+
+    // Compatibility entry: compute, then adopt on success.
     bool planGlobalTraj(const StartHead &head,
                         const std::vector<Eigen::Vector3d> &waypoints,
                         const ego_planner::TailBoundary &tail = ego_planner::TailBoundary{},
@@ -542,8 +568,12 @@ namespace path_manager
     void setFormationInfo(int drone_id, const std::string& formation_type,
                          const std::vector<Eigen::Vector3d>& formation_pattern);
 
-    void setLengthPerPiece(double val) { length_per_piece_ = val; }
-    void setObstacleClearance(double val) { obstacle_clearance_ = val; }
+    void setLengthPerPiece(double val) {
+        length_per_piece_ = val; ++execution_revision_;
+    }
+    void setObstacleClearance(double val) {
+        obstacle_clearance_ = val; ++execution_revision_;
+    }
 
     // Emergency stop: generate hovering trajectory at current position
     bool EmergencyStop(const Eigen::Vector3d& stop_pos);
@@ -649,30 +679,7 @@ namespace path_manager
     // zone-list/terrain change or ANY later search can never be silently
     // consulted through stale indices.
     using ZoneDisposition = RouteZoneDisposition;
-    struct ZonePolicySnapshot {
-        // DATA generation (zone list / terrain re-derivation) AND policy
-        // epoch (per front-end search) — dispositions are PER-SEARCH state
-        // (endpoint containment, unavoidable-soft set, final pass), so a
-        // re-plan with the SAME zone list still invalidates an older
-        // snapshot (review find: generation alone missed that).
-        uint64_t generation{0};
-        uint64_t epoch{0};
-        // False when the backend did not return measured canonical policy,
-        // no search has run since the last zone/terrain change, or the
-        // epoch's front-end ran MORE than one segment
-        // search (multi-waypoint mission: each leg rewrites the whole
-        // policy state, so the buffers describe only the LAST leg —
-        // publishing that as plan-wide policy is fail-open; review find).
-        // Valid means exactly: ONE single-goal search ran on current
-        // data. Contract 2 requires that; an invalid snapshot is
-        // fail-closed at every consumer.
-        bool valid{true};
-        struct Entry {
-            RiskZone zone;  // SHAPE COPY — identity, not an index
-            ZoneDisposition disposition{ZoneDisposition::HARD_AVOID};
-        };
-        std::vector<Entry> zones;
-    };
+    using ZonePolicySnapshot = path_manager::ZonePolicySnapshot;
     ZonePolicySnapshot zonePolicySnapshot() const;
 
     // [LEG-POLICY] One leg's zone policy, captured WHILE that leg's search
@@ -681,14 +688,7 @@ namespace path_manager
     // strict as it is: it answers "is there ONE plan-wide policy", and for a
     // multi-leg mission the honest answer is no. This answers a different
     // question, per leg, and is captured at the only moment it can be.
-    struct LegPolicySnapshot {
-        size_t leg{0};
-        // Monotone per search within an epoch. A missing or repeated serial
-        // means the capture sequence has a hole or a double-write, which is
-        // a programming error and is refused rather than averaged over.
-        uint64_t search_serial{0};
-        ZonePolicySnapshot policy;
-    };
+    using LegPolicySnapshot = path_manager::LegPolicySnapshot;
 
     // Capture the owned backend policy for this invocation of `leg`. Call
     // immediately after that leg's search succeeded and before the next one
@@ -726,7 +726,7 @@ namespace path_manager
     //   STALE    snapshot no longer matches the live state: fail the
     //            transition or re-commit the route, never guess
     //   INVALID  the snapshot never expressed a policy (see valid above)
-    enum class ZoneContactResult { CLEAR, CONTACT, STALE, INVALID };
+    using ZoneContactResult = path_manager::ZoneContactResult;
     // CONTACT = the SAME hard-exclusion volume the global search keeps
     // routes out of (1.05x-inflated ellipsoid + visibility > 0.35
     // standoff), via the searcher's own primitive — never the smooth risk
@@ -846,6 +846,10 @@ namespace path_manager
 
   private:
     std::shared_ptr<rclcpp::Node> node_;
+    const uint64_t execution_context_{nextRouteSearchIdentity()};
+    // Revision of the live calculation/adoption context, independent of the
+    // monotone execution ID. Also moves on a newer calculation or config.
+    uint64_t execution_revision_{0};
     std::vector<RiskZone> risk_zones_;
     // [S13] bumped by refreshEffectiveRiskZones (the single funnel every
     // zone-list or terrain re-derivation goes through).
@@ -1107,10 +1111,10 @@ namespace path_manager
         const std::vector<Eigen::Vector3d> &waypoints, bool takeoff_start);
 
     // Stage 2 adapter: supplies explicit values to the direct solver, then
-    // stores and publishes successful seed/optimized trajectories. The tail
+    // returns and publishes successful seed/optimized trajectories. The tail
     // flags retain their explicit prescribed-boundary meaning. Optimizer path
     // edits and piece attribution are retained on both success and failure.
-    bool optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
+    std::optional<PlannedTrajectory> optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
                        const Eigen::Vector3d &start_pos,
                        const Eigen::Vector3d &start_vel,
                        const Eigen::Vector3d &start_acc,

@@ -11,6 +11,11 @@ ROS를 필요로 한다. 기존 `ReplanFSM`도 같은 계획 API를 사용하며
 상태·ABORT·재계획은 ROS 실행 계층에 남는다. `plan()`은 동기 계산 호출이고, 반환된
 궤적을 실제로 실행하는 명령은 별도다.
 
+2026-10-10 후속 단계에서는 내부 계산 결과 생성과 실행 저장소 채택을 분리했다.
+기존 `plan()`의 사용법은 유지한다. 채택하지 않고 계산만 수행하는
+`RosPlanningBackend::compute()`와 외부 궤적의 `evaluateFlight(input)` 호출은
+[계산·채택·평가 사용 계약](planning_computation_usage_ko.md)을 참고한다.
+
 이 문서는 현재 API를 기준으로 한다. 변경 과정과 과거 API는
 [단계별 구현 기록](incremental_modularization_ko.md), 수치 회귀와 재현 정보는
 [보존된 검증 자료](../validation/planning_library_2026_10_08/README.md)를 참고한다.

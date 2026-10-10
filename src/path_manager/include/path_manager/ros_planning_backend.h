@@ -4,6 +4,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include "path_manager/mission_planning_backend.h"
+#include "path_manager/planning_computation.h"
 
 namespace swarm_formation { class LogManager; }
 namespace path_manager {
@@ -31,6 +32,17 @@ class RosPlanningBackend final : public MissionPlanningBackend {
       std::shared_ptr<swarm_formation::LogManager> logger = nullptr);
   ~RosPlanningBackend() override;
   void initialize(PlanSettings settings, PlanningEnvironment environment) override;
+  // Calculates owned values without adopting a candidate into execution
+  // storage. Environment preparation keeps its existing live revalidation
+  // behavior. Calls and subsequent adoption must be serialized; the result's
+  // context rejects reuse or adoption after another calculation, execution
+  // update, environment update, or model/search replacement.
+  // Do not change live ROS parameter values between calculation and adoption:
+  // parameter updates are not a frozen settings snapshot or revision token.
+  PlanningComputation compute(MissionPlanRequest request);
+  // Compatibility entry: compute, explicitly apply execution effects, then
+  // return owned values with their execution identity. No trajectory data is
+  // reconstructed from the execution slot.
   MissionPlanResult plan(MissionPlanRequest request) override;
   void setVehicleModel(mmp_vehicle_dynamics::VehicleModel::Ptr model) override;
   void setRouteSearchBackend(std::shared_ptr<RouteSearchBackend> backend) override;
@@ -54,7 +66,8 @@ class RosPlanningBackend final : public MissionPlanningBackend {
   void requireInitialized() const;
   PlanResult planDirect(const StartHead &head,
                         const std::vector<Eigen::Vector3d> &waypoints,
-                        const ego_planner::TailBoundary &tail);
+                        const ego_planner::TailBoundary &tail,
+                        PlanningComputation &computation);
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<swarm_formation::LogManager> logger_;
   std::shared_ptr<PathManager> manager_;

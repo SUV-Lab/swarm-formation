@@ -1035,3 +1035,110 @@ double 결과를 기존 wire 형식으로 변환한 값도 일치했다. 이를 
 보존했다. 과거 자료와 이번 재검증을 구분하며, 무결성과 수치 비교는 해당 디렉터리의
 검증 스크립트로 확인할 수 있다. 대용량 DEM과 실행 바이너리는 보관하지 않으므로
 실제 재실행에는 기존 ROS 환경과 지형 데이터가 필요하다.
+
+## 2026-10-10 후속 단계 1·2: 계산 결과·실행 채택·평가 분리
+
+작업 기준은 상위 `lgh/dev`의 `0e94aa3`, 계획 서브모듈 `mmp_dev`의
+`57ac7a8`이다. 별도 작업본 `/home/suv/ws/temp/MMP_module/MMP`에서 진행했다.
+`/home/suv/ws/LIG/MMP/docs/modularization_next_steps_ko.md`의 첫 구현 단위인
+단계 1·2를 적용한다. 단계 3의 simulator, 단계 4의 시각화 분리, 단계 5의 Python
+지도 처리, 단계 6의 target 구성 전체 정리는 이 단위에 포함하지 않는다.
+
+### 실제 코드에서 정한 분리 경계와 순서
+
+새 solver를 만들거나 MINCO·L-BFGS 내부를 나누지 않았다. 기존 전체 계획 호출인
+`MissionPlanner::plan()`과 직접 최적화 `PolyTrajOptimizer::solve()`를 유지하고,
+backend가 결과를 만들기 위해 실행 저장소를 먼저 갱신하던 의존을 제거했다.
+
+| 분리 대상 | 입력 → 출력 | 변경 파일 |
+|---|---|---|
+| 전체 비행 평가 계산 | 궤적·phase·환경 조회·모델·위험 정책 출처·설정 → 소유 측정 보고서 | `flight_evaluator.h/.cpp`, `zone_policy.h` |
+| 평가 ROS 연결 | 기존 manager·node에서 필요한 입력 조립 → 공통 평가 호출·기존 로그 출력 | `segment_chain_planner.cpp`의 평가 어댑터 |
+| 직접 계획 계산 | 기존 head·경유점·tail·선택 경로 → 소유 최종/참고 궤적과 시각 | `path_manager.h/.cpp` |
+| chain 계산 조정 | 기존 미션 입력 → 상태·소유 궤적·평가·명시 실행 효과 | `segment_chain_planner.h/.cpp`, `planning_computation.h` |
+| 실행 결과 채택 | 완료된 계산과 같은 live 문맥 → 저장소 갱신·기존 ID·무효화 | `PathManager::applyPlanningComputation()` |
+| 전체 API 호환 연결 | 미션 → compute → apply → 소유 `MissionPlanResult` | `ros_planning_backend.h/.cpp` |
+| FSM 실행 조회 | 현재 실행 상태 → 제한된 const 궤적 조회 | `replan_fsm.cpp` |
+
+순서는 기준 실행 확보, 입력·결과 계약 정의, evaluator 추출·원본 비교,
+계획 계산/채택 분리, 컨테이너 빌드와 기존 모드 회귀, 실제 R2·ABORT·복구 비교다.
+입력 필드·단위·좌표·AGL·수명·호출 예제는
+[계산·채택·평가 사용 계약](planning_computation_usage_ko.md)에 정리했다.
+
+### 계산 결과와 실행 호환 동작
+
+`PlannedTrajectory`는 최종·참고 궤적과 원래 clock 지점의 시각을 소유한다.
+`PlanningComputation`은 상태·phase·평가와 이 산출물을 전달한다. chain의 모든 중간
+계산은 호출별 결과를 명시적으로 받아 사용하며 `pm_->traj_`를 읽거나 쓰지 않는다.
+기존 backend도 실행 저장소에서 궤적을 다시 복사하지 않고 계산 산출물에서 결과를 만든다.
+FSM의 직접 `traj_` 접근은 `executionTrajectory()`와 `referenceTrajectory()`로 옮겼다.
+
+기존 순차 chain은 baseline·각 성공 구간·최종 선택마다 ID를 증가시켰다. 이 증가 수를
+`identity_advances`에 모았다가 채택 시 적용한다. 직접/route 성공의 증가량 1과
+baseline chain의 중간 증가량을 보존하며, 중간 궤적이 계산 중 실행 후보가 되지는 않는다.
+참고 궤적의 의미와 직접 계획의 최적화 전/후 시각, chain의 최종 시각도 유지한다.
+
+초기 입력/최적화 실패는 이전 저장소를 유지하고, 기존 전체 평가 거부 경로는 명시적
+`invalidate_execution` 효과를 돌려준다. 후자의 결과에 남은 중간 product는 호환 저장소와
+과거 ID 증가 재현용일 뿐 실행 가능한 결과가 아니다. 공개 `MissionPlanResult`는 실패 시
+이 궤적이나 이전 성공 결과를 노출하지 않는다.
+
+채택은 같은 manager·현재 계산/실행 문맥·환경·ID counter인지 검사한다. 재사용,
+다른 manager, 새로운 계산(조기 실패 포함), 환경·모델·탐색·명시 설정 변경으로 오래된
+결과는 저장소를 건드리지 않고 거부한다. 같은 API라도 public 데이터나 ROS 파라미터를
+임의로 수정하는 작업까지 추적하는 불변 스냅샷은 아니다. 호출 직렬화와 문서의 지원
+변경 경로를 따라야 한다. 실행 저장소의 최초 빈 상태도 명시적으로 초기화했다.
+
+경로 준비 중 환경 hook이 기존 비행을 철회할 수 있으므로 계산 완료 시점에 문맥을
+기록한다. 저장소를 복사했다가 계산 후 복원하는 방법은 사용하지 않았다. 그 방법은
+실제로 ABORT된 궤적을 되살릴 수 있다. 기존 hook-before-clear 순서는 유지한다.
+
+### 평가 계산과 표시의 책임
+
+`evaluateFlight(FlightEvaluationInput)`은 manager·ROS node 없이 측정 보고서를 반환한다.
+소유 결과에는 기존 verdict와 단계별/전체 AGL·envelope·위험·접촉 측정값 및 정책 출처
+진단이 들어간다. `formatFlightEvaluation(report)`는 같은 결과에서 기존 로그 문구를
+만들고, 어댑터만 실제 logger에 출력한다. 기존 chain의 성공·저하·실패 정책과 실행
+무효화 판단은 coordinator에 남긴다. chain 비활성 직접 계획에 새 전체 평가를 강제하지
+않으며 chain 내부 직접 fallback의 기존 전체 평가는 유지한다.
+
+수식·0.1초 표본·leg handover 검사·cruise latch·transition 범위·3-pass 정책은 유지한다.
+외부 입력에서 누락한 정책은 미확인 상태로 시작한다. 외부 궤적의 비유한 계수·시간과
+잘못된 수치 설정도 명시적인 미평가 사유로 거부하며 정상 궤적 계산을 바꾸지 않는다.
+환경 제공자는 동기 호출 동안 안정적으로 유효해야 하고 결과에는 제공자를 보관하지 않는다.
+
+계산 중 기존 ROS preview 발행과 환경 준비는 남아 있다. `compute()`를 호출하고 채택을
+생략하는 것과 ROS 발행을 전혀 하지 않는 것은 다른 조건이다. 실제 함수·target별
+시각화 분리는 후속 단계 4에서 처리한다.
+
+### 단계 1·2 검증 결과와 완료 범위
+
+수정 전 컨테이너 실행을 새로 확보했다. 37개 CTest, chain 71개, risk 154개가
+통과했고 실제 R2의 세 외부 호출 방식과 RViz·ABORT·새 ID 복구가 기존 자료와 같았다.
+수정 후에는 변경 패키지 `path_manager`를 명시 경로로 빌드해 아래를 확인했다.
+
+| 수정 후 확인 | 결과 |
+|---|---|
+| 전체 기존·추가 CTest | **39/39**, chain **71/71**, risk **154/154** 포함 |
+| 새 evaluator 수치·정책·입력·수명 검사 | **67/67** |
+| 새 계산/채택·실패·ID·오래된 결과 거부 검사 | **62/62** |
+| 기존 evaluator와 원본 비교 | **152개**, 모든 verdict 필드와 로그 문구 동일 |
+| 실제 지형 R2의 세 C++ API 호출 | 궤적·참고 궤적·phase·평가·상태 수치 동일 |
+| 실제 RViz R2 | **190조각**, wire **521.0625259429216초**, 전단·평가 로그 동일 |
+| 실제 ABORT·복구 | ID **1** 철회 한 번, ID **2** 복구·계수 동일 |
+| 외부 설치 target | evaluator 예제 실행 성공, 문서 함수 2개 컴파일·링크 |
+| 검증 대상 일치 | 소스 **156개**, 설치 파일 **8개** 시험 전후 해시 유지 |
+
+최종 검토에서 외부 입력의 NaN 계수·비유한 시간·수치 설정을 거부하는 검사와,
+새 계산이 시작되면 이전 후보를 재채택할 수 없게 하는 문맥 검사를 추가했다.
+실제 수치 결과는 최종 빌드 후 다시 비교했다. R2의 raw double 시간 합은
+521.0625247312521초이며 float32 wire와 각자 같은 표현끼리 비교했다.
+
+기준과 최종 증거를 [단계 1·2 검증 자료](../validation/planning_computation_2026_10_10/README.md)에
+보존했다. 원래 `/tmp/mmp_next_modularization_20261010/{baseline,after,evaluator}`의
+최종·예비 결과를 구분하며, 보존 자료 자체의 무결성 확인은 새 runtime 검증이 아니다.
+
+단계 1·2의 완료 조건인 소유 계산 결과, 명시 평가 입력·출력, 실행 채택 분리와 기존
+ABORT·복구 보존을 충족했다. 다음은 단계 3의 기존 C++ `DynamicsSimulator`에서
+같은 운동·제어·RK4 계산을 `step()`과 일괄 `simulate()`가 공유하게 하는 작업이다.
+전체 ROS 제거, 새 VTOL 법칙, MINCO·L-BFGS 분할은 계속 제외한다.

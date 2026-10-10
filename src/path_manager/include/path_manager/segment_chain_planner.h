@@ -69,6 +69,20 @@ public:
   // the first to false. Passing the head means the policy sees what the
   // operator actually said, and forgetting the provenance is a compile
   // error rather than a convention.
+  // Calculate an owned result without adopting into the execution slot.
+  // The result owns its trajectories, phases and verdict after this planner
+  // is destroyed. Its sealed execution context is valid only for the same
+  // live manager, current environment/execution revision, and a single apply;
+  // a later computation supersedes it. No ID is assigned during calculation.
+  // Failed products are diagnostics, never executable: use hasTrajectory().
+  // ROS parameter/environment adapters and legacy preview publication remain
+  // synchronous; serialize this call with updates to the same manager. An
+  // existing environment-change hook may still withdraw an active flight.
+  PlanningComputation compute(
+      const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail = {});
+
+  // Compatibility: compute, then immediately apply execution effects.
   PlanResult plan(const StartHead &head,
                   const std::vector<Eigen::Vector3d> &waypoints,
                   const ego_planner::TailBoundary &mission_tail =
@@ -170,9 +184,7 @@ public:
   // ...and the mapping from that verdict to what the caller receives, so a
   // regression can pin BOTH halves: that a hard contact is detected, and
   // that detecting it refuses the flight and drops any stored trajectory.
-  PlanResult verdictResultForTest(const FlightVerdict &fv) {
-    return stitchedVerdictResult(fv, PlanResult::success());
-  }
+  PlanResult verdictResultForTest(const FlightVerdict &fv);
 
   // [S13] Start-state regime classifier (enum, never string-matched): the
   // single entry gate plan() dispatches on. TRANSITION_REQUIRED = outside
@@ -219,6 +231,14 @@ public:
                 std::vector<size_t> *out_edge_leg = nullptr) const;
 
 private:
+  PlanResult planInto(PlanningComputation &computed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail);
+  PlanResult computeOverRoute(
+      PlanningComputation &computed, const CommittedRoute &route,
+      const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+      bool run_parallel, const ego_planner::TailBoundary &mission_tail,
+      const TransitionPrefix *transition = nullptr);
   // [AUTO-N] chain/segments option interpretation — ONE shared step, run
   // right after resetPlanState() so EVERY mission shape (plain chain and
   // the transition coordinator alike) sees the same N policy. Leaving it
@@ -230,16 +250,18 @@ private:
   // commit -> snapshot -> entry screening -> generate -> cut -> chain with
   // the transition prefix. transition_active_ is asserted for its whole
   // scope, so every fallback inside returns FAILED.
-  PlanResult planTransitionMission(const StartHead &head,
-                                   const std::vector<Eigen::Vector3d> &waypoints,
-                                   const ego_planner::TailBoundary &mission_tail);
+  PlanResult planTransitionMission(
+      PlanningComputation &computed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail);
   // [STITCH-GATE] Turns a whole-flight verdict into the plan outcome for a
   // STITCHED product: unflyable -> FAILED(STITCHED_FLIGHT_UNSAFE), envelope
   // budget exceeded -> the given result degraded, otherwise unchanged.
   // PRIVATE since the coordinator internalized it; the harness reaches it
   // through verdictResultForTest above, and through planOverRoute end to end.
-  PlanResult stitchedVerdictResult(const FlightVerdict &fv,
-                                   PlanResult ok_result) const;
+  PlanResult stitchedVerdictResult(
+      PlanningComputation &computed, const FlightVerdict &fv,
+      PlanResult ok_result) const;
   // Applies the NON-refusing half of the verdict (envelope budget, zone
   // standoff) to a result that is already a success. Shared by the exits
   // that do not go through stitchedVerdictResult.
@@ -287,6 +309,7 @@ private:
                                        bool run_parallel,
                                        bool phase_requested);
   PlanResult planRouteFallback(
+      PlanningComputation &computed,
       const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
       const ego_planner::TailBoundary &mission_tail,
       const std::vector<SegmentOverrides> &effective_overrides,
@@ -308,16 +331,17 @@ private:
   // baseline to restore; failures repair through the retry ladders or the
   // gated single-shot fallback (DEGRADED), which a transition-active plan
   // forbids outright.
-  PlanResult planRouteParallel(const StartHead &head,
-                               const std::vector<Eigen::Vector3d> &waypoints,
-                               bool run_parallel,
-                               const ego_planner::TailBoundary &mission_tail);
+  PlanResult planRouteParallel(
+      PlanningComputation &computed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
+      const ego_planner::TailBoundary &mission_tail);
 
   // plan() minus the final-boundary validation (which must run exactly
   // once): every internal exit path receives the validated tail.
-  PlanResult planImpl(const StartHead &head,
-                      const std::vector<Eigen::Vector3d> &waypoints,
-                      const ego_planner::TailBoundary &mission_tail);
+  PlanResult planImpl(
+      PlanningComputation &computed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail);
 
   // [STAGE-4] Whole-flight JUDGMENT of the FINAL stitched product — the one
   // artifact no per-solve audit ever sees whole (and the terminal phase not
@@ -475,9 +499,9 @@ private:
       const std::vector<double> &cap,
       const std::vector<Eigen::Vector3d> &pts,
       int upto_vertex = -1) const;
-  // Zeroes the fields ReplanFSM tests before executing a stored trajectory.
-  // Called on every FAILED exit that ran after the product was stored.
-  void invalidateStoredTrajectory() const;
+  // Records a refusal's execution invalidation effect, applied only by the
+  // execution adapter. Does not clear stored trajectory during calculation.
+  void invalidateStoredTrajectory(PlanningComputation &computed) const;
   // Clears every per-plan member so nothing survives into the next mission
   // (review find: segments_ is decremented mid-plan by the merge ladder and
   // the phase blackboard is only reset on the phase-enabled path).

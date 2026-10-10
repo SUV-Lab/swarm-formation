@@ -7,6 +7,7 @@
 #include "path_manager/traj_sampling.h"
 #include "path_manager/route_slice_batch.h"
 #include "path_manager/flight_assembly.h"
+#include "path_manager/flight_evaluator.h"
 #include "path_manager/transition_phase.h"
 
 #include <algorithm>
@@ -259,27 +260,39 @@ void SegmentChainPlanner::degradeForVerdict(PlanResult *r,
   }
 }
 
-void SegmentChainPlanner::invalidateStoredTrajectory() const
+void SegmentChainPlanner::invalidateStoredTrajectory(PlanningComputation &computed) const
 {
-  // A refused plan must not leave a flyable-looking trajectory behind:
-  // ReplanFSM::planFromGlobalTraj publishes and executes traj_.local_traj
-  // on (duration > 0 && start_time > 0) alone, so a FAILED outcome that
-  // stored one first would be picked up by the next state transition
-  // (review find). Zeroing the two fields it tests is the whole contract.
-  pm_->traj_.local_traj.duration = 0.0;
-  pm_->traj_.local_traj.start_time = 0.0;
-  // ...and erase what was already drawn. The direct paths publish the tube
-  // and the risk band from INSIDE planGlobalTraj, before this gate can run,
-  // and those channels are latched — so a refused flight stayed on screen
-  // as the current plan, and was handed to any RViz that connected later.
-  // The stitched paths draw nothing before judging, so this is a no-op for
-  // them; the guarantee has to hold for every caller either way.
-  pm_->clearTrajectoryViz();
+  // Record the gate's execution effect; calculation never clears a live slot.
+  // The compatibility wrapper/FSM applies this together with the final result.
+  computed.invalidate_execution = true;
 }
 
-PlanResult SegmentChainPlanner::plan(const StartHead &head,
-                                     const std::vector<Eigen::Vector3d> &waypoints,
-                                     const ego_planner::TailBoundary &mission_tail)
+PlanningComputation SegmentChainPlanner::compute(
+    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+    const ego_planner::TailBoundary &mission_tail)
+{
+  pm_->beginPlanningComputation();
+  PlanningComputation computed;
+  computed.status = planInto(computed, head, waypoints, mission_tail);
+  computed.evaluation = last_verdict_;
+  computed.phases = last_spans_;
+  return pm_->sealPlanningComputation(std::move(computed));
+}
+
+PlanResult SegmentChainPlanner::plan(
+    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+    const ego_planner::TailBoundary &mission_tail)
+{
+  auto computed = compute(head, waypoints, mission_tail);
+  if (!pm_->applyPlanningComputation(computed).applied)
+    return PlanResult::failed("computed chain plan could not be adopted");
+  return computed.status;
+}
+
+PlanResult SegmentChainPlanner::planInto(
+    PlanningComputation &computed, const StartHead &head,
+    const std::vector<Eigen::Vector3d> &waypoints,
+    const ego_planner::TailBoundary &mission_tail)
 {
   // Unpacked once, at the entry. The body reads these names; what changed is
   // that they come from ONE value whose combinations are all legal, instead
@@ -427,18 +440,19 @@ PlanResult SegmentChainPlanner::plan(const StartHead &head,
     // Tail validation above applies to EVERY mission shape — the
     // transition dispatch happens after it so a bad final boundary can
     // never slip out through the new path.
-    PlanResult r = planTransitionMission(head, waypoints, eff);
+    PlanResult r = planTransitionMission(computed, head, waypoints, eff);
     if (relaxed) r.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
     return r;
   }
-  PlanResult r = planImpl(head, waypoints, eff);
+  PlanResult r = planImpl(computed, head, waypoints, eff);
   if (relaxed) r.degrade(PlanReason::FINAL_BOUNDARY_RELAXED, relax_why);
   return r;
 }
 
-PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
-                               const std::vector<Eigen::Vector3d> &waypoints,
-                               const ego_planner::TailBoundary &mission_tail)
+PlanResult SegmentChainPlanner::planImpl(
+    PlanningComputation &computed, const StartHead &head,
+    const std::vector<Eigen::Vector3d> &waypoints,
+    const ego_planner::TailBoundary &mission_tail)
 {
   const Eigen::Vector3d &start_pos = head.pos_u;
   const Eigen::Vector3d &start_vel = head.vel_u;
@@ -448,13 +462,15 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   if (waypoints.size() != 1) {
     log_->warnf("[CHAIN] %zu waypoints — stage 1 chains single-goal missions "
                 "only, falling back to the single-shot plan", waypoints.size());
-    if (!pm_->planGlobalTraj(head, waypoints, mission_tail))
+    auto product = pm_->computeGlobalTrajectory(head, waypoints, mission_tail);
+    if (!product)
       return PlanResult::failed("multi-waypoint single-shot plan failed");
+    computed.recordProduct(std::move(*product));
     // Same contract as every other direct product: judged before it is
     // accepted. "Chain not attempted" is a statement about how the flight
     // was produced, never about whether it was checked.
     log_->infof("[PLAN-MODE] direct");
-    const poly_traj::Trajectory &mw = pm_->traj_.local_traj.traj;
+    const poly_traj::Trajectory &mw = computed.product->trajectory;
     const FlightVerdict mv = evaluateFlight(
         mw, {{mw.getTotalDuration(), PhaseKind::CRUISE, "direct"}},
         &pm_->lastPieceLeg(), pm_->lastCommittedRouteEpoch());
@@ -489,7 +505,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
                      "mission — set manager/allow_unmeasured_zone_policy to "
                      "fly it uncleared" : "");
       log_->errorf("[STITCH-GATE] %s", why);
-      invalidateStoredTrajectory();
+      invalidateStoredTrajectory(computed);
       return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE,
                                        why);
     }
@@ -528,7 +544,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
       // per worker (phase profiles + seg<i>), in the serial construction
       // window — see planRouteParallel. Non-whitelisted keys are dropped
       // loudly there.
-      return planRouteParallel(head, waypoints, par, mission_tail);
+      return planRouteParallel(computed, head, waypoints, par, mission_tail);
     } else if (par) {
       log_->warnf("[CHAIN] chain/parallel needs chain/author_from_route "
                   "(the baseline is inherently sequential) — running the "
@@ -549,17 +565,18 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   else
     log_->infof("[CHAIN] baseline plan (unsplit mission; %d chained segments "
                 "follow)", segments_);
-  if (!pm_->planGlobalTraj(head, waypoints, mission_tail)) {
+  auto baseline_product = pm_->computeGlobalTrajectory(head, waypoints, mission_tail);
+  if (!baseline_product) {
     log_->errorf("[CHAIN] baseline plan failed — nothing to chain, nothing "
                  "to fly");
     return PlanResult::failed("baseline plan failed");
   }
-  const poly_traj::Trajectory baseline = pm_->traj_.local_traj.traj;
+  computed.recordProduct(std::move(*baseline_product));
+  const poly_traj::Trajectory baseline = computed.product->trajectory;
   const double T = baseline.getTotalDuration();
-  // Both bail-outs below fly the baseline, and must leave the SAME storage
-  // the degrade path leaves: baseline in BOTH slots (at this point the
-  // global slot still holds the MINCO seed — the baseline copy normally
-  // happens after the segments run) plus viz and the final evaluation.
+  // Both bail-outs return the baseline with the same comparison reference
+  // as the degrade path. Until selected, the calculation product's reference
+  // is the MINCO seed. Adoption into execution storage happens in the caller.
   // One gate, two baseline exits. Both used to store and publish first and
   // keep evaluateFlight only for its log line; a whole-flight refusal that
   // the stitched path enforces must not be escapable by bailing out to the
@@ -588,7 +605,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
              !bv.evaluated ? "" :
                  (!bv.policy_measurable ? "zone policy unevaluated" : ""));
     log_->errorf("[STITCH-GATE] %s", why);
-    invalidateStoredTrajectory();
+    invalidateStoredTrajectory(computed);
     return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
   };
 
@@ -605,8 +622,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
     // must not be the way around the refusal.
     if (const auto bad = baseline_gate(baseline)) return *bad;
     const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-    pm_->traj_.setGlobalTraj(baseline, now_s);
-    pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
+    computed.recordProduct({baseline, baseline, now_s, now_s});
     pm_->publishTrajectoryViz(baseline, baseline);
     // A mission genuinely too small to split IS correctly served by the
     // baseline — SUCCESS, not a degradation (outcome matrix, frozen).
@@ -835,12 +851,11 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
       prov.edge_leg = &slice->edge_leg;
       prov.epoch = route_epoch;
     }
-    if (!pm_->planGlobalTraj(seg_head, goal,
-                             seg_tail, /*junction_goal=*/!last,
-                             slice ? &slice->path : nullptr,
-                             slice ? &slice->cap : nullptr,
-                             /*front_end_only=*/false,
-                             prov.edge_leg ? &prov : nullptr)) {
+    auto segment_product = pm_->computeGlobalTrajectory(
+        seg_head, goal, seg_tail, /*junction_goal=*/!last,
+        slice ? &slice->path : nullptr, slice ? &slice->cap : nullptr,
+        prov.edge_leg ? &prov : nullptr);
+    if (!segment_product) {
       // Degrade loudly to the baseline: the mission still flies, and the
       // failed experiment is visible in the log, not in the sky.
       log_->warnf("[CHAIN] segment %d/%d FAILED — restoring and flying the "
@@ -852,8 +867,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
       restore_guard.restore();
       if (const auto bad = baseline_gate(baseline)) return *bad;
       const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-      pm_->traj_.setGlobalTraj(baseline, now_s);
-      pm_->traj_.setLocalTraj(baseline, now_s, pm_->traj_.local_traj.drone_id);
+      computed.recordProduct({baseline, baseline, now_s, now_s});
       pm_->publishTrajectoryViz(baseline, baseline);
       PlanResult r = PlanResult::success();
       r.degrade(PlanReason::SINGLE_PLAN_FALLBACK,
@@ -863,10 +877,11 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
       degradeForVerdict(&r, baseline_verdict, "restored baseline");
       return r;
     }
-    runs.push_back(pm_->traj_.local_traj.traj);
+    computed.recordProduct(std::move(*segment_product));
+    runs.push_back(computed.product->trajectory);
   }
 
-  // === Stitch and store ===
+  // === Stitch the owned product ===
   poly_traj::Trajectory chained = runs.front();
   for (size_t i = 1; i < runs.size(); ++i) chained.append(runs[i]);
 
@@ -876,7 +891,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
   restore_guard.restore();
 
   // Report on the CHAIN portion (baseline deviation stays apples-to-apples),
-  // then append the optional prescribed terminal phase before storage.
+  // then append the optional prescribed terminal phase before final judgment.
   logChainReport(baseline, runs, contracts, chained, seg_over);
   std::vector<PhaseSpan> spans;
   double acc_t = 0.0;
@@ -932,16 +947,14 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
                 "stitched chain failed the whole-flight evaluation — "
                 "baseline flown instead");
     else
-      invalidateStoredTrajectory();
+      invalidateStoredTrajectory(computed);
     return r;
   }
 
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-  // GLOBAL slot = the baseline OPTIMIZED trajectory (comparison reference,
-  // see the class comment). Must precede setLocalTraj: setGlobalTraj resets
-  // the local slot's bookkeeping.
-  pm_->traj_.setGlobalTraj(baseline, now_s);
-  pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
+  // The owned comparison reference is the baseline OPTIMIZED trajectory.
+  // The execution adapter later applies global before local bookkeeping.
+  computed.recordProduct({chained, baseline, now_s, now_s});
   pm_->publishTrajectoryViz(chained, baseline);
   {
     // [CHAIN-VIZ] per-segment colors + labelled seams (+ the terminal
@@ -959,7 +972,7 @@ PlanResult SegmentChainPlanner::planImpl(const StartHead &head,
               "(baseline %.1f s), planned in %.1f ms wall",
               segments_, chained.getPieceNum(), chained.getTotalDuration(), T,
               wall_ms);
-  return stitchedVerdictResult(fv, PlanResult::success());
+  return stitchedVerdictResult(computed, fv, PlanResult::success());
 }
 
 void SegmentChainPlanner::applyContractJitter(
@@ -1652,7 +1665,8 @@ bool SegmentChainPlanner::cutAtArc(const std::vector<Eigen::Vector3d> &route,
 }
 
 PlanResult SegmentChainPlanner::planTransitionMission(
-    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+    PlanningComputation &computed, const StartHead &head,
+    const std::vector<Eigen::Vector3d> &waypoints,
     const ego_planner::TailBoundary &mission_tail)
 {
   const Eigen::Vector3d &start_pos = head.pos_u;
@@ -1926,8 +1940,8 @@ PlanResult SegmentChainPlanner::planTransitionMission(
                 "route cut at the entry arc failed");
 
   // [6] chain over the remainder with the transition prefix: junction
-  // gate, leading TRANSITION span, full-flight judgment, storage and viz
-  // all live inside planOverRoute.
+  // gate, leading TRANSITION span, full-flight judgment and preview all live
+  // inside computeOverRoute; execution adoption remains with the caller.
   TransitionPrefix prefix;
   prefix.traj = tr.traj;
   prefix.junction_pva_tol_u = 1e-6;
@@ -1946,17 +1960,18 @@ PlanResult SegmentChainPlanner::planTransitionMission(
   committed->path = std::move(sub_route);
   committed->cap = std::move(sub_cap);
   committed->edge_leg = std::move(sub_edge_leg);
-  return planOverRoute(*committed, handoff, waypoints, run_parallel,
+  return computeOverRoute(computed, *committed, handoff, waypoints, run_parallel,
                        mission_tail, &prefix);
 }
 
 PlanResult SegmentChainPlanner::planRouteParallel(
-    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+    PlanningComputation &computed, const StartHead &head,
+    const std::vector<Eigen::Vector3d> &waypoints,
     bool run_parallel, const ego_planner::TailBoundary &mission_tail)
 {
   const auto committed = commitRoute(head, waypoints, run_parallel);
   if (!committed) return PlanResult::failed("front-end failed");
-  return planOverRoute(*committed, head, waypoints, run_parallel, mission_tail);
+  return computeOverRoute(computed, *committed, head, waypoints, run_parallel, mission_tail);
 }
 
 // [S13] Stage 1: the ONE front-end pass that commits the global route
@@ -2000,7 +2015,8 @@ bool SegmentChainPlanner::commitRoute(
 }
 
 PlanResult SegmentChainPlanner::planRouteFallback(
-    const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
+    PlanningComputation &computed, const StartHead &head,
+    const std::vector<Eigen::Vector3d> &waypoints,
     const ego_planner::TailBoundary &mission_tail,
     const std::vector<SegmentOverrides> &eff, const char *why,
     bool as_degraded)
@@ -2065,7 +2081,9 @@ PlanResult SegmentChainPlanner::planRouteFallback(
           std::string("hard-limit preservation failed: ") + e.what());
     }
   }
-  const bool fb_ok = pm_->planGlobalTraj(head, waypoints, mission_tail);
+  auto fallback_product = pm_->computeGlobalTrajectory(head, waypoints, mission_tail);
+  const bool fb_ok = fallback_product.has_value();
+  if (fallback_product) computed.recordProduct(std::move(*fallback_product));
   if (!hardmin.empty()) {
     fguard.restoreNow();
     try {
@@ -2101,11 +2119,10 @@ PlanResult SegmentChainPlanner::planRouteFallback(
   log_->infof("[PLAN-MODE] direct");
   FlightVerdict direct_verdict{};
   {
-    // The LOCAL slot carries the optimized trajectory that is actually
-    // flown; the global slot is the pre-L-BFGS seed (path_manager.cpp
-    // stores out_global there as the comparison channel). Judging the
-    // seed would gate on a trajectory nobody flies — review find.
-    const poly_traj::Trajectory &fly = pm_->traj_.local_traj.traj;
+    // Judge the owned optimized trajectory, not its pre-L-BFGS comparison
+    // reference. The caller will adopt these into local/global execution
+    // storage only after the calculation has returned.
+    const poly_traj::Trajectory &fly = computed.product->trajectory;
     const FlightVerdict fv = evaluateFlight(
         fly, {{fly.getTotalDuration(), PhaseKind::CRUISE, "direct"}},
         &pm_->lastPieceLeg(), pm_->lastCommittedRouteEpoch());
@@ -2134,7 +2151,7 @@ PlanResult SegmentChainPlanner::planRouteFallback(
                  fv.viol_pct, 100.0 * fv.util_peak);
       }
       log_->errorf("[ENVELOPE] %s — FAILED (DIRECT_FALLBACK_UNSAFE)", why2);
-      invalidateStoredTrajectory();
+      invalidateStoredTrajectory(computed);
       return PlanResult::failedBecause(
           PlanReason::DIRECT_FALLBACK_UNSAFE,
           std::string(why) + "; " + why2);
@@ -2501,6 +2518,25 @@ PlanResult SegmentChainPlanner::planOverRoute(
     const ego_planner::TailBoundary &mission_tail,
     const TransitionPrefix *transition)
 {
+  pm_->beginPlanningComputation();
+  PlanningComputation computed;
+  computed.status = computeOverRoute(computed, committed, head, waypoints,
+                                      run_parallel, mission_tail, transition);
+  computed.evaluation = last_verdict_;
+  computed.phases = last_spans_;
+  computed = pm_->sealPlanningComputation(std::move(computed));
+  if (!pm_->applyPlanningComputation(computed).applied)
+    return PlanResult::failed("computed route plan could not be adopted");
+  return computed.status;
+}
+
+PlanResult SegmentChainPlanner::computeOverRoute(
+    PlanningComputation &computed, const CommittedRoute &committed,
+    const StartHead &head,
+    const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
+    const ego_planner::TailBoundary &mission_tail,
+    const TransitionPrefix *transition)
+{
   const auto &route = committed.path;
   const auto &cap = committed.cap;
   const auto &route_edge_leg = committed.edge_leg;
@@ -2508,8 +2544,8 @@ PlanResult SegmentChainPlanner::planOverRoute(
   const Eigen::Vector3d &start_pos = head.pos_u;
   const Eigen::Vector3d &start_vel = head.vel_u;
   const Eigen::Vector3d &start_acc = head.acc_u;
-  // [PLAN-STATE] This function is PUBLIC and re-entrant — the coordinator
-  // and the harness call it directly — but the audit state was cleared only
+  // [PLAN-STATE] The public planOverRoute adapter and internal coordinator
+  // both enter here. Previously the audit state was cleared only
   // in plan(). A direct re-call that returned at the input contract below
   // therefore left the PREVIOUS call's lastHeadPolicy(), lastFlightVerdict()
   // and lastPhaseSpans() readable, which is the same stale-audit defect the
@@ -2609,7 +2645,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
   // as_degraded=false marks the one caller where single-shot IS the correct
   // plan (mission below the split threshold), not a repair.
   const auto fallback = [&](const char *why, bool as_degraded = true) {
-    return planRouteFallback(head, waypoints, mission_tail, eff, why,
+    return planRouteFallback(computed, head, waypoints, mission_tail, eff, why,
                              as_degraded);
   };
 
@@ -2961,7 +2997,7 @@ PlanResult SegmentChainPlanner::planOverRoute(
                 joined.acceleration_error, transition->junction_pva_tol_u,
                 joined.jerk_jump);
     if (!joined.joined) {
-      invalidateStoredTrajectory();
+      invalidateStoredTrajectory(computed);
       return PlanResult::failedBecause(
           PlanReason::TRANSITION_JUNCTION_UNSOUND,
           "chain head is not on the transition tail");
@@ -2976,13 +3012,12 @@ PlanResult SegmentChainPlanner::planOverRoute(
   const FlightVerdict stitched_fv =
       evaluateFlight(chained, spans, nullptr, 0);  // stitched: see planImpl
   if (!stitched_fv.evaluated || stitched_fv.unflyable())
-    return stitchedVerdictResult(stitched_fv, PlanResult::success());
+    return stitchedVerdictResult(computed, stitched_fv, PlanResult::success());
 
   const double now_s = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-  // No baseline: both slots carry the chained product (the comparison
-  // channel simply mirrors the flight in this mode).
-  pm_->traj_.setGlobalTraj(chained, now_s);
-  pm_->traj_.setLocalTraj(chained, now_s, pm_->traj_.local_traj.drone_id);
+  // No baseline: the owned reference mirrors the chained product, as the
+  // comparison channel does when the caller adopts this mode.
+  computed.recordProduct({chained, chained, now_s, now_s});
   pm_->publishTrajectoryViz(chained, chained);
   {
     std::vector<Eigen::Vector3d> junc;
@@ -3016,21 +3051,33 @@ PlanResult SegmentChainPlanner::planOverRoute(
   if (!soft_drop_note.empty())
     result.degrade(PlanReason::PHASE_BOUNDARY_FALLBACK,
                    "merge dropped soft overrides: " + soft_drop_note);
-  return stitchedVerdictResult(stitched_fv, result);
+  return stitchedVerdictResult(computed, stitched_fv, result);
+}
+
+PlanResult SegmentChainPlanner::verdictResultForTest(const FlightVerdict &fv)
+{
+  PlanningComputation computed;
+  computed.status = stitchedVerdictResult(computed, fv, PlanResult::success());
+  // A passing synthetic verdict has no product to adopt. Refusing verdicts
+  // retain the harness's historical execution invalidation side effect.
+  if (computed.invalidate_execution)
+    pm_->applyPlanningComputation(pm_->sealPlanningComputation(computed));
+  return computed.status;
 }
 
 PlanResult SegmentChainPlanner::stitchedVerdictResult(
-    const FlightVerdict &fv, PlanResult ok_result) const
+    PlanningComputation &computed, const FlightVerdict &fv,
+    PlanResult ok_result) const
 {
   // Fail-closed on UNEVALUATED (review find: unflyable() is false when
   // evaluated is false, so a malformed span set slid a stitched product
   // through as SUCCESS with the trajectory already stored): a flight the
   // evaluator could not judge is refused like one it condemned, and
-  // whatever was stored is invalidated.
+  // execution invalidation is recorded for the caller to apply.
   if (!fv.evaluated) {
     log_->errorf("[STITCH-GATE] whole-flight evaluation did not run "
                  "(malformed spans or degenerate flight) — FAILED");
-    invalidateStoredTrajectory();
+    invalidateStoredTrajectory(computed);
     return PlanResult::failedBecause(
         PlanReason::STITCHED_FLIGHT_UNSAFE,
         "stitched flight could not be evaluated (span contract violation "
@@ -3047,9 +3094,6 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
   //     per-solve audit; the stitched reading is the honest whole-flight
   //     number, reported loudly rather than silently discarded (which is
   //     what happened before this gate existed).
-  // A degenerate product that could not be judged keeps its result: unlike
-  // the direct fallback (a repair, judged fail-closed), this trajectory
-  // already cleared the per-solve audits that produced it.
   if (fv.unflyable()) {
     char why[176];
     snprintf(why, sizeof why,
@@ -3062,10 +3106,10 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
                  ? "leg handover inside an authored zone; " : "",
              !fv.policy_measurable ? "zone policy unevaluated" : "");
     log_->errorf("[STITCH-GATE] %s", why);
-    // Nothing stored on this path today, but the guarantee has to hold for
-    // every caller — an earlier stage (baseline solve, direct fallback) may
-    // already have left a trajectory in traj_.
-    invalidateStoredTrajectory();
+    // Record the refusal even if no product exists yet. The execution
+    // adapter reproduces the legacy withdrawal, including after an earlier
+    // baseline/direct solve, without exposing an intermediate flight.
+    invalidateStoredTrajectory(computed);
     return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
   }
   if (fv.evaluated && fv.envelope_bad) {
@@ -3099,614 +3143,71 @@ SegmentChainPlanner::FlightVerdict SegmentChainPlanner::evaluateFlight(
     const std::vector<PhaseSpan> &spans,
     const std::vector<size_t> *piece_leg_in, uint64_t piece_epoch) const
 {
-  // Clear FIRST, so an early return can never leave the PREVIOUS flight's
-  // verdict readable through lastFlightVerdict(). A regression that asserts
-  // on a stale verdict is worse than one that has none: it reports on a
-  // flight that is not the one under test.
   last_verdict_ = FlightVerdict{};
   last_spans_.clear();
-  const double T = flight.getTotalDuration();
-  if (T <= 1e-9 || spans.empty()) return {};
-  // [S13] Span input contract, fail-closed to UNEVALUATED (the direct
-  // fallback gate treats that as FAILED; the stitched paths build their
-  // own spans, so a violation here is a programming error to surface):
-  //  - every t_end finite and strictly increasing
-  //  - the last t_end covers the whole flight
-  //  - TRANSITION only as the LEADING contiguous spans (a transition in
-  //    the middle of a cruise flight is not a thing this contract knows)
-  //  - TERMINAL only as the last span
-  {
-    double prev = 0.0;
-    bool cruise_seen = false;
-    for (size_t i = 0; i < spans.size(); ++i) {
-      const PhaseSpan &sp = spans[i];
-      if (!std::isfinite(sp.t_end) || sp.t_end <= prev + 1e-9) {
-        log_->errorf("[FINAL-EVAL] span contract: t_end not finite/strictly "
-                     "increasing at span %zu", i);
-        return {};
-      }
-      prev = sp.t_end;
-      if (sp.kind == PhaseKind::TRANSITION) {
-        if (cruise_seen) {
-          log_->errorf("[FINAL-EVAL] span contract: TRANSITION after a "
-                       "non-transition span (%zu)", i);
-          return {};
-        }
-      } else {
-        cruise_seen = true;
-      }
-      if (sp.kind == PhaseKind::TERMINAL && i + 1 != spans.size()) {
-        log_->errorf("[FINAL-EVAL] span contract: TERMINAL not last (%zu)",
-                     i);
-        return {};
+  const auto emit = [&](const FlightEvaluationReport &report) {
+    for (const auto &line : formatFlightEvaluation(report)) {
+      switch (line.level) {
+        case FlightEvaluationLogLevel::INFO:
+          log_->infof("%s", line.text.c_str()); break;
+        case FlightEvaluationLogLevel::WARNING:
+          log_->warnf("%s", line.text.c_str()); break;
+        case FlightEvaluationLogLevel::ERROR:
+          log_->errorf("%s", line.text.c_str()); break;
       }
     }
-    if (std::abs(spans.back().t_end - T) > 1e-6) {
-      log_->errorf("[FINAL-EVAL] span contract: last t_end %.6f != flight "
-                   "duration %.6f", spans.back().t_end, T);
-      return {};
-    }
-  }
-
-  const auto model = pm_->vehicleModel();
-  // Was a has_parameter probe with a literal fallback — the same shape that
-  // made the FSM's unit guard compare 100 against 100. readNumParam declares
-  // the name if it is absent, so a value that arrives later cannot leave this
-  // reader holding the literal.
-  const auto param_or = [&](const char *n, double def) {
-    return readNumParam(node_, n, def);
   };
-  const double um_xy = param_or("optimization/dynamics_unit_xy_m", 100.0);
-  const double um_z = param_or("optimization/dynamics_unit_z_m", 100.0);
-  const double clr_band = param_or("optimization/obstacle_clearance", 0.3);
-  const Eigen::Vector3d S(um_xy, um_xy, um_z);
-
-  struct PhaseStat {
-    double min_agl{std::numeric_limits<double>::infinity()};
-    double min_agl_t{0.0};
-    double agl_sum{0.0};
-    int n{0}, n_below_band{0}, n_below_ground{0};
-    int env_n{0}, env_viol{0};
-    double util_peak{0.0};
-    mmp_vehicle_dynamics::EnvelopeLimit peak_limit{
-        mmp_vehicle_dynamics::EnvelopeLimit::None};
-    double risk_max{0.0}, risk_int{0.0};
-    // Zone contact of the delivered flight. Containment alone is NOT the
-    // question — policy lives in the per-zone DISPOSITION, exactly as the
-    // transition candidate filter reads it: only HARD_AVOID contact is a
-    // violation, while SOFT_UNAVOIDABLE / SOFT_ENDPOINT / SOFT_FALLBACK are
-    // crossings the 3-pass policy deliberately allowed. Counting every
-    // containment as "hard" reported 3 hard contacts on an r5 flight whose
-    // final field was pass-2 all-soft — a permitted crossing dressed up as a
-    // safety breach. The two are kept apart and both are reported.
-    // Sampled at the dt below (0.1 s), so these are SAMPLE counts.
-    int zone_hard_n{0};       // inside the AUTHORED volume (q < 1.0)
-    double zone_hard_s{0.0};
-    int zone_standoff_n{0};   // in the 1.0-1.05 routing standoff shell
-    double zone_standoff_s{0.0};
-    int zone_soft_n{0};
-    double zone_soft_s{0.0};
-    bool zone_contact_measurable{true};
-    // [ZONE-CONTACT] WHERE and HOW DEEP, not just how many. A count alone
-    // cannot separate a 2 m graze of the 1.05x standoff shell from a
-    // traverse of the authored volume, and those two call for opposite
-    // responses. q < 1 is inside the authored ellipsoid; the gate fires at
-    // q < 1.05, so q_min is the number that says which one happened.
-    double zone_hard_t_first{-1.0};
-    double zone_hard_t_last{-1.0};
-    int zone_hard_runs{0};       // contiguous contact intervals
-    bool zone_hard_prev{false};  // sampler state behind the run count
-    // Closest approach to any HARD_AVOID zone over the whole span, contact
-    // or not. Distinct from zone_hard_qmin, which only exists when a contact
-    // occurred.
-    double zone_clear_qmin{1e9};
-    Eigen::Vector3d zone_clear_p{Eigen::Vector3d::Zero()};
-    double zone_clear_t{-1.0};
-    int zone_clear_zone{-1};
-    double zone_hard_qmin{1e9};
-    Eigen::Vector3d zone_hard_qmin_p{Eigen::Vector3d::Zero()};
-    double zone_hard_qmin_vis{-1.0};
-    int zone_hard_qmin_zone{-1};
-    // [LEG-POLICY] Piece boundaries where the leg changes hands, audited
-    // EXHAUSTIVELY and separately from the 0.1 s grid. They are instants,
-    // not dwell: they contribute counts and the refusal, never seconds.
-    int zone_junction_n{0};        // leg-change boundaries examined
-    int zone_junction_hard_n{0};   // ...of which entered an authored volume
+  FlightEvaluationReport rejected;
+  rejected.issue = validateFlightPhases(flight, spans, &rejected.issue_span);
+  if (rejected.issue != FlightEvaluationIssue::NONE) {
+    rejected.phases = spans;
+    rejected.duration = flight.getTotalDuration();
+    emit(rejected);
+    return {};
+  }
+  FlightEvaluationInput input{flight, spans};
+  const auto param_or = [&](const char *name, double fallback) {
+    return readNumParam(node_, name, fallback);
   };
-  std::vector<PhaseStat> st(spans.size());
-
-  const double dt = 0.1;
-  const size_t nz = pm_->numRiskZones();
-  const auto eval_snap = pm_->zonePolicySnapshot();
-
-  // [LEG-POLICY] A multi-leg mission has no plan-wide policy — the front end
-  // runs one search per leg and the same zone can be HARD_AVOID on one and
-  // SOFT_ENDPOINT on the next, so eval_snap above is INVALID for it and every
-  // sample reads as unmeasurable. It is measurable; it just has to be asked
-  // per piece. Route edge i became MINCO piece i, so the piece a sample falls
-  // in names the leg that was flying there, and that leg's captured policy is
-  // the one in force.
-  //
-  // Every condition below is a refusal, not a repair: a map that does not
-  // describe THIS trajectory, a leg with no capture, a capture that is not
-  // valid, a leg list with a hole or a repeat, or a policy that does not cover
-  // the current zones. Any of them and this falls back to eval_snap, which
-  // then refuses in the usual way. Notably a STITCHED flight lands here — the
-  // manager's map describes the last segment only, and the piece counts
-  // disagree, which is exactly the disagreement that must not be papered over.
-  static const std::vector<size_t> kNoPieceLeg;
-  const auto &piece_leg = piece_leg_in ? *piece_leg_in : kNoPieceLeg;
-  const auto &leg_pols = pm_->legPolicySnapshots();
-  bool per_piece = !piece_leg.empty() && !leg_pols.empty() &&
-                   piece_leg.size() ==
-                       static_cast<size_t>(flight.getPieceNum()) &&
-                   // The map and the captures must come from the SAME
-                   // front-end run. Sizes agreeing is not that: a map minted
-                   // one epoch ago names legs of a different search, and
-                   // nothing in a vector of indices says which.
-                   piece_epoch != 0 && piece_epoch == pm_->zonePolicyEpoch();
-  if (per_piece) {
-    // ORDER. A route is walked once, front to back, so its legs appear in
-    // flight order and each hands over to the NEXT one. A map that goes
-    // backwards, jumps a leg, or lets a leg reappear after another has taken
-    // over is not a route this planner can have produced — and every one of
-    // those shapes would still pass a size-and-range check while attributing
-    // stretches of the flight to the wrong policy.
-    //
-    // The first entry is NOT required to be leg 0: a slice of a committed
-    // route legitimately starts mid-route, so its tags begin at whichever leg
-    // the cut landed on.
-    for (size_t i = 1; i < piece_leg.size() && per_piece; ++i) {
-      const size_t prev = piece_leg[i - 1], cur = piece_leg[i];
-      if (cur != prev && cur != prev + 1) per_piece = false;
-    }
-    for (size_t i = 0; i < leg_pols.size() && per_piece; ++i) {
-      // leg i at index i, and serial exactly i + 1. The searcher increments
-      // its per-epoch counter once per leg search and captures with the new
-      // value, so a clean run is 1, 2, 3, ... — CONTIGUOUS. Testing only that
-      // serials increase accepts [1, 3], which is a set with a hole in the
-      // middle, and this code's whole promise is that it refuses those. A
-      // hole or a double-write is a programming error, and "some legs" is not
-      // a set this may average over.
-      if (leg_pols[i].leg != i || !leg_pols[i].policy.valid ||
-          leg_pols[i].policy.zones.size() != nz ||
-          leg_pols[i].search_serial != i + 1)
-        per_piece = false;
-    }
-    for (size_t leg : piece_leg)
-      if (leg >= leg_pols.size()) per_piece = false;
-  }
-  // Warn only where it COSTS something. A chained single-goal flight is
-  // stitched, so the map never matches its piece count — but its plan-wide
-  // snapshot is valid and is the right answer, not a fallback. The case worth
-  // saying out loud is the one where neither is available.
-  if (nz > 0 && !per_piece && !eval_snap.valid)
-    log_->warnf("[LEG-POLICY] no per-piece attribution (%zu tags, %d pieces, "
-                "%zu legs) and no valid plan-wide policy — this flight cannot "
-                "be cleared",
-                piece_leg.size(), flight.getPieceNum(), leg_pols.size());
-  else if (per_piece)
-    log_->infof("[LEG-POLICY] audit reads policy per piece: %zu pieces over "
-                "%zu legs", piece_leg.size(), leg_pols.size());
-
-  // The policy in force at time t, for the ordinary 0.1 s samples: whichever
-  // piece the sample falls in.
-  //
-  // This deliberately does NOT try to detect boundaries. locatePieceIdx
-  // advances only while `t > duration` (poly_traj_utils.hpp), so at exactly a
-  // seam it returns the PREVIOUS piece with the remainder equal to that
-  // piece's whole duration — not the next piece at remainder zero. A boundary
-  // test written against the second (wrong) reading is dead code, which is
-  // what the first version of this was: `rem <= 1e-9` never held. And a
-  // 0.1 s grid lands on an exact seam only by coincidence, so even a correct
-  // test here would go unexercised. Seams are handled exhaustively below
-  // instead, where their times are known exactly rather than sampled for.
-  const auto policyAt =
-      [&](double t) -> const PathManager::ZonePolicySnapshot & {
-    if (!per_piece) return eval_snap;
-    double rem = t;
-    const int pi = flight.locatePieceIdx(rem);
-    // Out of range is a refusal, not a clamp. Pinning it to 0 or to the last
-    // index hands those samples leg 0's or the LAST leg's policy — which is
-    // the exact failure this whole mechanism exists to prevent, arriving
-    // through the back door. eval_snap is INVALID for a multi-leg mission, so
-    // returning it here refuses in the usual way.
-    if (pi < 0 || pi >= static_cast<int>(piece_leg.size())) return eval_snap;
-    return leg_pols[piece_leg[static_cast<size_t>(pi)]].policy;
+  auto &settings = input.settings;
+  settings.unit_xy_m = param_or("optimization/dynamics_unit_xy_m", settings.unit_xy_m);
+  settings.unit_z_m = param_or("optimization/dynamics_unit_z_m", settings.unit_z_m);
+  settings.obstacle_clearance = param_or("optimization/obstacle_clearance", settings.obstacle_clearance);
+  settings.envelope_violation_max = param_or("optimization/audit_envelope_violation_max", settings.envelope_violation_max);
+  settings.envelope_peak_max = param_or("optimization/audit_envelope_peak_max", settings.envelope_peak_max);
+  input.model = pm_->vehicleModel();
+  input.plan_policy = pm_->zonePolicySnapshot();
+  input.leg_policies = pm_->legPolicySnapshots();
+  input.piece_leg = piece_leg_in;
+  input.piece_epoch = piece_epoch;
+  input.policy_epoch = pm_->zonePolicyEpoch();
+  auto &environment = input.environment;
+  environment.zone_count = pm_->numRiskZones();
+  environment.terrain_elevation = [this](double x, double y, double *z) {
+    return pm_->terrainElevation(x, y, z);
   };
-  // Same counting doctrine as the solver's [CONV-REJECT] audit, latch
-  // included: the pre-cruise ramp (a rest-start mission legitimately
-  // begins below stall) stays out of the statistics, but sub-min-speed
-  // dwell AFTER cruise entry counts into BOTH counters — dropping it from
-  // both made the evaluator blind to mid-flight speed collapse, the exact
-  // ~0%-scored failure the solver's latch was built to kill (review find:
-  // a sub-stall arrival contract fed a 300 s helix that scored "0.0%").
-  bool reached_cruise = false;
-  for (double t = 0.0; t < T; t += dt) {
-    size_t ph = 0;
-    while (ph + 1 < spans.size() && t >= spans[ph].t_end) ++ph;
-    PhaseStat &s = st[ph];
-    // Judgment selection by CONTRACT TYPE, never by the display name. A
-    // TRANSITION span is outside the cruise model by definition: its
-    // samples never enter the cruise envelope statistics (its own
-    // evaluator attaches with the generator, per ADR-0002 — v0 limits are
-    // experimental, not gates). Terrain/zone/risk below stay: those are
-    // model-agnostic.
-    const bool cruise_judged = spans[ph].kind != PhaseKind::TRANSITION;
-    const Eigen::Vector3d p = flight.getPos(t);
-    double g = 0.0;
-    pm_->terrainElevation(p.x(), p.y(), &g);  // false: sea level 0
-    const double agl = p.z() - g;
-    if (agl < s.min_agl) { s.min_agl = agl; s.min_agl_t = t; }
-    s.agl_sum += agl;
-    ++s.n;
-    if (agl < clr_band) ++s.n_below_band;
-    if (agl < 0.0) ++s.n_below_ground;
-    if (model && cruise_judged) {
-      const auto ev = model->evaluate(
-          S.cwiseProduct(p), S.cwiseProduct(flight.getVel(t)),
-          S.cwiseProduct(flight.getAcc(t)));
-      if (ev.valid && model->domain(ev).cruise) {
-        reached_cruise = true;
-        ++s.env_n;
-        mmp_vehicle_dynamics::EnvelopeLimit lim;
-        const double u =
-            model->utilization(ev, &lim);
-        if (!model->withinEnvelope(ev)) ++s.env_viol;
-        if (u > s.util_peak) { s.util_peak = u; s.peak_limit = lim; }
-      } else if (reached_cruise) {
-        ++s.env_n;
-        ++s.env_viol;
-      }
-    }
-    if (nz > 0) {
-      double keep = 1.0;
-      for (size_t zi = 0; zi < nz; ++zi)
-        keep *= 1.0 - pm_->getEffectiveRisk(zi, p);
-      const double r = 1.0 - keep;
-      s.risk_max = std::max(s.risk_max, r);
-      s.risk_int += r * dt;
-
-      bool hard = false, standoff = false, soft = false;
-      int hard_zi = -1;
-      double hard_q = 1e9;
-      // [LEG-POLICY] The policy that was in force WHERE THIS SAMPLE FLIES.
-      // Identical to eval_snap when there is one plan-wide policy to have.
-      const PathManager::ZonePolicySnapshot &snap = policyAt(t);
-      // Closest approach to a HARD_AVOID zone, tracked on EVERY sample and
-      // not only on contact. "No contact" is a threshold answer; how close
-      // the flight came is the measurement, and without it two products on
-      // the same route cannot be compared at all — which is exactly the
-      // question a contact on one and not the other raises.
-      for (size_t zi = 0; zi < nz; ++zi) {
-        if (zi >= snap.zones.size() ||
-            snap.zones[zi].disposition !=
-                PathManager::ZoneDisposition::HARD_AVOID)
-          continue;
-        const double q = pm_->getZoneEllipsoidRadius(zi, p);
-        if (q < s.zone_clear_qmin) {
-          s.zone_clear_qmin = q;
-          s.zone_clear_p = p;
-          s.zone_clear_t = t;
-          s.zone_clear_zone = static_cast<int>(zi);
-        }
-      }
-      for (size_t zi = 0; zi < nz; ++zi) {
-        switch (pm_->zoneContact(snap, zi, p)) {
-          case PathManager::ZoneContactResult::CONTACT:
-            if (zi < snap.zones.size() &&
-                snap.zones[zi].disposition ==
-                    PathManager::ZoneDisposition::HARD_AVOID) {
-              // WHICH BAND. zoneContact() reports the 1.05x standoff volume,
-              // which is the surface a ROUTE is kept out of; only the
-              // authored volume refuses a finished flight.
-              if (pm_->zoneContactAuthored(snap, zi, p)) hard = true;
-              else standoff = true;
-              // Only on contact, so the deep-sample cost never touches the
-              // common path.
-              const double q = pm_->getZoneEllipsoidRadius(zi, p);
-              if (q < hard_q) { hard_q = q; hard_zi = static_cast<int>(zi); }
-            } else {
-              soft = true;
-            }
-            break;
-          case PathManager::ZoneContactResult::STALE:
-          case PathManager::ZoneContactResult::INVALID:
-            // A snapshot that cannot be judged must not read as "clear" —
-            // that is how a zero contact count becomes a claim nobody
-            // checked. The verdict below refuses CLEAN on this.
-            s.zone_contact_measurable = false;
-            break;
-          case PathManager::ZoneContactResult::CLEAR:
-            break;
-        }
-      }
-      if (standoff) { ++s.zone_standoff_n; s.zone_standoff_s += dt; }
-      // The contact-detail fields track EITHER band, so the emitted line can
-      // say which one the deepest sample was in; the counters above are what
-      // decide refusal.
-      if (hard || standoff) {
-        if (hard) { ++s.zone_hard_n; s.zone_hard_s += dt; }
-        if (s.zone_hard_t_first < 0.0) s.zone_hard_t_first = t;
-        s.zone_hard_t_last = t;
-        if (!s.zone_hard_prev) ++s.zone_hard_runs;
-        if (hard_q < s.zone_hard_qmin) {
-          s.zone_hard_qmin = hard_q;
-          s.zone_hard_qmin_p = p;
-          s.zone_hard_qmin_zone = hard_zi;
-          s.zone_hard_qmin_vis =
-              hard_zi >= 0 ? pm_->getRiskVisibility(hard_zi, p) : -1.0;
-        }
-      }
-      s.zone_hard_prev = hard || standoff;
-      if (soft) { ++s.zone_soft_n; s.zone_soft_s += dt; }
-    }
-  }
-
-  // [LEG-POLICY] Leg handovers, audited exhaustively and off the grid.
-  //
-  // A seam between two legs is one instant. The 0.1 s sampler will land on it
-  // only by coincidence, so the sampler cannot be the thing that enforces the
-  // handover rule — the times have to be enumerated. They are known exactly:
-  // the cumulative duration at every piece i where piece_leg[i-1] differs
-  // from piece_leg[i].
-  //
-  // At that instant the point belongs to both legs, so it is judged under the
-  // STRICTER of the two policies. Stricter means HARD_AVOID and nothing else:
-  // that is the only distinction drawn below, and inventing an order among
-  // the SOFT_* kinds would be an ordering no consumer reads. The effect is
-  // that an exemption earned on one leg — a start or goal containment — stops
-  // at the junction instead of leaking into a leg that never had it.
-  //
-  // These feed their own counters. Folding them into the 0.1 s totals would
-  // add dwell seconds to an instant and make `n` mean two different things.
-  if (per_piece && nz > 0) {
-    PathManager::ZonePolicySnapshot merged;
-    double t_seam = 0.0;
-    for (size_t i = 0; i + 1 < piece_leg.size(); ++i) {
-      t_seam += flight[static_cast<int>(i)].getDuration();
-      const size_t a = piece_leg[i], b = piece_leg[i + 1];
-      if (a == b) continue;
-      size_t ph = 0;
-      while (ph + 1 < spans.size() && t_seam >= spans[ph].t_end) ++ph;
-      PhaseStat &s = st[ph];
-      ++s.zone_junction_n;
-
-      merged = leg_pols[b].policy;
-      const auto &other = leg_pols[a].policy;
-      for (size_t zi = 0; zi < merged.zones.size() && zi < other.zones.size();
-           ++zi) {
-        if (other.zones[zi].disposition ==
-            PathManager::ZoneDisposition::HARD_AVOID)
-          merged.zones[zi].disposition =
-              PathManager::ZoneDisposition::HARD_AVOID;
-      }
-
-      const Eigen::Vector3d p = flight.getPos(t_seam);
-      bool jhard = false;
-      for (size_t zi = 0; zi < nz; ++zi) {
-        switch (pm_->zoneContact(merged, zi, p)) {
-          case PathManager::ZoneContactResult::CONTACT:
-            if (zi < merged.zones.size() &&
-                merged.zones[zi].disposition ==
-                    PathManager::ZoneDisposition::HARD_AVOID &&
-                pm_->zoneContactAuthored(merged, zi, p))
-              jhard = true;
-            break;
-          case PathManager::ZoneContactResult::STALE:
-          case PathManager::ZoneContactResult::INVALID:
-            s.zone_contact_measurable = false;
-            break;
-          case PathManager::ZoneContactResult::CLEAR:
-            break;
-        }
-      }
-      if (jhard) {
-        ++s.zone_junction_hard_n;
-        log_->warnf("[LEG-POLICY] leg %zu -> %zu handover at t=%.3f s is "
-                    "inside an authored volume under the stricter of the two "
-                    "policies",
-                    a, b, t_seam);
-      }
-    }
-  }
-
-  log_->infof("[FINAL-EVAL] ===== whole-flight evaluation: %.1f s, %d "
-              "pieces, %zu phase(s) =====",
-              T, flight.getPieceNum(), spans.size());
-  double t0 = 0.0;
-  PhaseStat tot;
-  for (size_t ph = 0; ph < spans.size(); ++ph) {
-    const PhaseStat &s = st[ph];
-    if (s.n > 0) {
-      // A phase with dynamics on but ZERO cruise-domain samples has no
-      // measurement — "0.0%" would print no-data as a clean reading.
-      char env[96];
-      if (!model) {
-        snprintf(env, sizeof env, "env model off");
-      } else if (spans[ph].kind == PhaseKind::TRANSITION) {
-        snprintf(env, sizeof env,
-                 "env n/a (TRANSITION — cruise judgment not applicable)");
-      } else if (s.env_n == 0) {
-        snprintf(env, sizeof env, "env NO CRUISE DATA (pre-cruise ramp)");
-      } else {
-        snprintf(env, sizeof env, "env viol %5.1f%% peak %5.1f%% (%s)",
-                 100.0 * s.env_viol / s.env_n, 100.0 * s.util_peak,
-                 mmp_vehicle_dynamics::envelopeLimitName(s.peak_limit));
-      }
-      log_->infof(
-          "[FINAL-EVAL] %-9s %6.1f s | AGL min %7.3f@%.0fs mean %6.2f u, "
-          "<band %4.1f%%, underground %s | %s | risk max %.3f, "
-          "exposure %.1f s, zone contact hard %d (%.1f s) soft %d (%.1f s) "
-          "@0.1s sampling%s",
-          spans[ph].name.c_str(), spans[ph].t_end - t0, s.min_agl,
-          s.min_agl_t, s.agl_sum / s.n, 100.0 * s.n_below_band / s.n,
-          s.n_below_ground ? "YES" : "no", env, s.risk_max, s.risk_int,
-          s.zone_hard_n, s.zone_hard_s, s.zone_soft_n, s.zone_soft_s,
-          s.zone_contact_measurable ? "" : " [UNMEASURABLE: stale/invalid "
-                                           "zone snapshot]");
-    }
-    t0 = spans[ph].t_end;
-    if (s.min_agl < tot.min_agl) {
-      tot.min_agl = s.min_agl;
-      tot.min_agl_t = s.min_agl_t;
-    }
-    tot.n += s.n;
-    tot.n_below_band += s.n_below_band;
-    tot.n_below_ground += s.n_below_ground;
-    tot.env_n += s.env_n;
-    tot.env_viol += s.env_viol;
-    tot.risk_max = std::max(tot.risk_max, s.risk_max);
-    tot.risk_int += s.risk_int;
-    tot.zone_hard_n += s.zone_hard_n;
-    tot.zone_hard_s += s.zone_hard_s;
-    tot.zone_standoff_n += s.zone_standoff_n;
-    tot.zone_standoff_s += s.zone_standoff_s;
-    tot.zone_hard_runs += s.zone_hard_runs;
-    if (s.zone_hard_t_first >= 0.0 &&
-        (tot.zone_hard_t_first < 0.0 ||
-         s.zone_hard_t_first < tot.zone_hard_t_first))
-      tot.zone_hard_t_first = s.zone_hard_t_first;
-    if (s.zone_hard_t_last > tot.zone_hard_t_last)
-      tot.zone_hard_t_last = s.zone_hard_t_last;
-    if (s.zone_hard_qmin < tot.zone_hard_qmin) {
-      tot.zone_hard_qmin = s.zone_hard_qmin;
-      tot.zone_hard_qmin_p = s.zone_hard_qmin_p;
-      tot.zone_hard_qmin_vis = s.zone_hard_qmin_vis;
-      tot.zone_hard_qmin_zone = s.zone_hard_qmin_zone;
-    }
-    if (s.zone_clear_qmin < tot.zone_clear_qmin) {
-      tot.zone_clear_qmin = s.zone_clear_qmin;
-      tot.zone_clear_p = s.zone_clear_p;
-      tot.zone_clear_t = s.zone_clear_t;
-      tot.zone_clear_zone = s.zone_clear_zone;
-    }
-    tot.zone_soft_n += s.zone_soft_n;
-    tot.zone_soft_s += s.zone_soft_s;
-    tot.zone_junction_n += s.zone_junction_n;
-    tot.zone_junction_hard_n += s.zone_junction_hard_n;
-    tot.zone_contact_measurable &= s.zone_contact_measurable;
-    if (s.util_peak > tot.util_peak) {
-      tot.util_peak = s.util_peak;
-      tot.peak_limit = s.peak_limit;
-    }
-  }
-  const double viol_pct =
-      tot.env_n ? 100.0 * tot.env_viol / tot.env_n : 0.0;
-  // A flight that never once reaches cruise is unflyable for this airframe
-  // — the solver's own degenerate rule (viol := 1.0), mirrored here so
-  // no-data can never read as clean. The envelope threshold is the SAME
-  // configurable gate the per-solve audit uses, not a second number.
-  const double viol_max_pct =
-      100.0 * param_or("optimization/audit_envelope_violation_max", 0.25);
-  const bool no_cruise = model != nullptr && tot.env_n == 0;
-  // [PHASE-DEP] peak joins the verdict: 0.7% violation TIME hid a 299%
-  // instantaneous thrust demand as CLEAN (review find). Same parameter the
-  // departure acceptance gate uses.
-  const double peak_chk =
-      param_or("optimization/audit_envelope_peak_max", 1.30);
-  const bool peak_bad = tot.util_peak > peak_chk;
-  // A flight that entered a HARD_AVOID volume, or one whose zone policy could
-  // not be judged at all, must not read CLEAN. Leaving these out of the
-  // condition is what let the new metric be printed beside a CLEAN verdict it
-  // had no influence over — the number was reported, not enforced. An
-  // unjudgeable snapshot is treated like a contact rather than like clear:
-  // "we could not check" is not evidence of safety.
-  // [LEG-POLICY] A handover that sits inside an authored volume under the
-  // stricter of the two policies refuses the flight exactly as a sampled
-  // contact does. It is one instant rather than 0.1 s of dwell, which is why
-  // it is counted apart — not why it is treated more leniently.
-  const bool zone_bad = tot.zone_hard_n > 0 || tot.zone_junction_hard_n > 0 ||
-                        !tot.zone_contact_measurable;
-  // Envelope alone, kept apart from the zone reasons: a caller that has to
-  // NAME the cause cannot recover it from `clean`.
-  const bool envelope_bad = viol_pct >= viol_max_pct || peak_bad;
-  const bool clean = tot.n_below_ground == 0 && !no_cruise &&
-                     !envelope_bad && !zone_bad;
-  if (clean) {
-    log_->infof("[FINAL-EVAL] verdict: CLEAN — AGL min %.3f u, env viol "
-                "%.1f%% (peak %.1f%% %s), risk exposure %.1f s, "
-                "zone contact hard 0 standoff %d (%.1f s) soft %d (%.1f s) "
-                "@0.1s sampling",
-                tot.min_agl, viol_pct, 100.0 * tot.util_peak,
-                mmp_vehicle_dynamics::envelopeLimitName(tot.peak_limit),
-                tot.risk_int, tot.zone_standoff_n, tot.zone_standoff_s,
-                tot.zone_soft_n, tot.zone_soft_s);
-  } else {
-    log_->warnf("[FINAL-EVAL] verdict: CHECK — %s%s%s%s%s%s(AGL min %.3f u "
-                "@%.0fs, env viol %.1f%%) — the stitched flight carries "
-                "hazards no per-solve audit saw",
-                tot.n_below_ground ? "TERRAIN OVERLAP " : "",
-                no_cruise ? "NEVER REACHES CRUISE " : "",
-                tot.zone_hard_n > 0 ? "AUTHORED ZONE ENTERED " : "",
-                tot.zone_junction_hard_n > 0 ? "LEG HANDOVER IN ZONE " : "",
-                !tot.zone_contact_measurable ? "ZONE POLICY UNEVALUATED " : "",
-                !no_cruise && viol_pct >= viol_max_pct ? "ENVELOPE " : "",
-                tot.min_agl, tot.min_agl_t, viol_pct);
-  }
-  FlightVerdict v;
-  v.evaluated = true;
-  v.clean = clean;
-  v.envelope_bad = envelope_bad;
-  v.underground = tot.n_below_ground != 0;
-  v.no_cruise = no_cruise;
-  v.zone_hard_n = tot.zone_hard_n;
-  v.zone_standoff_n = tot.zone_standoff_n;
-  v.zone_soft_n = tot.zone_soft_n;
-  v.zone_junction_n = tot.zone_junction_n;
-  v.zone_junction_hard_n = tot.zone_junction_hard_n;
-  v.policy_measurable = tot.zone_contact_measurable;
-  v.viol_pct = viol_pct;
-  v.util_peak = tot.util_peak;
-  // Machine-readable, always emitted, one line. A reader (and the A/B
-  // parser) must not have to infer zone safety from the ABSENCE of a
-  // warning word — that is fail-open by construction: a reworded log or a
-  // dropped call both read as "measurable, no contact".
-  log_->infof("[ZONE-AUDIT] hard=%d hard_s=%.1f standoff=%d standoff_s=%.1f "
-              "soft=%d soft_s=%.1f measurable=%s sample_dt=%.2f "
-              "risk_max=%.4f risk_exposure_s=%.1f junctions=%d "
-              "junction_hard=%d",
-              v.zone_hard_n, tot.zone_hard_s,
-              v.zone_standoff_n, tot.zone_standoff_s,
-              v.zone_soft_n, tot.zone_soft_s,
-              v.policy_measurable ? "true" : "false", dt,
-              tot.risk_max, tot.risk_int, tot.zone_junction_n,
-              tot.zone_junction_hard_n);
-  // The count above says a breach happened; this says WHICH breach. Without
-  // it, a 2 m graze of the 1.05x standoff shell and a traverse of the
-  // authored volume are the same line — and they are not the same event.
-  // q_min < 1.00 means the flight was inside the zone the mission authored;
-  // 1.00 <= q_min < 1.05 means it stayed in the routing standoff margin,
-  // where the optimizer's risk term is zero by construction and risk_max
-  // above is therefore 0.0000 whatever the flight did.
-  // runs= is summed per phase, so a contact straddling a phase boundary
-  // reads as two.
-  // Emitted for every flight that had a HARD_AVOID zone to stay clear of,
-  // whether or not it touched anything. q_min is on the same scale the two
-  // thresholds use: < 1.00 entered the authored volume, < 1.05 entered the
-  // routing standoff, and anything above is the margin that was actually
-  // kept.
-  if (tot.zone_clear_zone >= 0) {
-    log_->infof("[ZONE-CLEARANCE] zone=%d q_min=%.5f t=%.2fs "
-                "at (%.2f, %.2f, %.2f)",
-                tot.zone_clear_zone, tot.zone_clear_qmin, tot.zone_clear_t,
-                tot.zone_clear_p.x(), tot.zone_clear_p.y(),
-                tot.zone_clear_p.z());
-  }
-  if (tot.zone_hard_n > 0 || tot.zone_standoff_n > 0) {
-    log_->infof("[ZONE-CONTACT] zone=%d t=[%.2f, %.2f]s runs=%d q_min=%.5f "
-                "%s vis=%.3f at (%.2f, %.2f, %.2f)",
-                tot.zone_hard_qmin_zone, tot.zone_hard_t_first,
-                tot.zone_hard_t_last, tot.zone_hard_runs, tot.zone_hard_qmin,
-                tot.zone_hard_qmin < 1.0 ? "INSIDE-AUTHORED" : "standoff-shell",
-                tot.zone_hard_qmin_vis, tot.zone_hard_qmin_p.x(),
-                tot.zone_hard_qmin_p.y(), tot.zone_hard_qmin_p.z());
-  }
-  // LAST, and only once every field is filled: an earlier assignment left
-  // viol_pct/util_peak at zero in the recorded copy.
-  last_verdict_ = v;
-  last_spans_ = spans;
-  return v;
+  environment.effective_risk = [this](size_t zone, const Eigen::Vector3d &p) {
+    return pm_->getEffectiveRisk(zone, p);
+  };
+  environment.ellipsoid_radius = [this](size_t zone, const Eigen::Vector3d &p) {
+    return pm_->getZoneEllipsoidRadius(zone, p);
+  };
+  environment.risk_visibility = [this](size_t zone, const Eigen::Vector3d &p) {
+    return pm_->getRiskVisibility(zone, p);
+  };
+  environment.zone_contact = [this](const ZonePolicySnapshot &policy, size_t zone,
+                                     const Eigen::Vector3d &p) {
+    return pm_->zoneContact(policy, zone, p);
+  };
+  environment.authored_contact = [this](const ZonePolicySnapshot &policy, size_t zone,
+                                         const Eigen::Vector3d &p) {
+    return pm_->zoneContactAuthored(policy, zone, p);
+  };
+  const auto report = path_manager::evaluateFlight(input);
+  emit(report);
+  last_verdict_ = report.verdict;
+  if (last_verdict_.evaluated) last_spans_ = spans;
+  return last_verdict_;
 }
 
 poly_traj::Trajectory SegmentChainPlanner::appendTerminalPhase(

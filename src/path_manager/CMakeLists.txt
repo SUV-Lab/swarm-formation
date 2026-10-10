@@ -61,6 +61,7 @@ add_library(${PROJECT_NAME}_lib
   src/route_slice_solver.cpp
   src/route_slice_batch.cpp
   src/flight_assembly.cpp
+  src/flight_evaluator.cpp
   src/direct_trajectory_solver.cpp
   src/mission_geometry.cpp
   src/route_postprocessing.cpp
@@ -314,6 +315,24 @@ target_include_directories(mission_planner_core_test PRIVATE
 target_link_libraries(mission_planner_core_test Eigen3::Eigen)
 target_compile_features(mission_planner_core_test PRIVATE cxx_std_17)
 
+# Compile the production evaluator without ROS includes or targets. This
+# catches accidental dependencies even while the ROS adapter lives in _lib.
+add_executable(flight_evaluator_test
+  test/flight_evaluator_test.cpp src/flight_evaluator.cpp)
+target_include_directories(flight_evaluator_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PATH_OPTIMIZER_PREFIX}/include
+  ${MMP_VEHICLE_DYNAMICS_PREFIX}/include)
+target_link_libraries(flight_evaluator_test Eigen3::Eigen
+  mmp_vehicle_dynamics::mmp_vehicle_dynamics)
+target_compile_features(flight_evaluator_test PRIVATE cxx_std_17)
+
+add_executable(flight_evaluator_example examples/flight_evaluator_example.cpp)
+target_link_libraries(flight_evaluator_example ${PROJECT_NAME}_lib)
+
+add_executable(execution_adoption_test test/execution_adoption_test.cpp)
+target_link_libraries(execution_adoption_test ${PROJECT_NAME}_lib)
+
 add_executable(ros_planning_backend_test test/ros_planning_backend_test.cpp)
 target_link_libraries(ros_planning_backend_test ${PROJECT_NAME}_lib)
 
@@ -419,6 +438,15 @@ if(BUILD_TESTING)
     COMMAND $<TARGET_FILE:mission_planner_core_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 30)
+  ament_add_test(flight_evaluator_test
+    COMMAND $<TARGET_FILE:flight_evaluator_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  ament_add_test(execution_adoption_test
+    COMMAND $<TARGET_FILE:execution_adoption_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 300)
   ament_add_test(ros_planning_backend_test
     COMMAND $<TARGET_FILE:ros_planning_backend_test>
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
@@ -615,6 +643,9 @@ install(TARGETS mission_planner_test mission_planner_core_test
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS committed_route_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS flight_evaluator_test execution_adoption_test flight_evaluator_example
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS mission_route_search_test route_search_backend_test vehicle_model_injection_test terrain_memo_test trajectory_message_test

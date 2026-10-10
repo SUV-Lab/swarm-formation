@@ -396,7 +396,7 @@ void ReplanFSM::computeAndPublishPaths() {
                 changeFSMExecState(EMERGENCY_STOP, "FSM");
                 break;
             }
-            auto local_traj = &path_manager_->traj_.local_traj;
+            auto local_traj = &path_manager_->executionTrajectory();
             // A refused plan zeroes duration and start_time
             // (SegmentChainPlanner::invalidateStoredTrajectory). Without
             // this guard the completion test below reads
@@ -486,7 +486,7 @@ void ReplanFSM::polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
         return;
     }
     // Emergency replacement and compatibility callers use the current slot.
-    const auto &data = path_manager_->traj_.local_traj;
+    const auto &data = path_manager_->executionTrajectory();
     msg = makeTrajectoryMessage(data.traj, drone_id_, data.traj_id,
                                 storedTrajectoryTime(data.start_time));
 }
@@ -502,7 +502,7 @@ void ReplanFSM::globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
     builtin_interfaces::msg::Time stamp;
     stamp.sec = now.seconds();
     stamp.nanosec = now.nanoseconds() % 1000000000;
-    msg = makeTrajectoryMessage(path_manager_->traj_.global_traj.traj,
+    msg = makeTrajectoryMessage(path_manager_->referenceTrajectory().traj,
                                 drone_id_, msg.trajectory_id, stamp);
 }
 
@@ -510,7 +510,7 @@ bool ReplanFSM::planFromGlobalTraj(int trial_times) {
     // The live execution slot still decides whether a flight was withdrawn.
     // The normal publication consumes the owned library result, so packaging
     // does not depend on the planner's coefficient storage or scratch values.
-    const auto &local_traj = path_manager_->traj_.local_traj;
+    const auto &local_traj = path_manager_->executionTrajectory();
     if (local_traj.duration > 0 && local_traj.start_time > 0)
     {
         if (pending_plan_ && pending_plan_->trajectory_id != local_traj.traj_id)
@@ -520,7 +520,7 @@ bool ReplanFSM::planFromGlobalTraj(int trial_times) {
         const double start_time = pending_plan_
             ? pending_plan_->start_time : local_traj.start_time;
         const auto &reference = pending_plan_
-            ? pending_plan_->reference_trajectory : path_manager_->traj_.global_traj.traj;
+            ? pending_plan_->reference_trajectory : path_manager_->referenceTrajectory().traj;
         log_manager_->infof("[planFromGlobalTraj] Using pre-optimized trajectory (duration=%.3f)", local_traj.duration);
 
         const auto msg = makeTrajectoryMessage(
@@ -605,7 +605,7 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
     }
 
     if (have_local_traj_) {
-        LocalTrajData *info = &path_manager_->traj_.local_traj;
+        const LocalTrajData *info = &path_manager_->executionTrajectory();
         double t_cur = rclcpp::Clock(RCL_ROS_TIME).now().seconds() - info->start_time;
         Eigen::Vector3d theoretical_pos = info->traj.getPos(t_cur);
         Eigen::Vector3d theoretical_vel = info->traj.getVel(t_cur);
@@ -929,7 +929,7 @@ void ReplanFSM::publishExecutionAbort(
     msg.drone_id = drone_id_;
     // The id of the trajectory being withdrawn — read BEFORE the slot is
     // cleared. A consumer executing a different id must ignore this.
-    msg.trajectory_id = path_manager_->traj_.local_traj.traj_id;
+    msg.trajectory_id = path_manager_->executionTrajectory().traj_id;
     msg.action = Ctl::ACTION_ABORT;
     msg.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
     msg.reason = (r == R::TERRAIN_BLOCKED)     ? Ctl::REASON_TERRAIN_BLOCKED
@@ -1333,9 +1333,9 @@ void ReplanFSM::loadObstaclesCallback(
     // array) only ever removes obstacles.
     if (added > 0) {
         const double t_cur =
-            (path_manager_->traj_.local_traj.start_time > 0.0)
+            (path_manager_->executionTrajectory().start_time > 0.0)
                 ? rclcpp::Clock(RCL_ROS_TIME).now().seconds() -
-                      path_manager_->traj_.local_traj.start_time
+                      path_manager_->executionTrajectory().start_time
                 : 0.0;
         Eigen::Vector3d hit;
         if (!path_manager_->revalidateStoredTrajectory(
@@ -1444,7 +1444,7 @@ void ReplanFSM::loadRiskZonesCallback(
     // must not read as "it is still fine" — the same rule the whole-flight
     // audit follows. An unchanged republish is a no-op, or every periodic
     // re-send would ground the mission.
-    if (path_manager_->traj_.local_traj.duration > 0.0 &&
+    if (path_manager_->executionTrajectory().duration > 0.0 &&
         path_manager_->riskZoneFingerprint() != zones_before) {
         path_manager_->invalidateStoredTrajectoryForEnvChange();
         FSM_LOG_WARN(
