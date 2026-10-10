@@ -1142,3 +1142,56 @@ baseline chain의 중간 증가량을 보존하며, 중간 궤적이 계산 중 
 ABORT·복구 보존을 충족했다. 다음은 단계 3의 기존 C++ `DynamicsSimulator`에서
 같은 운동·제어·RK4 계산을 `step()`과 일괄 `simulate()`가 공유하게 하는 작업이다.
 전체 ROS 제거, 새 VTOL 법칙, MINCO·L-BFGS 분할은 계속 제외한다.
+
+## 후속 단계 3 — 시뮬레이션 계산 엔진 (2026-10-10)
+
+단계 1·2의 상위 `8950668` / 계획 `a387e32`를 기준으로 기존 C++ follower의
+수신·재생과 계산을 분리했다. `mmp_vehicle_dynamics`의 기존 라이브러리에
+`trajectory_simulation.hpp/.cpp`를 추가했으며 라이브러리 수는 늘리지 않았다.
+
+| 입력/함수 | 결과와 책임 |
+|---|---|
+| `PolynomialReference` | 기존 float32 계수·구간 시간과 x/y·z의 m 배율을 소유 |
+| `makeInitialSimulationState()` | 기존 0.1초 방향 탐색·초기 속도 하한 규칙으로 SI 상태 생성 |
+| `SimulationInput` | 참조·초기 상태·적분 설정과 공유하는 const 운동 모델·제어기 |
+| `simulate(input)` | 상태 이력·최대 추종 오차·envelope 지표·종료 상태를 값으로 반환 |
+| `SimulationSession::step()` | 같은 RK4·감사를 한 스텝씩 실행, 호출자가 시간 예산 결정 |
+| `TrackingController` / `SimulationMotionModel` | 추종 명령 / 힘 변환·상태 미분·감사 교체 경계 |
+
+기본 `ReferenceTrackingController`와 `FixedWingMotionModel`은 원본 제어법과
+공유 point-mass 수학을 그대로 호출한다. 계획용 `VehicleModel`에 제어 기능을
+추가하지 않았다. ROS 노드는 메시지 수신, 기존 8 ms 계산 청크, 20 ms 타이머,
+스크럽·시각 앵커·ABORT·ID 관리, odometry/path/TF 발행을 유지한다.
+
+동일 세션은 직렬로 사용하고, 결과는 세션 파괴 뒤에도 유효하다. 모델과 제어기는
+RK4 중간값 및 재생에서 반복 조회 가능한 const 구현이어야 한다. 현재 3DOF 상태의
+교체 경계이며 임의 6DOF/VTOL 상태를 지원한다고 일반화하지 않는다. malformed 입력은
+`invalid_argument`, 전략 예외는 그대로 전달하며 스텝 중간 롤백은 약속하지 않는다.
+부분 결과·취소·borrowed 조회 수명은 상위 저장소의 `src/mmp_vehicle_dynamics/README.md`에
+기록했다. 공개 예제는 `trajectory_simulation_example.cpp`다.
+
+### 검증
+
+변경 전에 실제 기존 노드 소스와 설치 실행 파일을 보존했다. 네 입력의 전체 상태를
+두 번 실행해 기준 자체의 반복성을 먼저 확인했고, 변경 후에는 동일 입력을 두 실행
+방식으로 비교했다. R2 **26,055개 상태 × 8 double**, 선회·저속·수직 상태 이력,
+최대 오차·사용률·위반/평가불가 개수와 재생 조회 값이 모두 정확히 같다.
+R2 최대 오차는 **0.11871286239252095 m**, 최대 사용률은 **0.9831099246431086**다.
+
+명시한 차량·최적화·계획 패키지 경로로 컨테이너 빌드를 완료했고 CTest **40/40**을
+통과했다. 새 엔진 GTest **8개**, 기존 chain **71개**와 risk **154개**를 포함한다.
+설치 target만 사용하는 외부 CMake 프로그램도 빌드·실행했다.
+
+원본/변경 ROS 노드를 실제 DDS로 각각 실행해 8개 스크럽 위치의 상태·경로·오차·
+사용률·base TF를 비교했다. header stamp 외에는 같은 값이다. chase yaw는 ROS
+타이머 횟수 영향을 받으므로 같은 위치·yaw-only 규약을 검사했다. ABORT 후 발행
+중지, 같은 ID 거부, 새 ID 복구, 오래된 ABORT 무시가 모두 유지됐다.
+
+실제 RViz R2 로드·계획·환경 변경 철회·새 임무 복구를 다시 실행했다. 궤적 190조각과
+모든 계수·시간, 전단 경로, 평가·후처리·비용 프로필이 기존 기준과 같다. 검증 대상
+7개 변경 소스의 해시는 빌드 전후 같다. 증거는 상위 저장소의
+`docs/validation/trajectory_simulation_2026_10_10`에 보존했으며 오프라인 검증은
+새 실행을 대신하지 않는다.
+
+다음 단계 4는 표시 메시지의 준비와 ROS 발행을 옮긴다. 표시를 끌 때도 환경 마스크
+계산과 장애물 yaw 난수 소비처럼 실제 계획에 영향을 주는 처리는 계속 실행한다.
