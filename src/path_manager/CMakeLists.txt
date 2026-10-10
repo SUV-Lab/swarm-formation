@@ -52,14 +52,14 @@ find_package(ament_index_cpp REQUIRED)
 # (TrajectoryCommand, risk zones, dynamic obstacles) live in mmp_mission_msgs;
 # the trajectory wire format (PolyTraj) lives in mmp_traj_msgs.
 
-add_library(${PROJECT_NAME}_lib
-  src/path_manager.cpp
-  src/planning_visualization_data.cpp
-  src/ros_planning_visualization.cpp
+# Reusable computations and the backend-independent facade. This target has
+# explicit inputs/results; it contains no FSM, publisher, execution storage or
+# concrete ROS backend. Optimizer calls retain the existing complete solver.
+# Existing optimizer/search package dependencies still include ROS: splitting
+# targets here does not promise a separately deployable ROS-free SDK.
+add_library(${PROJECT_NAME}_calculations
   src/mission_planner.cpp
   src/planning_environment.cpp
-  src/ros_planning_backend.cpp
-  src/ros_terrain_grid.cpp
   src/route_slice_solver.cpp
   src/route_slice_batch.cpp
   src/flight_assembly.cpp
@@ -69,15 +69,36 @@ add_library(${PROJECT_NAME}_lib
   src/route_postprocessing.cpp
   src/mission_route_search.cpp
   src/route_search_backend.cpp
+  src/terminal_phase.cpp
+  src/transition_phase.cpp
+  src/waypoint_eval.cpp
+)
+target_compile_features(${PROJECT_NAME}_calculations PUBLIC cxx_std_17)
+target_include_directories(${PROJECT_NAME}_calculations PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(${PROJECT_NAME}_calculations PUBLIC
+  Eigen3::Eigen
+  path_optimizer::path_optimizer_lib
+  mmp_vehicle_dynamics::mmp_vehicle_dynamics
+)
+
+add_library(${PROJECT_NAME}_lib
+  src/path_manager.cpp
+  src/planning_visualization_data.cpp
+  src/ros_planning_visualization.cpp
+  src/ros_planning_backend.cpp
+  src/ros_terrain_grid.cpp
   src/builtin_route_search.cpp
   src/ros_route_search.cpp
   src/trajectory_message.cpp
   src/replan_fsm.cpp
   src/segment_chain_planner.cpp
-  src/terminal_phase.cpp
-  src/transition_phase.cpp
-  src/waypoint_eval.cpp
 )
+# Compatibility target for complete planning, ROS adapters and FSM execution.
+# Existing consumers keep their target name and inherit all computations.
+target_link_libraries(${PROJECT_NAME}_lib ${PROJECT_NAME}_calculations)
 
 # Public planning contracts use C++17 values such as std::optional. Export
 # the requirement so downstream callers do not rely on compiler defaults.
@@ -336,7 +357,7 @@ add_executable(planning_visualization_example examples/planning_visualization_ex
 target_link_libraries(planning_visualization_example ${PROJECT_NAME}_lib)
 
 add_executable(flight_evaluator_example examples/flight_evaluator_example.cpp)
-target_link_libraries(flight_evaluator_example ${PROJECT_NAME}_lib)
+target_link_libraries(flight_evaluator_example ${PROJECT_NAME}_calculations)
 
 add_executable(execution_adoption_test test/execution_adoption_test.cpp)
 target_link_libraries(execution_adoption_test ${PROJECT_NAME}_lib)
@@ -587,7 +608,7 @@ if(BUILD_TESTING)
     TIMEOUT 300)
 endif()
 
-install(TARGETS ${PROJECT_NAME}_lib
+install(TARGETS ${PROJECT_NAME}_lib ${PROJECT_NAME}_calculations
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -683,6 +704,18 @@ install(FILES ../common/log_manager.hpp DESTINATION common)
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
+
+# Ship source-level consumer examples. The separate consumer project below
+# resolves installed imported targets only; it has no source-tree include path.
+install(FILES
+  examples/library_consumer/CMakeLists.txt
+  examples/library_consumer/README.md
+  examples/mission_planner_example.cpp
+  examples/flight_evaluator_example.cpp
+  DESTINATION share/${PROJECT_NAME}/examples/library_consumer
+)
+install(FILES examples/planning_visualization_example.cpp
+  DESTINATION share/${PROJECT_NAME}/examples/library_consumer)
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 

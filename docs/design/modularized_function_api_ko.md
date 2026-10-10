@@ -1,0 +1,185 @@
+# 기능별 공개 API와 설치 target
+
+이 문서는 현재 호출 방법의 색인이다. 시간순 변경·검증 기록은
+[incremental_modularization_ko.md](incremental_modularization_ko.md)에 별도로 남긴다.
+ROS 실행, 기존 좌표계·단위·파라미터와 기본 알고리즘을 유지하면서, 입력과 결과를
+주고받는 계산과 ROS 실행·발행을 구분한다. 전체 기능을 같은 언어로 옮기거나
+ROS 없이 배포하는 독립 SDK를 제공하는 단계는 아니다.
+
+## 기능 선택
+
+| 필요한 기능 | 공개 진입점 | 호출자가 준비할 것 | 반환과 후속 사용 |
+|---|---|---|---|
+| 지도 준비 | Python `mmp_terrain.map_loader.load_map()` | `MapLoadInput`: 명시적 파일·미션·world·회랑·해상도 설정 | 소유하는 float32 지형, 실제 범위·해상도와 해석한 미션·프레임 |
+| 전체 계획 | C++ `MissionPlanner::plan()` | `PlanSettings`, `PlanningEnvironment`, 명시적 backend, `MissionPlanRequest` | 상태·사유, 소유하는 최종/참고 궤적, 평가·단계와 실행 메타데이터 |
+| 채택 전 계획 계산 | C++ `RosPlanningBackend::compute()` | 초기화한 backend와 동일한 미션 요청 | 소유하는 `PlanningComputation`; 실행 저장소의 후보 채택은 별도 호환 단계 |
+| 외부 궤적 평가 | C++ `evaluateFlight()` | 궤적, 단계 분할, 환경 조회, 선택 모델, 위험 정책·귀속, 평가 설정 | 소유하는 `FlightEvaluationReport`; 실행 저장소·발행 변경 없음 |
+| 추종 시뮬레이션 | C++ `simulate()` / `SimulationSession::step()` | 참조, 초기 상태, 운동 모델, 제어기, 적분 설정 | 소유하는 상태 이력·추종 오차·동역학 집계와 완료/취소 상태 |
+| 표시 준비·연결 | C++ `path_manager::visualization`의 `make*()`와 ROS 표시 어댑터 | 표시할 경로·궤적·위험·장애물 데이터와 필요한 조회·설정 | 소유하는 기존 ROS 표시 메시지. 실제 RViz 렌더링 완료를 반환하지 않음 |
+
+지도 로딩 없이 이미 준비한 환경을 계획에 전달할 수 있다. 평가·시뮬레이션·표시는
+외부 궤적에도 사용할 수 있으며 전체 계획을 선행해야 하는 강제 파이프라인이 아니다.
+표시 API는 기존 ROS 메시지를 사용하고, 표시 준비를 함수 호출로 분리한 경계다.
+
+각 기능은 선택적으로 호출한다. 아래의 화살표는 호출·의존 관계이며 필수 실행 순서가 아니다.
+
+```mermaid
+flowchart LR
+    A[외부 호출자 또는 기존 ROS 실행] --> L[Python load_map]
+    A --> P[MissionPlanner.plan]
+    A --> E[evaluateFlight]
+    A --> S[simulate / step]
+    A --> V[표시 메시지 make 함수]
+    P --> R[ROS backend · manager · chain]
+    R --> C[path_manager_calculations]
+    E --> C
+    C --> O[path_optimizer_lib · 기존 MINCO/L-BFGS]
+    S --> D[mmp_vehicle_dynamics]
+    C --> D
+    V --> W[ROS 표시 어댑터 · 기존 토픽 · RViz]
+```
+
+## CMake target의 책임
+
+| 설치된 imported target | 책임 | 남는 의존성 |
+|---|---|---|
+| `path_manager::path_manager_calculations` | generic planner facade, 환경 값 검증, 평가·궤적 연결·경로 처리, 구간 최적화 호출, 전환/종말/경유점 계산 | Eigen, 기존 optimizer·vehicle target. optimizer의 ROS 관련 전이 의존성은 유지 |
+| `path_manager::path_manager_lib` | 전체 계획의 현재 ROS backend, PathManager·SegmentChainPlanner 조정, FSM, 환경·메시지·시각화 연결 | calculations를 전이 제공하고 기존 ROS·지도·탐색·SDF 연결 유지 |
+| `path_optimizer::path_optimizer_lib` | `PolyTrajOptimizer::solve()`와 기존 MINCO·L-BFGS 전체, 설정·비용 프로필 연결 | 기존 ROS·탐색·기체 의존성 유지 |
+| `mmp_vehicle_dynamics::mmp_vehicle_dynamics` | 공유 물리, 계획용 `VehicleModel`, 시뮬레이션 엔진·운동 모델·제어기 | 계산 target에는 Eigen. 패키지 자체는 ROS 노드도 빌드 |
+
+계산 target의 목적은 책임과 링크 경계를 정리하는 것이다. 이를 링크한다고
+현재 설치 패키지의 모든 ROS 의존성이 없어지는 것은 아니다. 기존
+`path_manager::path_manager_lib` 소비자는 target 이름을 바꾸지 않아도 된다.
+MINCO·L-BFGS의 내부 알고리즘은 solver 하나의 경계 안에 유지한다.
+
+## 공개 헤더와 사용 문서
+
+| API | 헤더 또는 Python 모듈 | 자세한 문서·예제 |
+|---|---|---|
+| 계획 | `path_manager/mission_planner.h`, `mission_plan.h`, `plan_settings.h`, `planning_environment.h` | [계획 사용법](planning_library_usage_ko.md), `path_manager/examples/mission_planner_example.cpp` |
+| backend 선택·계산 결과 | `mission_planning_backend.h`, `ros_planning_backend.h`, `planning_computation.h` | [계산·채택·평가 계약](planning_computation_usage_ko.md) |
+| 평가 | `path_manager/flight_evaluator.h`, `flight_evaluation.h` | [계산·채택·평가 계약](planning_computation_usage_ko.md), `path_manager/examples/flight_evaluator_example.cpp` |
+| 교체 경계 | `path_manager/route_search_backend.h`, `mmp_vehicle_dynamics/vehicle_model.hpp` | [계획 사용법](planning_library_usage_ko.md)의 모델·탐색 주입 규약 |
+| 시뮬레이션 | `mmp_vehicle_dynamics/trajectory_simulation.hpp` | [vehicle README](../../../mmp_vehicle_dynamics/README.md), `mmp_vehicle_dynamics/src/trajectory_simulation_example.cpp` |
+| 지도 | `mmp_terrain.map_loader`, ROS 직렬화는 `mmp_terrain.ros_terrain` | [지도 API](../../../mmp_terrain/docs/map_loader_api_ko.md), `mmp_terrain/examples/load_map_example.py` |
+| 표시 | `path_manager/planning_visualization_data.h`, `ros_planning_visualization.h` | [표시 API 사용법](planning_visualization_usage_ko.md), `path_manager/examples/planning_visualization_example.cpp` |
+
+내부 조정 클래스의 기존 설치 헤더는 호환성을 위해 남는다. 새 외부 사용자는
+PathManager·SegmentChainPlanner·ReplanFSM 내부 필드나 실행 저장소를 조작하지 않고
+위 진입점을 사용한다. 채택·철회가 필요한 기존 실행 어댑터만 계산 결과의 호환
+채택 인터페이스를 사용한다. 일반 외부 호출자는 `MissionPlanner::plan()`이면 된다.
+
+## 단위와 시간
+
+- 계획 입력·출력 궤적은 기존 계획 좌표 단위 `u`이다. 속도는 `u/s`, 가속도는
+  `u/s²`이며 설정의 XY/Z 배율로 SI에 대응한다. 미션 waypoint z는 기존 AGL이다.
+  `MissionPlanRequest.start_altitude`가 시작 위치의 절대고도/명령 AGL 해석을 정한다.
+- 평가 대상 궤적 z는 전역고도이다. `FlightPhaseMetrics.min_agl` 등 지형 차이는
+  계획 단위이고, `min_agl_t` 등 궤적 시각은 참조 시작에서 경과한 초이다.
+  모델에 전달하는 PVA만 설정 배율을 적용해 SI로 변환한다.
+- `PhaseSpan.t_end`는 각 단계의 누적 종료 시각(초)이다. 구간 길이 목록이 아니다.
+  마지막 단계는 전체 궤적 끝에 일치해야 한다.
+- 시뮬레이션의 `PolynomialReference`는 기존 PolyTraj의 float 계수와 구간 시간을
+  소유한다. 샘플링 후 상태·참조 PVA는 m, m/s, m/s²이고 각도는 rad이다.
+  시뮬레이션 `time_s`는 참조 시작에서 경과한 초이다.
+- `MissionPlanResult.start_time`과 `reference_start_time`은 기존 ROS 계획 생성
+  시점의 절대 시각 메타데이터이다. 궤적 내부 상대 시간이나 새 실행 명령이 아니다.
+- Python 지형 결과는 기존 100 m 프레임 단위의 float32이며 `resolution_m`은 m이다.
+  미션 원본 z는 m AGL이다. 지형 배열의 행·열/NaN 규칙은 지도 API 문서를 따른다.
+
+C++ double 궤적과 ROS float32 계수는 서로 다른 표현이다. 외부 계획 결과를 기존
+follower와 비교하려면 같은 float32 직렬화 입력으로 시뮬레이션해야 한다. 표시나
+시뮬레이션 연결에서 임의로 단위·다항식 계수 표현을 바꾸지 않는다.
+
+## 소유권과 호출 순서
+
+`MissionPlanResult`와 `PlanningComputation`의 궤적은 계수·시간을 소유한다. 다음 계획,
+내부 임시 optimizer 파괴 또는 환경 갱신이 이미 반환한 계수를 바꾸지 않는다.
+`reference_trajectory`는 기존 의미를 유지한다: direct는 MINCO seed, baseline chain은
+최적화된 baseline, route chain은 완성된 비행 궤적이다.
+
+평가 입력의 궤적·단계·구간 귀속 포인터와 환경 조회는 한 동기 호출 동안 빌려 쓴다.
+조회 제공자와 값은 반환까지 유효하고 안정적이어야 하며 결과에는 보관하지 않는다.
+표시 준비 조회도 동기 호출의 수명 규약을 따른다. `VehicleModel`을 병렬 구간 worker가
+공유하므로 const 질의는 동시 읽기를 지원해야 한다.
+
+동일 planner의 계획·환경·모델·탐색·설정 변경은 직렬로 수행한다. 계산과 채택 사이에
+새 계산, 환경·실행 갱신, 모델·탐색 교체가 일어나면 이전 결과의 채택 토큰이 거부된다.
+토큰은 환경 불변 snapshot이 아니다. live ROS 파라미터 변경은 토큰으로 추적하지
+않으므로 계산과 채택 사이에 변경하면 안 된다. `compute()`는 새 후보를 실행 저장소에
+채택하지 않지만 기존 환경 준비·재검증까지 부작용 없는 함수라는 뜻은 아니다.
+
+시뮬레이션 세션은 입력 참조·설정·이력을 소유하고 모델·제어기를 shared const 객체로
+유지한다. 기본 전략은 생성 시 설정을 복사한다. RK4 중간 상태와 재생에서 반복 호출될
+수 있으므로 전략은 숨은 상태를 호출 횟수로 전진시키지 않는다. 상태를 가진 새 제어기나
+다른 상태 표현의 VTOL/6DOF 엔진은 이번 인터페이스의 보장 범위가 아니다.
+
+`SimulationSession::states()`는 세션이 빌려주는 참조다. 상태 원소 참조를 다음
+`step()`의 벡터 변경을 넘어 보관하지 않는다. `std::move(session).takeResult()`는
+부분/완료 이력을 소유 결과로 옮긴다. 이후 세션을 재사용하지 않는다.
+
+지도 배열은 호출 결과가 소유하며 열린 raster handle을 보관하지 않는다. 호출자가
+이미 해석한 `mission_snapshot`을 넘기면 그 snapshot은 명시적으로 재사용하므로 호출
+중 수정하지 않는다. 미션·자산이 다른 요청의 snapshot을 넘겨서는 안 된다.
+
+표시 준비 함수는 입력 참조와 조회 콜백을 저장하지 않고 소유하는 ROS 메시지를 반환한다.
+호출 동안 제공자를 유효하고 안정적으로 유지해야 한다. 잘못된 구조는
+`std::invalid_argument`, 제공자의 예외는 그대로 전파하며 부분 메시지를 반환하지 않는다.
+빈 궤적의 clear/no-tube 동작은 기존 의미를 따른다. `RiskSettings`는 기존 설정의
+명시적인 투영이며 0으로 초기화한 값을 사용 가능한 기본 프로필로 간주하지 않는다.
+
+`PlanSettings.attach_visualization=false`는 manager의 `/viz/*`, `/debug/pipeline`,
+`/planning/front_end_path` 표시 준비·발행을 끈다. 전체 ROS, terrain/SDF, 실행/철회
+동작을 끄는 옵션은 아니다. 표시 연결을 생략해도 계획 계산은 같은 구현을 사용한다.
+
+## 실패·예외·부분 결과
+
+| 기능 | 호출자가 확인할 것 |
+|---|---|
+| 계획 | `result.hasTrajectory()`와 `status`. 실패한 `MissionPlanResult`는 사용할 최종 궤적을 제공하지 않는다. DEGRADED의 사유를 보존한다. |
+| 채택 전 계산 | 반드시 `hasTrajectory()` 확인. 실패 결과의 `product`가 남아 있을 수 있으나, 이는 거부된 중간 결과의 기존 저장소 무효화 재현용이며 실행용 결과가 아니다. |
+| 평가 | 먼저 `report.issue == NONE`와 `verdict.evaluated`를 확인한 다음 `clean`·`unflyable()`를 해석한다. 미평가 기본값도 기존대로 `clean=true`이므로 이것만으로 성공을 판정하지 않는다. 잘못된 계수·시간·설정·단계는 미평가이며, 없는 위험 정책을 측정한 정책으로 간주하지 않는다. |
+| 시뮬레이션 | 완료는 `COMPLETED`, 명시적 취소는 `CANCELLED`와 부분 이력. `step()`은 상태를 추가하면 true, 종료 확인 후 false. false까지 호출해야 완료를 확인한다. |
+| 지도 | 파일·해석·예산 실패는 예외. 기존 게시 지형 유지/rollback은 ROS 서비스 어댑터 책임이다. `world="none"`은 명시적 삭제 결과다. |
+| 표시 | 메시지 준비·발행 성공은 화면 렌더링 완료의 보증이 아니다. 기존 토픽의 삭제·갱신 순서와 시간 의미를 어댑터가 유지한다. |
+
+초기 설정 오류와 동기 콜백·모델의 예외는 기존대로 호출자에게 전파된다. 모든 예외를
+계획 실패 결과로 변환하지 않는다. 병렬 구간 worker 안에서 처리하지 않은 예외는
+현재 프로세스를 종료할 수 있다. worker 종료·결과 채택 정책을 바꾸려면 별도 변경과
+검증이 필요하다.
+
+시뮬레이션은 잘못된 입력에 `std::invalid_argument`를 던진다. 전략 예외가 발생한
+`step()`에는 추가한 상태와 일부 지표가 남을 수 있으므로 해당 세션을 폐기한다.
+롤백·예외 뒤 재개는 보장하지 않는다. 직접 `PolynomialReference::sample()`을
+호출할 때는 마지막 필드 변경 후 `validate()`를 먼저 실행한다.
+
+직접 계획은 기존 optimizer audit만 유지하여 결과의 whole-flight
+`evaluation.evaluated`가 false이다. chain과 같은 평가를 자동으로 추가하지 않는다.
+외부 호출자는 필요한 궤적에 `evaluateFlight()`를 별도로 호출할 수 있다. 이 평가는
+기존 0.1 s 표본 판정을 보존하며 연속 충돌 검사나 비행 안전 보증이 아니다.
+
+## 설치된 API 검증 예제
+
+`path_manager`는 `share/path_manager/examples/library_consumer`에 외부 CMake
+프로젝트와 계획·평가 예제 소스를 설치한다. 시뮬레이션 예제 소스는
+`share/mmp_vehicle_dynamics/examples`에 설치한다. 해당 consumer는 설치된 imported
+대상만 연결하고 저장소 include 경로나 MMP 구현 소스를 직접 컴파일하지 않는다.
+
+```bash
+source /opt/ros/humble/setup.bash
+source /ws/install/setup.bash
+cmake -S /ws/install/path_manager/share/path_manager/examples/library_consumer \
+  -B /tmp/mmp_api_consumer_build -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/mmp_api_consumer_build -j2
+/tmp/mmp_api_consumer_build/flight_evaluator_client
+/tmp/mmp_api_consumer_build/trajectory_simulation_client
+/tmp/mmp_api_consumer_build/planning_visualization_client
+/tmp/mmp_api_consumer_build/mission_planner_client \
+  /ws/install/path_manager/share/path_manager/config/optimizer_params.yaml
+```
+
+지도 예제는 설치된 Python 모듈과 명시적인 지도·미션 자산을 사용한다. 실행 인자는
+`share/mmp_terrain/examples/load_map_example.py --help`와 지도 API 문서를 따른다.
+예제의 synthetic 입력 검증, 실제 R2 수치 회귀, ROS/RViz 실행 검증은 서로 다른
+검증 범위이며 실행한 결과는 검증 기록에서 구분한다.
