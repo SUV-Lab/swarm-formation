@@ -1,0 +1,22 @@
+32/33 Testing: chain_variants
+32/33 Test: chain_variants
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/chain_variants.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "bash" "/ws/src/mmp_path_planning/src/path_manager/../../scripts/run_chain_variants.sh" "/ws" "/ws/build/path_manager/chain_variants" "/ws/build/path_manager/chain_experiment_test"
+Directory: /ws/build/path_manager
+"chain_variants" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - bash /ws/src/mmp_path_planning/src/path_manager/../../scripts/run_chain_variants.sh /ws /ws/build/path_manager/chain_variants /ws/build/path_manager/chain_experiment_test
+binary: /ws/build/path_manager/chain_experiment_test
+71 variants
+DONE 71/71
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/chain_variants.xml' with successful test
+<end of output>
+Test time =  25.67 sec
+----------------------------------------------------------
+Test Passed.
+"chain_variants" end time: Oct 10 08:42 UTC
+"chain_variants" time elapsed: 00:00:25
+----------------------------------------------------------
+

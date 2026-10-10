@@ -1,0 +1,15 @@
+[INFO] [1791621735.108201662] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791621735.108270502] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791621735.108277655] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791621735.108279860] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791621735.108389577] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791621735.108454410] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791621735.108492432] [chain_experiment]: Optimizer initialized successfully for drone 0
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[ERROR] [1791621735.108869075] [chain_experiment]: A* failed for segment 0: (30.00,150.00,3.00) -> (330.00,150.00,2.57)
+[FM2-FAIL] plan=0 route=0 piece_leg=0 pieces=0 dur=0
+[OK]   an FM2 grid that cannot be built fails the plan
+[OK]   ...leaving NO committed route — a straight line nobody checked for obstacles is not an answer to a failed search
+[OK]   ...and no provenance
+[OK]   ...and nothing executable in the trajectory slot
+PASS: 0 failed check(s)

@@ -24,5 +24,12 @@ struct PlanSettings {
   std::map<std::string, PlanSetting> parameters;
   mmp_vehicle_dynamics::VehicleModel::Ptr vehicle_model;
   std::shared_ptr<RouteSearchBackend> route_search_backend;
+  // Optional ROS visualization connection. False creates no visualization
+  // publishers and skips message preparation; planning, risk masks, obstacle
+  // orientation, execution policy and numerical settings remain active.
+  // Covers PM's /viz/* display channels, /debug/pipeline and the display route
+  // /planning/front_end_path. ROS backend, terrain/SDF and execution transport
+  // still operate; this flag does not request a ROS-free backend.
+  bool attach_visualization{true};
 };
 }  // namespace path_manager

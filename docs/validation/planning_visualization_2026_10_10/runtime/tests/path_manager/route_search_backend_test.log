@@ -1,0 +1,236 @@
+24/33 Testing: route_search_backend_test
+24/33 Test: route_search_backend_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/route_search_backend_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/route_search_backend_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"route_search_backend_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/route_search_backend_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[OK] external canonical dispositions are measured without inventing an FM2 pass
+[OK] pass-zero diagnostics may supply consistent canonical projections
+[OK] pass-zero endpoint flag cannot contradict HARD_AVOID disposition
+[OK] pass-zero endpoint flag cannot deny SOFT_ENDPOINT disposition
+[OK] pass-zero endpoint projection can be supplied without soft diagnostics
+[OK] pass-zero soft flag cannot contradict HARD_AVOID disposition
+[OK] pass-zero soft flag cannot deny SOFT_UNAVOIDABLE disposition
+[OK] UNKNOWN policy cannot certify ordered zone dispositions
+[OK] stale request cannot be admitted as current policy
+[OK] stale context cannot be admitted as current policy
+[OK] stale environment revision cannot be admitted as current policy
+[OK] stale zone generation cannot be admitted as current policy
+[OK] stale policy epoch cannot be admitted as current policy
+[OK] stale search serial cannot be admitted as current policy
+[OK] policy for another leg cannot be admitted
+[OK] missing ordered disposition is unmeasured
+[OK] extra ordered disposition is unmeasured
+[OK] unrecognized disposition enum is unmeasured
+[OK] unrecognized policy knowledge enum is unmeasured
+[OK] partial raw diagnostic shape is unmeasured
+[OK] nonboolean raw diagnostic is unmeasured
+[OK] partial raw diagnostic shape is unmeasured
+[OK] nonboolean raw diagnostic is unmeasured
+[OK] invalid legacy pass cannot certify a policy
+[OK] invalid legacy pass cannot certify a policy
+[OK] complete consistent built-in pass-one diagnostics are admitted
+[OK] claimed built-in pass requires endpoint diagnostics
+[OK] claimed built-in pass requires soft-override diagnostics
+[OK] endpoint disposition cannot contradict built-in diagnostics
+[OK] pass-one crossing policy cannot contradict its explicit diagnostic claim
+[OK] pass-two fallback still respects endpoint precedence
+[OK] pass-two fallback cannot claim an incompatible disposition
+[OK] pass-three ordered diagnostics retain unavoidable-soft disposition
+[OK] finite successful geometry is usable independently of UNKNOWN policy
+[OK] failure status cannot publish leftover geometry
+[OK] successful one-point geometry is refused
+[OK] successful empty geometry is refused
+[OK] nonfinite geometry is refused before route postprocessing
+[OK] nonfinite geometry is refused before route postprocessing
+[OK] actual invocation identities are nonzero and advance
+[coarse] grid=4x4x2 N=32 blocked=0 reached=32 goal_cell=(3,2,0) goal_g=0
+[INFO] [1791621652.845899386] [astar]: CENTER: (16.000000,16.000000,4.000000)
+[INFO] [1791621652.846826982] [astar]: 3D A* search successful with ESDF
+[INFO] [1791621652.846842001] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[34mA star iter:1011, time:0.923[0m
+[OK] public built-in factory selects and executes actual A* on a small SDF grid
+[OK] zone-bearing A* truthfully returns UNKNOWN policy instead of inventing an FM2 pass
+[OK] A* UNKNOWN policy retains successful finite endpoint geometry
+[coarse] grid=4x4x2 N=32 blocked=0 reached=32 goal_cell=(3,2,0) goal_g=0
+[INFO] [1791621652.846866066] [astar]: CENTER: (16.000000,16.000000,4.000000)
+[INFO] [1791621652.847644409] [astar]: 3D A* search successful with ESDF
+[INFO] [1791621652.847650300] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[34mA star iter:1011, time:0.777[0m
+[OK] A* empty-zone result certifies only the empty canonical policy
+[coarse] grid=5x4x2 N=40 blocked=0 reached=40 goal_cell=(4,2,0) goal_g=0
+[INFO] [1791621652.847837565] [astar]: CENTER: (20.000000,16.000000,4.000000)
+[INFO] [1791621652.848877583] [astar]: 3D A* search successful with ESDF
+[INFO] [1791621652.848884557] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[34mA star iter:1366, time:1.038[0m
+[OK] reused actual A* backend resizes its tiny pool for changed grid geometry
+[OK] returned A* points remain owned after later searches and backend destruction
+[INFO] [1791621652.856670062] [route_backend_manager]: Initializing optimizer for drone 7...
+[WARN] [1791621652.856774510] [route_backend_manager]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791621652.856797433] [route_backend_manager]: Obstacle avoidance: enabled
+[INFO] [1791621652.856808965] [route_backend_manager]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791621652.856977664] [route_backend_manager]: [POLY_TRAJ_OPT][drone 7] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791621652.857102881] [route_backend_manager]: [POLY_TRAJ_OPT][drone 7] Setting initial formation type: 2
+[INFO] [1791621652.857172703] [route_backend_manager]: Optimizer initialized successfully for drone 7
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[OK] zone-bearing fixture installs a distant nonintersecting policy volume
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621652.998103963] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.010990714] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] default backend plans the real two-leg fixture
+[OK] built-in baseline captures measured policy for both legs
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.034010453] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.050138719] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] a separately owned real-backend wrapper reproduces default geometry, caps and edge provenance exactly
+[OK] replacement receives one actual search per mission leg
+[OK] actual leg identities carry unique invocation, stable owner, current epoch and ordered serials
+[OK] replacement receives the real terrain/SDF/ordered zones and the same physical model
+[OK] measured replacement metadata becomes complete per-leg policy captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.061852259] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.072992264] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] unknown policy keeps real successful geometry
+[OK] unknown policy leaves no partial or stale measured captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.085867062] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.103938355] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] first-leg unknown policy keeps real successful geometry
+[OK] first-leg unknown policy leaves no partial or stale measured captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.124261120] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.134027304] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] second-leg unknown policy keeps real successful geometry
+[OK] second-leg unknown policy leaves no partial or stale measured captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.144894592] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.156976810] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] stale invocation policy keeps real successful geometry
+[OK] stale invocation policy leaves no partial or stale measured captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.168895168] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.189451755] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] wrong owner policy keeps real successful geometry
+[OK] wrong owner policy leaves no partial or stale measured captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.199972799] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.222028964] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] missing dispositions policy keeps real successful geometry
+[OK] missing dispositions policy leaves no partial or stale measured captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.235953248] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.248061936] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] malformed raw diagnostics policy keeps real successful geometry
+[OK] malformed raw diagnostics policy leaves no partial or stale measured captures
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.271866862] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.280009874] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[ERROR] [1791621653.280199643] [route_backend_manager]: A* failed for segment 1: (180.00,150.00,6.00) -> (330.00,150.00,6.00)
+[OK] second-leg failure returns no partial committed route or stale cache
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.297941653] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.310051754] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[ERROR] [1791621653.310143578] [route_backend_manager]: A* failed for segment 1: (180.00,150.00,6.00) -> (330.00,150.00,6.00)
+[OK] second-leg nonfinite result returns no partial committed route or stale cache
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.321775373] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.333835078] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[ERROR] [1791621653.333911243] [route_backend_manager]: A* failed for segment 1: (180.00,150.00,6.00) -> (330.00,150.00,6.00)
+[OK] second-leg short result returns no partial committed route or stale cache
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.343887655] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.345565010] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] valid measured search recovers after unknown policy and geometry failures
+[OK] later backend calls cannot mutate retained route and raw result storage
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.346757487] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.348080912] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] null restores default routing and stops calling the replacement
+[INFO] [1791621653.361719806] [route_backend_second_owner]: Initializing optimizer for drone 7...
+[WARN] [1791621653.361818362] [route_backend_second_owner]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791621653.361839572] [route_backend_second_owner]: Obstacle avoidance: enabled
+[INFO] [1791621653.361851785] [route_backend_second_owner]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791621653.362017840] [route_backend_second_owner]: [POLY_TRAJ_OPT][drone 7] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791621653.362231695] [route_backend_second_owner]: [POLY_TRAJ_OPT][drone 7] Setting initial formation type: 2
+[INFO] [1791621653.362283503] [route_backend_second_owner]: Optimizer initialized successfully for drone 7
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.378918808] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=172 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.392811192] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[OK] owned replacement can bind a new manager after the original environment is destroyed
+[OK] backend reuse across managers receives a distinct context and invocation identity
+[OK] manager owns the replacement after caller ownership is released
+[OK] manager destruction releases the replacement without a cycle
+[OK] returned route and backend result own storage after all managers/backends die
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791621653.398427412] [route_backend_facade]: Initializing optimizer for drone 7...
+[INFO] [1791621653.398744422] [route_backend_facade]: Optimizer initialized successfully for drone 7
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.410387188] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621653.415119354] [route_backend_facade]: Setting formation with 0 positions to optimizer
+[WARN] [1791621653.415133401] [route_backend_facade]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] default facade fixture generates and evaluates a whole mission
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621653.433331064] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621653.445763765] [route_backend_facade]: Setting formation with 0 positions to optimizer
+[WARN] [1791621653.445808970] [route_backend_facade]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] whole-mission API actually invokes the external real backend
+[OK] replacement route backend preserves exact final and reference polynomial coefficients/durations
+[OK] replacement preserves phase boundaries and whole-flight evaluation
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/route_search_backend_test.xml' with successful test
+<end of output>
+Test time =   0.86 sec
+----------------------------------------------------------
+Test Passed.
+"route_search_backend_test" end time: Oct 10 08:40 UTC
+"route_search_backend_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

@@ -1,0 +1,634 @@
+=== Log started at 2026-10-10 08:40:49.194 for node: replan_fsm_drone_0 ===
+[2026-10-10 08:40:49.194] [INFO ] [replan_fsm_drone_0] Starting ReplanFSM for drone_id: 0
+[2026-10-10 08:40:49.194] [INFO ] [replan_fsm_drone_0] enable_waypoint_markers: true
+[2026-10-10 08:40:49.194] [INFO ] [replan_fsm_drone_0] enable_global_trajectory_pub: true
+[2026-10-10 08:40:49.194] [INFO ] [replan_fsm_drone_0] ReplanFSM parameters:
+[2026-10-10 08:40:49.194] [INFO ] [replan_fsm_drone_0]   Start position will be set from TrajectoryCommand
+[2026-10-10 08:40:49.194] [INFO ] [replan_fsm_drone_0]   Waiting for trajectory command...
+[2026-10-10 08:40:49.194] [INFO ] [replan_fsm_drone_0] Initial position set to: (0.00, 0.00, 0.00)
+=== Log started at 2026-10-10 08:40:49.194 for node: replan_fsm_drone_0 ===
+[2026-10-10 08:40:49.195] [INFO ] [replan_fsm_drone_0] dyn_yaw_seed: RANDOM -> 631509355 (pin manager/dyn_yaw_seed to this to reproduce)
+[2026-10-10 08:40:49.195] [INFO ] [replan_fsm_drone_0] world='none' (no ESDF disk cache; boxes-only SDF builds on demand)
+[2026-10-10 08:40:49.195] [INFO ] [replan_fsm_drone_0] Risk zone params size: 0
+[2026-10-10 08:40:49.195] [INFO ] [replan_fsm_drone_0] No risk zones configured
+[2026-10-10 08:40:49.197] [INFO ] [replan_fsm_drone_0] PathManager initialized, waiting for trajectory command
+[2026-10-10 08:40:49.197] [WARN ] [replan_fsm_drone_0] [CHAIN] segment-chained planning ENABLED (auto-sized segments) — /planning/initial_trajectory carries the baseline OPTIMIZED trajectory in this mode (the chained flight itself under chain/author_from_route), not the MINCO seed
+[2026-10-10 08:40:49.197] [INFO ] [replan_fsm_drone_0] Callback groups created: timer, subscription (all MutuallyExclusive)
+[2026-10-10 08:40:49.198] [INFO ] [replan_fsm_drone_0] FSM timer created on the subscription callback group (10ms period, serialized with planning)
+[2026-10-10 08:40:49.209] [INFO ] [replan_fsm_drone_0] [FSM]: from INIT to WAIT_POSITION
+[2026-10-10 08:40:49.213] [INFO ] [replan_fsm_drone_0] [TERRAIN] empty world confirmed (no DEM loaded)
+[2026-10-10 08:40:49.213] [INFO ] [replan_fsm_drone_0] Terrain data received and forwarded to PathManager
+[2026-10-10 08:40:52.667] [INFO ] [replan_fsm_drone_0] [SDF] xy voxel auto-set to DEM cell: 0.300 units
+[2026-10-10 08:40:52.680] [INFO ] [replan_fsm_drone_0] Terrain data loaded: 4119x2804, resolution=0.300, origin=(14524.65,17182.96), center=(14945.25,17800.81)
+[2026-10-10 08:40:52.686] [INFO ] [replan_fsm_drone_0] [TERRAIN-ALIGN] peak cell (c=2188,r=735) h=15.6934 -> world (15145.20,17762.11) -> getElevation=15.6934 delta=0.0000 (ALIGNED)
+[2026-10-10 08:40:52.692] [INFO ] [replan_fsm_drone_0] SDF built: shape=(2804,4120,457) voxel=(0.30,0.30,0.10) blocks=0
+[2026-10-10 08:40:52.692] [INFO ] [replan_fsm_drone_0] Terrain data received and forwarded to PathManager
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] [TRAJECTORY CMD] Received trajectory command (seq: 1, drone: 0) at time 1791621655.831
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] Received start position from TrajectoryCommand: (14724.65, 18218.68, 2.00)
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] Trajectory command (seq: 1): mission=r2_ridge_crossing#1, start=(14724.65, 18218.68, 2.00), target=(15165.90, 17382.96, 2.00)
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] Drone 0: target=(15165.90, 17382.96, 2.00), offset=(0.00, 0.00, 0.00), 1 waypoints
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] [DEBUG TARGET] startMissionPlan STARTED for drone 0 at time 1791621655.832!
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] Using command start state: pos=(14724.65, 18218.68, 2.00), speed=200.0 m/s, vel_mps=(93.4, -176.9, 0.0) [src: initial_speed x first-leg direction (level)], acc_mps2=(0.0, 0.0, 0.0)
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] Drone 0: Using 1 commanded waypoints (already offset-applied)
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] start_pt_: 14724.65, 18218.68, 2.00
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] waypoints size: 1
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] waypoint: 15165.90, 17382.96, 2.00
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] Drone 0: Published 1 waypoint markers to RViz (frame: map, ns: waypoints_drone_0)
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] [START AGL] commanded start z=2.00 AGL -> absolute 3.53 (terrain 1.53 + agl 2.00)
+[2026-10-10 08:40:55.831] [INFO ] [replan_fsm_drone_0] [TIMING] Starting global trajectory planning
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] PolyTrajOptimizer parameters initialized
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] Obstacle avoidance: enabled
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] Debug logging: enabled (using LogManager)
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] L-BFGS detail logging: disabled
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] PathManager: Set formation info - drone_id=0, type=none, pattern_size=1
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] route-parallel plan, auto-sized segments (no baseline)
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] Planning global trajectory with 1 waypoints
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] [GOAL AGL] waypoint (15165.9, 17383.0) z=2.00 AGL -> absolute 2.12 (terrain 0.12 + agl 2.00)
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] [BBOX] headroom=20.00 terrain_peak=12.16 zone_top=0.00 (0 zones, not covered) -> ceiling 32.16
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] Map bounds: lower=(14714.65,17372.96,-2.88), upper=(15175.90,18228.68,32.16)
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] SDF probe: start=1236.000 m, goal=1236.000 m (margin=0.60)
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] [PM DBG] setRiskZones: 0 zones weight=30.000
+[2026-10-10 08:40:55.832] [INFO ] [replan_fsm_drone_0] 드론 0: 3D 경로 검색 및 단순화 시작
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]   0% xy=(14724.6,18218.7) z= 3.532 terrain=1.532
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]   5% xy=(14779.4,18192.5) z= 3.157 terrain=1.807
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  10% xy=(14826.7,18155.6) z= 3.583 terrain=2.275
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  15% xy=(14865.9,18114.9) z= 3.461 terrain=1.980
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  20% xy=(14913.9,18080.8) z= 3.381 terrain=2.209
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  25% xy=(14955.8,18067.4) z= 3.552 terrain=2.241
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  30% xy=(14977.2,18022.9) z= 3.344 terrain=2.316
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  35% xy=(14998.6,17974.6) z= 4.035 terrain=3.222
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  40% xy=(14988.2,17924.5) z=10.341 terrain=9.081
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  45% xy=(15008.1,17878.4) z= 7.649 terrain=6.399
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  50% xy=(15019.2,17836.8) z= 6.539 terrain=5.511
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  55% xy=(15012.5,17789.7) z= 6.651 terrain=5.554
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  60% xy=(15032.6,17753.5) z= 7.296 terrain=6.063
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  65% xy=(15048.2,17705.1) z= 7.658 terrain=6.161
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  70% xy=(15067.8,17663.4) z= 6.422 terrain=5.435
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  75% xy=(15083.0,17623.3) z= 7.267 terrain=5.973
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  80% xy=(15088.2,17575.5) z= 9.106 terrain=7.872
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  85% xy=(15096.0,17527.9) z= 9.352 terrain=8.061
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  90% xy=(15113.0,17487.0) z= 5.213 terrain=3.767
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE]  95% xy=(15141.6,17440.1) z= 3.434 terrain=1.302
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [GEO-PROFILE] 100% xy=(15165.9,17383.0) z= 2.121 terrain=0.121
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] [FM2] grid=513x951x117 valid=ok eikonal=511.1ms geodesic=1.5ms wp=2264 start_risk=0.000 goal_risk=0.000 alpha=30.00 barrier=100.0 geo_z=[2.12,10.59] start_z=3.53 end_z=2.12
+[2026-10-10 08:40:56.345] [INFO ] [replan_fsm_drone_0] 드론 0: Raw 경로 Z 범위: 2.121 ~ 10.594 (변화량: 8.472)
+[2026-10-10 08:40:56.364] [INFO ] [replan_fsm_drone_0] [A* SHORTCUT] corner-cut guard re-inserted 129 vertex(es) (inner chord occupied/risk-exceeded)
+[2026-10-10 08:40:56.364] [WARN ] [replan_fsm_drone_0] [A* SHORTCUT] corner-cut guard capped/dense with blocked inner chord(s) remaining — optimizer terms are the remaining guard
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]   0% xy=(14724.6,18218.7) z= 3.532 terrain=1.532
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]   5% xy=(14868.6,18112.2) z= 3.430 terrain=1.738
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  10% xy=(14894.9,18090.9) z= 3.287 terrain=1.939
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  15% xy=(14938.5,18079.4) z= 3.618 terrain=2.181
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  20% xy=(14954.2,18069.2) z= 3.538 terrain=2.132
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  25% xy=(14967.1,18059.4) z= 3.768 terrain=2.311
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  30% xy=(14986.4,18010.0) z= 3.430 terrain=2.498
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  35% xy=(14992.8,17989.8) z= 3.651 terrain=2.891
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  40% xy=(14996.8,17972.8) z= 4.275 terrain=3.327
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  45% xy=(14988.4,17923.5) z=10.415 terrain=9.241
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  50% xy=(15019.3,17825.1) z= 7.819 terrain=6.771
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  55% xy=(15022.9,17761.3) z= 6.832 terrain=5.932
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  60% xy=(15044.5,17732.0) z= 8.391 terrain=6.917
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  65% xy=(15055.7,17688.7) z= 7.282 terrain=5.931
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  70% xy=(15071.8,17657.5) z= 6.386 terrain=5.577
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  75% xy=(15083.7,17621.5) z= 7.288 terrain=6.020
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  80% xy=(15088.3,17580.9) z= 9.646 terrain=8.399
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  85% xy=(15089.5,17565.5) z= 8.782 terrain=7.575
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  90% xy=(15100.0,17515.7) z= 9.531 terrain=8.380
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE]  95% xy=(15113.4,17485.5) z= 4.493 terrain=3.215
+[2026-10-10 08:40:56.365] [INFO ] [replan_fsm_drone_0] [SIMPLE-PROFILE] 100% xy=(15165.9,17383.0) z= 2.121 terrain=0.121
+[2026-10-10 08:40:56.366] [INFO ] [replan_fsm_drone_0] [A* SHORTCUT] raw=2264 → simple=180 cost_margin=1.05 risk_margin=1.10 max_risk_simple=0.810 (21.1 ms)
+[2026-10-10 08:40:56.366] [INFO ] [replan_fsm_drone_0] 드론 0: 3D 경로 단순화 완료 - 2264점 -> 180점
+[2026-10-10 08:40:56.366] [INFO ] [replan_fsm_drone_0] 드론 0: 단순화된 경로 Z 범위: 2.121 ~ 10.523 (변화량: 8.402)
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0] A* segment 0: simple_path_size=180
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0] A* route: 180 waypoints (534.7 ms)
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[0]: (14724.65, 18218.68, 3.53) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[1]: (14782.11, 18190.78, 3.15) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[2]: (14822.02, 18162.42, 3.35) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[3]: (14828.07, 18155.02, 3.71) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[4]: (14848.50, 18131.42, 3.44) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[5]: (14859.59, 18121.44, 3.33) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[6]: (14864.40, 18116.39, 3.64) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[7]: (14867.00, 18113.69, 3.43) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[8]: (14868.55, 18112.20, 3.43) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[9]: (14870.31, 18110.95, 3.32) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[10]: (14872.20, 18109.91, 3.27) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[11]: (14874.54, 18108.56, 3.30) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[12]: (14876.33, 18107.36, 3.36) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[13]: (14878.31, 18105.88, 3.57) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[14]: (14879.78, 18104.69, 3.50) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[15]: (14881.80, 18102.89, 3.35) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[16]: (14885.78, 18099.25, 3.27) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[17]: (14894.94, 18090.93, 3.29) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[18]: (14899.92, 18086.80, 3.24) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[19]: (14902.24, 18084.56, 3.22) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[20]: (14904.54, 18082.65, 3.34) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[21]: (14912.85, 18080.94, 3.35) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[22]: (14919.81, 18080.12, 3.49) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[23]: (14926.32, 18080.63, 3.75) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[24]: (14930.57, 18080.63, 3.97) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[25]: (14934.10, 18080.21, 3.87) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[26]: (14938.54, 18079.37, 3.62) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[27]: (14943.22, 18078.32, 3.54) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[28]: (14947.49, 18075.14, 3.73) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[29]: (14949.90, 18073.99, 4.14) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[30]: (14950.64, 18073.43, 4.34) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[31]: (14950.89, 18073.24, 4.30) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[32]: (14951.39, 18072.86, 4.19) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[33]: (14951.69, 18071.72, 3.98) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[34]: (14952.27, 18070.95, 3.73) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[35]: (14954.16, 18069.23, 3.54) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[36]: (14957.23, 18065.89, 3.78) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[37]: (14960.55, 18062.64, 3.61) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[38]: (14961.33, 18061.92, 3.69) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[39]: (14964.03, 18061.92, 3.81) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[40]: (14964.93, 18061.92, 3.90) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[41]: (14965.12, 18061.66, 4.13) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[42]: (14965.29, 18061.41, 4.26) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[43]: (14965.64, 18060.89, 4.34) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[44]: (14967.07, 18059.43, 3.77) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[45]: (14974.61, 18035.19, 3.22) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[46]: (14975.86, 18028.52, 3.28) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[47]: (14977.60, 18021.62, 3.36) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[48]: (14979.66, 18018.21, 3.47) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[49]: (14981.86, 18015.10, 3.50) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[50]: (14983.66, 18015.10, 3.50) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[51]: (14984.76, 18014.19, 3.47) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[52]: (14985.32, 18012.94, 3.47) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[53]: (14986.37, 18010.02, 3.43) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[54]: (14987.03, 18006.45, 3.39) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[55]: (14986.90, 18002.51, 3.36) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[56]: (14988.08, 18000.58, 3.67) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[57]: (14989.71, 17999.02, 3.66) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[58]: (14991.40, 17998.01, 3.69) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[59]: (14992.43, 17997.18, 3.74) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[60]: (14992.90, 17996.29, 3.65) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[61]: (14992.90, 17993.59, 3.61) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[62]: (14992.82, 17989.78, 3.65) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[63]: (14994.08, 17983.30, 4.01) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[64]: (14996.78, 17979.70, 4.01) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[65]: (14997.69, 17979.12, 4.05) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[66]: (14998.21, 17978.76, 4.05) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[67]: (14998.51, 17978.23, 4.01) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[68]: (14998.60, 17977.31, 4.01) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[69]: (14998.60, 17975.51, 3.97) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[70]: (14998.60, 17973.71, 4.15) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[71]: (14996.80, 17972.81, 4.27) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[72]: (14993.73, 17960.30, 5.91) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[73]: (14990.33, 17955.42, 7.53) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[74]: (14988.79, 17952.01, 8.04) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[75]: (14987.37, 17949.35, 8.29) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[76]: (14986.10, 17946.41, 7.90) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[77]: (14984.94, 17943.23, 7.87) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[78]: (14986.31, 17935.35, 8.31) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[79]: (14987.54, 17927.62, 9.75) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[80]: (14988.36, 17923.45, 10.41) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[81]: (14988.89, 17920.09, 10.52) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[82]: (14990.23, 17914.71, 10.02) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[83]: (14991.71, 17908.38, 10.17) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[84]: (15011.33, 17871.05, 7.27) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[85]: (15013.51, 17866.31, 7.84) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[86]: (15014.49, 17862.67, 7.73) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[87]: (15014.74, 17861.47, 7.41) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[88]: (15019.96, 17829.67, 6.97) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[89]: (15019.34, 17825.10, 7.82) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[90]: (15017.74, 17813.58, 7.86) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[91]: (15013.54, 17803.97, 8.23) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[92]: (15011.84, 17785.95, 6.69) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[93]: (15010.34, 17778.00, 6.99) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[94]: (15010.62, 17768.04, 6.76) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[95]: (15014.12, 17764.42, 6.95) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[96]: (15016.57, 17762.74, 6.91) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[97]: (15019.87, 17761.43, 6.81) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[98]: (15022.90, 17761.31, 6.83) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[99]: (15024.05, 17759.76, 7.03) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[100]: (15024.98, 17759.13, 7.06) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[101]: (15026.29, 17758.20, 7.06) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[102]: (15028.60, 17756.79, 7.21) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[103]: (15030.99, 17755.02, 7.21) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[104]: (15032.57, 17753.50, 7.30) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[105]: (15034.37, 17753.50, 7.26) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[106]: (15041.40, 17739.83, 7.48) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[107]: (15044.54, 17732.03, 8.39) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[108]: (15044.66, 17728.18, 8.78) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[109]: (15044.65, 17724.04, 9.36) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[110]: (15044.70, 17721.54, 9.25) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[111]: (15044.77, 17718.54, 8.77) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[112]: (15046.90, 17708.69, 8.22) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[113]: (15049.27, 17701.44, 6.88) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[114]: (15053.86, 17691.61, 7.22) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[115]: (15055.08, 17690.26, 7.25) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[116]: (15055.74, 17688.68, 7.28) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[117]: (15056.36, 17686.64, 6.92) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[118]: (15056.46, 17685.55, 6.74) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[119]: (15055.88, 17684.15, 6.74) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[120]: (15057.01, 17679.66, 6.35) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[121]: (15058.62, 17675.55, 6.39) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[122]: (15060.67, 17672.68, 6.39) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[123]: (15062.98, 17669.60, 6.42) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[124]: (15067.33, 17663.94, 6.42) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[125]: (15071.78, 17657.52, 6.39) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[126]: (15074.38, 17654.05, 6.39) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[127]: (15076.58, 17650.32, 6.39) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[128]: (15080.25, 17639.05, 6.95) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[129]: (15081.35, 17633.76, 6.98) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[130]: (15081.45, 17629.03, 6.93) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[131]: (15081.38, 17627.45, 7.18) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[132]: (15081.69, 17625.89, 7.17) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[133]: (15082.63, 17624.06, 7.29) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[134]: (15083.66, 17621.53, 7.29) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[135]: (15085.24, 17615.47, 7.35) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[136]: (15087.71, 17605.87, 7.64) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[137]: (15087.69, 17601.25, 8.43) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[138]: (15087.89, 17598.59, 8.88) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[139]: (15088.02, 17595.84, 9.24) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[140]: (15088.05, 17593.88, 9.38) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[141]: (15088.12, 17591.15, 9.24) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[142]: (15088.25, 17585.68, 9.66) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[143]: (15088.28, 17580.90, 9.65) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[144]: (15088.45, 17576.54, 9.14) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[145]: (15088.55, 17573.45, 9.11) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[146]: (15088.53, 17569.99, 9.07) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[147]: (15088.66, 17568.24, 8.93) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[148]: (15088.76, 17567.78, 8.82) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[149]: (15089.12, 17567.27, 8.75) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[150]: (15089.12, 17566.37, 8.75) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[151]: (15089.42, 17566.30, 8.75) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[152]: (15089.51, 17565.53, 8.78) risk=0.000
+[2026-10-10 08:40:56.367] [INFO ] [replan_fsm_drone_0]   A*[153]: (15089.57, 17564.11, 8.78) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[154]: (15089.83, 17562.58, 8.78) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[155]: (15090.90, 17556.82, 8.75) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[156]: (15092.82, 17544.92, 8.79) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[157]: (15094.06, 17534.46, 9.06) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[158]: (15095.50, 17529.79, 9.66) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[159]: (15096.02, 17527.87, 9.35) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[160]: (15096.79, 17525.48, 9.11) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[161]: (15099.99, 17515.70, 9.53) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[162]: (15101.90, 17510.63, 10.04) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[163]: (15103.93, 17506.20, 10.21) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[164]: (15106.67, 17502.63, 8.79) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[165]: (15108.79, 17499.04, 7.67) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[166]: (15112.10, 17492.99, 6.19) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[167]: (15112.76, 17489.79, 5.43) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[168]: (15112.97, 17487.34, 5.25) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[169]: (15113.17, 17486.42, 5.00) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[170]: (15113.40, 17485.52, 4.49) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[171]: (15113.93, 17482.12, 4.39) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[172]: (15114.23, 17481.31, 4.17) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[173]: (15114.89, 17480.63, 3.88) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[174]: (15116.50, 17480.20, 3.88) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[175]: (15117.69, 17479.67, 3.89) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[176]: (15118.30, 17477.81, 3.78) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[177]: (15118.26, 17477.50, 3.75) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[178]: (15119.02, 17476.96, 3.73) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0]   A*[179]: (15165.90, 17382.96, 2.12) risk=0.000
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [Z-DENOISE] shortcut z: 177/180 vertices smoothed, range [2.12, 10.52] -> [2.12, 10.17]
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] A* shortcut 180 pts → sparse pieces 191 pts (max_seg 25.0)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] front-end only: 191 vertices committed, optimization skipped
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [CHAIN] auto segments: 190 pieces (route) / target 35 -> N=5
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [PHASE] handoffs: departure @s=42.6 u, arrival @s=1002.5 u (cruise span 959.9 u)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] contract 1 @s=42.6 u (w-share 0.20, target 1.00): pos=(14762.96, 18200.08, 3.47) |v|=2.000 kappa=0.0000 rad/u
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] contract 2 @s=311.7 u (w-share 1.49, target 1.74): pos=(14970.84, 18047.31, 3.68) |v|=2.000 kappa=0.0000 rad/u
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] contract 3 @s=732.1 u (w-share 3.50, target 3.27): pos=(15062.98, 17669.60, 6.40) |v|=2.000 kappa=0.0022 rad/u
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] contract 4 @s=1002.5 u (w-share 4.80, target 4.00): pos=(15147.14, 17420.56, 2.61) |v|=2.000 kappa=0.0000 rad/u
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] 32 cores / 5 workers -> 6 inner threads each
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] PolyTrajOptimizer parameters initialized
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] Obstacle avoidance: enabled
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] Debug logging: enabled (using LogManager)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] L-BFGS detail logging: disabled
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] PolyTrajOptimizer parameters initialized
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] Obstacle avoidance: enabled
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] Debug logging: enabled (using LogManager)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] L-BFGS detail logging: disabled
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] PolyTrajOptimizer parameters initialized
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] Obstacle avoidance: enabled
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] Debug logging: enabled (using LogManager)
+[2026-10-10 08:40:56.368] [INFO ] [replan_fsm_drone_0] L-BFGS detail logging: disabled
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] PolyTrajOptimizer parameters initialized
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] Obstacle avoidance: enabled
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] Debug logging: enabled (using LogManager)
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] L-BFGS detail logging: disabled
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] PolyTrajOptimizer parameters initialized
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] Obstacle avoidance: enabled
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] Debug logging: enabled (using LogManager)
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] L-BFGS detail logging: disabled
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 2 pieces, cap=[3.932, 4.385] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 3.932)
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [CHAIN] tail BC prescribed: vel=(1.799, -0.874, -0.003) u/s (|v|=2.000), acc=(0.000, 0.000, 0.000)
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   0.0% t=    0.0 xy=(14724.6,18218.7) z= 3.532 vz=+0.0000
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   1.0% t=    0.2 xy=(14725.0,18218.5) z= 3.532 vz=-0.0000
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   2.0% t=    0.4 xy=(14725.4,18218.3) z= 3.532 vz=-0.0000
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   3.0% t=    0.6 xy=(14725.8,18218.1) z= 3.532 vz=-0.0001
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   4.0% t=    0.9 xy=(14726.2,18217.9) z= 3.532 vz=-0.0002
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   5.0% t=    1.1 xy=(14726.6,18217.7) z= 3.532 vz=-0.0003
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  10.0% t=    2.1 xy=(14728.5,18216.8) z= 3.531 vz=-0.0010
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  15.0% t=    3.2 xy=(14730.4,18215.9) z= 3.530 vz=-0.0019
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  20.0% t=    4.3 xy=(14732.3,18215.0) z= 3.527 vz=-0.0028
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  25.0% t=    5.3 xy=(14734.2,18214.0) z= 3.524 vz=-0.0036
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  30.0% t=    6.4 xy=(14736.1,18213.1) z= 3.520 vz=-0.0042
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  35.0% t=    7.5 xy=(14738.1,18212.2) z= 3.515 vz=-0.0046
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  40.0% t=    8.5 xy=(14740.0,18211.2) z= 3.510 vz=-0.0048
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  45.0% t=    9.6 xy=(14741.9,18210.3) z= 3.505 vz=-0.0046
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  50.0% t=   10.6 xy=(14743.8,18209.4) z= 3.500 vz=-0.0043
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  55.0% t=   11.7 xy=(14745.7,18208.4) z= 3.496 vz=-0.0039
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  60.0% t=   12.8 xy=(14747.6,18207.5) z= 3.492 vz=-0.0034
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  65.0% t=   13.8 xy=(14749.5,18206.6) z= 3.488 vz=-0.0030
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  70.0% t=   14.9 xy=(14751.5,18205.7) z= 3.485 vz=-0.0027
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  75.0% t=   16.0 xy=(14753.4,18204.7) z= 3.483 vz=-0.0025
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  80.0% t=   17.0 xy=(14755.3,18203.8) z= 3.480 vz=-0.0025
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  85.0% t=   18.1 xy=(14757.2,18202.9) z= 3.477 vz=-0.0026
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  90.0% t=   19.2 xy=(14759.1,18201.9) z= 3.474 vz=-0.0028
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  95.0% t=   20.2 xy=(14761.0,18201.0) z= 3.471 vz=-0.0029
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE] 100.0% t=   21.3 xy=(14763.0,18200.1) z= 3.468 vz=-0.0030
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 2 pieces, cap=[2.842, 3.484] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 3.484)
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   0.0% t=    0.0 xy=(15147.1,17420.6) z= 2.611 vz=-0.0233
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   1.0% t=    0.2 xy=(15147.3,17420.2) z= 2.606 vz=-0.0233
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   2.0% t=    0.4 xy=(15147.5,17419.8) z= 2.601 vz=-0.0232
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   3.0% t=    0.6 xy=(15147.7,17419.4) z= 2.596 vz=-0.0231
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   4.0% t=    0.8 xy=(15147.9,17419.1) z= 2.592 vz=-0.0229
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   5.0% t=    1.1 xy=(15148.1,17418.7) z= 2.587 vz=-0.0227
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  10.0% t=    2.1 xy=(15149.0,17416.8) z= 2.564 vz=-0.0215
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  15.0% t=    3.2 xy=(15150.0,17414.9) z= 2.542 vz=-0.0202
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  20.0% t=    4.2 xy=(15150.9,17413.0) z= 2.521 vz=-0.0196
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  25.0% t=    5.3 xy=(15151.8,17411.2) z= 2.500 vz=-0.0198
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  30.0% t=    6.3 xy=(15152.8,17409.3) z= 2.479 vz=-0.0211
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  35.0% t=    7.4 xy=(15153.7,17407.4) z= 2.456 vz=-0.0234
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  40.0% t=    8.4 xy=(15154.6,17405.5) z= 2.429 vz=-0.0266
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  45.0% t=    9.5 xy=(15155.6,17403.6) z= 2.400 vz=-0.0301
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  50.0% t=   10.5 xy=(15156.5,17401.8) z= 2.366 vz=-0.0335
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  55.0% t=   11.6 xy=(15157.5,17399.9) z= 2.329 vz=-0.0361
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  60.0% t=   12.6 xy=(15158.4,17398.0) z= 2.291 vz=-0.0371
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  65.0% t=   13.7 xy=(15159.3,17396.1) z= 2.252 vz=-0.0361
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  70.0% t=   14.7 xy=(15160.3,17394.2) z= 2.216 vz=-0.0331
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  75.0% t=   15.8 xy=(15161.2,17392.4) z= 2.183 vz=-0.0281
+[2026-10-10 08:40:56.369] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  80.0% t=   16.8 xy=(15162.1,17390.5) z= 2.157 vz=-0.0216
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  85.0% t=   17.9 xy=(15163.1,17388.6) z= 2.138 vz=-0.0144
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  90.0% t=   18.9 xy=(15164.0,17386.7) z= 2.127 vz=-0.0075
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  95.0% t=   20.0 xy=(15165.0,17384.8) z= 2.122 vz=-0.0022
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE] 100.0% t=   21.0 xy=(15165.9,17383.0) z= 2.121 vz=-0.0000
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] L-BFGS Result: 2 (The initial variables already minimize the objective function.), restarts=0
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] Iteration info: costFunction calls=2, max_iterations=3000
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] L-BFGS Result: 2 (The initial variables already minimize the objective function.), restarts=0
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] Iteration info: costFunction calls=2, max_iterations=3000
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] envelope(cruise) peak=87.0% (maximum speed) mean=87.0% p95=87.0% at t=8.5; state V=200.0 m/s n=1.00 CL=0.54 T=1346 N q=23509 Pa bank=0.0 deg; violations 0/2130; sub-stall ramp 0.0 s (peak 0%) low-lift 0.0 s (term on)
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] envelope(cruise) peak=87.0% (maximum speed) mean=87.0% p95=87.0% at t=12.6; state V=200.0 m/s n=1.00 CL=0.53 T=1144 N q=23852 Pa bank=0.0 deg; violations 0/2101; sub-stall ramp 0.0 s (peak 0%) low-lift 0.0 s (term on)
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN] min clearance 1.463 at t=15.700 pos=(14752.892, 18204.964, 3.483)
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   0% t=    0.0 xy=(14724.6,18218.7) z= 3.532 terrain=1.5318 near4=1.6848 clr=2.0000
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   5% t=    1.1 xy=(14726.6,18217.7) z= 3.532 terrain=1.4547 near4=1.6805 clr=2.0769
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  10% t=    2.1 xy=(14728.5,18216.8) z= 3.531 terrain=1.4038 near4=1.6698 clr=2.1271
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  15% t=    3.2 xy=(14730.4,18215.9) z= 3.530 terrain=1.3321 near4=1.6561 clr=2.1974
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  20% t=    4.3 xy=(14732.3,18215.0) z= 3.527 terrain=1.2658 near4=1.6633 clr=2.2612
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  25% t=    5.3 xy=(14734.2,18214.0) z= 3.524 terrain=1.2501 near4=1.7621 clr=2.2735
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  30% t=    6.4 xy=(14736.1,18213.1) z= 3.520 terrain=1.2717 near4=2.2162 clr=2.2477
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  35% t=    7.5 xy=(14738.1,18212.2) z= 3.515 terrain=1.3956 near4=2.2595 clr=2.1191
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN] min clearance 1.690 at t=17.690 pos=(15162.934, 17388.901, 2.141)
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  40% t=    8.5 xy=(14740.0,18211.2) z= 3.510 terrain=1.5711 near4=2.2535 clr=1.9386
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   0% t=    0.0 xy=(15147.1,17420.6) z= 2.611 terrain=0.4791 near4=0.8731 clr=2.1318
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  45% t=    9.6 xy=(14741.9,18210.3) z= 3.505 terrain=1.5013 near4=2.2314 clr=2.0033
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   5% t=    1.1 xy=(15148.1,17418.7) z= 2.587 terrain=0.3387 near4=0.8918 clr=2.2480
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  50% t=   10.6 xy=(14743.8,18209.4) z= 3.500 terrain=1.5091 near4=2.3037 clr=1.9907
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  10% t=    2.1 xy=(15149.0,17416.8) z= 2.564 terrain=0.3129 near4=0.8108 clr=2.2506
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  55% t=   11.7 xy=(14745.7,18208.4) z= 3.496 terrain=1.7770 near4=2.3126 clr=1.7185
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  15% t=    3.2 xy=(15150.0,17414.9) z= 2.542 terrain=0.5194 near4=0.8217 clr=2.0223
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  60% t=   12.8 xy=(14747.6,18207.5) z= 3.492 terrain=1.5743 near4=2.4524 clr=1.9174
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  20% t=    4.2 xy=(15150.9,17413.0) z= 2.521 terrain=0.5798 near4=0.8186 clr=1.9410
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  65% t=   13.8 xy=(14749.5,18206.6) z= 3.488 terrain=1.6098 near4=2.5672 clr=1.8784
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  25% t=    5.3 xy=(15151.8,17411.2) z= 2.500 terrain=0.4641 near4=0.7732 clr=2.0360
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  70% t=   14.9 xy=(14751.5,18205.7) z= 3.485 terrain=1.7309 near4=2.5804 clr=1.7543
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  30% t=    6.3 xy=(15152.8,17409.3) z= 2.479 terrain=0.4697 near4=0.7784 clr=2.0090
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  75% t=   16.0 xy=(14753.4,18204.7) z= 3.483 terrain=1.9808 near4=2.5909 clr=1.5016
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  80% t=   17.0 xy=(14755.3,18203.8) z= 3.480 terrain=1.5107 near4=2.6146 clr=1.9690
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  35% t=    7.4 xy=(15153.7,17407.4) z= 2.456 terrain=0.5595 near4=0.7961 clr=1.8959
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  85% t=   18.1 xy=(14757.2,18202.9) z= 3.477 terrain=1.4560 near4=2.5776 clr=2.0210
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  40% t=    8.4 xy=(15154.6,17405.5) z= 2.429 terrain=0.6093 near4=0.6276 clr=1.8199
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  90% t=   19.2 xy=(14759.1,18201.9) z= 3.474 terrain=1.3870 near4=2.5106 clr=2.0872
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  45% t=    9.5 xy=(15155.6,17403.6) z= 2.400 terrain=0.5510 near4=0.6373 clr=1.8485
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  95% t=   20.2 xy=(14761.0,18201.0) z= 3.471 terrain=1.3943 near4=2.4263 clr=2.0768
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  50% t=   10.5 xy=(15156.5,17401.8) z= 2.366 terrain=0.3731 near4=0.6426 clr=1.9929
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE] 100% t=   21.3 xy=(14763.0,18200.1) z= 3.468 terrain=1.5371 near4=2.4644 clr=1.9309
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  55% t=   11.6 xy=(15157.5,17399.9) z= 2.329 terrain=0.1877 near4=0.5949 clr=2.1417
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  60% t=   12.6 xy=(15158.4,17398.0) z= 2.291 terrain=0.1869 near4=0.5937 clr=2.1038
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  65% t=   13.7 xy=(15159.3,17396.1) z= 2.252 terrain=0.3029 near4=0.5932 clr=1.9493
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] Optimization completed: iter=2, use_formation_param=1, use_formation_internal=1, time(ms)=0.577042
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  70% t=   14.7 xy=(15160.3,17394.2) z= 2.216 terrain=0.1734 near4=0.5783 clr=2.0422
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [PROF] total=1ms cb=0ms | gen=0 smooth=0 pva=0 (pre=0 serial_loop=0) grad=0 vt=0 | lbfgs=0ms
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  75% t=   15.8 xy=(15161.2,17392.4) z= 2.183 terrain=0.1540 near4=0.5664 clr=2.0293
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  80% t=   16.8 xy=(15162.1,17390.5) z= 2.157 terrain=0.1503 near4=0.5236 clr=2.0069
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [JERK METRICS] total_jerk=0.000001, max_jerk=0.000568 units/s³ (x100 m/s³), duration=21.293 s
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  85% t=   17.9 xy=(15163.1,17388.6) z= 2.138 terrain=0.4230 near4=0.5495 clr=1.7152
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [COST] formation_cost=0.000000 (wei_formation=0.000000, similarity=0.000000)
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  90% t=   18.9 xy=(15164.0,17386.7) z= 2.127 terrain=0.1332 near4=0.4334 clr=1.9935
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  95% t=   20.0 xy=(15165.0,17384.8) z= 2.122 terrain=0.1728 near4=0.4451 clr=1.9490
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE] 100% t=   21.0 xy=(15165.9,17383.0) z= 2.121 terrain=0.1211 near4=0.3944 clr=2.0000
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] Optimization completed: iter=2, use_formation_param=1, use_formation_internal=1, time(ms)=0.520866
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [PROF] total=1ms cb=0ms | gen=0 smooth=0 pva=0 (pre=0 serial_loop=0) grad=0 vt=0 | lbfgs=0ms
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [JERK METRICS] total_jerk=0.000040, max_jerk=0.004510 units/s³ (x100 m/s³), duration=21.009 s
+[2026-10-10 08:40:56.370] [INFO ] [replan_fsm_drone_0] [COST] formation_cost=0.000000 (wei_formation=0.000000, similarity=0.000000)
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 47 pieces, cap=[3.909, 7.550] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 4.736)
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 58 pieces, cap=[4.419, 12.038] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 10.608)
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [CHAIN] tail BC prescribed: vel=(0.893, -1.790, -0.023) u/s (|v|=2.000), acc=(0.000, 0.000, 0.000)
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [CHAIN] tail BC prescribed: vel=(0.595, -1.910, -0.014) u/s (|v|=2.000), acc=(0.000, 0.000, 0.000)
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   0.0% t=    0.0 xy=(15063.0,17669.6) z= 6.400 vz=+0.0013
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   1.0% t=    1.4 xy=(15064.6,17667.5) z= 6.403 vz=+0.0025
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   2.0% t=    2.7 xy=(15066.3,17665.3) z= 6.404 vz=-0.0018
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   3.0% t=    4.1 xy=(15067.9,17663.1) z= 6.396 vz=-0.0100
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   4.0% t=    5.4 xy=(15069.4,17660.9) z= 6.383 vz=-0.0072
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   5.0% t=    6.8 xy=(15070.9,17658.7) z= 6.385 vz=+0.0137
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   0.0% t=    0.0 xy=(14763.0,18200.1) z= 3.468 vz=-0.0030
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   1.0% t=    1.3 xy=(14765.4,18198.9) z= 3.464 vz=-0.0030
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   2.0% t=    2.7 xy=(14767.8,18197.8) z= 3.460 vz=-0.0029
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   3.0% t=    4.0 xy=(14770.3,18196.6) z= 3.456 vz=-0.0029
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   4.0% t=    5.4 xy=(14772.7,18195.5) z= 3.452 vz=-0.0029
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   5.0% t=    6.7 xy=(14775.2,18194.4) z= 3.448 vz=-0.0030
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  10.0% t=   13.5 xy=(14786.8,18187.8) z= 3.428 vz=-0.0024
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  15.0% t=   20.2 xy=(14797.6,18179.7) z= 3.427 vz=+0.0025
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  20.0% t=   26.9 xy=(14809.1,18172.4) z= 3.456 vz=+0.0040
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  25.0% t=   33.6 xy=(14820.0,18164.5) z= 3.449 vz=-0.0071
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  30.0% t=   40.4 xy=(14828.7,18154.3) z= 3.395 vz=-0.0031
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  35.0% t=   47.1 xy=(14837.5,18144.1) z= 3.438 vz=+0.0128
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  40.0% t=   53.8 xy=(14846.1,18133.8) z= 3.497 vz=+0.0005
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  45.0% t=   60.6 xy=(14856.1,18124.8) z= 3.491 vz=+0.0064
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  50.0% t=   67.3 xy=(14865.6,18115.2) z= 3.432 vz=-0.0165
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  55.0% t=   74.0 xy=(14876.4,18107.3) z= 3.400 vz=+0.0273
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  60.0% t=   80.7 xy=(14886.5,18098.5) z= 3.315 vz=-0.0255
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  65.0% t=   87.5 xy=(14896.6,18089.6) z= 3.274 vz=-0.0003
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  70.0% t=   94.2 xy=(14907.1,18081.5) z= 3.367 vz=+0.0220
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  75.0% t=  100.9 xy=(14920.7,18080.1) z= 3.598 vz=+0.0399
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  80.0% t=  107.7 xy=(14934.1,18080.2) z= 3.748 vz=-0.0172
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  85.0% t=  114.4 xy=(14946.4,18075.7) z= 3.744 vz=+0.1671
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  90.0% t=  121.1 xy=(14956.0,18067.0) z= 3.693 vz=-0.0689
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  95.0% t=  127.8 xy=(14966.4,18059.9) z= 3.811 vz=-0.1214
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE] 100.0% t=  134.6 xy=(14970.8,18047.3) z= 3.684 vz=-0.0143
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  10.0% t=   13.5 xy=(15077.9,17647.1) z= 6.653 vz=+0.0075
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  15.0% t=   20.3 xy=(15081.3,17634.1) z= 6.878 vz=+0.0558
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  20.0% t=   27.0 xy=(15083.8,17621.0) z= 7.361 vz=+0.0611
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  25.0% t=   33.8 xy=(15087.6,17608.0) z= 7.873 vz=+0.0348
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  30.0% t=   40.6 xy=(15088.0,17594.6) z= 9.196 vz=+0.2523
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  35.0% t=   47.3 xy=(15088.3,17581.1) z= 9.362 vz=-0.0286
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  40.0% t=   54.1 xy=(15088.9,17567.6) z= 8.837 vz=-0.2444
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  45.0% t=   60.8 xy=(15092.4,17555.7) z= 8.796 vz=-0.0240
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  50.0% t=   67.6 xy=(15092.5,17540.7) z= 9.138 vz=+0.0482
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  55.0% t=   74.4 xy=(15096.0,17528.0) z= 9.327 vz=+0.1636
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  60.0% t=   81.1 xy=(15100.2,17515.2) z= 9.637 vz=-0.0308
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  65.0% t=   87.9 xy=(15106.2,17503.3) z= 8.824 vz=-0.5600
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  70.0% t=   94.6 xy=(15112.5,17491.7) z= 6.319 vz=-0.4802
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  75.0% t=  101.4 xy=(15116.6,17480.2) z= 3.901 vz=-0.3814
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  80.0% t=  108.2 xy=(15147.0,17470.3) z=21.433 vz=+1.9280
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  85.0% t=  114.9 xy=(15124.9,17456.7) z=-0.144 vz=-4.1423
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  90.0% t=  121.7 xy=(15127.0,17444.4) z=-3.370 vz=+2.1666
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  95.0% t=  128.4 xy=(15144.2,17432.8) z= 5.218 vz=-0.2357
+[2026-10-10 08:40:56.374] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE] 100.0% t=  135.2 xy=(15147.1,17420.6) z= 2.611 vz=-0.0233
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 81 pieces, cap=[4.656, 13.438] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 10.923)
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [CHAIN] tail BC prescribed: vel=(1.211, -1.592, 0.001) u/s (|v|=2.000), acc=(0.000, 0.000, 0.000)
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   0.0% t=    0.0 xy=(14970.8,18047.3) z= 3.684 vz=-0.0143
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   1.0% t=    2.1 xy=(14972.1,18043.2) z= 3.659 vz=-0.0078
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   2.0% t=    4.2 xy=(14973.3,18039.1) z= 3.643 vz=-0.0119
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   3.0% t=    6.3 xy=(14974.6,18035.3) z= 3.595 vz=-0.0360
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   4.0% t=    8.4 xy=(14975.6,18031.4) z= 3.494 vz=-0.0564
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]   5.0% t=   10.5 xy=(14976.0,18026.7) z= 3.383 vz=-0.0407
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  10.0% t=   21.0 xy=(14986.4,18010.1) z= 3.423 vz=+0.0059
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  15.0% t=   31.5 xy=(14992.7,17991.7) z= 3.761 vz=+0.0183
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  20.0% t=   42.0 xy=(14997.9,17973.1) z= 4.818 vz=+0.6756
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  25.0% t=   52.5 xy=(14989.8,17954.5) z= 7.003 vz=+0.3747
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  30.0% t=   63.0 xy=(14986.5,17934.8) z= 8.865 vz=+0.0583
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  35.0% t=   73.6 xy=(14990.4,17914.2) z= 9.612 vz=-0.2547
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  40.0% t=   84.1 xy=(14998.1,17894.9) z= 9.673 vz=-0.1465
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  45.0% t=   94.6 xy=(15008.3,17876.5) z= 8.009 vz=+0.1705
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  50.0% t=  105.1 xy=(15015.5,17857.0) z= 8.506 vz=+0.3465
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  55.0% t=  115.6 xy=(15019.7,17836.2) z= 7.084 vz=+0.1284
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  60.0% t=  126.1 xy=(15018.2,17815.4) z= 7.528 vz=-0.0197
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  65.0% t=  136.6 xy=(15012.0,17795.5) z= 7.429 vz=-0.0305
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  70.0% t=  147.1 xy=(15009.7,17774.5) z= 6.979 vz=-0.0813
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  75.0% t=  157.6 xy=(15022.9,17761.3) z= 6.931 vz=-0.0199
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  80.0% t=  168.1 xy=(15040.0,17753.1) z= 8.355 vz=+0.0446
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  85.0% t=  178.6 xy=(15044.7,17728.2) z= 8.646 vz=+0.1744
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  90.0% t=  189.1 xy=(15047.4,17707.6) z= 8.004 vz=-0.1309
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE]  95.0% t=  199.7 xy=(15055.8,17688.5) z= 7.085 vz=+0.0260
+[2026-10-10 08:40:56.377] [INFO ] [replan_fsm_drone_0] [INIT-PROFILE] 100.0% t=  210.2 xy=(15063.0,17669.6) z= 6.400 vz=+0.0013
+[2026-10-10 08:40:56.671] [INFO ] [replan_fsm_drone_0] L-BFGS Result: 0 (Success: reached convergence (g_epsilon).), restarts=0
+[2026-10-10 08:40:56.671] [INFO ] [replan_fsm_drone_0] Iteration info: costFunction calls=899, max_iterations=5800
+[2026-10-10 08:40:56.673] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] envelope(cruise) peak=97.4% (maximum thrust) mean=87.0% p95=94.0% at t=105.1; state V=195.1 m/s n=1.73 CL=0.99 T=3116 N q=22375 Pa bank=5.1 deg; violations 0/13696; sub-stall ramp 0.0 s (peak 0%) low-lift 3.3 s (term on)
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN] min clearance 0.339 at t=109.620 pos=(15123.426, 17469.911, 3.145)
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   0% t=    0.0 xy=(15063.0,17669.6) z= 6.400 terrain=5.3818 near4=6.4308 clr=1.0186
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   5% t=    6.8 xy=(15071.2,17658.6) z= 6.411 terrain=5.5036 near4=7.3010 clr=0.9075
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  10% t=   13.7 xy=(15078.2,17646.9) z= 6.661 terrain=5.6221 near4=6.7693 clr=1.0392
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  15% t=   20.5 xy=(15080.9,17633.6) z= 6.874 terrain=5.7678 near4=6.9211 clr=1.1060
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  20% t=   27.4 xy=(15083.7,17620.1) z= 7.420 terrain=6.2630 near4=7.3324 clr=1.1573
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  25% t=   34.2 xy=(15087.4,17606.9) z= 7.845 terrain=6.4752 near4=7.5546 clr=1.3699
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  30% t=   41.1 xy=(15088.0,17593.3) z= 9.267 terrain=8.1976 near4=8.3669 clr=1.0696
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  35% t=   47.9 xy=(15088.3,17579.7) z= 9.366 terrain=8.4727 near4=9.3023 clr=0.8931
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  40% t=   54.8 xy=(15089.2,17566.0) z= 8.797 terrain=7.5951 near4=8.3170 clr=1.2020
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  45% t=   61.6 xy=(15091.7,17552.7) z= 8.924 terrain=7.6132 near4=7.7950 clr=1.3107
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  50% t=   68.5 xy=(15093.4,17539.2) z= 9.013 terrain=7.7263 near4=8.3939 clr=1.2868
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  55% t=   75.3 xy=(15096.5,17526.4) z= 9.413 terrain=7.8769 near4=8.4574 clr=1.5356
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  60% t=   82.2 xy=(15100.4,17514.4) z= 9.782 terrain=8.5950 near4=9.5763 clr=1.1873
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  65% t=   89.0 xy=(15106.0,17503.5) z= 8.979 terrain=7.6153 near4=9.2108 clr=1.3638
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  70% t=   95.9 xy=(15111.6,17492.7) z= 6.260 terrain=4.6811 near4=6.1427 clr=1.5792
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  75% t=  102.7 xy=(15115.7,17480.9) z= 4.093 terrain=2.9917 near4=5.0133 clr=1.1012
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  80% t=  109.6 xy=(15123.4,17470.0) z= 3.146 terrain=2.7812 near4=3.7928 clr=0.3650
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  85% t=  116.4 xy=(15128.8,17457.4) z= 3.098 terrain=2.1866 near4=2.4988 clr=0.9114
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  90% t=  123.3 xy=(15134.7,17445.0) z= 2.937 terrain=2.1274 near4=2.2249 clr=0.8097
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  95% t=  130.1 xy=(15141.1,17432.9) z= 2.765 terrain=0.5659 near4=1.1272 clr=2.1985
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE] 100% t=  137.0 xy=(15147.1,17420.6) z= 2.611 terrain=0.4791 near4=0.8731 clr=2.1318
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] Optimization completed: iter=899, use_formation_param=1, use_formation_internal=1, time(ms)=299.831535
+[2026-10-10 08:40:56.674] [INFO ] [replan_fsm_drone_0] [PROF] total=300ms cb=282ms | gen=9 smooth=1 pva=264 (pre=158 serial_loop=106) grad=8 vt=0 | lbfgs=18ms
+[2026-10-10 08:40:56.675] [INFO ] [replan_fsm_drone_0] [JERK METRICS] total_jerk=0.088162, max_jerk=0.077173 units/s³ (x100 m/s³), duration=136.955 s
+[2026-10-10 08:40:56.675] [INFO ] [replan_fsm_drone_0] [COST] formation_cost=0.000000 (wei_formation=0.000000, similarity=0.000000)
+[2026-10-10 08:40:56.818] [INFO ] [replan_fsm_drone_0] L-BFGS Result: 0 (Success: reached convergence (g_epsilon).), restarts=0
+[2026-10-10 08:40:56.818] [INFO ] [replan_fsm_drone_0] Iteration info: costFunction calls=953, max_iterations=8100
+[2026-10-10 08:40:56.821] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] envelope(cruise) peak=98.2% (bank angle) mean=89.7% p95=96.4% at t=57.0; state V=188.2 m/s n=1.40 CL=0.91 T=3025 N q=19622 Pa bank=63.8 deg; violations 0/20776; sub-stall ramp 0.0 s (peak 0%) low-lift 3.9 s (term on)
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN] min clearance 0.294 at t=53.290 pos=(14987.488, 17949.905, 7.803)
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   0% t=    0.0 xy=(14970.8,18047.3) z= 3.684 terrain=2.0949 near4=3.4247 clr=1.5885
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   5% t=   10.4 xy=(14976.1,18027.1) z= 3.435 terrain=2.2688 near4=3.0781 clr=1.1664
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  10% t=   20.8 xy=(14986.2,18009.1) z= 3.464 terrain=2.4921 near4=3.6764 clr=0.9720
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  15% t=   31.2 xy=(14993.9,17989.8) z= 3.835 terrain=2.9882 near4=4.6039 clr=0.8470
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  20% t=   41.6 xy=(14997.8,17969.6) z= 4.969 terrain=4.0307 near4=5.3992 clr=0.9382
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  25% t=   51.9 xy=(14988.5,17952.2) z= 7.435 terrain=6.6587 near4=7.7067 clr=0.7759
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  30% t=   62.3 xy=(14986.1,17933.2) z= 8.994 terrain=7.3656 near4=8.9716 clr=1.6287
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  35% t=   72.7 xy=(14990.2,17913.9) z=10.041 terrain=8.8937 near4=10.111 clr=1.1476
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  40% t=   83.1 xy=(14998.3,17895.0) z= 8.817 terrain=6.7365 near4=7.0955 clr=2.0802
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  45% t=   93.5 xy=(15008.7,17877.0) z= 9.027 terrain=6.4621 near4=7.1226 clr=2.5649
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  50% t=  103.9 xy=(15015.7,17857.5) z= 7.354 terrain=5.7834 near4=7.0657 clr=1.5706
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  55% t=  114.3 xy=(15019.0,17836.9) z= 7.676 terrain=5.5095 near4=6.6463 clr=2.1659
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  60% t=  124.7 xy=(15017.8,17816.3) z= 7.585 terrain=6.4122 near4=7.6657 clr=1.1725
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  65% t=  135.0 xy=(15012.5,17796.2) z= 7.644 terrain=5.5830 near4=7.1018 clr=2.0607
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  70% t=  145.4 xy=(15010.0,17775.5) z= 7.040 terrain=5.6833 near4=7.1020 clr=1.3563
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  75% t=  155.8 xy=(15022.1,17759.9) z= 6.957 terrain=6.3650 near4=7.2887 clr=0.5916
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  80% t=  166.2 xy=(15037.9,17747.6) z= 7.691 terrain=6.1904 near4=7.7505 clr=1.5005
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  85% t=  176.6 xy=(15044.6,17728.2) z= 8.631 terrain=7.4556 near4=8.6707 clr=1.1757
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  90% t=  187.0 xy=(15046.9,17707.7) z= 7.996 terrain=7.1041 near4=7.6699 clr=0.8913
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  95% t=  197.4 xy=(15055.3,17688.7) z= 7.047 terrain=6.0541 near4=7.4223 clr=0.9930
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE] 100% t=  207.8 xy=(15063.0,17669.6) z= 6.400 terrain=5.3818 near4=6.4308 clr=1.0186
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] Optimization completed: iter=953, use_formation_param=1, use_formation_internal=1, time(ms)=446.426983
+[2026-10-10 08:40:56.823] [INFO ] [replan_fsm_drone_0] [PROF] total=446ms cb=419ms | gen=13 smooth=2 pva=393 (pre=228 serial_loop=165) grad=11 vt=0 | lbfgs=28ms
+[2026-10-10 08:40:56.825] [INFO ] [replan_fsm_drone_0] [JERK METRICS] total_jerk=0.166170, max_jerk=0.129666 units/s³ (x100 m/s³), duration=207.760 s
+[2026-10-10 08:40:56.825] [INFO ] [replan_fsm_drone_0] [COST] formation_cost=0.000000 (wei_formation=0.000000, similarity=0.000000)
+[2026-10-10 08:40:56.826] [INFO ] [replan_fsm_drone_0] L-BFGS Result: 0 (Success: reached convergence (g_epsilon).), restarts=0
+[2026-10-10 08:40:56.826] [INFO ] [replan_fsm_drone_0] Iteration info: costFunction calls=1586, max_iterations=4700
+[2026-10-10 08:40:56.827] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [DYNAMICS] envelope(cruise) peak=98.3% (bank angle) mean=88.2% p95=95.3% at t=110.7; state V=198.9 m/s n=1.70 CL=0.93 T=968 N q=23155 Pa bank=63.9 deg; violations 0/13405; sub-stall ramp 0.0 s (peak 0%) low-lift 0.0 s (term on)
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN] min clearance 0.570 at t=126.380 pos=(14964.517, 18061.090, 3.812)
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   0% t=    0.0 xy=(14763.0,18200.1) z= 3.468 terrain=1.5371 near4=2.4644 clr=1.9309
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   5% t=    6.7 xy=(14775.1,18194.4) z= 3.449 terrain=1.4493 near4=2.0160 clr=1.9998
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  10% t=   13.4 xy=(14786.8,18187.8) z= 3.426 terrain=1.6330 near4=2.2756 clr=1.7929
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  15% t=   20.1 xy=(14797.5,18179.7) z= 3.422 terrain=1.7188 near4=2.0946 clr=1.7030
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  20% t=   26.8 xy=(14808.9,18172.4) z= 3.467 terrain=1.3245 near4=1.8612 clr=2.1419
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  25% t=   33.5 xy=(14819.7,18164.7) z= 3.463 terrain=2.0357 near4=2.8443 clr=1.4270
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  30% t=   40.2 xy=(14828.5,18154.6) z= 3.388 terrain=2.4034 near4=3.2062 clr=0.9848
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  35% t=   46.9 xy=(14837.2,18144.4) z= 3.437 terrain=1.9054 near4=2.4855 clr=1.5316
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  40% t=   53.6 xy=(14845.9,18134.1) z= 3.488 terrain=1.9058 near4=2.8809 clr=1.5818
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  45% t=   60.3 xy=(14855.8,18125.1) z= 3.510 terrain=1.7842 near4=2.2955 clr=1.7257
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  50% t=   67.0 xy=(14865.1,18115.5) z= 3.452 terrain=2.1010 near4=3.0730 clr=1.3505
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  55% t=   73.7 xy=(14875.7,18107.7) z= 3.383 terrain=1.8283 near4=2.8112 clr=1.5545
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  60% t=   80.4 xy=(14886.0,18099.0) z= 3.322 terrain=1.7651 near4=2.5630 clr=1.5564
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  65% t=   87.1 xy=(14896.0,18090.0) z= 3.292 terrain=1.9175 near4=2.9161 clr=1.3739
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  70% t=   93.8 xy=(14906.8,18082.2) z= 3.349 terrain=2.0456 near4=3.2886 clr=1.3028
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  75% t=  100.5 xy=(14919.9,18080.3) z= 3.606 terrain=2.4056 near4=3.2765 clr=1.2005
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  80% t=  107.2 xy=(14933.2,18080.4) z= 3.759 terrain=2.6815 near4=3.2027 clr=1.0776
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  85% t=  113.9 xy=(14945.9,18076.8) z= 3.851 terrain=2.4798 near4=3.2882 clr=1.3712
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  90% t=  120.6 xy=(14955.6,18068.2) z= 4.056 terrain=2.1459 near4=3.2039 clr=1.9102
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  95% t=  127.3 xy=(14965.7,18059.6) z= 3.761 terrain=2.8603 near4=3.3739 clr=0.9009
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE] 100% t=  134.0 xy=(14970.8,18047.3) z= 3.684 terrain=2.0949 near4=3.4247 clr=1.5885
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] Optimization completed: iter=1586, use_formation_param=1, use_formation_internal=1, time(ms)=454.124011
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [PROF] total=454ms cb=431ms | gen=13 smooth=2 pva=406 (pre=243 serial_loop=163) grad=10 vt=0 | lbfgs=23ms
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [JERK METRICS] total_jerk=0.108810, max_jerk=0.081428 units/s³ (x100 m/s³), duration=134.045 s
+[2026-10-10 08:40:56.828] [INFO ] [replan_fsm_drone_0] [COST] formation_cost=0.000000 (wei_formation=0.000000, similarity=0.000000)
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] ===== split verification =====
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] run 1/5: 2 pieces, 21.3 s, 42.6 u arc, mean 2.000 u/s
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] run 2/5: 47 pieces, 134.0 s, 267.5 u arc, mean 1.995 u/s
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] run 3/5: 81 pieces, 207.8 s, 412.9 u arc, mean 1.987 u/s
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] run 4/5: 58 pieces, 137.0 s, 268.7 u arc, mean 1.962 u/s
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] run 5/5: 2 pieces, 21.0 s, 42.0 u arc, mean 2.000 u/s
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] seam 1: |dP|=4.441e-16 u |dV|=2.483e-16 u/s |dA|=4.337e-19 u/s^2 | jerk jump |dJ|=0.015 u/s^3 | tail-vs-contract 4.441e-16, head-vs-contract 0.000e+00
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] seam 2: |dP|=3.638e-12 u |dV|=1.174e-16 u/s |dA|=1.153e-16 u/s^2 | jerk jump |dJ|=0.037 u/s^3 | tail-vs-contract 3.638e-12, head-vs-contract 0.000e+00
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] seam 3: |dP|=3.638e-12 u |dV|=2.220e-16 u/s |dA|=1.552e-17 u/s^2 | jerk jump |dJ|=0.117 u/s^3 | tail-vs-contract 3.638e-12, head-vs-contract 0.000e+00
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] seam 4: |dP|=0.000e+00 u |dV|=2.483e-16 u/s |dA|=1.399e-17 u/s^2 | jerk jump |dJ|=0.006 u/s^3 | tail-vs-contract 0.000e+00, head-vs-contract 0.000e+00
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] (route mode: no baseline to compare against)
+[2026-10-10 08:40:56.829] [INFO ] [replan_fsm_drone_0] [CHAIN-REPORT] verdict: PASS — all seams C2-continuous (worst |d(P,V,A)| = 3.638e-12)
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [FINAL-EVAL] ===== whole-flight evaluation: 521.1 s, 190 pieces, 5 phase(s) =====
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [FINAL-EVAL] departure   21.3 s | AGL min   1.463@16s mean   2.00 u, <band  0.0%, underground no | env viol   0.0% peak  87.0% (maximum speed) | risk max 0.000, exposure 0.0 s, zone contact hard 0 (0.0 s) soft 0 (0.0 s) @0.1s sampling
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [FINAL-EVAL] cruise-1   134.0 s | AGL min   0.571@148s mean   1.54 u, <band  0.0%, underground no | env viol   0.0% peak  98.3% (bank angle) | risk max 0.000, exposure 0.0 s, zone contact hard 0 (0.0 s) soft 0 (0.0 s) @0.1s sampling
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [FINAL-EVAL] cruise-2   207.8 s | AGL min   0.299@209s mean   1.36 u, <band  1.7%, underground no | env viol   0.0% peak  98.2% (bank angle) | risk max 0.000, exposure 0.0 s, zone contact hard 0 (0.0 s) soft 0 (0.0 s) @0.1s sampling
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [FINAL-EVAL] cruise-3   137.0 s | AGL min   0.343@450s mean   1.28 u, <band  2.6%, underground no | env viol   0.0% peak  97.3% (maximum thrust) | risk max 0.000, exposure 0.0 s, zone contact hard 0 (0.0 s) soft 0 (0.0 s) @0.1s sampling
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [FINAL-EVAL] arrival     21.0 s | AGL min   1.700@518s mean   2.01 u, <band  0.0%, underground no | env viol   0.0% peak  87.0% (maximum speed) | risk max 0.000, exposure 0.0 s, zone contact hard 0 (0.0 s) soft 0 (0.0 s) @0.1s sampling
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [FINAL-EVAL] verdict: CLEAN — AGL min 0.299 u, env viol 0.0% (peak 98.3% bank angle), risk exposure 0.0 s, zone contact hard 0 standoff 0 (0.0 s) soft 0 (0.0 s) @0.1s sampling
+[2026-10-10 08:40:56.830] [INFO ] [replan_fsm_drone_0] [ZONE-AUDIT] hard=0 hard_s=0.0 standoff=0 standoff_s=0.0 soft=0 soft_s=0.0 measurable=true sample_dt=0.10 risk_max=0.0000 risk_exposure_s=0.0 junctions=0 junction_hard=0
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [PLAN-MODE] chain
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [CHAIN-PAR] PARALLEL: front-end 536 ms + author 0 ms + solves [1/460/456/306/1] ms (wall 460, max 460) => TOTAL 999 ms | 190 pieces, 521.1 s flight
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [POLY_TRAJ_OPT][drone 0] NONE mode found - formation cost DISABLED (weight=0)
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [TIMING] Global trajectory planning took 1000 ms
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] Trajectory planning successful for formation type: none
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [startMissionPlan]: from WAIT_POSITION to SEQUENTIAL_START
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] Successfully generated global trajectory for drone 0
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [DEBUG TARGET] startMissionPlan COMPLETED in 1000 ms at time 1791621656.832 (total elapsed: 1000.176 ms)
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [TRAJECTORY CMD] Callback completed (took 1000 ms) at time 1791621656.832
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [planFromGlobalTraj] Using pre-optimized trajectory (duration=521.063)
+[2026-10-10 08:40:56.831] [INFO ] [replan_fsm_drone_0] [FSM]: from SEQUENTIAL_START to EXEC_TRAJ

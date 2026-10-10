@@ -1,0 +1,122 @@
+15/33 Testing: execution_adoption_test
+15/33 Test: execution_adoption_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/execution_adoption_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/execution_adoption_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"execution_adoption_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/execution_adoption_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791621650.988084217] [adoption_direct]: Initializing optimizer for drone 7...
+[INFO] [1791621650.988463134] [adoption_direct]: Optimizer initialized successfully for drone 7
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621651.142754711] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621651.145476723] [adoption_direct]: Setting formation with 0 positions to optimizer
+[WARN] [1791621651.145499206] [adoption_direct]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621651.157332573] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621651.160643489] [adoption_direct]: Setting formation with 0 positions to optimizer
+[WARN] [1791621651.160671873] [adoption_direct]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621651.169287490] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621651.172696021] [adoption_direct]: Setting formation with 0 positions to optimizer
+[WARN] [1791621651.172729254] [adoption_direct]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] direct calculates an owned trajectory: 
+[OK] direct retains historical successful intermediate identity count
+[OK] direct initial calculation does not allocate an execution identity
+[OK] direct explicit adoption assigns the historical final identity
+[OK] direct adoption preserves owned coefficients and original clock points
+[OK] direct replayed adoption is refused without modifying active execution
+[OK] direct early refusal retains the active trajectory and consumes no identity
+[OK] direct applying an early refusal preserves historical execution fields
+[OK] direct second calculation leaves every active execution field unchanged
+[OK] direct repeated computation preserves the complete numerical product
+[OK] newer calculation makes an earlier candidate stale without adopting either
+[OK] a fresh calculation restores a usable adoption context without storage mutation
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[OK] direct another manager cannot adopt this computation
+[OK] direct environment update accepted
+[OK] direct environment-stale adoption is refused without undoing live changes
+[OK] direct model rebinding rejects an outstanding receipt without withdrawing execution
+[OK] direct search rebinding rejects an outstanding receipt without withdrawing execution
+[OK] direct rejected intermediate is not a flyable product
+[OK] direct postsolve refusal consumes its old identity and invalidates execution
+[OK] direct stale candidate cannot resurrect the withdrawn flight
+[OK] direct failed compatibility plan returns no old or rejected trajectory
+[OK] direct owned result survives later computations, adoption and withdrawal
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791621651.183549994] [adoption_route]: Initializing optimizer for drone 7...
+[INFO] [1791621651.183788616] [adoption_route]: Optimizer initialized successfully for drone 7
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621651.204560721] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621651.208620205] [adoption_route]: Setting formation with 0 positions to optimizer
+[WARN] [1791621651.208643769] [adoption_route]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621651.221356651] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621651.226287894] [adoption_route]: Setting formation with 0 positions to optimizer
+[WARN] [1791621651.226308934] [adoption_route]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] route calculates an owned trajectory: 
+[OK] route retains historical successful intermediate identity count
+[OK] route initial calculation does not allocate an execution identity
+[OK] route explicit adoption assigns the historical final identity
+[OK] route adoption preserves owned coefficients and original clock points
+[OK] route replayed adoption is refused without modifying active execution
+[OK] route early refusal retains the active trajectory and consumes no identity
+[OK] route applying an early refusal preserves historical execution fields
+[OK] route second calculation leaves every active execution field unchanged
+[OK] route repeated computation preserves the complete numerical product
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[OK] route another manager cannot adopt this computation
+[OK] route environment update accepted
+[OK] route environment-stale adoption is refused without undoing live changes
+[OK] route model rebinding rejects an outstanding receipt without withdrawing execution
+[OK] route search rebinding rejects an outstanding receipt without withdrawing execution
+[OK] route rejected intermediate is not a flyable product
+[OK] route postsolve refusal consumes its old identity and invalidates execution
+[OK] route stale candidate cannot resurrect the withdrawn flight
+[OK] route failed compatibility plan returns no old or rejected trajectory
+[OK] route owned result survives later computations, adoption and withdrawal
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791621651.234290140] [adoption_baseline]: Initializing optimizer for drone 7...
+[INFO] [1791621651.234641195] [adoption_baseline]: Optimizer initialized successfully for drone 7
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621651.250330470] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621651.260415407] [adoption_baseline]: Setting formation with 0 positions to optimizer
+[WARN] [1791621651.260427450] [adoption_baseline]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621651.272289572] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621651.280089114] [adoption_baseline]: Setting formation with 0 positions to optimizer
+[WARN] [1791621651.280099303] [adoption_baseline]: [POLY_TRAJ_OPT][drone 7] Failed to set formation - swarm_graph not initialized or empty positions
+[OK] baseline calculates an owned trajectory: 
+[OK] baseline retains historical successful intermediate identity count
+[OK] baseline initial calculation does not allocate an execution identity
+[OK] baseline explicit adoption assigns the historical final identity
+[OK] baseline adoption preserves owned coefficients and original clock points
+[OK] baseline replayed adoption is refused without modifying active execution
+[OK] baseline early refusal retains the active trajectory and consumes no identity
+[OK] baseline applying an early refusal preserves historical execution fields
+[OK] baseline second calculation leaves every active execution field unchanged
+[OK] baseline repeated computation preserves the complete numerical product
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,320) voxel=(2,2,0.1) free_distance=360
+[OK] baseline another manager cannot adopt this computation
+[OK] baseline environment update accepted
+[OK] baseline environment-stale adoption is refused without undoing live changes
+[OK] baseline model rebinding rejects an outstanding receipt without withdrawing execution
+[OK] baseline search rebinding rejects an outstanding receipt without withdrawing execution
+[OK] baseline rejected intermediate is not a flyable product
+[OK] baseline postsolve refusal consumes its old identity and invalidates execution
+[OK] baseline stale candidate cannot resurrect the withdrawn flight
+[OK] baseline failed compatibility plan returns no old or rejected trajectory
+[OK] baseline owned result survives later computations, adoption and withdrawal
+PASS: 0 failure(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/execution_adoption_test.xml' with successful test
+<end of output>
+Test time =   0.55 sec
+----------------------------------------------------------
+Test Passed.
+"execution_adoption_test" end time: Oct 10 08:40 UTC
+"execution_adoption_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

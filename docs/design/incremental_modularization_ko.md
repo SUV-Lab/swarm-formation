@@ -1195,3 +1195,59 @@ R2 최대 오차는 **0.11871286239252095 m**, 최대 사용률은 **0.983109924
 
 다음 단계 4는 표시 메시지의 준비와 ROS 발행을 옮긴다. 표시를 끌 때도 환경 마스크
 계산과 장애물 yaw 난수 소비처럼 실제 계획에 영향을 주는 처리는 계속 실행한다.
+
+## 후속 단계 4 — 표시 데이터 준비와 ROS 발행 (2026-10-10)
+
+기준은 상위 `fccf998` / 계획 `7496ba1`이다. 계획 결과의 계산·채택과 시뮬레이션을
+검증한 다음, PathManager에 있던 표시 처리를 다음 두 부분으로 옮겼다.
+
+- `planning_visualization_data.h/.cpp`: 경로·tube·chain·pipeline·궤적 위험·profile·
+  heatmap·risk field·장애물의 입력을 받아 소유하는 ROS 메시지를 만드는 `make*()` 함수.
+- `RosPlanningVisualization`: 기존 11개 토픽의 publisher와 QoS, 갱신·삭제 발행 담당.
+  전체 manager를 받거나 내부 계산 상태를 조회하지 않는다.
+
+PathManager에는 필요한 값과 동기 조회만 건네는 얇은 연결을 남겼다. RiskView의
+지형·위험·visibility·shadow 조회와 clock은 함수 호출 동안만 빌리며 반환 메시지에
+보관하지 않는다. 큰 지형 snapshot이나 전체 미션 표시용 사본을 추가하지 않았다.
+
+`PlanSettings.attach_visualization`은 기본 true다. false이면 PM 표시 publisher를
+만들지 않고 메시지 샘플링·격자 준비 이전에 반환한다. 이는 PM의 `/viz/*`,
+`/debug/pipeline`, 표시용 `/planning/front_end_path`의 연결 옵션이다. ROS backend,
+지형/SDF, 실행 궤적·ABORT 통신까지 끄는 옵션은 아니다.
+
+충돌·비용에 쓰는 terrain risk mask 재구축은 연결 여부와 관계없이 실행한다.
+구형 장애물이 소비한 난수가 다음 박스의 충돌 yaw에 영향을 주므로, yaw/RNG 처리는
+장애물 변경 쪽에 남겼다. 기존 계산 중 발행 순서도 유지하며 최종 성공 뒤 한꺼번에
+발행하도록 바꾸지 않았다. clear의 `world` frame, 일반 표시의 `map` frame,
+빈 1×1 NaN heatmap, DELETEALL 선두, late-join latch 및 profile layout을 유지했다.
+
+공개 입력에 비유한 계수·시간·격자 차원으로 정수 변환이 일어나는 것을 막는 검사와
+소유권 검사를 추가했다. 검토 중 표시 scale=0을 새 검사에서 거부할 수 있는 부분을
+찾아 고쳤다. 기존 유한 표시 scale과 mesh 높이(0 포함)를 받아들이며 이런 표시 설정이
+계획에 새 제약을 만들지 않는다. [표시 API 사용법](planning_visualization_usage_ko.md)에
+입력·예외·수명·연결 범위를 정리했고 설치 예제는 `planning_visualization_example`이다.
+
+### 검증된 공통 동작
+
+변경 전 설치 archive와 소스를 보존하여 독립 fixture 기준을 만들었다. 5가지 위험
+표시 모드, 지형 없음, ridge/NaN 지형, 궤적/profile, pipeline, chain의 종말·junction,
+구형→박스 장애물, 삭제를 포함한다. 원본/변경의 live 메시지 **40개**, 완성 상태의
+late-join **11개**, 삭제 뒤 late-join **11개**가 header stamp만 제외하고 동일했다.
+
+연결을 끈 fixture는 표시 메시지 **0개**이며, 모든 단계의 환경 revision·위험값·
+visibility·shadow·장애물 collision yaw·다음 난수 값이 원본 및 연결한 경우와 정확히
+같았다. 표시 준비의 소유 결과는 입력/조회 파괴 뒤에도 사용할 수 있음을 검사했다.
+
+최종 수정 소스를 컨테이너에서 명시한 `path_manager` 경로로 빌드했고 CTest
+**41/41**을 통과했다. 실제 RViz에서 R2 로드·계획, 환경 변경 ABORT, 새 임무 복구를
+실행했다. 190조각의 최종/참고 궤적·시간·전단 경로, 평가 38개·후처리 2개·비용
+프로필 10개의 비교가 통과했다. 변경 소스·사용 문서 12개의 빌드 전후 해시가 같다.
+
+설치된 라이브러리로 전체 R2를 표시 연결/해제 두 모드에서 각각 실행했다. 상태·사유,
+소유하는 double 궤적과 참고 궤적, phase·평가·ID·환경 정보가 원본 및 서로 간에
+정확히 같고 float32 wire 비교도 통과했다. 표시 빌더의 최종 검사는 **28/28**이다.
+비교 하네스 첫 복사에서 기존 `compare_runs.py` helper가 빠진 것은 보존하고,
+helper를 추가한 뒤 두 모드의 비교를 완료했다. 제품 코드는 바꾸지 않았다.
+증거는 [단계 4 검증 자료](../validation/planning_visualization_2026_10_10/README.md)에
+보관한다. 다음 단계는 기존 Python 지도 처리의 같은 계산 경로를 함수로 제공하는
+작업이며, ROS 서비스의 설정·rollback·발행 책임은 유지한다.

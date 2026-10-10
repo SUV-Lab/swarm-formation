@@ -1,0 +1,31 @@
+9/33 Testing: param_contract_test
+9/33 Test: param_contract_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/param_contract_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/param_contract_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"param_contract_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/param_contract_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+  [OK]   drone_id 가 궤적 컨테이너에 그대로 들어간다
+  [OK]   같은 drone_id 가 최적화기까지 전달된다 — 로그 접두사로 확인
+  [OK]   0 으로 떨어지지 않는다
+  [OK]   enable_obstacles 가 선언된 기본값 true 를 받는다
+  [OK]   enable_obstacles=false 가 컴파일 기본값 true 를 덮는다
+  [OK]   override 경로에서도 drone_id 가 전달된다
+  [OK]   선언되지 않은 drone_id 로는 PathManager 가 만들어지지 않는다
+  [OK]   예외가 어느 파라미터인지 이름으로 말한다
+  [OK]   예외가 '조용히 0 으로 가지 않는다' 를 명시한다
+  [OK]   선언되지 않은 파라미터는 이름과 함께 보고된다 — 읽기 실패가 정상 설정처럼 숨지 않는다
+  [OK]   그래도 drone_id 는 정확히 전달된다
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/param_contract_test.xml' with successful test
+<end of output>
+Test time =   0.16 sec
+----------------------------------------------------------
+Test Passed.
+"param_contract_test" end time: Oct 10 08:40 UTC
+"param_contract_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

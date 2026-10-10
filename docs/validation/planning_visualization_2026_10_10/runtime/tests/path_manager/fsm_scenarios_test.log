@@ -1,0 +1,108 @@
+28/33 Testing: fsm_scenarios_test
+28/33 Test: fsm_scenarios_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/fsm_scenarios_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/fsm_scenarios_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"fsm_scenarios_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/fsm_scenarios_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[INFO] [1791621654.265242113] [fsm_scenarios]: ReplanFSM parameters:
+[INFO] [1791621654.265293741] [fsm_scenarios]:   Start position will be set from TrajectoryCommand
+[INFO] [1791621654.265299492] [fsm_scenarios]:   Waiting for trajectory command...
+[INFO] [1791621654.265304181] [fsm_scenarios]: Initial position set to: (0.00, 0.00, 0.00)
+[INFO] [1791621654.267136709] [fsm_scenarios]: PathManager initialized, waiting for trajectory command
+[INFO] [1791621654.280139189] [fsm_scenarios]: [FSM]: from INIT to WAIT_POSITION
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,300) voxel=(2,2,0.1) free_distance=360
+[INFO] [1791621654.996573555] [fsm_scenarios]: Initializing optimizer for drone 0...
+[INFO] [1791621654.996882439] [fsm_scenarios]: Optimizer initialized successfully for drone 0
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621655.144262523] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621655.147435138] [fsm_scenarios]: Setting formation with 0 positions to optimizer
+[WARN] [1791621655.147461107] [fsm_scenarios]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791621655.147481396] [fsm_scenarios]: [startMissionPlan]: from WAIT_POSITION to SEQUENTIAL_START
+[INFO] [1791621655.147487708] [fsm_scenarios]: Successfully generated global trajectory for drone 0
+  [OK]   installing zones with nothing flying aborts nothing
+  [OK]   the mission is planned AND published
+  .. trajectory id 1
+[WARN] [1791621659.517985319] [fsm_scenarios]: [ABORT] trajectory 1 withdrawn (reason 3) at t=0.00 s, point (0.00, 0.00, 0.00) — the execution layer owns the recovery
+[INFO] [1791621659.518109414] [fsm_scenarios]: [ENV-CHANGE]: from EXEC_TRAJ to WAIT_EXTERNAL_RECOVERY
+[WARN] [1791621659.518132959] [fsm_scenarios]: loadRiskZones: the zone set CHANGED while a trajectory was executing — it cannot be re-judged against the new set (per-leg policy, not occupancy), so the flight is withdrawn
+[GEODESIC] points=340 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=340 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621659.933700210] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621659.952271179] [fsm_scenarios]: Setting formation with 0 positions to optimizer
+[WARN] [1791621659.952299833] [fsm_scenarios]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791621659.952316745] [fsm_scenarios]: [startMissionPlan (recovery)]: from WAIT_EXTERNAL_RECOVERY to SEQUENTIAL_START
+[INFO] [1791621659.952324189] [fsm_scenarios]: Successfully generated global trajectory for drone 0
+[WARN] [1791621664.000915782] [fsm_scenarios]: [ABORT] trajectory 2 withdrawn (reason 2) at t=4.05 s, point (38.15, 150.00, 4.00) — the execution layer owns the recovery
+[INFO] [1791621664.000963302] [fsm_scenarios]: [ENV-CHANGE]: from EXEC_TRAJ to WAIT_EXTERNAL_RECOVERY
+  [OK]   republishing the SAME zone set aborts nothing
+  [OK]   a CHANGED zone set aborts exactly once
+  [OK]   ...as an ABORT
+  [OK]   ...naming the trajectory being flown
+  [OK]   ...with the POLICY reason, not the obstacle one
+  [OK]   a mission after an abort is published — the FSM leaves the recovery state
+  .. trajectory id 2
+  [OK]   ...with a HIGHER id, so the old abort cannot bind it
+[GEODESIC] points=317 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=317 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621664.664796166] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621664.677120432] [fsm_scenarios]: Setting formation with 0 positions to optimizer
+[WARN] [1791621664.677145289] [fsm_scenarios]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791621664.677166389] [fsm_scenarios]: [startMissionPlan (recovery)]: from WAIT_EXTERNAL_RECOVERY to SEQUENTIAL_START
+[INFO] [1791621664.677175186] [fsm_scenarios]: Successfully generated global trajectory for drone 0
+[WARN] [1791621668.679834675] [fsm_scenarios]: [ABORT] trajectory 3 withdrawn (reason 1) at t=4.00 s, point (144.52, 150.00, 4.00) — the execution layer owns the recovery
+[INFO] [1791621668.679875722] [fsm_scenarios]: [ENV-CHANGE]: from EXEC_TRAJ to WAIT_EXTERNAL_RECOVERY
+[WARN] [1791621668.679899237] [fsm_scenarios]: loadObstacles: the flight in progress is blocked from t=4.00 s at (144.52, 150.00, 4.00) — trajectory invalidated
+  [OK]   a DEM that puts ground through the flight aborts it
+  [OK]   ...naming the CURRENT trajectory
+  [OK]   ...with the TERRAIN reason — this is the path that used to report every terrain block as an obstacle
+  [OK]   obstacle scenario starts with a fresh flight
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621669.336742432] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621669.355146084] [fsm_scenarios]: Setting formation with 0 positions to optimizer
+[WARN] [1791621669.355179727] [fsm_scenarios]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791621669.355197952] [fsm_scenarios]: [startMissionPlan (recovery)]: from WAIT_EXTERNAL_RECOVERY to SEQUENTIAL_START
+[INFO] [1791621669.355204514] [fsm_scenarios]: Successfully generated global trajectory for drone 0
+[ERROR] [1791621669.355278805] [fsm_scenarios]: [ENVELOPE] commanded initial state REJECTED: speed 400.0 m/s above the effective maximum 200.0 m/s (default planning cap) (INITIAL_MODE_UNSUPPORTED)
+[ERROR] [1791621669.355293603] [fsm_scenarios]: [PLAN] FAILED reason=7: initial state unsupported: speed 400.0 m/s above the effective maximum 200.0 m/s (default planning cap)
+[ERROR] [1791621669.355301859] [fsm_scenarios]: Unable to generate global trajectory for drone 0!
+[ERROR] [1791621669.355310074] [fsm_scenarios]: [PLAN REJECTED] mission 'invalid-replacement' (seq 5) produced no trajectory — sequence rolled back, a resend will retry
+[GEODESIC] points=340 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=340 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621670.577373863] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621670.580371276] [fsm_scenarios]: Setting formation with 0 positions to optimizer
+[WARN] [1791621670.580396183] [fsm_scenarios]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791621670.580414288] [fsm_scenarios]: [startMissionPlan]: from EXEC_TRAJ to SEQUENTIAL_START
+[INFO] [1791621670.580421682] [fsm_scenarios]: Successfully generated global trajectory for drone 0
+[WARN] [1791621670.623762730] [fsm_scenarios]: [ABORT] trajectory 5 withdrawn (reason 3) at t=0.00 s, point (0.00, 0.00, 0.00) — the execution layer owns the recovery
+[WARN] [1791621670.623819939] [fsm_scenarios]: loadRiskZones: the zone set CHANGED while a trajectory was executing — it cannot be re-judged against the new set (per-leg policy, not occupancy), so the flight is withdrawn
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=353 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621671.440758351] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621671.452539338] [fsm_scenarios]: Setting formation with 0 positions to optimizer
+[WARN] [1791621671.452562943] [fsm_scenarios]: [POLY_TRAJ_OPT][drone 0] Failed to set formation - swarm_graph not initialized or empty positions
+[INFO] [1791621671.452579153] [fsm_scenarios]: [startMissionPlan (recovery)]: from WAIT_EXTERNAL_RECOVERY to SEQUENTIAL_START
+[INFO] [1791621671.452585355] [fsm_scenarios]: Successfully generated global trajectory for drone 0
+  [OK]   an obstacle on the remaining flight aborts it
+  [OK]   ...with the OBSTACLE reason
+  [OK]   ...naming the current trajectory
+  [OK]   ...and an environment revision that MOVED — an obstacle change does not touch the zone policy generation, which is what this field used to carry
+  [OK]   refused replacement retains and publishes the prior successful pending result once
+  [OK]   a result withdrawn before its publication tick is never emitted
+  [OK]   pre-publication withdrawal names the newly allocated ID exactly once
+  [OK]   a fresh library result recovers after pending publication was withdrawn
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/fsm_scenarios_test.xml' with successful test
+<end of output>
+Test time =  18.59 sec
+----------------------------------------------------------
+Test Passed.
+"fsm_scenarios_test" end time: Oct 10 08:41 UTC
+"fsm_scenarios_test" time elapsed: 00:00:18
+----------------------------------------------------------
+

@@ -1,0 +1,25 @@
+{
+  "stats": {
+    "events": {
+      "messages": 0,
+      "topics": {}
+    },
+    "late_full": {
+      "messages": 0,
+      "topics": {}
+    },
+    "late_clear": {
+      "messages": 0,
+      "topics": {}
+    }
+  },
+  "checks": {
+    "late_full_complete": true,
+    "late_full_topic_count": 0,
+    "late_clear_complete": true,
+    "late_clear_topic_count": 0,
+    "all_expected_topics": true,
+    "expected_topic_count": 0
+  },
+  "normalization": "Only header.stamp sec/nanosec zeroed; all other fields retained. Float values retain hex and IEEE binary64 bits (lossless promotion for finite float32; NaN sign/payload retained by Python conversion). Receipt order retained within phase/topic."
+}

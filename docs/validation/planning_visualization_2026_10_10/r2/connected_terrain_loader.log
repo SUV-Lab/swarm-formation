@@ -1,0 +1,33 @@
+Traceback (most recent call last):
+  File "/ws/install/mmp_terrain/lib/mmp_terrain/terrain_publisher", line 33, in <module>
+    sys.exit(load_entry_point('mmp-terrain', 'console_scripts', 'terrain_publisher')())
+  File "/ws/install/mmp_terrain/lib/mmp_terrain/terrain_publisher", line 25, in importlib_load_entry_point
+    return next(matches).load()
+  File "/usr/lib/python3.10/importlib/metadata/__init__.py", line 171, in load
+    module = import_module(match.group('module'))
+  File "/usr/lib/python3.10/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 883, in exec_module
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "/ws/build/mmp_terrain/mmp_terrain/terrain_publisher.py", line 1, in <module>
+    import rasterio
+  File "/usr/lib/python3/dist-packages/rasterio/__init__.py", line 9, in <module>
+    from rasterio._base import gdal_version
+  File "rasterio/_base.pyx", line 1, in init rasterio._base
+  File "rasterio/_shim.pyx", line 1, in init rasterio._shim
+  File "/usr/lib/python3/dist-packages/numpy/__init__.py", line 150, in <module>
+    from . import core
+  File "/usr/lib/python3/dist-packages/numpy/core/__init__.py", line 72, in <module>
+    from . import numeric
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 879, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1012, in get_code
+  File "<frozen importlib._bootstrap_external>", line 672, in _compile_bytecode
+KeyboardInterrupt
+[ros2run]: Interrupt

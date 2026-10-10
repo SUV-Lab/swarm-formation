@@ -1,0 +1,55 @@
+19/33 Testing: direct_trajectory_solver_test
+19/33 Test: direct_trajectory_solver_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/direct_trajectory_solver_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/direct_trajectory_solver_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"direct_trajectory_solver_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/direct_trajectory_solver_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[WARN] [1791621651.958414759] [direct_trajectory_solver_test]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] cap_ref size 1 != clean_path size 2 — falling back to scalar cap
+[WARN] [1791621651.959710442] [direct_trajectory_solver_test]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] cap_ref size 1 != clean_path size 2 — falling back to scalar cap
+[WARN] [1791621651.960963253] [direct_trajectory_solver_test]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] cap_ref size 1 != clean_path size 2 — falling back to scalar cap
+[WARN] [1791621651.962167252] [direct_trajectory_solver_test]: [POLY_TRAJ_OPT][drone 0] [LEG-POLICY] edge_leg size 2 != clean_path size 2 - 1 — route provenance dropped for this solve
+[WARN] [1791621651.962807954] [direct_trajectory_solver_test]: [POLY_TRAJ_OPT][drone 0] [LEG-POLICY] edge_leg size 2 != clean_path size 2 - 1 — route provenance dropped for this solve
+[WARN] [1791621651.963900302] [direct_trajectory_solver_test]: [POLY_TRAJ_OPT][drone 0] [COLLISION] t=0.000 pos=(20.000, 30.000, 4.000) d=-1.000 inside obstacle
+[WARN] [1791621651.964400839] [direct_trajectory_solver_test]: [POLY_TRAJ_OPT][drone 0] [COLLISION] t=0.000 pos=(20.000, 30.000, 4.000) d=-1.000 inside obstacle
+[OK] direct altitude band restores the raw crest while retaining path/endpoint floor
+[OK] lower raw crest cannot tighten the cap and enabled ground adds its cushion
+[OK] endpoint heights remain part of the direct altitude envelope
+[OK] a cap-reference outlier does not inflate the direct scalar ceiling
+[OK] empty path is rejected before unconfigured optimizer access
+[OK] one-point input retains its diagnostic path without entering optimizer
+[OK] missing mission goal is rejected before optimizer access
+[OK] normal solve retains the backend acceptance decision
+[OK] normal solve retains the exact edited path and piece-to-leg diagnostics
+[OK] normal solve returns identical seed/final coefficients and durations
+[OK] real direct optimizer supplies both seed and final trajectories
+[OK] midpoint insertion leaves every caller request field unchanged
+[OK] inserted path vertices split the original edge into correctly attributed pieces
+[OK] optimizer reuse cannot rewrite retained trajectories or diagnostics
+[OK] cap-size scalar fallback retains the backend acceptance decision
+[OK] cap-size scalar fallback retains the exact edited path and piece-to-leg diagnostics
+[OK] cap-size scalar fallback returns identical seed/final coefficients and durations
+[OK] real scalar-cap fallback uses the raw crest band despite cap-reference outlier
+[OK] climbing fixture distinguishes the direct ceiling from erroneous cap-outlier inflation
+[OK] mismatched edge tags retains the backend acceptance decision
+[OK] mismatched edge tags retains the exact edited path and piece-to-leg diagnostics
+[OK] mismatched edge tags returns identical seed/final coefficients and durations
+[OK] mismatched provenance preserves the backend's whole-map drop rule
+[OK] real collision rejection retains the backend acceptance decision
+[OK] real collision rejection retains the exact edited path and piece-to-leg diagnostics
+[OK] real collision rejection exposes no seed or final trajectory after refusal
+[OK] rejection preserves edited path and cleared mapping while withholding backend scratch seed
+[OK] a rejected solve leaves input and earlier accepted results untouched
+[OK] owned seed/final trajectories and diagnostics survive optimizer, manager and node destruction
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/direct_trajectory_solver_test.xml' with successful test
+<end of output>
+Test time =   0.17 sec
+----------------------------------------------------------
+Test Passed.
+"direct_trajectory_solver_test" end time: Oct 10 08:40 UTC
+"direct_trajectory_solver_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

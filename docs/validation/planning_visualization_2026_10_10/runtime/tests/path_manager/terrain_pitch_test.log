@@ -1,0 +1,53 @@
+4/33 Testing: terrain_pitch_test
+4/33 Test: terrain_pitch_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/terrain_pitch_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/terrain_pitch_test"
+Directory: /ws/build/path_manager
+"terrain_pitch_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/terrain_pitch_test
+[INFO] [1791621647.972139894] [astar]: [FM2-SWEEP] lifted=6 cap=512 clean_exit=true pts=8
+
+[1] the repairer and the judge use one stride
+         terrainCheckPitch = 0.050 u (5 m)
+  [OK]   the shared stride is at least as fine as the voxel pitch (0.05 u)
+  [OK]   and finer than the DEM-cell floor the sweep used to walk at (0.50 u)
+         gate used 0.050 u
+  [OK]   the final gate walked at the shared stride
+
+[2] the fixture is the real failure in miniature
+         worst shortfall: 50 m stride 0.000 u, shared stride 0.600 u
+  [OK]   a 50 m stride steps clean over the rise and reports no shortfall
+  [OK]   the shared stride sees it — this is the gap that refused r19
+
+[3] before repair the route is short of clearance
+  [OK]   the gate refuses a route that grazes the rise
+         refused at (0.200, 5.000, 1.000), ground 0.83, clearance 0.174 u
+  [OK]   and the refusal point really is inside the margin
+
+[4] what the production sweep repairs is what the gate judges
+         sweep 0.050 u / gate 0.050 u: 6 lift(s), 8 points, gate says clear
+  [OK]   the sweep recorded the stride it used
+  [OK]   the repairer and the judge walked the SAME stride
+  [OK]   the sweep found the rises and repaired them
+  [OK]   and the gate accepts what the sweep produced
+  [OK]   the repair converges well inside the 512 lift cap
+  [OK]   the same route without the sweep is refused
+
+[5] the obstacle answer is unchanged
+  [OK]   a route with room to spare is not refused
+  [OK]   a short relief arc does not excuse a shortfall further along
+  [OK]   a relief arc covering the whole route does excuse it
+
+==== terrain_pitch_test: passed=16 failed=0 ====
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/terrain_pitch_test.xml' with successful test
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"terrain_pitch_test" end time: Oct 10 08:40 UTC
+"terrain_pitch_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

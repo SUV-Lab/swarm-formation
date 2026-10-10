@@ -15,6 +15,7 @@
 #include "path_manager/route_search_backend.h"
 #include "path_manager/zone_policy.h"
 #include "path_manager/planning_computation.h"
+#include "path_manager/ros_planning_visualization.h"
 #include <Eigen/Eigen>
 #include <algorithm>
 #include <atomic>
@@ -287,7 +288,7 @@ namespace path_manager
   class PathManager
   {
   public:
-    PathManager(rclcpp::Node::SharedPtr node);
+    PathManager(rclcpp::Node::SharedPtr node, bool attach_visualization = true);
 
     void initOptimizer(bool force_reinit = false);
     bool isOptimizerInitialized() const { return is_optimizer_initialized_ && poly_traj_opt_ != nullptr; }
@@ -973,12 +974,12 @@ namespace path_manager
     // node is gone). Same topics/QoS/namespaces, so RViz configs, the
     // altitude panel, and dump_geometry are unaffected.
     void publishTubeMarker(
-        const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+        visualization::TubeChannel channel,
         const std::vector<Eigen::Vector3d> &pts, const std::string &ns_prefix,
         float r, float g, float b, float a);
     void publishTrajTube(
         const poly_traj::Trajectory &traj,
-        const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+        visualization::TubeChannel channel,
         const std::string &ns_prefix, float r, float g, float b, float a);
     // [RISK-PROFILE] Versioned altitude-panel channel. Payload (v4):
     //   [4.0, N,
@@ -992,9 +993,6 @@ namespace path_manager
     // detection floor, top_i the geometric top — the triplet lets the panel
     // distinguish a shadow-safe pocket between two zones from uncovered sky.
     // NaN triplet means that zone has no visible vertical interval at (x,y).
-    bool riskProfileVisibleInterval(size_t zone_index, double x, double y,
-                                    double *lower_z,
-                                    double *floor_z, double *top_z) const;
     void publishRiskProfile(const poly_traj::Trajectory &traj);
     double dyn_obstacle_margin_{3.0};  // berth around dynamic obstacles
     double opt_obstacle_clearance_{0.7};  // optimizer penalty onset (< front-end margin)
@@ -1128,38 +1126,16 @@ namespace path_manager
     mmp_vehicle_dynamics::VehicleModel::Ptr vehicle_model_override_;
     bool is_optimizer_initialized_;
 
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr front_end_path_pub_;
-    // Trajectory tube channels (see publishTrajTube).
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr opt_traj_tube_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr global_traj_tube_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr front_end_tube_pub_;
+    // Optional ROS display connection. Adapters borrow only needed numerical
+    // data; prepared messages own it. Null skips preparation before sampling.
+    std::unique_ptr<RosPlanningVisualization> visualization_;
+    visualization::Stamp visualizationStamp() const;
+    visualization::RiskView riskVisualizationView() const;
+    visualization::RiskSettings riskVisualizationSettings() const;
     double path_scale_ = 1.5;  // tube diameter, frame units (1 u = 100 m)
-    // Terrain-masked risk visualization: ONE latched MarkerArray carries the
-    // whole picture (DELETEALL + every zone's markers), so a late joiner gets
-    // all of it or none of it. See publishEffectiveRiskField.
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr risk_field_pub_;
-    // [CHAIN-VIZ] see publishChainSegmentsViz().
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr chain_segments_pub_;
-    // [DEBUG-PIPELINE] Stage-by-stage geometry for "which stage broke it"
-    // debugging: the front-end/initial/final trajectories already have their
-    // own channels, but the two intermediates between them did not — the
-    // shortcut vertices (what the front end committed) and the sparse inner
-    // points (what MINCO is actually seeded with). Debug-mode only: the
-    // publisher exists only when manager/debug_pipeline_viz is true, so the
-    // topic is absent — not merely silent — outside debug mode.
     bool debug_pipeline_viz_{false};
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr debug_pipeline_pub_;
     void publishPipelineDebug(const std::vector<Eigen::Vector3d> &shortcut_route,
                               const std::vector<Eigen::Vector3d> &inner_points);
-    // Draped visibility-boundary heatmap (GridMap, rendered by a second
-    // grid_map_rviz_plugin display; see publishRiskHeatmap).
-    rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr risk_heatmap_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr traj_risk_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr risk_profile_pub_;
-    // Dynamic obstacle visualization (one MarkerArray republished on every add/clear).
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr dyn_obstacle_pub_;
-    // Terrain ESDF cache status string (RViz panel reads this).
-    // Only drone_0's PathManager owns this publisher to avoid duplicate writes.
     // Tracks live patch ids so clearObstacles + visualization stay in sync.
     std::vector<int> dyn_patch_ids_;
     std::vector<Eigen::Vector3d> dyn_patch_centers_;

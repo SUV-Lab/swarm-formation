@@ -1,0 +1,54 @@
+5/33 Testing: terrain_risk_mask_test
+5/33 Test: terrain_risk_mask_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/terrain_risk_mask_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/terrain_risk_mask_test"
+Directory: /ws/build/path_manager
+"terrain_risk_mask_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/terrain_risk_mask_test
+[OK]   no DEM -> full visibility fallback
+[OK]   horizontal/vertical q=0.5 points share the ellipsoid moat value
+[OK]   risk is zero above the vertical ellipsoid support
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(20,20,340) voxel=(1,1,0.1) free_distance=34
+[WARN] [1791621648.338326078] [terrain_risk_mask_test]: EMERGENCY STOP executed at position (6.50, 0.50, 2.00)
+[OK]   near ridge raises the far-side shadow ceiling
+[OK]   aircraft below horizon is terrain-shadowed
+[OK]   aircraft above horizon regains risk visibility
+[OK]   unblocked azimuth remains visible
+[OK]   risk source is visible at zero range
+[OK]   AGL-grounded ridge-top source sees past its own crest
+[OK]   DEM half-cell border clamps to the nearest terrain cell
+[OK]   query beyond the physical DEM boundary remains off-map
+[OK]   effective-risk TRIANGLE_LIST floor is published for RViz
+[OK]   clipped ellipsoid wire volume is published for RViz
+[OK]   RViz volume raises its far-side floor to the terrain horizon
+[OK]   risk profile publishes self-describing v4 fixed-width records
+[OK]   profile record binds risk data to the source trajectory altitude
+[OK]   profile combined risk exactly matches OR-combined effective risk
+[OK]   zone record preserves its own ellipsoid visible interval
+[OK]   v4 triplet keeps geometric lower below the detection floor
+[OK]   grounded visibility floor is inverted into raw trajectory z
+[OK]   terrain replacement refreshes the current trajectory risk profile
+[OK]   world=none clears the planner DEM and restores no-terrain visibility
+[OK]   world=none refreshes the current trajectory risk profile
+[OK]   world=none invalidates the old SDF so new obstacles defer to the next map
+[OK]   empty runtime zone set clears the latched risk profile
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(20,20,340) voxel=(1,1,0.1) free_distance=34
+[OK]   draped risk heatmap is published
+[OK]   heatmap corner outside every footprint is transparent
+[OK]   west heatmap cell is painted
+[OK]   west cell (visible at ground level) is red
+[OK]   east cell behind the ridge ramps toward yellow (raised floor)
+[OK]   far-east rim cell (floor above agl_max) is safe green
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/terrain_risk_mask_test.xml' with successful test
+<end of output>
+Test time =   1.39 sec
+----------------------------------------------------------
+Test Passed.
+"terrain_risk_mask_test" end time: Oct 10 08:40 UTC
+"terrain_risk_mask_test" time elapsed: 00:00:01
+----------------------------------------------------------
+

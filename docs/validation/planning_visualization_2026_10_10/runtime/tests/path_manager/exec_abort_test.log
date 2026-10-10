@@ -1,0 +1,46 @@
+29/33 Testing: exec_abort_test
+29/33 Test: exec_abort_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/exec_abort_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/exec_abort_test"
+Directory: /ws/build/path_manager
+"exec_abort_test" start time: Oct 10 08:41 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/exec_abort_test
+== the contract itself (shared state machine) ==
+  [OK]   a trajectory is accepted and becomes the one being executed
+  [OK]   an abort naming it stops execution
+  [OK]   a NEW trajectory after that abort is accepted
+  [OK]   a replayed abort for the OLD id does not stop it
+  [OK]   ...however many times it is replayed
+  [OK]   an abort for a trajectory never seen stops nothing
+  [OK]   ...and that trajectory is REFUSED when it later arrives — the case a published test cannot pin, because it cannot choose the delivery order
+  [OK]   a different id still starts normally
+  [OK]   the withdrawn id is still refused
+  [OK]   ...and the flight in progress is UNAFFECTED by refusing it
+== consumer already listening ==
+  [OK]   a published trajectory is executed
+  [OK]   an ABORT naming it stops the follower — this is the step a zeroed planner-side slot cannot perform
+  [OK]   ...exactly once
+  [OK]   a duplicate ABORT is a no-op
+  [OK]   a new trajectory issued after the abort is executed
+  [OK]   a replayed ABORT for an older id does NOT stop the current trajectory — this is why the id exists and start_time cannot stand in for it
+== consumer joins late, ONLY an aborted trajectory latched ==
+  [OK]   a late consumer whose newest latched trajectory is aborted flies NOTHING — there is no newer id to fall back on here
+== consumer joins late (mixed history) ==
+  [OK]   a late consumer does not start flying an aborted trajectory
+  [OK]   ...it either discarded it on arrival or moved on to the newer one
+== reasons are distinguishable ==
+  [OK]   "we cannot judge it" is not the same wire value as "it is blocked" — both withdraw, they are not the same event
+  [OK]   ACTION_ABORT is the documented constant
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/exec_abort_test.xml' with successful test
+<end of output>
+Test time =   2.47 sec
+----------------------------------------------------------
+Test Passed.
+"exec_abort_test" end time: Oct 10 08:41 UTC
+"exec_abort_test" time elapsed: 00:00:02
+----------------------------------------------------------
+

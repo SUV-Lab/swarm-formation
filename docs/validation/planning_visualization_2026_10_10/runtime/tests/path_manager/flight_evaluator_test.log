@@ -1,0 +1,86 @@
+14/33 Testing: flight_evaluator_test
+14/33 Test: flight_evaluator_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/flight_evaluator_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/flight_evaluator_test"
+Directory: /ws/build/path_manager
+"flight_evaluator_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/flight_evaluator_test
+[OK] 0.1 second samples exclude the final instant and call terrain once each
+[OK] AGL measurements use planner global z and retain phase/total sums
+[OK] evaluation does not mutate trajectory or phase input
+[OK] owned report outlives trajectory, phases and borrowed provider owner
+[OK] legacy logs format later from owned report without any provider
+[OK] missing terrain provider uses sea level and detects underground flight
+[OK] unavailable terrain query retains the established zero fallback
+[OK] provider exception propagates synchronously without execution state
+[OK] invalid phase partition remains unevaluated and does not query environment
+[OK] invalid phase partition remains unevaluated and does not query environment
+[OK] invalid phase partition remains unevaluated and does not query environment
+[OK] invalid phase partition remains unevaluated and does not query environment
+[OK] invalid phase partition remains unevaluated and does not query environment
+[OK] invalid phase partition remains unevaluated and does not query environment
+[OK] invalid phase partition remains unevaluated and does not query environment
+[OK] nonfinite trajectory coefficient is unevaluated before callbacks
+[OK] nonfinite trajectory coefficient is unevaluated before callbacks
+[OK] nonfinite trajectory coefficient is unevaluated before callbacks
+[OK] nonfinite or nonpositive piece duration is unevaluated before callbacks
+[OK] nonfinite or nonpositive piece duration is unevaluated before callbacks
+[OK] nonfinite or nonpositive piece duration is unevaluated before callbacks
+[OK] nonfinite or nonpositive piece duration is unevaluated before callbacks
+[OK] nonfinite or nonpositive piece duration is unevaluated before callbacks
+[OK] overflow of otherwise finite piece-duration sum is refused before sampling
+[OK] empty and finite tiny positive trajectories retain the degenerate outcome
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite or nonpositive unit scale is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] nonfinite clearance or envelope threshold is unevaluated before callbacks
+[OK] finite negative thresholds and clearance retain their existing comparison semantics
+[OK] SI conversion and cruise latch exclude pre-cruise but count later loss
+[OK] violation fraction equal to the configured threshold still fails envelope
+[OK] envelope budget affects clean verdict without changing sampled metrics
+[OK] peak utilization equal to configured threshold remains allowed
+[OK] peak utilization above threshold changes envelope verdict
+[OK] transition is excluded from cruise judgment but retains terrain samples
+[OK] phase enum determines physics independently of display name
+[OK] explicitly disabled dynamics does not invent a never-cruise refusal
+[OK] external input defaults to unknown policy when zones exist
+[OK] authored contact refuses while exposure preserves original per-sample integration
+[OK] routing standoff stays distinct from authored volume and leaves degrade to coordinator
+[OK] measured soft policy permits crossing and still reports exposure
+[OK] unknown policy is unmeasurable rather than a zero-contact clearance claim
+[OK] stale policy epoch remains unmeasurable through explicit contact provider
+[OK] changed ordered zone shape remains unmeasurable
+[OK] incomplete external zone providers cannot produce evaluated clearance
+[OK] off-grid leg handover uses stricter policy and counts an instant without dwell
+[OK] structured handover diagnostic preserves legacy log order and content
+[OK] piece attribution from another search epoch cannot borrow valid leg policies
+[OK] hole in per-leg capture serials refuses per-piece policy attribution
+[OK] backward leg attribution refuses even when all tags are in range
+[OK] piece-count mismatch cannot accidentally reuse the last solve attribution
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/flight_evaluator_test.xml' with successful test
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"flight_evaluator_test" end time: Oct 10 08:40 UTC
+"flight_evaluator_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

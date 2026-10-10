@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="path_optimizer" tests="1" failures="0" time="0.118" errors="0" skipped="0">
+  <testcase classname="path_optimizer" name="optimizer_session_test.missing_result" time="0.118">
+    
+  </testcase>
+</testsuite>

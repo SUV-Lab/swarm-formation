@@ -1,0 +1,42 @@
+[
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/path_manager/src/path_manager.cpp",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/src/path_manager.cpp",
+    "sha256": "18f350de37b80466129812946f5170e0c65793b3ccca2c381bd591ff61fac35a"
+  },
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/path_manager/include/path_manager/path_manager.h",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/include/path_manager/path_manager.h",
+    "sha256": "fd0045927841f596582d5e35296c76e7c6bf209832090c8e24ad66fa2dc3be6b"
+  },
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/path_manager/include/path_manager/risk_zone.h",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/include/path_manager/risk_zone.h",
+    "sha256": "f6a85698b0e86207fb953b4e9f328f50a79dfeffd5fbe8eb826c2ae415d67669"
+  },
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/path_manager/CMakeLists.txt",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/CMakeLists.txt",
+    "sha256": "29ba0775c92d3185f162290d0f6d26a844ed645b8915fa0cf55792eac45c61c2"
+  },
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/config/optimizer_params.yaml",
+    "sha256": "19ba60796a2107b970c10bc1a4857b32980415e7bf165e3d4d1e688a1a306455"
+  },
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/path_manager/src/ros_planning_backend.cpp",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/src/ros_planning_backend.cpp",
+    "sha256": "6e35857d82e13dbb4bcddc8106cebc5d1d9ee67dca8718d4d7bb72f2791b3fcb"
+  },
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/path_manager/include/path_manager/mission_plan.h",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/include/path_manager/mission_plan.h",
+    "sha256": "a07db5382445a2dc9177dfbea715f250ccfa4d090e63c4d31242556815dc470b"
+  },
+  {
+    "path": "/home/suv/ws/temp/MMP_module/MMP/src/mmp_path_planning/src/common/log_manager.hpp",
+    "snapshot": "/tmp/mmp_stage4_visualization_20261010/baseline/source/common/log_manager.hpp",
+    "sha256": "f2af3d62b98fcc0bd2a30f00a2da4928d1425f1b5b363f5f42af97c376a681e7"
+  }
+]

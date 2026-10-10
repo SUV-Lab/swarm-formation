@@ -1,0 +1,58 @@
+{
+  "started_utc": "2026-10-10T08:41:36.686640+00:00",
+  "domain": 84,
+  "checks": {
+    "configure": {
+      "command": [
+        "cmake",
+        "-S",
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer",
+        "-B",
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer/build",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 0.5644546959956642
+    },
+    "build": {
+      "command": [
+        "cmake",
+        "--build",
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer/build",
+        "-j2"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 9.681099106994225
+    },
+    "connected_run": {
+      "command": [
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer/build/r2_external_consumer",
+        "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+        "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+        "/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml",
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer/connected_result.json"
+      ],
+      "exit_code": 0,
+      "elapsed_s": 4.219994300976396
+    },
+    "connected_wire_compare": {
+      "command": [
+        "python3",
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer/compare.py",
+        "/tmp/mmp_next_modularization_20261010/baseline/gui/mission.json",
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer/connected_result.json",
+        "/tmp/mmp_stage4_visualization_20261010/r2_consumer/connected_wire_comparison.json"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 0.03171448997454718
+    }
+  },
+  "modes": {
+    "connected": {
+      "own_loader_pid": 154842
+    }
+  },
+  "error": "connected_wire_compare failed",
+  "finished_utc": "2026-10-10T08:41:51.300030+00:00",
+  "pass": false
+}

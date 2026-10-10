@@ -1,0 +1,69 @@
+3/33 Testing: risk_contract_test
+3/33 Test: risk_contract_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/risk_contract_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/risk_contract_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"risk_contract_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/risk_contract_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+[INFO] [1791621647.815098600] [risk_contract_test]: Initializing optimizer for drone 1...
+[WARN] [1791621647.815261268] [risk_contract_test]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791621647.815279402] [risk_contract_test]: Obstacle avoidance: enabled
+[INFO] [1791621647.815287567] [risk_contract_test]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791621647.815397986] [risk_contract_test]: [POLY_TRAJ_OPT][drone 1] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791621647.815469492] [risk_contract_test]: [POLY_TRAJ_OPT][drone 1] Setting initial formation type: 2
+[INFO] [1791621647.815519516] [risk_contract_test]: Optimizer initialized successfully for drone 1
+
+[1-3] shape properties (exponent-agnostic)
+  [OK]   maximum at the centre: shape(0) == 1
+  [OK]   zero at and beyond the boundary: shape(q >= 1) == 0
+  [OK]   NaN radius yields 0, not a NaN moat
+  [OK]   monotonically non-increasing in q (20000 samples)
+  [OK]   stays within [0, 1]
+  [OK]   finite everywhere sampled
+  [OK]   centre value is peak exactly, independent of the exponent
+
+[5] analytic derivative matches the value it differentiates
+         worst |numeric - analytic| = 1.642e-10 at q=0.264
+  [OK]   central difference matches shapeDeriv within 1e-7
+  [OK]   derivative is non-positive everywhere (property 2)
+  [OK]   derivative is 0 outside the envelope
+
+[6] PA-7: peak is admissible only in (0, 1]
+  [OK]   accepts (0, 1]: 1e-9, 0.1, 0.5, 0.8, 1.0
+  [OK]   rejects 0, -0, negative, >1, +/-Inf, NaN (10 cases)
+
+[4] cross-layer field identity
+  [OK]   a well-formed zone is accepted
+         41 points; max |front-end - manager| = 5.551e-17, max |manager - shape| = 0.000e+00
+  [OK]   front end and manager agree pointwise (single-copy mutation dies)
+  [OK]   both equal peak * mmp::risk::shape(q) * visibility
+  [OK]   risk is positive inside the envelope
+  [OK]   risk is exactly zero at and beyond the rim
+  [OK]   a second well-formed zone is accepted
+         composed risk at probe: 1 zone 0.288000 -> 2 zones 0.528656
+  [OK]   adding a zone never lowers the composed risk
+  [OK]   a set containing peak=1.5 is rejected
+  [OK]   the rejected update left the active field untouched (atomic rejection, not a partial adopt)
+  [OK]   back end: single zone re-installed
+         66 directional derivatives; worst relative error = 5.825e-08
+  [OK]   back end: the optimizer exists and answers
+  [OK]   back end: the probe points actually cost something
+  [OK]   back end: analytic gradient matches the numeric derivative of the cost it belongs to
+  [OK]   back end: zero cost and zero gradient far outside the envelope
+  [OK]   two zones re-installed for the atomic-rejection checks
+  [OK]   a NaN peak is rejected
+  [OK]   the NaN-peak update also left the field untouched
+
+==== risk_contract_test: passed=29 failed=0 ====
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/risk_contract_test.xml' with successful test
+<end of output>
+Test time =   0.19 sec
+----------------------------------------------------------
+Test Passed.
+"risk_contract_test" end time: Oct 10 08:40 UTC
+"risk_contract_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

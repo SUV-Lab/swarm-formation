@@ -1,0 +1,29 @@
+[OK] prepared messages own source point values
+[OK] caller supplies message clock without a ROS node
+[OK] empty geometry retains no-tube behavior
+[OK] sampled geometry survives temporary trajectory destruction
+[OK] legacy zero path scale still prepares hidden geometry
+[OK] legacy zero sphere mesh height does not reject planning
+[OK] trajectory clear keeps legacy action/frame
+[OK] empty chain remains an owned clear-only array
+[OK] external profile preserves self-describing v4 contract
+[OK] external canonical provider prepares colored geometry
+[OK] external risk view prepares an owned elevation/color grid
+[OK] risk field owns one complete replaceable marker array
+[OK] builder queries provider synchronously
+[OK] returned payload retains neither callback nor provider owner
+[OK] empty trajectory clears profile without unused settings/providers
+[OK] empty trajectory clears colored line
+[OK] empty field replaces retained heatmap with NaN stub
+[OK] infinite duration is rejected before sample conversion
+[OK] NaN duration is rejected before sampling loop
+[OK] nonfinite coefficients cannot escape as prepared geometry
+[OK] unrepresentable sample count is rejected
+[OK] finite huge tube duration is rejected before size conversion
+[OK] zero heatmap dimension is rejected
+[OK] nonfinite geometric setting is rejected
+[OK] overflowed profile count is rejected
+[OK] required provider absence is diagnosed
+[OK] required clock absence is diagnosed
+[OK] provider exceptions propagate without a partial result
+failures=0

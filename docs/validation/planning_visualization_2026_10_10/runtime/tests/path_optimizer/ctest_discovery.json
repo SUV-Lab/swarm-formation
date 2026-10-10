@@ -1,0 +1,112 @@
+{
+  "backtraceGraph" : 
+  {
+    "commands" : 
+    [
+      "add_test",
+      "ament_add_test"
+    ],
+    "files" : 
+    [
+      "/opt/ros/humble/share/ament_cmake_test/cmake/ament_add_test.cmake",
+      "/ws/src/mmp_path_planning/src/path_optimizer/CMakeLists.txt"
+    ],
+    "nodes" : 
+    [
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 99,
+        "parent" : 0
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 1
+      },
+      {
+        "file" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 105,
+        "parent" : 3
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 4
+      }
+    ]
+  },
+  "kind" : "ctestInfo",
+  "tests" : 
+  [
+    {
+      "backtrace" : 2,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_optimizer/test_results/path_optimizer/route_cost_profile_test.xml",
+        "--package-name",
+        "path_optimizer",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_optimizer/route_cost_profile_test"
+      ],
+      "name" : "route_cost_profile_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 30.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_optimizer"
+        }
+      ]
+    },
+    {
+      "backtrace" : 5,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/path_optimizer/test_results/path_optimizer/optimizer_session_test.xml",
+        "--package-name",
+        "path_optimizer",
+        "--generate-result-on-success",
+        "--command",
+        "/ws/build/path_optimizer/optimizer_session_test",
+        "/ws/src/mmp_path_planning/src/path_optimizer/../path_manager/config/optimizer_params.yaml"
+      ],
+      "name" : "optimizer_session_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 120.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/path_optimizer"
+        }
+      ]
+    }
+  ],
+  "version" : 
+  {
+    "major" : 1,
+    "minor" : 0
+  }
+}

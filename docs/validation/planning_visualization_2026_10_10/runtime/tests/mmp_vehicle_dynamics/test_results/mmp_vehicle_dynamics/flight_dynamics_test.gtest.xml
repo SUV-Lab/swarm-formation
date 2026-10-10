@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="23" failures="0" disabled="0" errors="0" time="0" timestamp="2026-10-10T08:42:34" name="AllTests">
+  <testsuite name="FlightDynamics" tests="15" failures="0" disabled="0" errors="0" time="0" timestamp="2026-10-10T08:42:34">
+    <testcase name="StraightLevelTrimIncludesGravity" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="NearZeroLiftArcDoesNotTriggerBankLimit" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="CoordinatedTurnMatchesClosedForm" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="SteadyClimbMatchesEnergyBalance" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="PenaltyGradientMatchesFiniteDifference" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="RepresentativeLevelCruiseIsInsideEnvelope" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="ConeBankEnforcesAtHighLift" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="BankPenaltyBoundedNearZeroLift" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="FlightPathComponentFormBoundedAndActive" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="NoDeceleratingBarrierDuringInitialAcceleration" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="QFloorIsInertAboveStall" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="QFloorBlendBoundaries" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="SubStallAeroIsBoundedAndSpeedFlat" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="BankConeGuardsNegativeLiftPushover" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+    <testcase name="GentlePushoverStaysClean" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.FlightDynamics" />
+  </testsuite>
+  <testsuite name="HandoffVerdict" tests="8" failures="0" disabled="0" errors="0" time="0" timestamp="2026-10-10T08:42:34">
+    <testcase name="MarginBackedFloorIsSpeedMinTimesOnePlusMargin" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+    <testcase name="KnownTrimPasses" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+    <testcase name="SubActivationSpeedIsRefusedThoughUtilizationReadsZero" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+    <testcase name="SpeedBoundariesAreInclusiveWithinOneMicrometrePerSecond" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+    <testcase name="FlightPathConeIsInclusiveExactlyAtTheLimit" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+    <testcase name="NonFiniteComponentsAreNamedAndBeatOtherViolations" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+    <testcase name="ThrustExceededIsReportedByName" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+    <testcase name="DragPolarIsOneDefinitionSharedWithTheModel" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.HandoffVerdict" />
+  </testsuite>
+</testsuites>

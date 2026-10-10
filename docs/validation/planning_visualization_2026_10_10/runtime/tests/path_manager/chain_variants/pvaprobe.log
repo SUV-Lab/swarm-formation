@@ -1,0 +1,16 @@
+[INFO] [1791621744.826813113] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791621744.826878397] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791621744.826885971] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791621744.826888706] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791621744.826996520] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791621744.827066573] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791621744.827106909] [chain_experiment]: Optimizer initialized successfully for drone 0
+route-sequential mode
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+pvaprobe: dwell-complete state at t=2.28 s
+  planner p=(29.9994, 146.371, 16.947) u  |v|=1.68043 u/s  |a|=0.451601 u/s^2
+  pvaEnvelopeProblem: flying this exact state demands 502% of the minimum thrust limit
+  NOTE: NOT a physics verdict — example aircraft vs cruise model.
+[OK]   validator rejected -> FAILED(INITIAL_MODE_UNSUPPORTED)
+[OK]   validator's reason text reaches PlanResult.detail verbatim
+PASS: 0 failed check(s)

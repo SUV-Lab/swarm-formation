@@ -1,0 +1,8 @@
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(2804,4120,457) voxel=(0.3,0.3,0.1) free_distance=1236
+PLANNING_R2 chain=1 segments=0
+[INFO] [1791621710.245101085] [r2_external_mission_consumer]: Initializing optimizer for drone 0...
+[INFO] [1791621710.245457830] [r2_external_mission_consumer]: Optimizer initialized successfully for drone 0
+[GEODESIC] points=2263 recover_steps=152 (grad_fail=0 mono_rej=152) reached_goal=yes
+[INFO] [1791621710.705487086] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=180
+[INFO] [1791621710.955525173] [r2_external_mission_consumer]: Setting formation with 1 positions to optimizer
+R2_RESULT has_trajectory=1 pieces=190 phases=5 input_unchanged=1

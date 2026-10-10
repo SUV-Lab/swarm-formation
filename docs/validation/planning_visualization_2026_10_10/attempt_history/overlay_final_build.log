@@ -1,0 +1,49 @@
+-- Found path_manager: 1.0.0 (/ws/install/path_manager/share/path_manager/cmake)
+-- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+-- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)
+-- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+-- Found rmw_fastrtps_cpp: 6.2.10 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+-- Using RMW implementation 'rmw_fastrtps_cpp' as default
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /tmp/mmp_stage4_visualization_20261010/overlay_build
+Consolidate compiler generated dependencies of target visualization_overlay
+[  3%] Building CXX object CMakeFiles/visualization_overlay.dir/src/planning_visualization_data.cpp.o
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In function ‘path_manager::visualization::Prepared<visualization_msgs::msg::MarkerArray_<std::allocator<void> > > path_manager::visualization::makePipeline(const std::vector<Eigen::Matrix<double, 3, 1> >&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const Stamp&)’:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:221:48: warning: ‘[DEBUG-PIPELINE] published ’ directive output truncated writing 27 bytes into a region of size 1 [-Wformat-truncation=]
+  221 | Prepared<visualization_msgs::msg::MarkerArray> makePipeline(
+      |                                                ^~~~~~~~~~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:221:48: note: using the range [0, 18446744073709551615] for directive argument
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:221:48: note: using the range [0, 18446744073709551615] for directive argument
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /tmp/mmp_stage4_visualization_20261010/overlay/include/path_manager/planning_visualization_data.h:5,
+                 from /tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 55 and 93 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+[  6%] Linking CXX static library libvisualization_overlay.a
+[ 86%] Built target visualization_overlay
+Consolidate compiler generated dependencies of target stage4_visual_fixture
+[ 89%] Building CXX object CMakeFiles/planning_visualization_test.dir/test/planning_visualization_test.cpp.o
+[ 93%] Linking CXX executable stage4_visual_fixture
+[ 96%] Built target stage4_visual_fixture
+[100%] Linking CXX executable planning_visualization_test
+[100%] Built target planning_visualization_test
+Consolidate compiler generated dependencies of target visualization_overlay
+[ 86%] Built target visualization_overlay
+Consolidate compiler generated dependencies of target planning_visualization_test
+[ 89%] Building CXX object CMakeFiles/planning_visualization_test.dir/test/planning_visualization_test.cpp.o
+[ 96%] Built target stage4_visual_fixture
+[100%] Linking CXX executable planning_visualization_test
+[100%] Built target planning_visualization_test

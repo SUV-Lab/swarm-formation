@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(mmp_installed_visual_fixture LANGUAGES CXX)
+find_package(path_manager REQUIRED)
+add_executable(installed_visual_fixture main.cpp)
+target_compile_definitions(installed_visual_fixture PRIVATE STAGE4_VISUALIZATION=1)
+target_include_directories(installed_visual_fixture BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/access")
+target_link_libraries(installed_visual_fixture PRIVATE path_manager::path_manager_lib)

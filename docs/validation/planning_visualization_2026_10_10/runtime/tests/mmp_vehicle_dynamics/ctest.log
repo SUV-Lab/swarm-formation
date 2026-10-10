@@ -1,0 +1,20 @@
+Test project /ws/build/mmp_vehicle_dynamics
+    Start 1: flight_dynamics_test
+1/6 Test #1: flight_dynamics_test .............   Passed    0.03 sec
+    Start 2: vehicle_model_test
+2/6 Test #2: vehicle_model_test ...............   Passed    0.03 sec
+    Start 3: point_mass_eom_test
+3/6 Test #3: point_mass_eom_test ..............   Passed    0.03 sec
+    Start 4: trajectory_simulation_test
+4/6 Test #4: trajectory_simulation_test .......   Passed    0.03 sec
+    Start 5: python_binding_test
+5/6 Test #5: python_binding_test ..............   Passed    0.12 sec
+    Start 6: config_snapshot_test
+6/6 Test #6: config_snapshot_test .............   Passed    0.04 sec
+
+100% tests passed, 0 tests failed out of 6
+
+Label Time Summary:
+gtest    =   0.12 sec*proc (4 tests)
+
+Total Test time (real) =   0.28 sec

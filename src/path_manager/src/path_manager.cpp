@@ -19,7 +19,7 @@
 namespace path_manager
 {
 
-    PathManager::PathManager(rclcpp::Node::SharedPtr node)
+    PathManager::PathManager(rclcpp::Node::SharedPtr node, bool attach_visualization)
         : node_(node),
           max_vel_(-1.0),
           max_acc_(-1.0),
@@ -364,74 +364,14 @@ namespace path_manager
             log_manager_->warnf("Invalid risk_zones param size: %zu (must be multiple of 5)", tz_params.size());
         }
 
-        // Latched so a late-joining altitude panel still gets the last
-        // front-end route (transient_local pub serves volatile subs fine).
-        front_end_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
-            "/planning/front_end_path",
-            rclcpp::QoS(1).reliable().transient_local());
-        // Trajectory tube channels (see publishTrajTube in the header). Same
-        // latched QoS as the /planning sources they mirror.
-        const auto tube_qos = rclcpp::QoS(1).reliable().transient_local();
-        opt_traj_tube_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-            "/viz/opt_trajectory", tube_qos);
-        global_traj_tube_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-            "/viz/global_trajectory", tube_qos);
-        front_end_tube_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-            "/viz/front_end_path", tube_qos);
-        // Tube diameter; parameterized because the right size depends on the
-        // map scale being viewed (5.0 read as a 500 m sausage nationwide).
+        // Read legacy parameters even when the optional ROS connection is off.
         node_->declare_parameter("path_scale", 1.5);
         node_->get_parameter("path_scale", path_scale_);
-        // TRANSIENT_LOCAL so RViz, joining late, still gets the latest set.
-        rclcpp::QoS dyn_qos(1);
-        dyn_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
-        dyn_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
-        dyn_obstacle_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-            "/viz/dynamic_obstacles", dyn_qos);
-        // The launch default is drone_id=1 and single-agent runs do not
-        // necessarily create drone_0, so risk visualization cannot use the
-        // terrain-status publisher's drone_0-only ownership rule. Multiple
-        // planners publish an identical id/namespace set and are harmless.
-        //
-        // Depth 1: the field is ONE MarkerArray per refresh, so the latched
-        // sample is the complete picture. The former per-marker burst needed a
-        // deep queue (7 markers x N zones) and still truncated silently past
-        // ~18 zones, leaving late joiners with a half-drawn field.
-        risk_field_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-            "/viz/risk_field", rclcpp::QoS(1).reliable().transient_local());
-        // [CHAIN-VIZ] per-segment chain view — same one-latched-array
-        // contract as the risk field.
-        chain_segments_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-            "/viz/chain_segments", rclcpp::QoS(1).reliable().transient_local());
-        // [DEBUG-PIPELINE] debug-mode only (see the member comment). Off by
-        // default: the esdf overlay taught us that always-on debug output
-        // with no watcher is pure cost — here the publisher itself is only
-        // created in debug mode, so `ros2 topic list` tells the truth.
         node_->declare_parameter("manager/debug_pipeline_viz", false);
         node_->get_parameter("manager/debug_pipeline_viz", debug_pipeline_viz_);
-        if (debug_pipeline_viz_) {
-            debug_pipeline_pub_ =
-                node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-                    "/debug/pipeline",
-                    rclcpp::QoS(1).reliable().transient_local());
-            RCLCPP_INFO(node_->get_logger(),
-                        "[DEBUG-PIPELINE] /debug/pipeline enabled "
-                        "(shortcut_points + inner_points per plan)");
-        }
-        // One latched map; a second grid_map_rviz_plugin display drapes it
-        // over the terrain (same message-layout contract as /terrain/grid_map).
-        rclcpp::QoS heatmap_qos(1);
-        heatmap_qos.reliability(rclcpp::ReliabilityPolicy::Reliable);
-        heatmap_qos.durability(rclcpp::DurabilityPolicy::TransientLocal);
-        // [TRAJ-RISK] latched: published once per plan; a late-joining RViz
-        // must still see the colored line.
-        traj_risk_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-            "/viz/traj_risk", rclcpp::QoS(1).reliable().transient_local());
-        // [RISK-PROFILE] altitude-panel dome/roof channels, latched per plan.
-        risk_profile_pub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
-            "/viz/risk_profile", rclcpp::QoS(1).reliable().transient_local());
-        risk_heatmap_pub_ = node_->create_publisher<grid_map_msgs::msg::GridMap>(
-            "/viz/risk_heatmap", heatmap_qos);
+        if (attach_visualization)
+            visualization_ = std::make_unique<RosPlanningVisualization>(
+                *node_, debug_pipeline_viz_);
 
         // Terrain may arrive after construction. This first call publishes an
         // ideal circular fallback; setTerrainData() replaces it with the DEM-
@@ -1348,6 +1288,7 @@ bool PathManager::configureFrontEnd(RouteSearchProblem &problem)
 void PathManager::publishFrontEndRoute(
     const std::vector<Eigen::Vector3d> &route, double search_ms)
 {
+    if (!visualization_) return;
     log_manager_->infof("A* route: %zu waypoints (%.1f ms)",
         route.size(),
         search_ms);
@@ -1401,24 +1342,9 @@ void PathManager::publishFrontEndRoute(
             dbg_risk_sum / std::max<size_t>(1, route.size()));
     }
 
-    // Front-end route: nav_msgs/Path for programmatic consumers plus the
-    // tube marker render (/viz/front_end_path).
-    nav_msgs::msg::Path path_msg;
-    path_msg.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
-    path_msg.header.frame_id = "map";
-    for (const auto &point : route) {
-        geometry_msgs::msg::PoseStamped pose;
-        pose.header = path_msg.header;
-        pose.pose.position.x = point.x();
-        pose.pose.position.y = point.y();
-        pose.pose.position.z = point.z();
-        pose.pose.orientation.w = 1.0;
-        path_msg.poses.push_back(pose);
-    }
-    front_end_path_pub_->publish(path_msg);
-    // ns matches the retired bridge node ("opt_path_drone_<id>" — the
-    // shipped RViz configs filter on it).
-    publishTubeMarker(front_end_tube_pub_, route, "opt_path_drone_",
+    visualization_->frontEndPath(visualization::makeFrontEndPath(
+        route, rclcpp::Clock(RCL_ROS_TIME).now()));
+    publishTubeMarker(visualization::TubeChannel::FrontEnd, route, "opt_path_drone_",
                       0.12f, 0.39f, 1.0f, 0.7f);
 }
 
@@ -1720,9 +1646,9 @@ std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::V
         // Tube renders of the flown (optimized) and seed (global) trajectories.
         // Reference trajectory: pale + translucent, a faint "tunnel" the
         // cursor sphere and the flown path pass through.
-        publishTrajTube(local_traj, opt_traj_tube_pub_, "opt_path_drone_",
+        publishTrajTube(local_traj, visualization::TubeChannel::Optimized, "opt_path_drone_",
                         0.55f, 0.72f, 1.0f, 0.22f);
-        publishTrajTube(global_traj, global_traj_tube_pub_, "global_path_drone_",
+        publishTrajTube(global_traj, visualization::TubeChannel::Reference, "global_path_drone_",
                         0.59f, 0.71f, 1.0f, 0.85f);
         // [CHAIN-VIZ] every ordinary solve clears the per-segment channel;
         // a chained plan repaints it AFTER its last segment solve.
@@ -1768,92 +1694,9 @@ void PathManager::publishChainSegmentsViz(
     const std::vector<Eigen::Vector3d> &junctions,
     const poly_traj::Trajectory *terminal)
 {
-    if (!chain_segments_pub_) return;
-    visualization_msgs::msg::MarkerArray arr;
-    {
-        visualization_msgs::msg::Marker del;
-        del.header.frame_id = "map";
-        del.header.stamp = node_->now();
-        del.action = visualization_msgs::msg::Marker::DELETEALL;
-        arr.markers.push_back(del);
-    }
-    if (runs.empty()) {  // clear-only
-        chain_segments_pub_->publish(arr);
-        return;
-    }
-    // High-contrast palette, cycled; the terminal phase is always WHITE so
-    // the prescribed geometry is unmistakable next to the optimized runs.
-    static const float kPal[][3] = {
-        {0.12f, 0.65f, 1.00f}, {1.00f, 0.55f, 0.10f}, {0.20f, 0.90f, 0.35f},
-        {0.95f, 0.30f, 0.85f}, {1.00f, 0.90f, 0.15f}, {0.35f, 0.35f, 1.00f},
-        {0.10f, 0.90f, 0.90f}, {1.00f, 0.35f, 0.30f}, {0.60f, 0.95f, 0.20f},
-        {0.80f, 0.55f, 1.00f},
-    };
-    constexpr size_t kPalN = sizeof(kPal) / sizeof(kPal[0]);
-    int id = 0;
-    const auto tube = [&](const poly_traj::Trajectory &traj, const float *c,
-                          const char *ns) {
-        const double T = traj.getTotalDuration();
-        if (T <= 1e-6) return;
-        visualization_msgs::msg::Marker m;
-        m.header.frame_id = "map";
-        m.header.stamp = node_->now();
-        m.ns = ns;
-        m.id = id++;
-        m.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-        m.action = visualization_msgs::msg::Marker::ADD;
-        m.pose.orientation.w = 1.0;
-        m.scale.x = m.scale.y = m.scale.z = path_scale_;
-        m.color.r = c[0]; m.color.g = c[1]; m.color.b = c[2];
-        m.color.a = 0.9f;
-        m.lifetime = rclcpp::Duration(0, 0);
-        for (double t = 0.0; t < T; t += 0.1) {
-            const Eigen::Vector3d p = traj.getPos(t);
-            geometry_msgs::msg::Point q;
-            q.x = p.x(); q.y = p.y(); q.z = p.z();
-            m.points.push_back(q);
-        }
-        const Eigen::Vector3d pe = traj.getPos(T - 1e-9);
-        geometry_msgs::msg::Point qe;
-        qe.x = pe.x(); qe.y = pe.y(); qe.z = pe.z();
-        m.points.push_back(qe);
-        arr.markers.push_back(m);
-    };
-    for (size_t i = 0; i < runs.size(); ++i)
-        tube(runs[i], kPal[i % kPalN], "chain_seg");
-    if (terminal) {
-        static const float kWhite[3] = {1.0f, 1.0f, 1.0f};
-        tube(*terminal, kWhite, "chain_terminal");
-    }
-    for (size_t j = 0; j < junctions.size(); ++j) {
-        visualization_msgs::msg::Marker s;
-        s.header.frame_id = "map";
-        s.header.stamp = node_->now();
-        s.ns = "chain_junction";
-        s.id = id++;
-        s.type = visualization_msgs::msg::Marker::SPHERE;
-        s.action = visualization_msgs::msg::Marker::ADD;
-        s.pose.position.x = junctions[j].x();
-        s.pose.position.y = junctions[j].y();
-        s.pose.position.z = junctions[j].z();
-        s.pose.orientation.w = 1.0;
-        s.scale.x = s.scale.y = s.scale.z = 3.0 * path_scale_;
-        s.color.r = s.color.g = s.color.b = 1.0f;
-        s.color.a = 0.95f;
-        s.lifetime = rclcpp::Duration(0, 0);
-        arr.markers.push_back(s);
-
-        visualization_msgs::msg::Marker t = s;
-        t.ns = "chain_junction_label";
-        t.id = id++;
-        t.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-        t.pose.position.z += 4.0 * path_scale_;
-        t.scale.x = t.scale.y = 0.0;
-        t.scale.z = 4.0 * path_scale_;
-        t.text = "J" + std::to_string(j + 1);
-        arr.markers.push_back(t);
-    }
-    chain_segments_pub_->publish(arr);
+    if (!visualization_) return;
+    visualization_->chain(visualization::makeChain(
+        runs, junctions, terminal, path_scale_, visualizationStamp()));
 }
 
 // [CHAIN] Republish the along-trajectory channels for an externally
@@ -1865,9 +1708,9 @@ void PathManager::publishTrajectoryViz(const poly_traj::Trajectory &opt,
 {
     publishTrajRisk(opt);
     publishRiskProfile(opt);
-    publishTrajTube(opt, opt_traj_tube_pub_, "opt_path_drone_",
+    publishTrajTube(opt, visualization::TubeChannel::Optimized, "opt_path_drone_",
                     0.55f, 0.72f, 1.0f, 0.22f);
-    publishTrajTube(reference, global_traj_tube_pub_, "global_path_drone_",
+    publishTrajTube(reference, visualization::TubeChannel::Reference, "global_path_drone_",
                     0.59f, 0.71f, 1.0f, 0.85f);
 }
 
@@ -1897,15 +1740,12 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
     // route-derived diagnostic must change with it. Otherwise the altitude
     // panel can combine a stationary marker with the old front-end path
     // and old risk colors.
-    if (front_end_path_pub_) {
-        nav_msgs::msg::Path clear;
-        clear.header.frame_id = "map";
-        clear.header.stamp = node_->now();
-        front_end_path_pub_->publish(clear);
+    if (visualization_) {
+        visualization_->frontEndPath(visualization::makeFrontEndPath({}, node_->now()));
     }
     publishTrajRisk(traj_.local_traj.traj);
     publishRiskProfile(traj_.local_traj.traj);
-    publishTrajTube(traj_.local_traj.traj, opt_traj_tube_pub_, "opt_path_drone_",
+    publishTrajTube(traj_.local_traj.traj, visualization::TubeChannel::Optimized, "opt_path_drone_",
                     0.55f, 0.72f, 1.0f, 0.22f);
 
     RCLCPP_WARN(node_->get_logger(), "EMERGENCY STOP executed at position (%.2f, %.2f, %.2f)",
@@ -2266,325 +2106,98 @@ double PathManager::riskVisibility(size_t zone_index,
 //   /viz/opt_trajectory      optimized final                (existing)
 // One latched MarkerArray per plan (element 0 = DELETEALL), same atomicity
 // contract as /viz/risk_field. Debug mode only.
+visualization::Stamp PathManager::visualizationStamp() const
+{
+    return [this]() -> builtin_interfaces::msg::Time { return node_->now(); };
+}
+
+visualization::RiskView PathManager::riskVisualizationView() const
+{
+    return {risk_zones_,
+        {terrain_data_.valid, terrain_data_.resolution,
+         [this](double x, double y) { return terrain_data_.getElevation(x, y); },
+         [this](double x, double y, float *h, float *dx, float *dy) {
+             return terrain_data_.getElevationAndGrad(x, y, h, dx, dy);
+         }},
+        [this](size_t i, const Eigen::Vector3d &p) { return riskZoneValue(i, p); },
+        [this](size_t i, const Eigen::Vector3d &p) { return riskVisibilityValue(i, p); },
+        [this](size_t i, const Eigen::Vector3d &p) { return riskShadowCeiling(i, p); }};
+}
+
+visualization::RiskSettings PathManager::riskVisualizationSettings() const
+{
+    visualization::RiskSettings settings;
+    settings.vertical_ratio = risk_vertical_ratio_;
+    settings.softness = risk_mask_softness_;
+    settings.threshold = risk_mask_viz_threshold_;
+    settings.obstacle_clearance = opt_obstacle_clearance_;
+    settings.grounded = risk_grounded_;
+    settings.max_velocity = max_vel_;
+    settings.step = risk_mask_viz_step_;
+    settings.slice_offset = risk_mask_viz_slice_offset_;
+    settings.agl = risk_mask_viz_agl_;
+    settings.volume_alpha = risk_mask_viz_volume_alpha_;
+    settings.contours = risk_mask_viz_contours_;
+    settings.mode = risk_mask_viz_mode_;
+    settings.heatmap_agl_max = risk_heatmap_agl_max_;
+    settings.heatmap_offset = risk_heatmap_offset_;
+    settings.heatmap_preview_lift = risk_heatmap_preview_lift_;
+    settings.heatmap_max_dim = risk_heatmap_max_dim_;
+    settings.heatmap_safe_transparent = risk_heatmap_safe_transparent_;
+    return settings;
+}
+
 void PathManager::publishPipelineDebug(
     const std::vector<Eigen::Vector3d> &shortcut_route,
     const std::vector<Eigen::Vector3d> &inner_points)
 {
-    if (!debug_pipeline_viz_ || !debug_pipeline_pub_) return;
-
-    visualization_msgs::msg::MarkerArray arr;
-    visualization_msgs::msg::Marker clear;
-    clear.header.frame_id = "map";
-    clear.header.stamp = node_->now();
-    clear.action = visualization_msgs::msg::Marker::DELETEALL;
-    arr.markers.push_back(clear);
-
-    auto sphere_list = [&](const char *ns, double scale,
-                           float r, float g, float b) {
-        visualization_msgs::msg::Marker m;
-        m.header.frame_id = "map";
-        m.header.stamp = node_->now();
-        m.ns = ns;
-        m.id = 0;
-        m.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-        m.action = visualization_msgs::msg::Marker::ADD;
-        m.pose.orientation.w = 1.0;
-        m.scale.x = m.scale.y = m.scale.z = scale;
-        m.color.r = r; m.color.g = g; m.color.b = b; m.color.a = 0.95f;
-        return m;
-    };
-
-    // Shortcut vertices: what the front end committed. Orange, chunky.
-    auto sc = sphere_list("shortcut_points", 0.9, 1.0f, 0.55f, 0.10f);
-    for (const auto &p : shortcut_route) {
-        geometry_msgs::msg::Point q;
-        q.x = p.x(); q.y = p.y(); q.z = p.z();
-        sc.points.push_back(q);
-    }
-    arr.markers.push_back(std::move(sc));
-
-    // Index labels so a bad vertex can be named, not pointed at. Thinned on
-    // long routes to keep RViz responsive.
-    const size_t n = shortcut_route.size();
-    const size_t stride = n > 120 ? (n + 119) / 120 : 1;
-    for (size_t i = 0; i < n; i += stride) {
-        visualization_msgs::msg::Marker t;
-        t.header.frame_id = "map";
-        t.header.stamp = node_->now();
-        t.ns = "shortcut_index";
-        t.id = static_cast<int>(i);
-        t.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-        t.action = visualization_msgs::msg::Marker::ADD;
-        t.pose.position.x = shortcut_route[i].x();
-        t.pose.position.y = shortcut_route[i].y();
-        t.pose.position.z = shortcut_route[i].z() + 1.4;
-        t.pose.orientation.w = 1.0;
-        t.scale.z = 1.2;
-        t.color.r = 1.0f; t.color.g = 0.75f; t.color.b = 0.35f;
-        t.color.a = 0.9f;
-        t.text = std::to_string(i);
-        arr.markers.push_back(std::move(t));
-    }
-
-    // MINCO seed: the sparse pieces the optimizer actually starts from. Cyan,
-    // small — dense enough that size must stay subtle next to the shortcut.
-    auto ip = sphere_list("inner_points", 0.35, 0.15f, 0.80f, 0.95f);
-    for (const auto &p : inner_points) {
-        geometry_msgs::msg::Point q;
-        q.x = p.x(); q.y = p.y(); q.z = p.z();
-        ip.points.push_back(q);
-    }
-    arr.markers.push_back(std::move(ip));
-
-    debug_pipeline_pub_->publish(arr);
-    log_manager_->infof("[DEBUG-PIPELINE] published %zu shortcut + %zu inner points",
-                        shortcut_route.size(), inner_points.size());
+    if (!visualization_ || !visualization_->pipelineEnabled()) return;
+    auto result = visualization::makePipeline(shortcut_route, inner_points,
+                                              visualizationStamp());
+    visualization_->pipeline(result.message);
+    if (log_manager_ && !result.diagnostic.empty())
+        log_manager_->infof("%s", result.diagnostic.c_str());
 }
 
 void PathManager::publishTubeMarker(
-    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+    visualization::TubeChannel channel,
     const std::vector<Eigen::Vector3d> &pts, const std::string &ns_prefix,
     float r, float g, float b, float a)
 {
-    if (!pub || pts.empty()) return;
-    visualization_msgs::msg::Marker m;
-    m.header.frame_id = "map";
-    m.header.stamp = node_->now();
-    const int drone_id = std::max(0, traj_.local_traj.drone_id);
-    m.ns = ns_prefix + std::to_string(drone_id);
-    m.id = drone_id;
-    m.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-    m.action = visualization_msgs::msg::Marker::ADD;
-    m.pose.orientation.w = 1.0;  // identity quaternion (avoids RViz cull/flicker)
-    m.scale.x = m.scale.y = m.scale.z = path_scale_;
-    m.color.r = r; m.color.g = g; m.color.b = b; m.color.a = a;
-    m.points.reserve(pts.size());
-    for (const auto &p : pts) {
-        geometry_msgs::msg::Point gp;
-        gp.x = p.x(); gp.y = p.y(); gp.z = p.z();
-        m.points.push_back(gp);
-    }
-    pub->publish(m);
+    if (!visualization_) return;
+    auto message = visualization::makeTube(pts, traj_.local_traj.drone_id,
+        path_scale_, ns_prefix, r, g, b, a, visualizationStamp());
+    if (message) visualization_->tube(channel, *message);
 }
 
 void PathManager::clearTrajectoryViz()
 {
-    // The tube and risk channels are transient_local (latched), so a REFUSED
-    // plan whose trajectory was invalidated still shows in RViz as the
-    // current plan — and any RViz that connects afterwards is handed it from
-    // the latch. Zeroing the two execution fields says nothing to a
-    // subscriber. Every refusal exit that invalidates must also erase, or
-    // the operator is looking at a flight the planner already rejected.
-    visualization_msgs::msg::Marker del;
-    del.header.frame_id = "world";
-    del.action = visualization_msgs::msg::Marker::DELETEALL;
-    for (const auto &pub : {opt_traj_tube_pub_, global_traj_tube_pub_,
-                            traj_risk_pub_}) {
-        if (pub) pub->publish(del);
-    }
-    // The risk profile is a Float64MultiArray, not markers: an EMPTY array
-    // is its "nothing to show" value.
-    if (risk_profile_pub_) {
-        std_msgs::msg::Float64MultiArray empty;
-        risk_profile_pub_->publish(empty);
-    }
+    if (!visualization_) return;
+    visualization_->clearTrajectory(visualization::makeTrajectoryClear());
 }
 
 void PathManager::publishTrajTube(
-    const poly_traj::Trajectory &traj,
-    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr &pub,
+    const poly_traj::Trajectory &traj, visualization::TubeChannel channel,
     const std::string &ns_prefix, float r, float g, float b, float a)
 {
-    const double T = traj.getDurations().sum();
-    if (T <= 1e-6) return;
-    // 0.1 s sampling plus the exact endpoint — the density the retired
-    // bridge node used; dense enough to read as a tube at map scale.
-    std::vector<Eigen::Vector3d> pts;
-    pts.reserve(static_cast<size_t>(T / 0.1) + 2);
-    for (double t = 0.0; t < T; t += 0.1) pts.push_back(traj.getPos(t));
-    pts.push_back(traj.getPos(T - 1e-9));
-    publishTubeMarker(pub, pts, ns_prefix, r, g, b, a);
+    if (!visualization_) return;
+    auto message = visualization::makeTrajectoryTube(traj,
+        traj_.local_traj.drone_id, path_scale_, ns_prefix, r, g, b, a,
+        visualizationStamp());
+    if (message) visualization_->tube(channel, *message);
 }
 
 void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
 {
-    if (!traj_risk_pub_) return;
-    visualization_msgs::msg::Marker m;
-    m.header.frame_id = "map";
-    m.header.stamp = node_->now();
-    m.ns = "traj_risk";
-    m.id = 0;
-    m.type = visualization_msgs::msg::Marker::LINE_STRIP;
-    m.action = visualization_msgs::msg::Marker::ADD;
-    m.pose.orientation.w = 1.0;
-    m.scale.x = 0.45;  // line width (u); slightly thinner than the main traj
-    m.lifetime = rclcpp::Duration(0, 0);
-
-    const double T = traj.getDurations().sum();
-    if (T <= 1e-6 || risk_zones_.empty()) {
-        // No zones (or empty traj): publish DELETE so a stale colored line
-        // from a previous zoned plan cannot outlive its mission.
-        m.action = visualization_msgs::msg::Marker::DELETE;
-        traj_risk_pub_->publish(m);
-        return;
-    }
-    const int n = std::min(2000, std::max(50, static_cast<int>(T / 0.5)));
-    m.points.reserve(n + 1);
-    m.colors.reserve(n + 1);
-    for (int i = 0; i <= n; ++i) {
-        const double t = T * static_cast<double>(i) / n;
-        const Eigen::Vector3d p = traj.getPos(std::min(t, T - 1e-9));
-        // OR-combined effective moat (terrain-masked, same field the
-        // optimizer prices): r = 1 - prod(1 - m_i).
-        double surv = 1.0;
-        for (size_t zi = 0; zi < risk_zones_.size(); ++zi)
-            surv *= (1.0 - riskZoneValue(zi, p));
-        const double r = 1.0 - surv;
-        // Perceptual ramp: sqrt lifts the faint-halo values so "slightly
-        // visible" is visibly yellow-ish instead of indistinguishable green.
-        const double s = std::sqrt(std::clamp(r, 0.0, 1.0));
-        geometry_msgs::msg::Point gp;
-        gp.x = p.x(); gp.y = p.y(); gp.z = p.z();
-        std_msgs::msg::ColorRGBA c;
-        c.a = 0.95f;
-        if (s < 0.5) {          // green -> yellow
-            c.r = static_cast<float>(2.0 * s);
-            c.g = 0.85f;
-            c.b = 0.05f;
-        } else {                // yellow -> red
-            c.r = 0.95f;
-            c.g = static_cast<float>(0.85 * 2.0 * (1.0 - s));
-            c.b = 0.05f;
-        }
-        m.points.push_back(gp);
-        m.colors.push_back(c);
-    }
-    // Diagnostic: max experienced moat along the line — if this is 0 while
-    // the optimizer's risk_cost was nonzero, the viz field and the priced
-    // field have diverged (bug), or the cost was pure barrier/velocity terms.
-    {
-        double max_r = 0.0; Eigen::Vector3d max_p = Eigen::Vector3d::Zero();
-        for (int i = 0; i <= n; ++i) {
-            const double t = T * static_cast<double>(i) / n;
-            const Eigen::Vector3d p = traj.getPos(std::min(t, T - 1e-9));
-            double surv = 1.0;
-            for (size_t zi = 0; zi < risk_zones_.size(); ++zi)
-                surv *= (1.0 - riskZoneValue(zi, p));
-            if (1.0 - surv > max_r) { max_r = 1.0 - surv; max_p = p; }
-        }
-        log_manager_->infof(
-            "[TRAJ-RISK] published %d pts, max experienced moat r=%.5f at "
-            "(%.1f, %.1f, %.2f), zones=%zu",
-            n + 1, max_r, max_p.x(), max_p.y(), max_p.z(), risk_zones_.size());
-    }
-    traj_risk_pub_->publish(m);
+    if (!visualization_) return;
+    auto result = visualization::makeTrajectoryRisk(
+        traj, riskVisualizationView(), visualizationStamp());
+    if (log_manager_ && !result.diagnostic.empty())
+        log_manager_->infof("%s", result.diagnostic.c_str());
+    visualization_->trajectoryRisk(result.message);
 }
 
-bool PathManager::riskProfileVisibleInterval(size_t zone_index,
-                                             double x, double y,
-                                             double *lower_z,
-                                             double *floor_z,
-                                             double *top_z) const
-{
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    if (lower_z) *lower_z = nan;
-    if (floor_z) *floor_z = nan;
-    if (top_z) *top_z = nan;
-    if (!floor_z || !top_z || zone_index >= risk_zones_.size())
-        return false;
 
-    const auto &zone = risk_zones_[zone_index];
-    if (!(zone.reach > 0.0) || !(zone.peak > 0.0) ||
-        !(risk_vertical_ratio_ > 0.0)) {
-        return false;
-    }
-
-    const double dx = x - zone.center.x();
-    const double dy = y - zone.center.y();
-    const double rho2 = dx * dx + dy * dy;
-    const double reach2 = zone.reach * zone.reach;
-    if (!(rho2 < reach2)) return false;
-
-    const double rv = zone.reach * risk_vertical_ratio_;
-    const double half_z =
-        rv * std::sqrt(std::max(0.0, 1.0 - rho2 / reach2));
-    const double ellipsoid_lower = zone.center.z() - half_z;
-    const double ellipsoid_upper = zone.center.z() + half_z;
-
-    // Keep the same sea/off-map convention used when risk-zone sources are
-    // grounded: finite positive DEM is land; pure water and off-DEM use MSL 0.
-    double ground = 0.0;
-    float terrain_h = 0.0f, terrain_gx = 0.0f, terrain_gy = 0.0f;
-    const bool has_ground_sample =
-        terrain_data_.valid &&
-        terrain_data_.getElevationAndGrad(
-            x, y, &terrain_h, &terrain_gx, &terrain_gy);
-    if (has_ground_sample && std::isfinite(terrain_h) && terrain_h > 0.0f)
-        ground = static_cast<double>(terrain_h);
-
-    double visible_floor = std::max(ellipsoid_lower, ground);
-    if (!(visible_floor < ellipsoid_upper)) return false;
-
-    // riskVisibilityValue is monotone in raw z. Find its configured contour
-    // in raw trajectory-z coordinates, rather than mistaking the effective
-    // (grounded) z contour for a trajectory altitude.
-    const double threshold = risk_mask_viz_threshold_;
-    if (threshold >= 1.0) return false;  // no finite visible interval
-    if (threshold > 0.0) {
-        const double ceiling = riskShadowCeiling(
-            zone_index, Eigen::Vector3d(x, y, zone.center.z()));
-        if (std::isfinite(ceiling)) {
-            const double w = std::max(1e-6, risk_mask_softness_);
-            const double z_eff_boundary =
-                ceiling + w * std::log(threshold / (1.0 - threshold));
-            double raw_z_boundary = z_eff_boundary;
-
-            if (risk_grounded_ && has_ground_sample) {
-                const double grounded_floor =
-                    static_cast<double>(terrain_h) +
-                    opt_obstacle_clearance_;
-                const double d =
-                    (z_eff_boundary - grounded_floor) / w;
-                if (d <= 0.0) {
-                    // smoothmax(z, grounded_floor) is strictly above its
-                    // asymptote for every finite z: the whole shell is visible.
-                    raw_z_boundary =
-                        -std::numeric_limits<double>::infinity();
-                } else if (d > 50.0) {
-                    // log(expm1(d)) = d + log(1-exp(-d)); this form avoids
-                    // overflow while retaining the exact inverse.
-                    raw_z_boundary =
-                        grounded_floor +
-                        w * (d + std::log1p(-std::exp(-d)));
-                } else {
-                    raw_z_boundary =
-                        grounded_floor + w * std::log(std::expm1(d));
-                }
-            }
-            visible_floor = std::max(visible_floor, raw_z_boundary);
-        }
-        // A non-finite horizon is the same full-visibility fallback used by
-        // riskVisibilityValue (mask disabled/not ready, source cell, etc.).
-    }
-
-    // [SHADOW-FULL] A column whose LOS boundary rises above the ellipsoid cap
-    // is FULLY shadowed inside the zone — the safest spot in the footprint,
-    // not "no zone". Reporting it as no-interval (old behavior) punched
-    // white holes into the panel's zone band that were indistinguishable
-    // from uncovered sky. Report a zero-height band AT the cap instead
-    // (detection floor == zone top): the red band degenerates to nothing and
-    // the shadow-safe fill covers the whole cross-section.
-    if (!(visible_floor < ellipsoid_upper)) {
-        if (lower_z) *lower_z = ellipsoid_lower;
-        *floor_z = ellipsoid_upper;
-        *top_z = ellipsoid_upper;
-        return true;
-    }
-    if (lower_z) *lower_z = ellipsoid_lower;
-    *floor_z = visible_floor;
-    *top_z = ellipsoid_upper;
-    return true;
-}
 
 // [RISK-PROFILE] Version 3 is self-describing, binds data to source xyz, and
 // preserves every zone's
@@ -2593,59 +2206,12 @@ bool PathManager::riskProfileVisibleInterval(size_t zone_index,
 // 3-D trajectory sample with the exact same OR-combination as /viz/traj_risk.
 void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
 {
-    if (!risk_profile_pub_) return;
-    const double T = traj.getTotalDuration();
-    std_msgs::msg::Float64MultiArray msg;
-    if (!(T > 0.0) || !std::isfinite(T) || risk_zones_.empty()) {
-        risk_profile_pub_->publish(msg);  // empty = clear stale profile
-        return;
-    }
-    const double est_len = std::max(1.0, T * max_vel_);
-    const int K = std::clamp(static_cast<int>(est_len / 1.0), 256, 16384);
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    const size_t zone_count = risk_zones_.size();
-    // v4: per-zone TRIPLET (geometric lower, detection floor, geometric top)
-    // — the panel needs the cross-section lower bound to paint mid-air
-    // shadow-safe pockets between overlapping zones (a gap between zone A's
-    // cap and zone B's floor was indistinguishable from uncovered sky).
-    const size_t record_width = 5 + 3 * zone_count;
-
-    msg.data.reserve(2 + record_width * static_cast<size_t>(K + 1));
-    msg.data.push_back(4.0);
-    msg.data.push_back(static_cast<double>(zone_count));
-    double s = 0.0;
-    Eigen::Vector3d prev = traj.getPos(0.0);
-    for (int k = 0; k <= K; ++k) {
-        const double t = T * static_cast<double>(k) / K;
-        const Eigen::Vector3d p = traj.getPos(std::min(t, T - 1e-9));
-        s += (p - prev).head<2>().norm();
-        prev = p;
-
-        double survival = 1.0;
-        for (size_t zi = 0; zi < zone_count; ++zi)
-            survival *= (1.0 - riskZoneValue(zi, p));
-        const double combined_risk = 1.0 - survival;
-
-        msg.data.push_back(s);
-        msg.data.push_back(p.x());
-        msg.data.push_back(p.y());
-        msg.data.push_back(p.z());
-        msg.data.push_back(combined_risk);
-        for (size_t zi = 0; zi < zone_count; ++zi) {
-            double lower_z = nan;
-            double floor_z = nan;
-            double top_z = nan;
-            (void)riskProfileVisibleInterval(
-                zi, p.x(), p.y(), &lower_z, &floor_z, &top_z);
-            msg.data.push_back(lower_z);
-            msg.data.push_back(floor_z);
-            msg.data.push_back(top_z);
-        }
-    }
-    risk_profile_pub_->publish(msg);
-    log_manager_->infof(
-        "[RISK-PROFILE] v4: %d samples over %.1f u, zones=%zu, width=%zu",
-        K + 1, s, zone_count, record_width);
+    if (!visualization_) return;
+    auto result = visualization::makeRiskProfile(
+        traj, riskVisualizationView(), riskVisualizationSettings());
+    visualization_->riskProfile(result.message);
+    if (log_manager_ && !result.diagnostic.empty())
+        log_manager_->infof("%s", result.diagnostic.c_str());
 }
 
 // Safe corridors are rendered POSITIVELY instead of being the absence of
@@ -2654,229 +2220,12 @@ void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
 // this mode.
 void PathManager::publishRiskHeatmap()
 {
-    if (!risk_heatmap_pub_) return;
-
-    // Message-layout contract shared with terrain_publisher.py and
-    // TerrainData ([TERRAIN-FRAME]): matrix ROWS span X (mirrored), COLS
-    // span Y (mirrored), data[col * rows + row], length_x = rows * res.
-    auto makeLayer = [](int rows, int cols) {
-        std_msgs::msg::Float32MultiArray arr;
-        arr.layout.dim.resize(2);
-        arr.layout.dim[0].label = "column_index";
-        arr.layout.dim[0].size = static_cast<uint32_t>(cols);
-        arr.layout.dim[0].stride = static_cast<uint32_t>(cols) * rows;
-        arr.layout.dim[1].label = "row_index";
-        arr.layout.dim[1].size = static_cast<uint32_t>(rows);
-        arr.layout.dim[1].stride = static_cast<uint32_t>(rows);
-        arr.data.assign(static_cast<size_t>(rows) * cols,
-                        std::numeric_limits<float>::quiet_NaN());
-        return arr;
-    };
-    grid_map_msgs::msg::GridMap msg;
-    msg.header.frame_id = "map";
-    msg.header.stamp = node_->now();
-    msg.layers = {"elevation", "color"};
-
-    constexpr double kInf = std::numeric_limits<double>::infinity();
-    double x0 = kInf, x1 = -kInf, y0 = kInf, y1 = -kInf;
-    for (const auto &zone : risk_zones_) {
-        if (!(zone.reach > 0.0) || !(zone.peak > 0.0)) continue;
-        x0 = std::min(x0, zone.center.x() - zone.reach);
-        x1 = std::max(x1, zone.center.x() + zone.reach);
-        y0 = std::min(y0, zone.center.y() - zone.reach);
-        y1 = std::max(y1, zone.center.y() + zone.reach);
-    }
-    const bool hm3d = risk_mask_viz_mode_ == "heatmap3d";
-    if ((risk_mask_viz_mode_ != "heatmap" && !hm3d) || !(x1 > x0)) {
-        // Latched topic: replace any stale heatmap with an all-NaN stub.
-        msg.info.resolution = 1.0;
-        msg.info.length_x = 1.0;
-        msg.info.length_y = 1.0;
-        msg.info.pose.position.x = 0.0;
-        msg.info.pose.position.y = 0.0;
-        msg.info.pose.orientation.w = 1.0;
-        msg.data = {makeLayer(1, 1), makeLayer(1, 1)};
-        risk_heatmap_pub_->publish(msg);
-        return;
-    }
-
-    const double extent = std::max(x1 - x0, y1 - y0);
-    const double res = std::max(
-        extent / static_cast<double>(risk_heatmap_max_dim_), 0.05);
-    const int rows = std::max(1, static_cast<int>(std::ceil((x1 - x0) / res)));
-    const int cols = std::max(1, static_cast<int>(std::ceil((y1 - y0) / res)));
-    const double length_x = rows * res;
-    const double length_y = cols * res;
-    msg.info.resolution = res;
-    msg.info.length_x = length_x;
-    msg.info.length_y = length_y;
-    msg.info.pose.position.x = x0 + 0.5 * length_x;
-    msg.info.pose.position.y = y0 + 0.5 * length_y;
-    msg.info.pose.orientation.w = 1.0;
-    auto elevation = makeLayer(rows, cols);
-    auto color = makeLayer(rows, cols);
-
-    // grid_map_core colorVectorToValue packing (0xRRGGBB reinterpreted as
-    // float32). Self-contained — terrain_publisher.py no longer has a color
-    // layer (elevation-only since the TerrainTiles migration).
-    auto pack = [](int r, int g, int b) -> float {
-        const uint32_t rgb = (static_cast<uint32_t>(r) << 16) |
-                             (static_cast<uint32_t>(g) << 8) |
-                             static_cast<uint32_t>(b);
-        float f;
-        std::memcpy(&f, &rgb, sizeof(f));
-        return f;
-    };
-    // Danger ramp stays WARM only (red at floor 0 -> yellow near agl_max):
-    // green is reserved for the explicit safe category so "green = safe"
-    // never collides with "high-but-still-visible".
-    auto rampColor = [&pack](double t) -> float {
-        const double h = 60.0 * std::clamp(t, 0.0, 1.0) / 60.0;
-        const double s = 0.90, v = 0.95;
-        const int i = static_cast<int>(h);
-        const double f = h - i;
-        const double p = v * (1.0 - s);
-        const double q = v * (1.0 - s * f);
-        const double u = v * (1.0 - s * (1.0 - f));
-        double r = v, g = p, b = p;
-        switch (i) {
-            case 0: r = v; g = u; b = p; break;
-            case 1: r = q; g = v; b = p; break;
-            case 2: r = p; g = v; b = u; break;
-            default: r = p; g = q; b = v; break;  // 180..185 deg
-        }
-        return pack(static_cast<int>(255.0 * r + 0.5),
-                    static_cast<int>(255.0 * g + 0.5),
-                    static_cast<int>(255.0 * b + 0.5));
-    };
-    const float shadow_color = pack(40, 95, 215);
-    const float safe_color = pack(72, 204, 106);
-
-    // Same visibility contour as the marker modes: the floor follows the
-    // configured sigmoid threshold, not necessarily the midpoint.
-    double vis_offset = 0.0;
-    if (risk_mask_viz_threshold_ > 1e-6 &&
-        risk_mask_viz_threshold_ < 1.0 - 1e-6) {
-        vis_offset = risk_mask_softness_ * std::log(
-            risk_mask_viz_threshold_ / (1.0 - risk_mask_viz_threshold_));
-    }
-    const double rv_ratio = risk_vertical_ratio_;
-
-    // [PREVIEW] No DEM yet (before the first plan loads the corridor map):
-    // every column falls back to sea level, so the drape would be BURIED
-    // inside the rendered terrain mesh — the ideal-field preview was
-    // invisible exactly when the user wants to compare it against the
-    // terrain-masked result. Float the whole sheet above the tallest
-    // rendered terrain instead. Purely a render height; the field itself is
-    // the same ideal (unmasked) field it always was.
-    const double preview_lift =
-        terrain_data_.valid ? 0.0 : risk_heatmap_preview_lift_;
-
-    size_t painted = 0;
-    for (int row = 0; row < rows; ++row) {
-        const double wx = x0 + length_x - (row + 0.5) * res;
-        for (int col = 0; col < cols; ++col) {
-            const double wy = y0 + length_y - (col + 0.5) * res;
-            // Water/off-DEM columns sit at sea level 0 (same rule as
-            // refreshEffectiveRiskZones / the marker modes).
-            double ground = 0.0;
-            // Render height uses the MAX elevation within the cell, not the
-            // center: on steep ridges the terrain relief inside one coarse
-            // heatmap cell exceeds even the 100 m drape offset, so the
-            // terrain mesh pierced the drape and z-fought along the
-            // intersection line (herringbone bands tracing ridge lines).
-            // Semantic quantities (floor AGL, colors) keep the CENTER
-            // elevation; only the drawn surface rides the in-cell crest.
-            double ground_render = 0.0;
-            if (terrain_data_.valid) {
-                const float h = terrain_data_.getElevation(wx, wy);
-                if (std::isfinite(h) && h > 0.0f)
-                    ground = static_cast<double>(h);
-                ground_render = ground;
-                const double hr = 0.5 * res;
-                for (const auto &d :
-                     {std::pair<double, double>{-hr, -hr}, {-hr, hr},
-                      {hr, -hr}, {hr, hr}}) {
-                    const float hc = terrain_data_.getElevation(
-                        wx + d.first, wy + d.second);
-                    if (std::isfinite(hc))
-                        ground_render = std::max(
-                            ground_render, static_cast<double>(hc));
-                }
-            }
-            bool in_footprint = false;
-            double floor_agl = kInf;
-            for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-                const auto &zone = risk_zones_[zi];
-                if (!(zone.reach > 0.0) || !(zone.peak > 0.0)) continue;
-                const double dx = wx - zone.center.x();
-                const double dy = wy - zone.center.y();
-                const double rho2 = dx * dx + dy * dy;
-                if (rho2 >= zone.reach * zone.reach) continue;
-                in_footprint = true;
-                const double rv = zone.reach * rv_ratio;
-                const double half_z = rv * std::sqrt(std::max(
-                    0.0, 1.0 - rho2 / (zone.reach * zone.reach)));
-                const double upper = zone.center.z() + half_z;
-                if (upper <= ground) continue;  // envelope underground here
-                double det = std::max(zone.center.z() - half_z, ground);
-                const double horizon = riskShadowCeiling(
-                    zi, Eigen::Vector3d(wx, wy, zone.center.z()));
-                if (std::isfinite(horizon))
-                    det = std::max(det, horizon + vis_offset);
-                if (det < upper)
-                    floor_agl = std::min(floor_agl, det - ground);
-            }
-            if (!in_footprint) continue;  // NaN = transparent cell
-            float cell_color;
-            if (!std::isfinite(floor_agl)) {
-                cell_color = shadow_color;  // never visible here
-            } else if (floor_agl >= risk_heatmap_agl_max_) {
-                // Safe within the band of interest — seen only if you climb
-                // above agl_max. Optionally transparent to maximise imagery.
-                if (risk_heatmap_safe_transparent_) continue;
-                cell_color = safe_color;
-            } else {
-                cell_color = rampColor(floor_agl / risk_heatmap_agl_max_);
-            }
-            const size_t idx =
-                static_cast<size_t>(col) * rows + row;
-            // Drape offset keeps the heatmap clear of the rendered terrain
-            // mesh (which locally overshoots the bilinear DEM on slopes)
-            // without reading as a floating slab.
-            //
-            // [HEATMAP3D] mode "heatmap3d": render the VISIBILITY CEILING as a
-            // real 3-D surface instead of a terrain drape — surface altitude
-            // = ground + visibility-boundary AGL ("fly BELOW this roof and no
-            // zone sees you"). Terrain-occluded (never visible) and
-            // safe-in-band
-            // cells cap flat at agl_max, so the roof height itself is the
-            // information: hugging terrain (red) = visible at any altitude,
-            // high roof (green/blue) = generous low-exposure envelope. The
-            // trajectory piercing the roof = becoming visible.
-            double lift = risk_heatmap_offset_;
-            if (hm3d) {
-                lift = std::isfinite(floor_agl)
-                    ? std::min(floor_agl, risk_heatmap_agl_max_)
-                    : risk_heatmap_agl_max_;
-                // Red (floor≈0) cells sit ON the terrain: keep a sliver of
-                // clearance so the roof does not z-fight the terrain mesh.
-                lift = std::max(lift, 0.08);
-            }
-            elevation.data[idx] =
-                static_cast<float>(ground_render + lift + preview_lift);
-            color.data[idx] = cell_color;
-            ++painted;
-        }
-    }
-    msg.data = {elevation, color};
-    risk_heatmap_pub_->publish(msg);
-    if (log_manager_) {
-        log_manager_->infof(
-            "[RISK-HEATMAP] %dx%d cells (res=%.3f), %zu painted, "
-            "agl_max=%.2f u", rows, cols, res, painted,
-            risk_heatmap_agl_max_);
-    }
+    if (!visualization_) return;
+    auto result = visualization::makeRiskHeatmap(
+        riskVisualizationView(), riskVisualizationSettings(), visualizationStamp());
+    visualization_->riskHeatmap(result.message);
+    if (log_manager_ && !result.diagnostic.empty())
+        log_manager_->infof("%s", result.diagnostic.c_str());
 }
 
 // One MarkerArray per refresh is the entire risk field. Element 0 is a
@@ -2886,385 +2235,12 @@ void PathManager::publishRiskHeatmap()
 // zone set therefore publishes an array holding only that DELETEALL.
 void PathManager::publishEffectiveRiskField()
 {
-    if (!risk_field_pub_) return;
-
-    visualization_msgs::msg::MarkerArray arr;
-    visualization_msgs::msg::Marker clear;
-    clear.header.frame_id = "map";
-    clear.header.stamp = node_->now();
-    clear.action = visualization_msgs::msg::Marker::DELETEALL;
-    arr.markers.push_back(clear);
-
-    // The draped GridMap channel (self-clearing when mode != "heatmap").
+    if (!visualization_) return;
+    // Preserve the existing streaming order; LOS masks were already rebuilt
+    // by the caller and remain active even when this connection is absent.
     publishRiskHeatmap();
-
-    const bool volume_mode = risk_mask_viz_mode_ == "volume";
-    const bool heatmap_mode = risk_mask_viz_mode_ == "heatmap" ||
-                              risk_mask_viz_mode_ == "heatmap3d";
-    constexpr double kTwoPi = 6.28318530717958647692;
-    for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-        const auto &zone = risk_zones_[zi];
-        if (!(zone.reach > 0.0) || !(zone.peak > 0.0)) continue;
-        const double rv = zone.reach * risk_vertical_ratio_;
-        const double auto_step = std::max(
-            terrain_data_.valid ? terrain_data_.resolution : 0.0,
-            zone.reach / 70.0);
-        const double step = std::max(
-            0.05, risk_mask_viz_step_ > 0.0 ? risk_mask_viz_step_
-                                             : auto_step);
-        const auto header = [&]() {
-            std_msgs::msg::Header h;
-            h.frame_id = "map";
-            h.stamp = node_->now();
-            return h;
-        }();
-        auto groundAt = [this](double x, double y, double *ground) -> bool {
-            if (!terrain_data_.valid) return false;
-            const float h = terrain_data_.getElevation(x, y);
-            if (!std::isfinite(h)) return false;
-            *ground = std::max(0.0, static_cast<double>(h));
-            return true;
-        };
-        auto point = [](const Eigen::Vector3d &p) {
-            geometry_msgs::msg::Point gp;
-            gp.x = p.x(); gp.y = p.y(); gp.z = p.z();
-            return gp;
-        };
-        auto riskColor = [this, &zone](double risk, double alpha_scale) {
-            std_msgs::msg::ColorRGBA c;
-            const double peak = std::max(1e-6, std::min(zone.peak, 1.0));
-            const double t = std::clamp(risk / peak, 0.0, 1.0);
-            c.r = 1.0f;
-            c.g = static_cast<float>(0.38 * (1.0 - t));
-            c.b = static_cast<float>(0.04 * (1.0 - t));
-            c.a = static_cast<float>(
-                risk_mask_viz_volume_alpha_ * alpha_scale *
-                (0.35 + 0.65 * std::sqrt(t)));
-            return c;
-        };
-
-        if (volume_mode) {
-            // The visible lower boundary of the effective 3-D volume:
-            // max(ellipsoid floor, terrain, radial-horizon ceiling). Drawing
-            // this surface, rather than an opaque top lid, makes terrain
-            // shadows legible and avoids the old floating-disc appearance.
-            // (Mode "heatmap" carries this same surface as a draped GridMap
-            // instead — see publishRiskHeatmap.)
-            visualization_msgs::msg::Marker floor;
-            floor.header = header;
-            floor.ns = "effective_risk_floor";
-            floor.id = static_cast<int>(zi);
-            floor.type = visualization_msgs::msg::Marker::TRIANGLE_LIST;
-            floor.action = visualization_msgs::msg::Marker::ADD;
-            floor.pose.orientation.w = 1.0;
-            floor.scale.x = floor.scale.y = floor.scale.z = 1.0;
-            floor.lifetime = rclcpp::Duration(0, 0);
-
-            // The plotted visibility boundary follows the configured contour,
-            // not necessarily the sigmoid midpoint.
-            double visibility_z_offset = 0.0;
-            if (risk_mask_viz_threshold_ > 1e-6 &&
-                risk_mask_viz_threshold_ < 1.0 - 1e-6) {
-                visibility_z_offset = risk_mask_softness_ * std::log(
-                    risk_mask_viz_threshold_ /
-                    (1.0 - risk_mask_viz_threshold_));
-            }
-            struct SurfaceVertex {
-                Eigen::Vector3d p{Eigen::Vector3d::Zero()};
-                double risk{0.0};
-                bool valid{false};
-            };
-            auto surfaceAt = [&](double x, double y) {
-                SurfaceVertex out;
-                const double dx = x - zone.center.x();
-                const double dy = y - zone.center.y();
-                const double rho2 = dx * dx + dy * dy;
-                if (rho2 >= zone.reach * zone.reach) return out;
-                const double half_z = rv * std::sqrt(std::max(
-                    0.0, 1.0 - rho2 / (zone.reach * zone.reach)));
-                double lower = zone.center.z() - half_z;
-                const double upper = zone.center.z() + half_z;
-                double ground = 0.0;
-                if (groundAt(x, y, &ground))
-                    lower = std::max(lower, ground + 0.02);
-                const double horizon = riskShadowCeiling(
-                    zi, Eigen::Vector3d(x, y, zone.center.z()));
-                if (std::isfinite(horizon))
-                    lower = std::max(lower,
-                                     horizon + visibility_z_offset);
-                if (!(lower < upper)) return out;
-                out.p = Eigen::Vector3d(x, y, lower + 0.01);
-                out.risk = riskZoneValue(zi, out.p);
-                out.valid = true;
-                return out;
-            };
-            auto appendTriangle = [&](const SurfaceVertex &a,
-                                      const SurfaceVertex &b,
-                                      const SurfaceVertex &c) {
-                if (!a.valid || !b.valid || !c.valid) return;
-                // Do not bridge a cliff-sized discontinuity in the horizon
-                // table; leaving a narrow gap is visually more honest.
-                const double zmin = std::min({a.p.z(), b.p.z(), c.p.z()});
-                const double zmax = std::max({a.p.z(), b.p.z(), c.p.z()});
-                if (zmax - zmin > std::max(3.0 * step, 0.25 * rv)) return;
-                for (const auto *v : {&a, &b, &c}) {
-                    floor.points.push_back(point(v->p));
-                    floor.colors.push_back(riskColor(v->risk, 1.0));
-                }
-            };
-            const int half_cells = std::min(
-                180, static_cast<int>(std::ceil(zone.reach / step)));
-            const double mesh_step = zone.reach /
-                static_cast<double>(std::max(1, half_cells));
-            for (int iy = -half_cells; iy < half_cells; ++iy) {
-                const double y0 = zone.center.y() + iy * mesh_step;
-                const double y1 = y0 + mesh_step;
-                for (int ix = -half_cells; ix < half_cells; ++ix) {
-                    const double x0 = zone.center.x() + ix * mesh_step;
-                    const double x1 = x0 + mesh_step;
-                    const SurfaceVertex v00 = surfaceAt(x0, y0);
-                    const SurfaceVertex v10 = surfaceAt(x1, y0);
-                    const SurfaceVertex v01 = surfaceAt(x0, y1);
-                    const SurfaceVertex v11 = surfaceAt(x1, y1);
-                    appendTriangle(v00, v10, v11);
-                    appendTriangle(v00, v11, v01);
-                }
-            }
-            if (!floor.points.empty()) arr.markers.push_back(std::move(floor));
-        }
-
-        if (volume_mode || heatmap_mode) {
-            // Sparse altitude contours plus meridians communicate the full
-            // ellipsoid without filling it with a visually dominant lid.
-            // Heatmap mode keeps only the visibility-clipped equator ring:
-            // the draped map already carries the field, so the ring just
-            // marks the risk boundary.
-            const int n_contours = heatmap_mode ? 1 : risk_mask_viz_contours_;
-            const int n_meridians = heatmap_mode ? 0 : 12;
-            visualization_msgs::msg::Marker wire;
-            wire.header = header;
-            wire.ns = "effective_risk_volume";
-            wire.id = static_cast<int>(zi);
-            wire.type = visualization_msgs::msg::Marker::LINE_LIST;
-            wire.action = visualization_msgs::msg::Marker::ADD;
-            wire.pose.orientation.w = 1.0;
-            // Readability: the rim used to be a semi-transparent red line on
-            // the warm draped heatmap — red on red. Opaque, wider, and
-            // backed by a darker halo underlay (published below) so the
-            // boundary reads on any background.
-            //
-            // In heatmap mode the ring is also DRAPED onto the terrain (see
-            // drapeZ): drawn at the ellipsoid equator's constant altitude it
-            // floated over valleys and sank into ridges, reading as a chain
-            // hanging in mid-air rather than a boundary. Membership and
-            // visibility are still evaluated on the TRUE ellipsoid geometry;
-            // only the drawn height follows the ground.
-            wire.scale.x = std::max(0.14, 0.22 * step);
-            wire.color.r = 1.0f;
-            wire.color.g = 0.18f;
-            wire.color.b = 0.02f;
-            wire.color.a = 1.0f;
-            wire.lifetime = rclcpp::Duration(0, 0);
-            auto shellPointVisible = [&](const Eigen::Vector3d &p) {
-                double ground = 0.0;
-                if (groundAt(p.x(), p.y(), &ground) &&
-                    p.z() <= ground + 0.02) return false;
-                return riskVisibilityValue(zi, p) >=
-                       risk_mask_viz_threshold_;
-            };
-            // Drawn height: terrain-following in heatmap mode (rides just
-            // above the drape), true geometry otherwise (volume/wire modes
-            // are showing the 3-D shell, where floating IS the point).
-            auto drapeZ = [&](const Eigen::Vector3d &p) {
-                if (!heatmap_mode) return p;
-                double ground = 0.0;
-                groundAt(p.x(), p.y(), &ground);
-                Eigen::Vector3d q = p;
-                q.z() = ground + risk_heatmap_offset_ + 0.05;
-                return q;
-            };
-            auto appendSegment = [&](const Eigen::Vector3d &a,
-                                     const Eigen::Vector3d &b) {
-                if (!shellPointVisible(a) || !shellPointVisible(b)) return;
-                wire.points.push_back(point(drapeZ(a)));
-                wire.points.push_back(point(drapeZ(b)));
-            };
-            const int ring_samples = 192;
-            for (int li = 0; li < n_contours; ++li) {
-                const double f = n_contours == 1 ? 0.0 :
-                    -0.70 + 1.40 * li /
-                    static_cast<double>(n_contours - 1);
-                const double z = zone.center.z() + f * rv;
-                const double radius = zone.reach *
-                    std::sqrt(std::max(0.0, 1.0 - f * f));
-                for (int ai = 0; ai < ring_samples; ++ai) {
-                    const double a0 = kTwoPi * ai / ring_samples;
-                    const double a1 = kTwoPi * (ai + 1) / ring_samples;
-                    appendSegment(
-                        Eigen::Vector3d(zone.center.x() + radius * std::cos(a0),
-                                        zone.center.y() + radius * std::sin(a0), z),
-                        Eigen::Vector3d(zone.center.x() + radius * std::cos(a1),
-                                        zone.center.y() + radius * std::sin(a1), z));
-                }
-            }
-            constexpr int kMeridianSamples = 48;
-            for (int mi = 0; mi < n_meridians; ++mi) {
-                const double az = kTwoPi * mi / n_meridians;
-                for (int bi = 0; bi < kMeridianSamples; ++bi) {
-                    const double b0 = -0.5 * M_PI +
-                        M_PI * bi / kMeridianSamples;
-                    const double b1 = -0.5 * M_PI +
-                        M_PI * (bi + 1) / kMeridianSamples;
-                    appendSegment(
-                        Eigen::Vector3d(
-                            zone.center.x() + zone.reach * std::cos(b0) * std::cos(az),
-                            zone.center.y() + zone.reach * std::cos(b0) * std::sin(az),
-                            zone.center.z() + rv * std::sin(b0)),
-                        Eigen::Vector3d(
-                            zone.center.x() + zone.reach * std::cos(b1) * std::cos(az),
-                            zone.center.y() + zone.reach * std::cos(b1) * std::sin(az),
-                            zone.center.z() + rv * std::sin(b1)));
-                }
-            }
-            if (!wire.points.empty()) {
-                // Cartographic halo: a wider near-black underlay one step
-                // closer to the drape; the bright rim renders on top of it.
-                visualization_msgs::msg::Marker halo = wire;
-                halo.ns = "effective_risk_volume_halo";
-                halo.scale.x = 2.0 * wire.scale.x;
-                halo.pose.position.z = -0.01;
-                halo.color.r = 0.08f;
-                halo.color.g = 0.0f;
-                halo.color.b = 0.0f;
-                halo.color.a = 0.85f;
-                arr.markers.push_back(std::move(halo));
-                arr.markers.push_back(std::move(wire));
-            }
-        }
-
-        if (!volume_mode && !heatmap_mode) {
-            // Explicit diagnostic cross-section. POINTS avoid the thick,
-            // staircase-like CUBE_LIST slab that previously looked physical.
-            visualization_msgs::msg::Marker slice;
-            slice.header = header;
-            slice.ns = risk_mask_viz_mode_ == "fixed_agl"
-                           ? "effective_risk_fixed_agl"
-                           : "effective_risk_fixed_msl";
-            slice.id = static_cast<int>(zi);
-            slice.type = visualization_msgs::msg::Marker::POINTS;
-            slice.action = visualization_msgs::msg::Marker::ADD;
-            slice.pose.orientation.w = 1.0;
-            slice.scale.x = slice.scale.y = std::max(0.08, 0.70 * step);
-            slice.lifetime = rclcpp::Duration(0, 0);
-            const double slice_z =
-                zone.center.z() + risk_mask_viz_slice_offset_;
-            const int half_cells = static_cast<int>(
-                std::ceil(zone.reach / step));
-            for (int iy = -half_cells; iy <= half_cells; ++iy) {
-                const double y = zone.center.y() + iy * step;
-                for (int ix = -half_cells; ix <= half_cells; ++ix) {
-                    const double x = zone.center.x() + ix * step;
-                    double z = slice_z;
-                    if (risk_mask_viz_mode_ == "fixed_agl") {
-                        double ground = 0.0;
-                        if (!groundAt(x, y, &ground)) continue;
-                        z = ground + risk_mask_viz_agl_;
-                    }
-                    const Eigen::Vector3d p(x, y, z);
-                    if (riskVisibilityValue(zi, p) <
-                        risk_mask_viz_threshold_) continue;
-                    const double risk = riskZoneValue(zi, p);
-                    if (risk < 1e-3) continue;
-                    slice.points.push_back(point(
-                        Eigen::Vector3d(x, y, z + 0.02)));
-                    slice.colors.push_back(riskColor(risk, 2.0));
-                }
-            }
-            if (!slice.points.empty()) arr.markers.push_back(std::move(slice));
-        }
-
-        visualization_msgs::msg::Marker source;
-        source.header = header;
-        source.ns = "risk_source";
-        source.id = static_cast<int>(zi);
-        source.type = visualization_msgs::msg::Marker::SPHERE;
-        source.action = visualization_msgs::msg::Marker::ADD;
-        source.pose.position.x = zone.center.x();
-        source.pose.position.y = zone.center.y();
-        source.pose.position.z = zone.center.z();
-        source.pose.orientation.w = 1.0;
-        source.scale.x = std::max(0.5, 0.008 * zone.reach);
-        source.scale.y = source.scale.x;
-        source.scale.z = source.scale.x;
-        source.color.r = 0.8f;
-        source.color.g = 0.0f;
-        source.color.b = 0.0f;
-        source.color.a = 1.0f;
-        source.lifetime = rclcpp::Duration(0, 0);
-        arr.markers.push_back(std::move(source));
-
-        // A thin vertical reference visually anchors a ground risk source.
-        double source_ground = 0.0;
-        if (groundAt(zone.center.x(), zone.center.y(), &source_ground) &&
-            zone.center.z() > source_ground + 0.02) {
-            visualization_msgs::msg::Marker mast;
-            mast.header = header;
-            mast.ns = "risk_source_mast";
-            mast.id = static_cast<int>(zi);
-            mast.type = visualization_msgs::msg::Marker::LINE_LIST;
-            mast.action = visualization_msgs::msg::Marker::ADD;
-            mast.pose.orientation.w = 1.0;
-            mast.scale.x = std::max(0.06, 0.08 * step);
-            mast.color.r = 0.8f;
-            mast.color.g = 0.05f;
-            mast.color.b = 0.02f;
-            mast.color.a = 0.9f;
-            mast.points.push_back(point(Eigen::Vector3d(
-                zone.center.x(), zone.center.y(), source_ground)));
-            mast.points.push_back(point(zone.center));
-            mast.lifetime = rclcpp::Duration(0, 0);
-            arr.markers.push_back(std::move(mast));
-        }
-
-        visualization_msgs::msg::Marker label;
-        label.header = header;
-        label.ns = "risk_label";
-        label.id = static_cast<int>(zi);
-        label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-        label.action = visualization_msgs::msg::Marker::ADD;
-        label.pose.position.x = zone.center.x();
-        label.pose.position.y = zone.center.y();
-        label.pose.position.z = zone.center.z() + rv +
-                                std::max(1.0, 0.03 * zone.reach);
-        label.pose.orientation.w = 1.0;
-        label.scale.z = std::max(1.0, 0.02 * zone.reach);
-        label.color.r = 1.0f;
-        label.color.g = 0.2f;
-        label.color.b = 0.2f;
-        label.color.a = 1.0f;
-        char label_text[96];
-        if (volume_mode || heatmap_mode) {
-            std::snprintf(label_text, sizeof(label_text),
-                          "terrain-occluded risk zone #%zu  Rh=%.0fm Rv=%.0fm",
-                          zi, 100.0 * zone.reach, 100.0 * rv);
-        } else if (risk_mask_viz_mode_ == "fixed_agl") {
-            std::snprintf(label_text, sizeof(label_text),
-                          "risk #%zu @ terrain + %.0f m AGL",
-                          zi, 100.0 * risk_mask_viz_agl_);
-        } else {
-            std::snprintf(label_text, sizeof(label_text),
-                          "risk #%zu @ z=%.2f MSL", zi,
-                          zone.center.z() + risk_mask_viz_slice_offset_);
-        }
-        label.text = label_text;
-        label.lifetime = rclcpp::Duration(0, 0);
-        arr.markers.push_back(std::move(label));
-    }
-
-    // Single atomic repaint. With no zones this is the lone DELETEALL, which
-    // is exactly the clear that EmergencyStop / a world change / an empty
-    // runtime zone set need.
-    risk_field_pub_->publish(arr);
+    visualization_->riskField(visualization::makeRiskField(
+        riskVisualizationView(), riskVisualizationSettings(), visualizationStamp()));
 }
 
 void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg) {
@@ -4030,93 +3006,25 @@ bool PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
 
 void PathManager::publishDynamicObstacles()
 {
-    if (!dyn_obstacle_pub_) return;
-    visualization_msgs::msg::MarkerArray arr;
-
-    // Single DELETEALL marker first so removed patches disappear in RViz.
-    visualization_msgs::msg::Marker clear_marker;
-    clear_marker.header.frame_id = "map";
-    clear_marker.header.stamp = node_->now();
-    clear_marker.ns = "dynamic_obstacles";
-    clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
-    arr.markers.push_back(clear_marker);
-
+    if (!visualization_) return;
+    std::vector<visualization::Obstacle> obstacles;
+    obstacles.reserve(dyn_patch_centers_.size());
     for (size_t i = 0; i < dyn_patch_centers_.size(); ++i) {
-        // Per-obstacle visual model from the catalog; collision (SDF) is separate.
-        const ObstacleMeshInfo& mi = meshFor(dyn_patch_models_[i]);
-        visualization_msgs::msg::Marker m;
-        m.header.frame_id = "map";
-        m.header.stamp = node_->now();
-        m.ns = "dynamic_obstacles";
-        m.id = dyn_patch_ids_[i];
-        // color all-zero => RViz uses the mesh's own embedded materials/textures.
-        m.type = visualization_msgs::msg::Marker::MESH_RESOURCE;
-        m.mesh_resource = mi.resource;
-        m.mesh_use_embedded_materials = true;
-        m.action = visualization_msgs::msg::Marker::ADD;
-        m.color.r = m.color.g = m.color.b = m.color.a = 0.0f;  // use mesh textures
-
-        const Eigen::Vector3d& c = dyn_patch_centers_[i];
-        double foot_x, foot_y, height, base_z;
-        if (dyn_patch_is_box_[i]) {
-            // Box: mesh fills the collision box exactly (collision == visual bbox).
-            foot_x = dyn_patch_sizes_[i].x();
-            foot_y = dyn_patch_sizes_[i].y();
-            height = dyn_patch_sizes_[i].z();
-            base_z = c.z() - 0.5 * height;
-        } else {
-            // Sphere: fixed-height building from the ball's bottom.
-            const double radius = 0.5 * dyn_patch_sizes_[i].x();  // stored as (2r,2r,2r)
-            foot_x = foot_y = 2.0 * radius;
-            height = obstacle_mesh_height_;
-            base_z = c.z() - radius;
-        }
-
-        // Visual-only magnification: grows the mesh about the BASE (xy about
-        // the center, z upward from the bottom face) so magnified obstacles
-        // keep resting on the surface — center-anchored scaling pushed half
-        // of every magnified hull underground/underwater. Per-model via
-        // obstacle_viz_scale_<model>, global via obstacle_viz_scale.
-        // Collision, companion geometry marker and panel overlay untouched.
-        const double vs = std::max(1.0, mi.viz_scale);
-        m.pose.position.x = c.x();
-        m.pose.position.y = c.y();
-        m.pose.position.z = base_z;
-        // Per-spawn yaw about Z, shared with the SDF collision primitive
-        // (PrimitiveSpec.yaw) — what you see is what the planner avoids.
-        const double yaw = (i < dyn_patch_yaws_.size()) ? dyn_patch_yaws_[i] : 0.0;
-        m.pose.orientation.z = std::sin(0.5 * yaw);
-        m.pose.orientation.w = std::cos(0.5 * yaw);
-        m.scale.x = vs * foot_x / mi.native_size.x();
-        m.scale.y = vs * foot_y / mi.native_size.y();
-        m.scale.z = vs * height / mi.native_size.z();
-        arr.markers.push_back(m);
-
-        // Companion GEOMETRY marker: the exact collision primitive (center /
-        // size / yaw), fully transparent so RViz shows only the mesh above.
-        // Panels cannot recover the collision box from a MESH_RESOURCE marker
-        // (its scale is relative to unknown native mesh dims), and without
-        // this the altitude profile cannot explain box-avoidance climbs —
-        // "why is it climbing over open water" turned out to be invisible
-        // ships more than once.
-        visualization_msgs::msg::Marker g;
-        g.header = m.header;
-        g.ns = "dynamic_obstacles_geom";
-        g.id = dyn_patch_ids_[i];
-        g.type = visualization_msgs::msg::Marker::CUBE;
-        g.action = visualization_msgs::msg::Marker::ADD;
-        g.pose.position.x = c.x();
-        g.pose.position.y = c.y();
-        g.pose.position.z = c.z();
-        g.pose.orientation = m.pose.orientation;
-        g.scale.x = dyn_patch_is_box_[i] ? dyn_patch_sizes_[i].x() : foot_x;
-        g.scale.y = dyn_patch_is_box_[i] ? dyn_patch_sizes_[i].y() : foot_y;
-        g.scale.z = dyn_patch_is_box_[i] ? dyn_patch_sizes_[i].z()
-                                         : dyn_patch_sizes_[i].x();
-        g.color.a = 0.0f;  // invisible in RViz; geometry carrier only
-        arr.markers.push_back(g);
+        const auto &mesh = meshFor(dyn_patch_models_[i]);
+        visualization::Obstacle obstacle;
+        obstacle.id = dyn_patch_ids_[i];
+        obstacle.center = dyn_patch_centers_[i];
+        obstacle.size = dyn_patch_sizes_[i];
+        obstacle.is_box = dyn_patch_is_box_[i];
+        // Yaw was consumed/committed by obstacle mutation, never rendering.
+        obstacle.yaw = i < dyn_patch_yaws_.size() ? dyn_patch_yaws_[i] : 0.0;
+        obstacle.mesh_resource = mesh.resource;
+        obstacle.mesh_native_size = mesh.native_size;
+        obstacle.mesh_scale = mesh.viz_scale;
+        obstacles.push_back(std::move(obstacle));
     }
-    dyn_obstacle_pub_->publish(arr);
+    visualization_->dynamicObstacles(visualization::makeDynamicObstacles(
+        obstacles, obstacle_mesh_height_, visualizationStamp()));
 }
 
 // Voxelize terrain + geometry obstacles into an occupancy grid and build ESDF.

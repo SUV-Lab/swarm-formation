@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="8" failures="0" disabled="0" errors="0" time="0" timestamp="2026-10-10T08:42:34" name="AllTests">
+  <testsuite name="TrajectorySimulation" tests="8" failures="0" disabled="0" errors="0" time="0" timestamp="2026-10-10T08:42:34">
+    <testcase name="InjectedModelAndControllerDrivePhysicalHistory" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+    <testcase name="ChunkBoundariesDoNotChangeStateOrMetrics" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+    <testcase name="BorrowedPlaybackAndOwnedResultHaveDistinctLifetimes" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+    <testcase name="UnrepresentableStepsAreExcludedOnlyFromAggregateAudit" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+    <testcase name="ExplicitCancellationRetainsOwnedPartialHistory" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+    <testcase name="SamplingKeepsFloatValuesAndPreviousPieceAtSeam" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+    <testcase name="InvalidInputIsRejectedBeforeStrategyCalls" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+    <testcase name="StrategyExceptionsPropagateWithoutInventingCompletion" status="run" result="completed" time="0" timestamp="2026-10-10T08:42:34" classname="mmp_vehicle_dynamics.TrajectorySimulation" />
+  </testsuite>
+</testsuites>

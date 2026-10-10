@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="path_manager" tests="1" failures="0" time="0.146" errors="0" skipped="0">
+  <testcase classname="path_manager" name="unit_guard_test.missing_result" time="0.146">
+    
+  </testcase>
+</testsuite>

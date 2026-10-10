@@ -1,0 +1,4 @@
+Consolidate compiler generated dependencies of target focused_visual_fixture
+[ 50%] Building CXX object CMakeFiles/focused_visual_fixture.dir/main.cpp.o
+[100%] Linking CXX executable focused_visual_fixture
+[100%] Built target focused_visual_fixture

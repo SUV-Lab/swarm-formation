@@ -95,7 +95,7 @@ void RosPlanningBackend::initialize(PlanSettings settings, PlanningEnvironment e
   declare_once("enable_lbfgs_detail_logs", false);
   node_->get_parameter("drone_id", drone_id_);
 
-  manager_ = std::make_shared<PathManager>(node_);
+  manager_ = std::make_shared<PathManager>(node_, settings.attach_visualization);
   declare_once("chain/enable", false);
   declare_once("chain/segments", 3);
   declare_once("chain/inherit_route", true);

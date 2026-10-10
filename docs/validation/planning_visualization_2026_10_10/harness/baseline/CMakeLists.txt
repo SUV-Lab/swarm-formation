@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(mmp_focused_visual_fixture LANGUAGES CXX)
+find_package(path_manager REQUIRED)
+set_property(TARGET path_manager::path_manager_lib PROPERTY IMPORTED_LOCATION_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/../baseline/lib/libpath_manager_lib.a")
+set_property(TARGET path_manager::path_manager_lib PROPERTY IMPORTED_LOCATION_NOCONFIG "${CMAKE_CURRENT_SOURCE_DIR}/../baseline/lib/libpath_manager_lib.a")
+add_executable(focused_visual_fixture main.cpp)
+target_include_directories(focused_visual_fixture BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/access")
+target_link_libraries(focused_visual_fixture PRIVATE path_manager::path_manager_lib)

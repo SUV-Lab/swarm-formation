@@ -1,0 +1,60 @@
+[INFO] [1791621739.024473930] [chain_experiment]: Initializing optimizer for drone 0...
+[WARN] [1791621739.024555434] [chain_experiment]: [PARAM] enable_debug_logs is not declared; keeping the compiled default false
+[INFO] [1791621739.024563529] [chain_experiment]: Obstacle avoidance: enabled
+[INFO] [1791621739.024566114] [chain_experiment]: Debug logging: disabled (using RCLCPP only)
+[INFO] [1791621739.024675321] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] note: sustained n=2.5 turn at 176 m/s needs 4947 N > thrust_max 3200 N — the load-factor limit is reachable only transiently (energy-bleeding maneuvers)
+[INFO] [1791621739.024740855] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] Setting initial formation type: 2
+[INFO] [1791621739.024779147] [chain_experiment]: Optimizer initialized successfully for drone 0
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(180,150,318) voxel=(2,2,0.1) free_distance=360
+[GEODESIC] points=205 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=205 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621739.161325149] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[GEODESIC] points=62 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=62 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[INFO] [1791621739.162525019] [astar]: [FM2-SWEEP] lifted=0 cap=512 clean_exit=true pts=2
+[INFO] [1791621739.162954011] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] arc-varying cap active: 14 pieces, cap=[3.079, 3.760] (slope=0.10, headroom=0.40, zone-relax=0.60 on 0 pieces; scalar fallback 3.760)
+[INFO] [1791621739.162996331] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [FEASIBILITY] FEASIBLE: terrain holds the clearance band along the route (no risk-driven duck-below predicted).
+[INFO] [1791621739.196335503] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [DYNAMICS] envelope(cruise) peak=87.5% (maximum speed) mean=87.3% p95=87.4% at t=13.5; state V=201.3 m/s n=0.93 CL=0.49 T=1079 N q=23913 Pa bank=20.4 deg; violations 0/15063; sub-stall ramp 0.0 s (peak 0%) low-lift 0.0 s (term on)
+[INFO] [1791621739.196768672] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN] min clearance 1.500 at t=150.620 pos=(329.989, 149.995, 2.565)
+[INFO] [1791621739.196775946] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   0% t=    0.0 xy=(   30.0,  150.0) z= 3.000 terrain=1.0984 near4=1.2016 clr=1.9015
+[INFO] [1791621739.196781968] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]   5% t=    7.5 xy=(   44.1,  144.8) z= 3.129 terrain=0.9704 near4=1.0682 clr=2.1588
+[INFO] [1791621739.196787448] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  10% t=   15.1 xy=(   59.1,  143.0) z= 3.070 terrain=0.9646 near4=1.0137 clr=2.1055
+[INFO] [1791621739.196792588] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  15% t=   22.6 xy=(   74.2,  142.6) z= 2.652 terrain=1.0204 near4=1.0764 clr=1.6311
+[INFO] [1791621739.196797677] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  20% t=   30.1 xy=(   89.3,  142.4) z= 2.857 terrain=1.0755 near4=1.1750 clr=1.7813
+[INFO] [1791621739.196802717] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  25% t=   37.7 xy=(  104.4,  142.4) z= 3.046 terrain=1.0948 near4=1.1962 clr=1.9515
+[INFO] [1791621739.196807536] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  30% t=   45.2 xy=(  119.5,  142.6) z= 2.883 terrain=1.0669 near4=1.1636 clr=1.8156
+[INFO] [1791621739.196812425] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  35% t=   52.7 xy=(  134.6,  142.7) z= 3.034 terrain=1.0141 near4=1.0637 clr=2.0201
+[INFO] [1791621739.196817595] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  40% t=   60.3 xy=(  149.8,  142.7) z= 3.104 terrain=0.9567 near4=1.0107 clr=2.1473
+[INFO] [1791621739.196822595] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  45% t=   67.8 xy=(  164.9,  142.7) z= 2.935 terrain=0.9191 near4=1.0163 clr=2.0156
+[INFO] [1791621739.196827554] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  50% t=   75.3 xy=(  180.0,  142.7) z= 2.885 terrain=0.9175 near4=1.0156 clr=1.9672
+[INFO] [1791621739.196835699] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  55% t=   82.8 xy=(  195.1,  142.7) z= 3.033 terrain=0.9540 near4=1.0106 clr=2.0791
+[INFO] [1791621739.196840639] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  60% t=   90.4 xy=(  210.2,  142.8) z= 3.075 terrain=1.0111 near4=1.0576 clr=2.0638
+[INFO] [1791621739.196856429] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  65% t=   97.9 xy=(  225.4,  142.8) z= 2.909 terrain=1.0618 near4=1.1567 clr=1.8470
+[INFO] [1791621739.196861528] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  70% t=  105.4 xy=(  240.5,  142.6) z= 2.792 terrain=1.0883 near4=1.1899 clr=1.7031
+[INFO] [1791621739.196866468] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  75% t=  113.0 xy=(  255.6,  142.5) z= 2.858 terrain=1.0755 near4=1.1757 clr=1.7824
+[INFO] [1791621739.196871607] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  80% t=  120.5 xy=(  270.7,  142.5) z= 2.825 terrain=1.0235 near4=1.0824 clr=1.8010
+[INFO] [1791621739.196876657] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  85% t=  128.0 xy=(  285.8,  142.6) z= 2.712 terrain=0.9626 near4=1.0072 clr=1.7491
+[INFO] [1791621739.196881516] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  90% t=  135.6 xy=(  301.0,  142.7) z= 2.710 terrain=0.9223 near4=1.0158 clr=1.7880
+[INFO] [1791621739.196886566] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE]  95% t=  143.1 xy=(  315.9,  144.7) z= 2.628 terrain=0.9651 near4=1.0672 clr=1.6624
+[INFO] [1791621739.196891605] [chain_experiment]: [POLY_TRAJ_OPT][drone 0] [TERRAIN-PROFILE] 100% t=  150.6 xy=(  330.0,  150.0) z= 2.565 terrain=1.0654 near4=1.1567 clr=1.5000
+[GEODESIC] points=45 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[GEODESIC] points=45 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+[OK]   a two-leg mission plans
+[OK]   ...leaving captures, a piece map and route tags behind it
+[coarse] grid=20x6x2 N=240 blocked=239 reached=240 goal_cell=(10,0,0) goal_g=0
+[INFO] [1791621739.198407704] [astar]: CENTER: (105.000000,115.000000,3.179836)
+[ERROR] [1791621739.198426610] [astar]: Unable to handle the initial or end point, force return!
+[ERROR] [1791621739.198432611] [astar]: Start: (30.00,150.00,3.00) End: (180.00,80.00,3.36)
+[ERROR] [1791621739.198436198] [astar]: Pool size: (0,0,0) Center: (0,0,0)
+[WARN] [1791621739.198442590] [astar]: 3D A* failed again, trying with elevated end point Z: 3.36 -> 8.36
+[INFO] [1791621739.198464622] [astar]: CENTER: (105.000000,115.000000,5.679836)
+[ERROR] [1791621739.198478999] [astar]: Unable to handle the initial or end point, force return!
+[ERROR] [1791621739.198480993] [astar]: Start: (30.00,150.00,3.00) End: (180.00,80.00,8.36)
+[ERROR] [1791621739.198484169] [astar]: Pool size: (0,0,0) Center: (0,0,0)
+[ERROR] [1791621739.198489619] [astar]: 3D A* search completely failed, returning NO path
+[ERROR] [1791621739.198496452] [chain_experiment]: A* failed for segment 0: (30.00,150.00,3.00) -> (180.00,80.00,3.36)
+[LEG-FAIL] plan=0 legs=0 piece_leg=0 tags=0 route=0
+[OK]   a front end that cannot honour the clearance fails the plan
+[OK]   and the EPOCH is void — not a prefix of the legs that ran before the failing one, and not the previous plan's two either
+[OK]   ...and no provenance or geometry survives from the plan before it
+PASS: 0 failed check(s)

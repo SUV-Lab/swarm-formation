@@ -1,0 +1,447 @@
+-- Found path_manager: 1.0.0 (/ws/install/path_manager/share/path_manager/cmake)
+-- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+-- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)
+-- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+-- Found rmw_fastrtps_cpp: 6.2.10 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+-- Using RMW implementation 'rmw_fastrtps_cpp' as default
+-- Found OpenMP_CXX: -fopenmp (found version "4.5") 
+-- Found OpenMP: TRUE (found version "4.5")  
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /tmp/mmp_stage4_visualization_20261010/overlay_build
+Consolidate compiler generated dependencies of target visualization_overlay
+[  3%] Building CXX object CMakeFiles/visualization_overlay.dir/src/path_manager.cpp.o
+[  7%] Building CXX object CMakeFiles/visualization_overlay.dir/src/planning_visualization_data.cpp.o
+[ 11%] Building CXX object CMakeFiles/visualization_overlay.dir/src/ros_planning_visualization.cpp.o
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In function ‘path_manager::visualization::Prepared<visualization_msgs::msg::MarkerArray_<std::allocator<void> > > path_manager::visualization::makePipeline(const std::vector<Eigen::Matrix<double, 3, 1> >&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const Stamp&)’:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:217:48: warning: ‘[DEBUG-PIPELINE] published ’ directive output truncated writing 27 bytes into a region of size 1 [-Wformat-truncation=]
+  217 | Prepared<visualization_msgs::msg::MarkerArray> makePipeline(
+      |                                                ^~~~~~~~~~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:217:48: note: using the range [0, 18446744073709551615] for directive argument
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:217:48: note: using the range [0, 18446744073709551615] for directive argument
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /tmp/mmp_stage4_visualization_20261010/overlay/include/path_manager/planning_visualization_data.h:5,
+                 from /tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 55 and 93 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+[ 14%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/mission_planner.cpp.o
+[ 18%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/planning_environment.cpp.o
+[ 22%] Building CXX object CMakeFiles/visualization_overlay.dir/src/ros_planning_backend.cpp.o
+[ 25%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/ros_terrain_grid.cpp.o
+[ 29%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/route_slice_solver.cpp.o
+[ 33%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/route_slice_batch.cpp.o
+[ 37%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/flight_assembly.cpp.o
+[ 40%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp.o
+[ 44%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/direct_trajectory_solver.cpp.o
+[ 48%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/mission_geometry.cpp.o
+[ 51%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/route_postprocessing.cpp.o
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp: In function ‘std::vector<path_manager::FlightEvaluationLogLine> path_manager::formatFlightEvaluation(const path_manager::FlightEvaluationReport&)’:
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘%s’ directive output truncated writing 118 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+......
+  546 |       lines.errorf("%s", "[FINAL-EVAL] input contract: unit scales must be "
+      |                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  547 |                    "finite and positive; clearance and envelope thresholds "
+      |                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  548 |                    "must be finite");
+      |                    ~~~~~~~~~~~~~~~~   
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin_snprintf’ output 119 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘%s’ directive output truncated writing 127 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+......
+  541 |       lines.errorf("%s", "[FINAL-EVAL] input contract: trajectory requires "
+      |                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  542 |                    "finite positive piece durations, finite total duration "
+      |                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  543 |                    "and finite coefficients");
+      |                    ~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin_snprintf’ output 128 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘%s’ directive output truncated writing 49 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+......
+  551 |       lines.errorf("%s", "[FINAL-EVAL] input contract: zone queries missing");
+      |                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin_snprintf’ output 50 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘[FINAL-EVAL] span contract: ...’ directive output truncated writing 39 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 8 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 8 bytes
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 66 and 694 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:533:22: warning: ‘[FINAL-EVAL] span contract: ...’ directive output truncated writing 47 bytes into a region of size 1 [-Wformat-truncation=]
+  533 |       lines.errorf("[FINAL-EVAL] span contract: TERMINAL not last (%zu)",
+      |                     ~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 50 and 69 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:529:22: warning: ‘[FINAL-EVAL] span contract: ...’ directive output truncated writing 68 bytes into a region of size 1 [-Wformat-truncation=]
+  529 |       lines.errorf("[FINAL-EVAL] span contract: TRANSITION after a "
+      |                     ~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  530 |                    "non-transition span (%zu)", report.issue_span);
+      |                    ~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 71 and 90 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:525:22: warning: ‘[FINAL-EVAL] span contract: ...’ directive output truncated writing 73 bytes into a region of size 1 [-Wformat-truncation=]
+  525 |       lines.errorf("[FINAL-EVAL] span contract: t_end not finite/strictly "
+      |                     ~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  526 |                    "increasing at span %zu", report.issue_span);
+      |                    ~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 75 and 94 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘[LEG-POLICY] leg ’ directive output truncated writing 17 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 5 bytes
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 112 and 461 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘[FINAL-EVAL] ===== whole-fli...’ directive output truncated writing 44 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: using the range [0, 18446744073709551615] for directive argument
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 78 and 416 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘[FINAL-EVAL] ’ directive output truncated writing 13 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 5 bytes
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output 189 or more bytes (assuming 331) into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘[FINAL-EVAL] verdict: CHECK ...’ directive output truncated writing 32 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 5 bytes
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 130 and 1172 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘[ZONE-AUDIT] hard=’ directive output truncated writing 18 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 4 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 6 bytes
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 166 and 2075 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: warning: ‘[ZONE-CONTACT] zone=’ directive output truncated writing 20 bytes into a region of size 1 [-Wformat-truncation=]
+  516 | std::vector<FlightEvaluationLogLine> formatFlightEvaluation(
+      |                                      ^~~~~~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 4 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 4 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 7 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 5 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 4 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 4 bytes
+/ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:516:38: note: assuming directive output of 4 bytes
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 95 and 2290 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+[ 55%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/mission_route_search.cpp.o
+[ 59%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/route_search_backend.cpp.o
+[ 62%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/builtin_route_search.cpp.o
+[ 66%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/ros_route_search.cpp.o
+[ 70%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/trajectory_message.cpp.o
+[ 74%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/replan_fsm.cpp.o
+[ 77%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp.o
+[ 81%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/terminal_phase.cpp.o
+[ 85%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/transition_phase.cpp.o
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In member function ‘path_manager::PlanResult path_manager::SegmentChainPlanner::stitchedVerdictResult(path_manager::PlanningComputation&, const FlightVerdict&, path_manager::PlanResult) const’:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:3100:55: warning: ‘) — whole-flight evaluatio...’ directive output may be truncated writing 64 bytes into a region of size between 23 and 146 [-Wformat-truncation=]
+ 3100 |              "stitched flight is unflyable (%s%s%s%s%s) — whole-flight "
+      |                                                       ^~~~~~~~~~~~~~~~~~
+ 3101 |              "evaluation, which no per-solve audit performs",
+      |              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 95 and 218 bytes into a destination of size 176
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In lambda function:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:597:57: warning: ‘) — whole-flight evaluation’ directive output may be truncated writing 29 bytes into a region of size between 10 and 146 [-Wformat-truncation=]
+  597 |              "baseline flight is unflyable (%s%s%s%s%s%s) — whole-flight "
+      |                                                         ^~~~~~~~~~~~~~~~~~
+  598 |              "evaluation",
+      |              ~~~~~~~~~~~                                 
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 60 and 196 bytes into a destination of size 176
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In member function ‘path_manager::PlanResult path_manager::SegmentChainPlanner::planRouteFallback(path_manager::PlanningComputation&, const path_manager::StartHead&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const ego_planner::TailBoundary&, const std::vector<path_manager::SegmentChainPlanner::SegmentOverrides>&, const char*, bool)’:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:2144:30: warning: ‘, peak ’ directive output may be truncated writing 7 bytes into a region of size between 0 and 131 [-Wformat-truncation=]
+ 2144 |                  "viol %.1f%%, peak %.1f%%)",
+      |                              ^~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 74 and 817 bytes into a destination of size 192
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In member function ‘path_manager::PlanResult path_manager::SegmentChainPlanner::planImpl(path_manager::PlanningComputation&, const path_manager::StartHead&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const ego_planner::TailBoundary&)’:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:496:75: warning: ‘%s’ directive output may be truncated writing up to 122 bytes into a region of size between 95 and 208 [-Wformat-truncation=]
+  496 |                "multi-waypoint single-shot flight is unflyable (%s%s%s%s%s%s)",
+      |                                                                           ^~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 50 and 285 bytes into a destination of size 256
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+[ 88%] Building CXX object CMakeFiles/visualization_overlay.dir/ws/src/mmp_path_planning/src/path_manager/src/waypoint_eval.cpp.o
+[ 92%] Linking CXX static library libvisualization_overlay.a
+[ 92%] Built target visualization_overlay
+[ 96%] Building CXX object CMakeFiles/stage4_visual_fixture.dir/tmp/mmp_stage4_visualization_20261010/fixture/main.cpp.o
+[100%] Linking CXX executable stage4_visual_fixture
+[100%] Built target stage4_visual_fixture

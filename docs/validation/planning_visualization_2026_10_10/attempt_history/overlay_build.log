@@ -1,0 +1,97 @@
+-- The CXX compiler identification is GNU 11.4.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found path_manager: 1.0.0 (/ws/install/path_manager/share/path_manager/cmake)
+-- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter 
+-- Found rosidl_generator_c: 3.1.8 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+-- Found rosidl_adapter: 3.1.8 (/opt/ros/humble/share/rosidl_adapter/cmake)
+-- Found rosidl_generator_cpp: 3.1.8 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+-- Found rmw_fastrtps_cpp: 6.2.10 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+-- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.0.2")  
+-- Found FastRTPS: /opt/ros/humble/include  
+-- Using RMW implementation 'rmw_fastrtps_cpp' as default
+-- Looking for C++ include pthread.h
+-- Looking for C++ include pthread.h - found
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /tmp/mmp_stage4_visualization_20261010/overlay_build
+[ 66%] Building CXX object CMakeFiles/visualization_overlay.dir/src/planning_visualization_data.cpp.o
+[ 66%] Building CXX object CMakeFiles/visualization_overlay.dir/src/ros_planning_visualization.cpp.o
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In function ‘visualization_msgs::msg::MarkerArray path_manager::visualization::makeRiskField(const path_manager::visualization::RiskView&, const path_manager::visualization::RiskSettings&, const Stamp&)’:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:743:26: error: invalid use of ‘this’ in non-member function
+  743 |         auto groundAt = [this](double x, double y, double *ground) -> bool {
+      |                          ^~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In lambda function:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:744:18: error: ‘risk’ is not captured
+  744 |             if (!risk.terrain.valid) return false;
+      |                  ^~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:743:30: note: the lambda has no capture-default
+  743 |         auto groundAt = [this](double x, double y, double *ground) -> bool {
+      |                              ^
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:710:21: note: ‘const path_manager::visualization::RiskView& risk’ declared here
+  710 |     const RiskView &risk, const RiskSettings &settings, const Stamp &stamp)
+      |     ~~~~~~~~~~~~~~~~^~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:745:29: error: ‘risk’ is not captured
+  745 |             const float h = risk.terrain.elevation(x, y);
+      |                             ^~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:743:30: note: the lambda has no capture-default
+  743 |         auto groundAt = [this](double x, double y, double *ground) -> bool {
+      |                              ^
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:710:21: note: ‘const path_manager::visualization::RiskView& risk’ declared here
+  710 |     const RiskView &risk, const RiskSettings &settings, const Stamp &stamp)
+      |     ~~~~~~~~~~~~~~~~^~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In function ‘visualization_msgs::msg::MarkerArray path_manager::visualization::makeRiskField(const path_manager::visualization::RiskView&, const path_manager::visualization::RiskSettings&, const Stamp&)’:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:755:27: error: invalid use of ‘this’ in non-member function
+  755 |         auto riskColor = [this, &zone](double risk, double alpha_scale) {
+      |                           ^~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In lambda function:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:763:17: error: ‘settings’ is not captured
+  763 |                 settings.volume_alpha * alpha_scale *
+      |                 ^~~~~~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:755:38: note: the lambda has no capture-default
+  755 |         auto riskColor = [this, &zone](double risk, double alpha_scale) {
+      |                                      ^
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:710:47: note: ‘const path_manager::visualization::RiskSettings& settings’ declared here
+  710 |     const RiskView &risk, const RiskSettings &settings, const Stamp &stamp)
+      |                           ~~~~~~~~~~~~~~~~~~~~^~~~~~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In function ‘visualization_msgs::msg::MarkerArray path_manager::visualization::makeRiskField(const path_manager::visualization::RiskView&, const path_manager::visualization::RiskSettings&, const Stamp&)’:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:998:46: error: request for member ‘value’ in ‘risk’, which is of non-class type ‘const double’
+  998 |                     const double risk = risk.value(zi, p);
+      |                                              ^~~~~
+gmake[2]: *** [CMakeFiles/visualization_overlay.dir/build.make:76: CMakeFiles/visualization_overlay.dir/src/planning_visualization_data.cpp.o] Error 1
+gmake[2]: *** Waiting for unfinished jobs....
+gmake[1]: *** [CMakeFiles/Makefile2:137: CMakeFiles/visualization_overlay.dir/all] Error 2
+gmake: *** [Makefile:101: all] Error 2
+Consolidate compiler generated dependencies of target visualization_overlay
+[ 33%] Building CXX object CMakeFiles/visualization_overlay.dir/src/planning_visualization_data.cpp.o
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp: In function ‘path_manager::visualization::Prepared<visualization_msgs::msg::MarkerArray_<std::allocator<void> > > path_manager::visualization::makePipeline(const std::vector<Eigen::Matrix<double, 3, 1> >&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const Stamp&)’:
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:172:48: warning: ‘[DEBUG-PIPELINE] published ’ directive output truncated writing 27 bytes into a region of size 1 [-Wformat-truncation=]
+  172 | Prepared<visualization_msgs::msg::MarkerArray> makePipeline(
+      |                                                ^~~~~~~~~~~~
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:172:48: note: using the range [0, 18446744073709551615] for directive argument
+/tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:172:48: note: using the range [0, 18446744073709551615] for directive argument
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /tmp/mmp_stage4_visualization_20261010/overlay/include/path_manager/planning_visualization_data.h:5,
+                 from /tmp/mmp_stage4_visualization_20261010/overlay/src/planning_visualization_data.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 55 and 93 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+[ 66%] Linking CXX static library libvisualization_overlay.a
+[100%] Built target visualization_overlay

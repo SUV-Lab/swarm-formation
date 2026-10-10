@@ -54,6 +54,8 @@ find_package(ament_index_cpp REQUIRED)
 
 add_library(${PROJECT_NAME}_lib
   src/path_manager.cpp
+  src/planning_visualization_data.cpp
+  src/ros_planning_visualization.cpp
   src/mission_planner.cpp
   src/planning_environment.cpp
   src/ros_planning_backend.cpp
@@ -142,6 +144,9 @@ ament_target_dependencies(${PROJECT_NAME}_node
 # Standalone sanity test for the DynamicObstacleArray dispatch loop. The array
 # type now lives in mmp_mission_msgs, so this target depends on that package
 # instead of this one's generated interfaces.
+add_executable(planning_visualization_test test/planning_visualization_test.cpp)
+target_link_libraries(planning_visualization_test ${PROJECT_NAME}_lib)
+
 add_executable(load_obstacles_test test/load_obstacles_test.cpp)
 ament_target_dependencies(load_obstacles_test mmp_mission_msgs)
 
@@ -327,6 +332,9 @@ target_link_libraries(flight_evaluator_test Eigen3::Eigen
   mmp_vehicle_dynamics::mmp_vehicle_dynamics)
 target_compile_features(flight_evaluator_test PRIVATE cxx_std_17)
 
+add_executable(planning_visualization_example examples/planning_visualization_example.cpp)
+target_link_libraries(planning_visualization_example ${PROJECT_NAME}_lib)
+
 add_executable(flight_evaluator_example examples/flight_evaluator_example.cpp)
 target_link_libraries(flight_evaluator_example ${PROJECT_NAME}_lib)
 
@@ -436,6 +444,10 @@ if(BUILD_TESTING)
 
   ament_add_test(mission_planner_core_test
     COMMAND $<TARGET_FILE:mission_planner_core_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  ament_add_test(planning_visualization_test
+    COMMAND $<TARGET_FILE:planning_visualization_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 30)
   ament_add_test(flight_evaluator_test
@@ -645,7 +657,8 @@ install(TARGETS mission_planner_test mission_planner_core_test
 install(TARGETS committed_route_test
   DESTINATION lib/${PROJECT_NAME})
 
-install(TARGETS flight_evaluator_test execution_adoption_test flight_evaluator_example
+install(TARGETS planning_visualization_test planning_visualization_example
+  flight_evaluator_test execution_adoption_test flight_evaluator_example
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS mission_route_search_test route_search_backend_test vehicle_model_injection_test terrain_memo_test trajectory_message_test

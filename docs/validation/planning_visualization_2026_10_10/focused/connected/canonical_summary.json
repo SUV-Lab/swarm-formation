@@ -1,0 +1,61 @@
+{
+  "stats": {
+    "events": {
+      "messages": 40,
+      "topics": {
+        "/viz/risk_field": 11,
+        "/viz/risk_heatmap": 11,
+        "/planning/front_end_path": 1,
+        "/viz/front_end_path": 1,
+        "/debug/pipeline": 1,
+        "/viz/opt_trajectory": 2,
+        "/viz/global_trajectory": 2,
+        "/viz/traj_risk": 3,
+        "/viz/risk_profile": 3,
+        "/viz/chain_segments": 2,
+        "/viz/dynamic_obstacles": 3
+      }
+    },
+    "late_full": {
+      "messages": 11,
+      "topics": {
+        "/viz/opt_trajectory": 1,
+        "/viz/global_trajectory": 1,
+        "/viz/front_end_path": 1,
+        "/viz/traj_risk": 1,
+        "/viz/chain_segments": 1,
+        "/viz/risk_field": 1,
+        "/viz/dynamic_obstacles": 1,
+        "/debug/pipeline": 1,
+        "/viz/risk_profile": 1,
+        "/viz/risk_heatmap": 1,
+        "/planning/front_end_path": 1
+      }
+    },
+    "late_clear": {
+      "messages": 11,
+      "topics": {
+        "/planning/front_end_path": 1,
+        "/viz/opt_trajectory": 1,
+        "/viz/front_end_path": 1,
+        "/viz/risk_profile": 1,
+        "/viz/global_trajectory": 1,
+        "/viz/traj_risk": 1,
+        "/viz/chain_segments": 1,
+        "/viz/risk_field": 1,
+        "/viz/dynamic_obstacles": 1,
+        "/debug/pipeline": 1,
+        "/viz/risk_heatmap": 1
+      }
+    }
+  },
+  "checks": {
+    "late_full_complete": true,
+    "late_full_topic_count": 11,
+    "late_clear_complete": true,
+    "late_clear_topic_count": 11,
+    "all_expected_topics": true,
+    "expected_topic_count": 11
+  },
+  "normalization": "Only header.stamp sec/nanosec zeroed; all other fields retained. Float values retain hex and IEEE binary64 bits (lossless promotion for finite float32; NaN sign/payload retained by Python conversion). Receipt order retained within phase/topic."
+}

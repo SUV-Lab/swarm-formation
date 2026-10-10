@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="mmp_vehicle_dynamics" tests="1" failures="0" time="0.010" errors="0" skipped="0">
+  <testcase classname="mmp_vehicle_dynamics" name="config_snapshot_test.missing_result" time="0.010">
+    
+  </testcase>
+</testsuite>

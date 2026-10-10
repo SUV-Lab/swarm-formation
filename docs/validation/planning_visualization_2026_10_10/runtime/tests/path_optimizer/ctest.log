@@ -1,0 +1,9 @@
+Test project /ws/build/path_optimizer
+    Start 1: route_cost_profile_test
+1/2 Test #1: route_cost_profile_test ..........   Passed    0.03 sec
+    Start 2: optimizer_session_test
+2/2 Test #2: optimizer_session_test ...........   Passed    0.15 sec
+
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   0.18 sec

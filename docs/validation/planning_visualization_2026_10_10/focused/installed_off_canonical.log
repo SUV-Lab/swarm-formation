@@ -1,0 +1,24 @@
+{
+  "stats": {
+    "events": {
+      "messages": 0,
+      "topics": {}
+    },
+    "late_full": {
+      "messages": 0,
+      "topics": {}
+    },
+    "late_clear": {
+      "messages": 0,
+      "topics": {}
+    }
+  },
+  "checks": {
+    "late_full_complete": true,
+    "late_full_topic_count": 0,
+    "late_clear_complete": true,
+    "late_clear_topic_count": 0,
+    "all_expected_topics": true,
+    "expected_topic_count": 0
+  }
+}

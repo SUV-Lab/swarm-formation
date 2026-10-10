@@ -1,0 +1,45 @@
+4/6 Testing: trajectory_simulation_test
+4/6 Test: trajectory_simulation_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/trajectory_simulation_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/trajectory_simulation_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"trajectory_simulation_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/trajectory_simulation_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml
+Running main() from /opt/ros/humble/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 8 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 8 tests from TrajectorySimulation
+[ RUN      ] TrajectorySimulation.InjectedModelAndControllerDrivePhysicalHistory
+[       OK ] TrajectorySimulation.InjectedModelAndControllerDrivePhysicalHistory (0 ms)
+[ RUN      ] TrajectorySimulation.ChunkBoundariesDoNotChangeStateOrMetrics
+[       OK ] TrajectorySimulation.ChunkBoundariesDoNotChangeStateOrMetrics (0 ms)
+[ RUN      ] TrajectorySimulation.BorrowedPlaybackAndOwnedResultHaveDistinctLifetimes
+[       OK ] TrajectorySimulation.BorrowedPlaybackAndOwnedResultHaveDistinctLifetimes (0 ms)
+[ RUN      ] TrajectorySimulation.UnrepresentableStepsAreExcludedOnlyFromAggregateAudit
+[       OK ] TrajectorySimulation.UnrepresentableStepsAreExcludedOnlyFromAggregateAudit (0 ms)
+[ RUN      ] TrajectorySimulation.ExplicitCancellationRetainsOwnedPartialHistory
+[       OK ] TrajectorySimulation.ExplicitCancellationRetainsOwnedPartialHistory (0 ms)
+[ RUN      ] TrajectorySimulation.SamplingKeepsFloatValuesAndPreviousPieceAtSeam
+[       OK ] TrajectorySimulation.SamplingKeepsFloatValuesAndPreviousPieceAtSeam (0 ms)
+[ RUN      ] TrajectorySimulation.InvalidInputIsRejectedBeforeStrategyCalls
+[       OK ] TrajectorySimulation.InvalidInputIsRejectedBeforeStrategyCalls (0 ms)
+[ RUN      ] TrajectorySimulation.StrategyExceptionsPropagateWithoutInventingCompletion
+[       OK ] TrajectorySimulation.StrategyExceptionsPropagateWithoutInventingCompletion (0 ms)
+[----------] 8 tests from TrajectorySimulation (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 8 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 8 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml'
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"trajectory_simulation_test" end time: Oct 10 08:42 UTC
+"trajectory_simulation_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

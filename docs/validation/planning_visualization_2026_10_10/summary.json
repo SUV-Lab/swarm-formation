@@ -1,0 +1,145 @@
+{
+  "pass": true,
+  "stage": "4 visualization preparation/publishing separation",
+  "source_files_frozen": 12,
+  "registered_ctest": {
+    "passed": 41,
+    "total": 41,
+    "path_manager": 33,
+    "path_optimizer": 2,
+    "vehicle": 6
+  },
+  "builder_contract_checks": 28,
+  "focused": {
+    "live_messages": 40,
+    "late_full_messages": 11,
+    "late_clear_messages": 11,
+    "topics": 11,
+    "baseline_connected_canonical_exact": true,
+    "baseline_connected_disconnected_physical_exact": true,
+    "disconnected_live_messages": 0,
+    "disconnected_late_join_messages": 0,
+    "publisher_graph_count_measured": false,
+    "physical_state_sha256": "7df28eb4d4aa497dea6403f933f4561a40e94d890a1fb48553b84d1a0c4df70f"
+  },
+  "r2": {
+    "started_utc": "2026-10-10T08:43:35.717409+00:00",
+    "domain": 84,
+    "checks": {
+      "configure": {
+        "command": [
+          "cmake",
+          "-S",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer",
+          "-B",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/build",
+          "-DCMAKE_BUILD_TYPE=Release"
+        ],
+        "exit_code": 0,
+        "elapsed_s": 0.2640858829836361
+      },
+      "build": {
+        "command": [
+          "cmake",
+          "--build",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/build",
+          "-j2"
+        ],
+        "exit_code": 0,
+        "elapsed_s": 0.031777369003975764
+      },
+      "connected_run": {
+        "command": [
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/build/r2_external_consumer",
+          "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+          "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+          "/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/connected_result.json"
+        ],
+        "exit_code": 0,
+        "elapsed_s": 4.219994300976396,
+        "reused_completed_attempt": "attempt1_missing_comparator/summary.json"
+      },
+      "connected_wire_compare": {
+        "command": [
+          "python3",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/compare.py",
+          "/tmp/mmp_next_modularization_20261010/baseline/gui/mission.json",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/connected_result.json",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/connected_wire_comparison.json"
+        ],
+        "exit_code": 0,
+        "elapsed_s": 0.1136914069938939
+      },
+      "disconnected_run": {
+        "command": [
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/build/r2_external_consumer",
+          "/ws/install/path_manager/share/path_manager/config/optimizer_params.yaml",
+          "/ws/install/path_manager/share/path_manager/config/drone_hardware.yaml",
+          "/ws/src/mmp_terrain/data/scenarios/missions/r2_ridge_crossing.yaml",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/disconnected_result.json"
+        ],
+        "exit_code": 0,
+        "elapsed_s": 4.373654933006037
+      },
+      "disconnected_wire_compare": {
+        "command": [
+          "python3",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/compare.py",
+          "/tmp/mmp_next_modularization_20261010/baseline/gui/mission.json",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/disconnected_result.json",
+          "/tmp/mmp_stage4_visualization_20261010/r2_consumer/disconnected_wire_comparison.json"
+        ],
+        "exit_code": 0,
+        "elapsed_s": 0.11385624797549099
+      }
+    },
+    "modes": {
+      "connected": {
+        "own_loader_pid": 158940,
+        "field_exact": {
+          "schema": true,
+          "source": true,
+          "input_unchanged": true,
+          "serialized_after_planner_destruction": true,
+          "status": true,
+          "final": true,
+          "reference": true,
+          "phases": true,
+          "evaluation": true,
+          "identity": true,
+          "terrain": true
+        },
+        "pass": true
+      },
+      "disconnected": {
+        "own_loader_pid": 159005,
+        "field_exact": {
+          "schema": true,
+          "source": true,
+          "input_unchanged": true,
+          "serialized_after_planner_destruction": true,
+          "status": true,
+          "final": true,
+          "reference": true,
+          "phases": true,
+          "evaluation": true,
+          "identity": true,
+          "terrain": true
+        },
+        "pass": true
+      }
+    },
+    "connected_disconnected_exact": true,
+    "finished_utc": "2026-10-10T08:43:40.753414+00:00",
+    "pass": true
+  },
+  "installed_example": "route_points=2 tube_points=21 frame=map",
+  "normalization": "Focused messages ignore only header.stamp; all other fields compared, with floating-point bit representations retained. Cross-topic receipt order not compared; order within phase/topic retained. R2 owned result comparison is whole-object exact; float32 wire comparison separately checks legacy transport.",
+  "history": [
+    "Initial isolated extraction compilation exposed leftover member lambda captures and a local-name shadow; corrected before integration.",
+    "An initial ownership test expected the exact trajectory endpoint rather than the existing T-1e-9 sample; corrected test expectation, production sampling unchanged.",
+    "R2 first comparison failed because compare_runs.py was omitted while copying harness; completed successful connected solve was retained and compared after restoring the exact helper. Disconnected solve then ran normally.",
+    "Final review retained legacy finite display scales and sphere mesh heights, including zero; added compatibility regressions before installed build."
+  ]
+}

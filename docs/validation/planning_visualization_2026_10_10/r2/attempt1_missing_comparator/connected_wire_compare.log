@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/tmp/mmp_stage4_visualization_20261010/r2_consumer/compare.py", line 5, in <module>
+    spec=importlib.util.spec_from_file_location('mmp_comparison',str(Path(__file__).parent/'compare_runs.py'));mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+  File "<frozen importlib._bootstrap_external>", line 879, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1016, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1073, in get_data
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/mmp_stage4_visualization_20261010/r2_consumer/compare_runs.py'

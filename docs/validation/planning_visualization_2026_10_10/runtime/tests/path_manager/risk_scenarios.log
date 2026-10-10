@@ -1,0 +1,751 @@
+33/33 Testing: risk_scenarios
+33/33 Test: risk_scenarios
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/risk_scenarios.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "bash" "/ws/src/mmp_path_planning/src/path_manager/../../tools/run_risk_harness.sh" "NONE" "/ws/build/path_manager/risk_scenarios_test"
+Directory: /ws/build/path_manager
+"risk_scenarios" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - bash /ws/src/mmp_path_planning/src/path_manager/../../tools/run_risk_harness.sh NONE /ws/build/path_manager/risk_scenarios_test
+Loaded 14 scenarios from /ws/src/mmp_terrain/data/risk_scenarios/synthetic_flat.yaml  (map 200 200  20 voxel 1)
+front_end=fm2 fm2_k=4 fm2_star=1
+
+[S1_single_zone alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=20.765 max_depth=30.0m time=118.1ms wp=80 mean_turn=84.81deg
+  zone[0] peak=0.80 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  [info] sub-production alpha=0.1: DETOUR not asserted (risk_int=20.765, max_depth=30.0m)
+
+[S2_two_overlapping alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=36.143 max_depth=32.2m time=0.5ms wp=80 mean_turn=80.19deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=8.5m pen=26.5m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=2.8m pen=32.2m)
+  [info] sub-production alpha=0.1: DETOUR not asserted (risk_int=36.143, max_depth=32.2m)
+
+[S3_encircling_band alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=9.104 max_depth=17.6m time=0.4ms wp=80 mean_turn=84.81deg
+  zone[0] peak=0.60 reach=30 : clear   (min_d=53.1m pen=0.0m)
+  zone[1] peak=0.60 reach=30 : THROUGH (min_d=16.1m pen=13.9m)
+  zone[2] peak=0.60 reach=30 : THROUGH (min_d=12.4m pen=17.6m)
+  zone[3] peak=0.60 reach=30 : clear   (min_d=40.0m pen=0.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S4_goal_in_zone alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=80 recover_steps=75 (grad_fail=0 mono_rej=75) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=314.7m direct=226.3m risk_int=13.540 max_depth=40.0m time=0.6ms wp=81 mean_turn=85.28deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=0.0m pen=40.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S5_sdf2_mimic alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=76.500 max_depth=58.6m time=0.4ms wp=80 mean_turn=77.88deg
+  zone[0] peak=0.60 reach=50 : THROUGH (min_d=10.2m pen=39.8m)
+  zone[1] peak=0.70 reach=60 : THROUGH (min_d=1.4m pen=58.6m)
+  zone[2] peak=0.50 reach=40 : THROUGH (min_d=0.0m pen=40.0m)
+  [info] sub-production alpha=0.1: DETOUR not asserted (risk_int=76.500, max_depth=58.6m)
+
+[S6_goal_surrounded alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=80 recover_steps=74 (grad_fail=0 mono_rej=74) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=313.2m direct=226.3m risk_int=5.873 max_depth=12.3m time=0.4ms wp=81 mean_turn=84.12deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=14.2m pen=10.8m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=12.7m pen=12.3m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S7_start_surrounded alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=7.308 max_depth=13.7m time=0.4ms wp=80 mean_turn=89.42deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=11.3m pen=13.7m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=14.4m pen=10.6m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S8_narrow_corridor alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=14.402 max_depth=24.4m time=0.4ms wp=80 mean_turn=89.42deg
+  zone[0] peak=0.70 reach=50 : THROUGH (min_d=28.3m pen=21.7m)
+  zone[1] peak=0.70 reach=50 : THROUGH (min_d=25.6m pen=24.4m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S9_wall_blocking alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=40 recover_steps=39 (grad_fail=0 mono_rej=39) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=160.0m direct=160.0m risk_int=15.851 max_depth=30.0m time=0.3ms wp=41 mean_turn=0.00deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=20.0m pen=10.0m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  zone[2] peak=0.70 reach=30 : THROUGH (min_d=20.0m pen=10.0m)
+  [info] sub-production alpha=0.1: DETOUR not asserted (risk_int=15.851, max_depth=30.0m)
+
+[S10_zone_rows alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=26.353 max_depth=25.0m time=0.4ms wp=80 mean_turn=83.65deg
+  zone[0] peak=0.60 reach=25 : THROUGH (min_d=0.0m pen=25.0m)
+  zone[1] peak=0.60 reach=25 : clear   (min_d=56.6m pen=0.0m)
+  zone[2] peak=0.60 reach=25 : clear   (min_d=25.6m pen=0.0m)
+  zone[3] peak=0.60 reach=25 : clear   (min_d=28.3m pen=0.0m)
+  zone[4] peak=0.60 reach=25 : clear   (min_d=53.8m pen=0.0m)
+  zone[5] peak=0.60 reach=25 : THROUGH (min_d=0.0m pen=25.0m)
+  [info] sub-production alpha=0.1: DETOUR not asserted (risk_int=26.353, max_depth=25.0m)
+
+[S11_both_in_zones alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=80 recover_steps=76 (grad_fail=0 mono_rej=76) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=315.5m direct=226.3m risk_int=17.401 max_depth=30.0m time=0.4ms wp=81 mean_turn=86.41deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S12_giant_middle_zone alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=40 recover_steps=39 (grad_fail=0 mono_rej=39) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=160.0m direct=160.0m risk_int=27.977 max_depth=70.0m time=0.3ms wp=41 mean_turn=0.00deg
+  zone[0] peak=0.60 reach=70 : THROUGH (min_d=0.0m pen=70.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S13_asymmetric_peaks alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=3.611 max_depth=14.4m time=0.4ms wp=80 mean_turn=87.12deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=28.3m pen=11.7m)
+  zone[1] peak=0.30 reach=40 : THROUGH (min_d=25.6m pen=14.4m)
+  [info] sub-production alpha=0.1: DETOUR not asserted (risk_int=3.611, max_depth=14.4m)
+
+[S14_vertical_detour alpha=0.1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=66 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=161.3m direct=160.0m risk_int=13.650 max_depth=16.5m time=0.3ms wp=67 mean_turn=1.57deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=21.4m pen=13.6m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=18.9m pen=16.1m)
+  zone[2] peak=0.70 reach=35 : THROUGH (min_d=21.8m pen=13.2m)
+  zone[3] peak=0.70 reach=35 : THROUGH (min_d=18.5m pen=16.5m)
+  [info] sub-production alpha=0.1: DETOUR not asserted (risk_int=13.650, max_depth=16.5m)
+
+[S1_single_zone alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=86 recover_steps=42 (grad_fail=0 mono_rej=42) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=276.5m direct=226.3m risk_int=6.548 max_depth=17.3m time=0.4ms wp=87 mean_turn=35.96deg
+  zone[0] peak=0.80 reach=30 : THROUGH (min_d=12.7m pen=17.3m)
+  [info] sub-production alpha=0.3: DETOUR not asserted (risk_int=6.548, max_depth=17.3m)
+
+[S2_two_overlapping alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=86 recover_steps=43 (grad_fail=0 mono_rej=43) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=278.3m direct=226.3m risk_int=9.981 max_depth=20.7m time=0.4ms wp=87 mean_turn=31.89deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=20.6m pen=14.4m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=14.3m pen=20.7m)
+  [info] sub-production alpha=0.3: DETOUR not asserted (risk_int=9.981, max_depth=20.7m)
+
+[S3_encircling_band alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=7.719 max_depth=15.4m time=0.4ms wp=80 mean_turn=80.19deg
+  zone[0] peak=0.60 reach=30 : clear   (min_d=53.1m pen=0.0m)
+  zone[1] peak=0.60 reach=30 : THROUGH (min_d=14.6m pen=15.4m)
+  zone[2] peak=0.60 reach=30 : THROUGH (min_d=16.3m pen=13.7m)
+  zone[3] peak=0.60 reach=30 : clear   (min_d=40.0m pen=0.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S4_goal_in_zone alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=81 recover_steps=73 (grad_fail=0 mono_rej=73) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=312.5m direct=226.3m risk_int=12.875 max_depth=40.0m time=0.4ms wp=82 mean_turn=82.18deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=0.0m pen=40.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S5_sdf2_mimic alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=88 recover_steps=42 (grad_fail=0 mono_rej=42) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=280.0m direct=226.3m risk_int=22.282 max_depth=37.4m time=0.5ms wp=89 mean_turn=25.12deg
+  zone[0] peak=0.60 reach=50 : THROUGH (min_d=33.1m pen=16.9m)
+  zone[1] peak=0.70 reach=60 : THROUGH (min_d=22.6m pen=37.4m)
+  zone[2] peak=0.50 reach=40 : THROUGH (min_d=18.2m pen=21.8m)
+  [info] sub-production alpha=0.3: DETOUR not asserted (risk_int=22.282, max_depth=37.4m)
+
+[S6_goal_surrounded alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=81 recover_steps=71 (grad_fail=0 mono_rej=71) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=309.9m direct=226.3m risk_int=5.371 max_depth=12.6m time=0.4ms wp=82 mean_turn=79.87deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=16.0m pen=9.0m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=12.4m pen=12.6m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S7_start_surrounded alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=93 recover_steps=3 (grad_fail=0 mono_rej=3) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=230.0m direct=226.3m risk_int=5.818 max_depth=13.3m time=0.4ms wp=94 mean_turn=2.86deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=11.7m pen=13.3m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=16.5m pen=8.5m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S8_narrow_corridor alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=87 recover_steps=37 (grad_fail=0 mono_rej=37) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=269.9m direct=226.3m risk_int=11.510 max_depth=24.2m time=0.4ms wp=88 mean_turn=38.63deg
+  zone[0] peak=0.70 reach=50 : THROUGH (min_d=30.5m pen=19.5m)
+  zone[1] peak=0.70 reach=50 : THROUGH (min_d=25.8m pen=24.2m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S9_wall_blocking alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=54 recover_steps=18 (grad_fail=0 mono_rej=18) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=160.7m direct=160.0m risk_int=15.652 max_depth=28.0m time=0.7ms wp=55 mean_turn=1.10deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=20.4m pen=9.6m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=2.0m pen=28.0m)
+  zone[2] peak=0.70 reach=30 : THROUGH (min_d=19.6m pen=10.4m)
+  [info] sub-production alpha=0.3: DETOUR not asserted (risk_int=15.652, max_depth=28.0m)
+
+[S10_zone_rows alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=90 recover_steps=22 (grad_fail=0 mono_rej=22) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=252.5m direct=226.3m risk_int=13.974 max_depth=21.5m time=0.4ms wp=91 mean_turn=14.26deg
+  zone[0] peak=0.60 reach=25 : THROUGH (min_d=8.0m pen=17.0m)
+  zone[1] peak=0.60 reach=25 : clear   (min_d=52.9m pen=0.0m)
+  zone[2] peak=0.60 reach=25 : clear   (min_d=33.2m pen=0.0m)
+  zone[3] peak=0.60 reach=25 : clear   (min_d=25.5m pen=0.0m)
+  zone[4] peak=0.60 reach=25 : clear   (min_d=60.2m pen=0.0m)
+  zone[5] peak=0.60 reach=25 : THROUGH (min_d=3.5m pen=21.5m)
+  [info] sub-production alpha=0.3: DETOUR not asserted (risk_int=13.974, max_depth=21.5m)
+
+[S11_both_in_zones alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=94 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=226.8m direct=226.3m risk_int=14.137 max_depth=30.0m time=0.4ms wp=95 mean_turn=0.76deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S12_giant_middle_zone alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=55 recover_steps=16 (grad_fail=0 mono_rej=16) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=160.6m direct=160.0m risk_int=27.839 max_depth=68.2m time=0.4ms wp=56 mean_turn=1.00deg
+  zone[0] peak=0.60 reach=70 : THROUGH (min_d=1.8m pen=68.2m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S13_asymmetric_peaks alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=79 recover_steps=78 (grad_fail=0 mono_rej=78) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=317.7m direct=226.3m risk_int=3.336 max_depth=17.4m time=0.4ms wp=80 mean_turn=87.12deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=28.8m pen=11.2m)
+  zone[1] peak=0.30 reach=40 : THROUGH (min_d=22.6m pen=17.4m)
+  [info] sub-production alpha=0.3: DETOUR not asserted (risk_int=3.336, max_depth=17.4m)
+
+[S14_vertical_detour alpha=0.3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=66 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=161.3m direct=160.0m risk_int=13.603 max_depth=16.3m time=0.4ms wp=67 mean_turn=1.57deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=21.2m pen=13.8m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=19.2m pen=15.8m)
+  zone[2] peak=0.70 reach=35 : THROUGH (min_d=21.6m pen=13.4m)
+  zone[3] peak=0.70 reach=35 : THROUGH (min_d=18.7m pen=16.3m)
+  [info] sub-production alpha=0.3: DETOUR not asserted (risk_int=13.603, max_depth=16.3m)
+
+[S1_single_zone alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=88 recover_steps=38 (grad_fail=0 mono_rej=38) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=274.2m direct=226.3m risk_int=0.819 max_depth=7.0m time=0.4ms wp=89 mean_turn=27.16deg
+  zone[0] peak=0.80 reach=30 : THROUGH (min_d=23.0m pen=7.0m)
+  [info] sub-production alpha=1.0: DETOUR not asserted (risk_int=0.819, max_depth=7.0m)
+
+[S2_two_overlapping alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=88 recover_steps=43 (grad_fail=0 mono_rej=43) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=281.4m direct=226.3m risk_int=1.355 max_depth=9.4m time=0.4ms wp=89 mean_turn=29.28deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=29.5m pen=5.5m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=25.6m pen=9.4m)
+  [info] sub-production alpha=1.0: DETOUR not asserted (risk_int=1.355, max_depth=9.4m)
+
+[S3_encircling_band alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=88 recover_steps=31 (grad_fail=0 mono_rej=31) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=264.0m direct=226.3m risk_int=4.193 max_depth=11.6m time=0.4ms wp=89 mean_turn=29.22deg
+  zone[0] peak=0.60 reach=30 : clear   (min_d=53.1m pen=0.0m)
+  zone[1] peak=0.60 reach=30 : THROUGH (min_d=18.4m pen=11.6m)
+  zone[2] peak=0.60 reach=30 : THROUGH (min_d=18.9m pen=11.1m)
+  zone[3] peak=0.60 reach=30 : clear   (min_d=49.9m pen=0.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S4_goal_in_zone alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=81 recover_steps=71 (grad_fail=0 mono_rej=71) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=310.1m direct=226.3m risk_int=12.418 max_depth=40.0m time=0.4ms wp=82 mean_turn=79.89deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=0.0m pen=40.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S5_sdf2_mimic alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=91 recover_steps=41 (grad_fail=0 mono_rej=41) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=286.1m direct=226.3m risk_int=3.348 max_depth=17.6m time=0.4ms wp=92 mean_turn=20.42deg
+  zone[0] peak=0.60 reach=50 : THROUGH (min_d=48.1m pen=1.9m)
+  zone[1] peak=0.70 reach=60 : THROUGH (min_d=42.4m pen=17.6m)
+  zone[2] peak=0.50 reach=40 : THROUGH (min_d=31.8m pen=8.2m)
+  [info] sub-production alpha=1.0: DETOUR not asserted (risk_int=3.348, max_depth=17.6m)
+
+[S6_goal_surrounded alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=81 recover_steps=69 (grad_fail=0 mono_rej=69) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=307.5m direct=226.3m risk_int=5.124 max_depth=11.9m time=0.6ms wp=82 mean_turn=77.64deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=15.3m pen=9.7m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=13.1m pen=11.9m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S7_start_surrounded alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=94 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=226.8m direct=226.3m risk_int=4.996 max_depth=10.8m time=0.4ms wp=95 mean_turn=0.74deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=14.2m pen=10.8m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=14.2m pen=10.8m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S8_narrow_corridor alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=88 recover_steps=30 (grad_fail=0 mono_rej=30) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=261.7m direct=226.3m risk_int=10.191 max_depth=21.7m time=0.4ms wp=89 mean_turn=30.89deg
+  zone[0] peak=0.70 reach=50 : THROUGH (min_d=28.3m pen=21.7m)
+  zone[1] peak=0.70 reach=50 : THROUGH (min_d=28.3m pen=21.7m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S9_wall_blocking alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=55 recover_steps=16 (grad_fail=0 mono_rej=16) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=160.7m direct=160.0m risk_int=15.483 max_depth=28.0m time=0.3ms wp=56 mean_turn=1.10deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=21.0m pen=9.0m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=2.0m pen=28.0m)
+  zone[2] peak=0.70 reach=30 : THROUGH (min_d=19.1m pen=10.9m)
+  [info] sub-production alpha=1.0: DETOUR not asserted (risk_int=15.483, max_depth=28.0m)
+
+[S10_zone_rows alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=91 recover_steps=20 (grad_fail=0 mono_rej=20) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=253.3m direct=226.3m risk_int=4.592 max_depth=12.4m time=0.4ms wp=92 mean_turn=10.68deg
+  zone[0] peak=0.60 reach=25 : THROUGH (min_d=17.0m pen=8.0m)
+  zone[1] peak=0.60 reach=25 : clear   (min_d=46.0m pen=0.0m)
+  zone[2] peak=0.60 reach=25 : clear   (min_d=42.1m pen=0.0m)
+  zone[3] peak=0.60 reach=25 : THROUGH (min_d=20.5m pen=4.5m)
+  zone[4] peak=0.60 reach=25 : clear   (min_d=66.1m pen=0.0m)
+  zone[5] peak=0.60 reach=25 : THROUGH (min_d=12.6m pen=12.4m)
+  [info] sub-production alpha=1.0: DETOUR not asserted (risk_int=4.592, max_depth=12.4m)
+
+[S11_both_in_zones alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=94 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=226.8m direct=226.3m risk_int=14.136 max_depth=30.0m time=0.4ms wp=95 mean_turn=0.78deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S12_giant_middle_zone alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=59 recover_steps=11 (grad_fail=0 mono_rej=11) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=161.0m direct=160.0m risk_int=27.345 max_depth=65.9m time=0.4ms wp=60 mean_turn=1.32deg
+  zone[0] peak=0.60 reach=70 : THROUGH (min_d=4.1m pen=65.9m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S13_asymmetric_peaks alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=87 recover_steps=35 (grad_fail=0 mono_rej=35) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=267.6m direct=226.3m risk_int=2.356 max_depth=15.2m time=0.7ms wp=88 mean_turn=33.45deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=31.9m pen=8.1m)
+  zone[1] peak=0.30 reach=40 : THROUGH (min_d=24.8m pen=15.2m)
+  [info] sub-production alpha=1.0: DETOUR not asserted (risk_int=2.356, max_depth=15.2m)
+
+[S14_vertical_detour alpha=1 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=66 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=161.3m direct=160.0m risk_int=13.541 max_depth=15.8m time=0.4ms wp=67 mean_turn=1.60deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=20.8m pen=14.2m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=19.5m pen=15.5m)
+  zone[2] peak=0.70 reach=35 : THROUGH (min_d=21.1m pen=13.9m)
+  zone[3] peak=0.70 reach=35 : THROUGH (min_d=19.2m pen=15.8m)
+  [info] sub-production alpha=1.0: DETOUR not asserted (risk_int=13.541, max_depth=15.8m)
+
+[S1_single_zone alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=89 recover_steps=36 (grad_fail=0 mono_rej=36) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=273.4m direct=226.3m risk_int=0.013 max_depth=1.1m time=0.4ms wp=90 mean_turn=24.87deg
+  zone[0] peak=0.80 reach=30 : THROUGH (min_d=28.9m pen=1.1m)
+  [info] sub-production alpha=3.0: DETOUR not asserted (risk_int=0.013, max_depth=1.1m)
+
+[S2_two_overlapping alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=88 recover_steps=43 (grad_fail=0 mono_rej=43) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=283.1m direct=226.3m risk_int=0.131 max_depth=3.6m time=0.5ms wp=89 mean_turn=27.21deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=34.1m pen=0.9m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=31.4m pen=3.6m)
+  [info] sub-production alpha=3.0: DETOUR not asserted (risk_int=0.131, max_depth=3.6m)
+
+[S3_encircling_band alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=91 recover_steps=27 (grad_fail=0 mono_rej=27) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=262.8m direct=226.3m risk_int=2.426 max_depth=9.5m time=0.5ms wp=92 mean_turn=20.89deg
+  zone[0] peak=0.60 reach=30 : clear   (min_d=56.9m pen=0.0m)
+  zone[1] peak=0.60 reach=30 : THROUGH (min_d=23.1m pen=6.9m)
+  zone[2] peak=0.60 reach=30 : THROUGH (min_d=20.5m pen=9.5m)
+  zone[3] peak=0.60 reach=30 : clear   (min_d=53.0m pen=0.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S4_goal_in_zone alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=83 recover_steps=70 (grad_fail=0 mono_rej=70) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=313.1m direct=226.3m risk_int=12.842 max_depth=40.0m time=0.4ms wp=84 mean_turn=72.90deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=0.0m pen=40.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S5_sdf2_mimic alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=93 recover_steps=42 (grad_fail=0 mono_rej=42) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=291.8m direct=226.3m risk_int=0.487 max_depth=9.1m time=0.5ms wp=94 mean_turn=20.12deg
+  zone[0] peak=0.60 reach=50 : clear   (min_d=50.0m pen=0.0m)
+  zone[1] peak=0.70 reach=60 : THROUGH (min_d=50.9m pen=9.1m)
+  zone[2] peak=0.50 reach=40 : THROUGH (min_d=37.5m pen=2.5m)
+  [info] sub-production alpha=3.0: DETOUR not asserted (risk_int=0.487, max_depth=9.1m)
+
+[S6_goal_surrounded alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=82 recover_steps=67 (grad_fail=0 mono_rej=67) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=305.3m direct=226.3m risk_int=5.043 max_depth=11.2m time=0.4ms wp=83 mean_turn=74.58deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=14.7m pen=10.3m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=13.8m pen=11.2m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S7_start_surrounded alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=94 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=226.8m direct=226.3m risk_int=4.988 max_depth=10.7m time=0.5ms wp=95 mean_turn=0.74deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=14.3m pen=10.7m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=14.3m pen=10.7m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S8_narrow_corridor alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=89 recover_steps=28 (grad_fail=0 mono_rej=28) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=259.4m direct=226.3m risk_int=10.097 max_depth=21.7m time=0.4ms wp=90 mean_turn=28.60deg
+  zone[0] peak=0.70 reach=50 : THROUGH (min_d=28.3m pen=21.7m)
+  zone[1] peak=0.70 reach=50 : THROUGH (min_d=28.3m pen=21.7m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S9_wall_blocking alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=55 recover_steps=16 (grad_fail=0 mono_rej=16) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=160.7m direct=160.0m risk_int=15.440 max_depth=27.8m time=0.4ms wp=56 mean_turn=1.17deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=21.2m pen=8.8m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=2.2m pen=27.8m)
+  zone[2] peak=0.70 reach=30 : THROUGH (min_d=18.9m pen=11.1m)
+  [info] sub-production alpha=3.0: DETOUR not asserted (risk_int=15.440, max_depth=27.8m)
+
+[S10_zone_rows alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=96 recover_steps=16 (grad_fail=0 mono_rej=16) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=257.6m direct=226.3m risk_int=1.960 max_depth=8.7m time=0.4ms wp=97 mean_turn=7.39deg
+  zone[0] peak=0.60 reach=25 : THROUGH (min_d=23.0m pen=2.0m)
+  zone[1] peak=0.60 reach=25 : clear   (min_d=47.0m pen=0.0m)
+  zone[2] peak=0.60 reach=25 : clear   (min_d=42.5m pen=0.0m)
+  zone[3] peak=0.60 reach=25 : THROUGH (min_d=23.3m pen=1.7m)
+  zone[4] peak=0.60 reach=25 : clear   (min_d=61.8m pen=0.0m)
+  zone[5] peak=0.60 reach=25 : THROUGH (min_d=16.3m pen=8.7m)
+  [info] sub-production alpha=3.0: DETOUR not asserted (risk_int=1.960, max_depth=8.7m)
+
+[S11_both_in_zones alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=94 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=226.8m direct=226.3m risk_int=14.127 max_depth=30.0m time=0.4ms wp=95 mean_turn=0.78deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S12_giant_middle_zone alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=76 recover_steps=12 (grad_fail=0 mono_rej=12) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=203.9m direct=160.0m risk_int=6.523 max_depth=24.6m time=0.4ms wp=77 mean_turn=14.61deg
+  zone[0] peak=0.60 reach=70 : THROUGH (min_d=45.4m pen=24.6m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S13_asymmetric_peaks alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=88 recover_steps=31 (grad_fail=0 mono_rej=31) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=263.0m direct=226.3m risk_int=2.198 max_depth=16.4m time=0.4ms wp=89 mean_turn=31.09deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=33.1m pen=6.9m)
+  zone[1] peak=0.30 reach=40 : THROUGH (min_d=23.6m pen=16.4m)
+  [info] sub-production alpha=3.0: DETOUR not asserted (risk_int=2.198, max_depth=16.4m)
+
+[S14_vertical_detour alpha=3 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=66 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=161.3m direct=160.0m risk_int=13.501 max_depth=15.4m time=0.4ms wp=67 mean_turn=1.63deg
+  zone[0] peak=0.70 reach=35 : THROUGH (min_d=20.5m pen=14.5m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=19.8m pen=15.2m)
+  zone[2] peak=0.70 reach=35 : THROUGH (min_d=20.7m pen=14.3m)
+  zone[3] peak=0.70 reach=35 : THROUGH (min_d=19.6m pen=15.4m)
+  [info] sub-production alpha=3.0: DETOUR not asserted (risk_int=13.501, max_depth=15.4m)
+
+[S1_single_zone alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=89 recover_steps=37 (grad_fail=0 mono_rej=37) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=275.4m direct=226.3m risk_int=0.000 max_depth=0.0m time=0.4ms wp=90 mean_turn=24.88deg
+  zone[0] peak=0.80 reach=30 : clear   (min_d=31.6m pen=0.0m)
+  [OK]   DETOUR: risk_int < 5% of direct                 
+  [OK]   DETOUR: max_depth < 5m                          
+
+[S2_two_overlapping alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=89 recover_steps=43 (grad_fail=0 mono_rej=43) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=284.9m direct=226.3m risk_int=0.000 max_depth=0.0m time=0.5ms wp=90 mean_turn=26.87deg
+  zone[0] peak=0.70 reach=35 : clear   (min_d=37.2m pen=0.0m)
+  zone[1] peak=0.70 reach=35 : clear   (min_d=36.4m pen=0.0m)
+  [OK]   DETOUR: risk_int < 5% of direct                 
+  [OK]   DETOUR: max_depth < 5m                          
+
+[S3_encircling_band alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=91 recover_steps=38 (grad_fail=0 mono_rej=38) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=281.5m direct=226.3m risk_int=1.537 max_depth=7.9m time=0.5ms wp=92 mean_turn=24.98deg
+  zone[0] peak=0.60 reach=30 : clear   (min_d=80.0m pen=0.0m)
+  zone[1] peak=0.60 reach=30 : clear   (min_d=60.8m pen=0.0m)
+  zone[2] peak=0.60 reach=30 : THROUGH (min_d=23.0m pen=7.0m)
+  zone[3] peak=0.60 reach=30 : THROUGH (min_d=22.1m pen=7.9m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S4_goal_in_zone alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=85 recover_steps=70 (grad_fail=0 mono_rej=70) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=318.8m direct=226.3m risk_int=12.439 max_depth=40.0m time=0.4ms wp=86 mean_turn=66.94deg
+  zone[0] peak=0.90 reach=40 : THROUGH (min_d=0.0m pen=40.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S5_sdf2_mimic alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=94 recover_steps=41 (grad_fail=0 mono_rej=41) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=294.1m direct=226.3m risk_int=0.002 max_depth=0.8m time=0.4ms wp=95 mean_turn=17.82deg
+  zone[0] peak=0.60 reach=50 : clear   (min_d=50.0m pen=0.0m)
+  zone[1] peak=0.70 reach=60 : THROUGH (min_d=59.2m pen=0.8m)
+  zone[2] peak=0.50 reach=40 : clear   (min_d=40.7m pen=0.0m)
+  [OK]   DETOUR: risk_int < 5% of direct                 
+  [OK]   DETOUR: max_depth < 5m                          
+
+[S6_goal_surrounded alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=82 recover_steps=66 (grad_fail=0 mono_rej=66) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=303.9m direct=226.3m risk_int=4.981 max_depth=10.7m time=0.4ms wp=83 mean_turn=73.30deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=14.3m pen=10.7m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=14.3m pen=10.7m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S7_start_surrounded alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=94 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=227.0m direct=226.3m risk_int=4.977 max_depth=10.7m time=0.4ms wp=95 mean_turn=0.87deg
+  zone[0] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[1] peak=0.70 reach=25 : THROUGH (min_d=14.3m pen=10.7m)
+  zone[2] peak=0.70 reach=25 : THROUGH (min_d=20.0m pen=5.0m)
+  zone[3] peak=0.70 reach=25 : THROUGH (min_d=14.3m pen=10.7m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S8_narrow_corridor alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=98 recover_steps=35 (grad_fail=0 mono_rej=35) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=294.2m direct=226.3m risk_int=0.015 max_depth=1.4m time=0.5ms wp=99 mean_turn=6.09deg
+  zone[0] peak=0.70 reach=50 : clear   (min_d=96.7m pen=0.0m)
+  zone[1] peak=0.70 reach=50 : THROUGH (min_d=48.6m pen=1.4m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S9_wall_blocking alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=74 recover_steps=20 (grad_fail=0 mono_rej=20) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=212.4m direct=160.0m risk_int=0.033 max_depth=1.5m time=0.4ms wp=75 mean_turn=19.67deg
+  zone[0] peak=0.70 reach=30 : clear   (min_d=59.5m pen=0.0m)
+  zone[1] peak=0.70 reach=30 : clear   (min_d=45.3m pen=0.0m)
+  zone[2] peak=0.70 reach=30 : THROUGH (min_d=28.5m pen=1.5m)
+  [OK]   DETOUR: risk_int < 5% of direct                 
+  [OK]   DETOUR: max_depth < 5m                          
+
+[S10_zone_rows alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=98 recover_steps=15 (grad_fail=0 mono_rej=15) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=262.1m direct=226.3m risk_int=0.022 max_depth=1.3m time=0.4ms wp=99 mean_turn=4.79deg
+  zone[0] peak=0.60 reach=25 : clear   (min_d=25.9m pen=0.0m)
+  zone[1] peak=0.60 reach=25 : clear   (min_d=48.4m pen=0.0m)
+  zone[2] peak=0.60 reach=25 : clear   (min_d=40.5m pen=0.0m)
+  zone[3] peak=0.60 reach=25 : clear   (min_d=35.2m pen=0.0m)
+  zone[4] peak=0.60 reach=25 : clear   (min_d=53.4m pen=0.0m)
+  zone[5] peak=0.60 reach=25 : THROUGH (min_d=23.7m pen=1.3m)
+  [OK]   DETOUR: risk_int < 5% of direct                 
+  [OK]   DETOUR: max_depth < 5m                          
+
+[S11_both_in_zones alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=93 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=226.7m direct=226.3m risk_int=14.047 max_depth=30.0m time=0.5ms wp=94 mean_turn=0.71deg
+  zone[0] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  zone[1] peak=0.70 reach=30 : THROUGH (min_d=0.0m pen=30.0m)
+  [OK]   APPROACH: length < 1.5× direct                 
+  [OK]   APPROACH: time < 18s (no timeout)               
+
+[S12_giant_middle_zone alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=87 recover_steps=15 (grad_fail=0 mono_rej=15) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=234.8m direct=160.0m risk_int=0.444 max_depth=6.5m time=0.4ms wp=88 mean_turn=11.89deg
+  zone[0] peak=0.60 reach=70 : THROUGH (min_d=63.5m pen=6.5m)
+  [OK]   TRANSIT: length < 2× direct                    
+  [OK]   TRANSIT: time < 18s (no timeout)                
+
+[S13_asymmetric_peaks alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=95 recover_steps=35 (grad_fail=0 mono_rej=35) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=287.2m direct=226.3m risk_int=0.052 max_depth=3.3m time=0.4ms wp=96 mean_turn=10.03deg
+  zone[0] peak=0.90 reach=40 : clear   (min_d=88.1m pen=0.0m)
+  zone[1] peak=0.30 reach=40 : THROUGH (min_d=36.7m pen=3.3m)
+  [OK]   DETOUR: risk_int < 5% of direct                 
+  [OK]   DETOUR: max_depth < 5m                          
+
+[S14_vertical_detour alpha=10 hw=1]
+[SDFManager] built (no obstacles): shape=(200,200,20) voxel=(1,1,1) static layer EMPTY (0 bytes), free_distance=200
+[GEODESIC] points=86 recover_steps=0 (grad_fail=0 mono_rej=0) reached_goal=yes
+  [OK]   A* returned a path                              
+  length=208.8m direct=160.0m risk_int=0.094 max_depth=2.5m time=0.4ms wp=87 mean_turn=2.65deg
+  zone[0] peak=0.70 reach=35 : clear   (min_d=59.5m pen=0.0m)
+  zone[1] peak=0.70 reach=35 : THROUGH (min_d=33.9m pen=1.1m)
+  zone[2] peak=0.70 reach=35 : clear   (min_d=62.0m pen=0.0m)
+  zone[3] peak=0.70 reach=35 : THROUGH (min_d=32.5m pen=2.5m)
+  [OK]   DETOUR: risk_int < 5% of direct                 
+  [OK]   DETOUR: max_depth < 5m                          
+
+==== risk_scenarios_test: passed=154 failed=0 ====
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/risk_scenarios.xml' with successful test
+<end of output>
+Test time =   0.47 sec
+----------------------------------------------------------
+Test Passed.
+"risk_scenarios" end time: Oct 10 08:42 UTC
+"risk_scenarios" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 10 08:42 UTC

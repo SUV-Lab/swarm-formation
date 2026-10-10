@@ -1,0 +1,4 @@
+[INFO] [1791621703.800196428] [focused_visual_fixture]: [DEBUG-PIPELINE] /debug/pipeline enabled (shortcut_points + inner_points per plan)
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(20,20,340) voxel=(1,1,0.1) free_distance=34
+[SDFManager] built EMPTY (no occupancy grid materialized): shape=(40,40,320) voxel=(1,1,0.1) free_distance=40
+recorded 40 live visual messages

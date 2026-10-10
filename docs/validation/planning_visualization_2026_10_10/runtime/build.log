@@ -1,0 +1,166 @@
+Starting >>> path_manager
+--- stderr: path_manager
+In file included from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/mission_plan.h:11,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/mission_planning_backend.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/mission_planner.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/mission_planner.cpp:1:
+/ws/install/path_optimizer/include/path_optimizer/poly_traj_utils.hpp: In member function ‘Eigen::MatrixXd poly_traj::MinJerkOpt::getInitConstrainPoints(int)’:
+/ws/install/path_optimizer/include/path_optimizer/poly_traj_utils.hpp:1224:24: warning: unused variable ‘t’ [-Wunused-variable]
+ 1224 |                 double t = 0;
+      |                        ^
+In file included from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/mission_plan.h:11,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/mission_planning_backend.h:3,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/mission_planner.h:4,
+                 from /ws/src/mmp_path_planning/src/path_manager/test/mission_planner_core_test.cpp:3:
+/ws/install/path_optimizer/include/path_optimizer/poly_traj_utils.hpp: In member function ‘Eigen::MatrixXd poly_traj::MinJerkOpt::getInitConstrainPoints(int)’:
+/ws/install/path_optimizer/include/path_optimizer/poly_traj_utils.hpp:1224:24: warning: unused variable ‘t’ [-Wunused-variable]
+ 1224 |                 double t = 0;
+      |                        ^
+/ws/src/mmp_path_planning/src/path_manager/src/planning_visualization_data.cpp: In function ‘path_manager::visualization::Prepared<visualization_msgs::msg::MarkerArray_<std::allocator<void> > > path_manager::visualization::makePipeline(const std::vector<Eigen::Matrix<double, 3, 1> >&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const Stamp&)’:
+/ws/src/mmp_path_planning/src/path_manager/src/planning_visualization_data.cpp:221:48: warning: ‘[DEBUG-PIPELINE] published ’ directive output truncated writing 27 bytes into a region of size 1 [-Wformat-truncation=]
+  221 | Prepared<visualization_msgs::msg::MarkerArray> makePipeline(
+      |                                                ^~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/planning_visualization_data.cpp:221:48: note: using the range [0, 18446744073709551615] for directive argument
+/ws/src/mmp_path_planning/src/path_manager/src/planning_visualization_data.cpp:221:48: note: using the range [0, 18446744073709551615] for directive argument
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/planning_visualization_data.h:5,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/planning_visualization_data.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 55 and 93 bytes into a destination of size 1
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/replan_fsm.cpp: In constructor ‘path_manager::ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr)’:
+/ws/src/mmp_path_planning/src/path_manager/src/replan_fsm.cpp:187:10: warning: variable ‘sensor_qos’ set but not used [-Wunused-but-set-variable]
+  187 |     auto sensor_qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
+      |          ^~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/replan_fsm.cpp: In member function ‘bool path_manager::ReplanFSM::planFromGlobalTraj(int)’:
+/ws/src/mmp_path_planning/src/path_manager/src/replan_fsm.cpp:509:40: warning: unused parameter ‘trial_times’ [-Wunused-parameter]
+  509 | bool ReplanFSM::planFromGlobalTraj(int trial_times) {
+      |                                    ~~~~^~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In member function ‘path_manager::PlanResult path_manager::SegmentChainPlanner::stitchedVerdictResult(path_manager::PlanningComputation&, const FlightVerdict&, path_manager::PlanResult) const’:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:3100:55: warning: ‘) — whole-flight evaluatio...’ directive output may be truncated writing 64 bytes into a region of size between 23 and 146 [-Wformat-truncation=]
+ 3100 |              "stitched flight is unflyable (%s%s%s%s%s) — whole-flight "
+      |                                                       ^~~~~~~~~~~~~~~~~~
+ 3101 |              "evaluation, which no per-solve audit performs",
+      |              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 95 and 218 bytes into a destination of size 176
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In lambda function:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:597:57: warning: ‘) — whole-flight evaluation’ directive output may be truncated writing 29 bytes into a region of size between 10 and 146 [-Wformat-truncation=]
+  597 |              "baseline flight is unflyable (%s%s%s%s%s%s) — whole-flight "
+      |                                                         ^~~~~~~~~~~~~~~~~~
+  598 |              "evaluation",
+      |              ~~~~~~~~~~~                                 
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 60 and 196 bytes into a destination of size 176
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In member function ‘path_manager::PlanResult path_manager::SegmentChainPlanner::planRouteFallback(path_manager::PlanningComputation&, const path_manager::StartHead&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const ego_planner::TailBoundary&, const std::vector<path_manager::SegmentChainPlanner::SegmentOverrides>&, const char*, bool)’:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:2144:30: warning: ‘, peak ’ directive output may be truncated writing 7 bytes into a region of size between 0 and 131 [-Wformat-truncation=]
+ 2144 |                  "viol %.1f%%, peak %.1f%%)",
+      |                              ^~~~~~~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 74 and 817 bytes into a destination of size 192
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp: In member function ‘path_manager::PlanResult path_manager::SegmentChainPlanner::planImpl(path_manager::PlanningComputation&, const path_manager::StartHead&, const std::vector<Eigen::Matrix<double, 3, 1> >&, const ego_planner::TailBoundary&)’:
+/ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:496:75: warning: ‘%s’ directive output may be truncated writing up to 122 bytes into a region of size between 95 and 208 [-Wformat-truncation=]
+  496 |                "multi-waypoint single-shot flight is unflyable (%s%s%s%s%s%s)",
+      |                                                                           ^~
+In file included from /usr/include/stdio.h:894,
+                 from /usr/include/c++/11/cstdio:42,
+                 from /usr/include/c++/11/ext/string_conversions.h:43,
+                 from /usr/include/c++/11/bits/basic_string.h:6608,
+                 from /usr/include/c++/11/string:55,
+                 from /usr/include/c++/11/bits/locale_classes.h:40,
+                 from /usr/include/c++/11/bits/ios_base.h:41,
+                 from /usr/include/c++/11/ios:42,
+                 from /usr/include/c++/11/istream:38,
+                 from /usr/include/c++/11/sstream:38,
+                 from /usr/include/c++/11/complex:45,
+                 from /usr/include/eigen3/Eigen/Core:50,
+                 from /usr/include/eigen3/Eigen/Dense:1,
+                 from /usr/include/eigen3/Eigen/Eigen:1,
+                 from /ws/src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h:7,
+                 from /ws/src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp:1:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:71:35: note: ‘__builtin___snprintf_chk’ output between 50 and 285 bytes into a destination of size 256
+   71 |   return __builtin___snprintf_chk (__s, __n, __USE_FORTIFY_LEVEL - 1,
+      |          ~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   72 |                                    __glibc_objsize (__s), __fmt,
+      |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   73 |                                    __va_arg_pack ());
+      |                                    ~~~~~~~~~~~~~~~~~
+/ws/src/mmp_path_planning/src/path_manager/test/chain_experiment_test.cpp:12:1: warning: multi-line comment [-Wcomment]
+   12 | //   ./install/path_manager/lib/path_manager/chain_experiment_test \
+      | ^
+---
+Finished <<< path_manager [1min 52s]
+
+Summary: 1 package finished [1min 52s]
+  1 package had stderr output: path_manager

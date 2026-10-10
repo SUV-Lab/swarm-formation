@@ -1,0 +1,146 @@
+Start testing: Oct 10 08:42 UTC
+----------------------------------------------------------
+1/2 Testing: route_cost_profile_test
+1/2 Test: route_cost_profile_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_optimizer/test_results/path_optimizer/route_cost_profile_test.xml" "--package-name" "path_optimizer" "--generate-result-on-success" "--command" "/ws/build/path_optimizer/route_cost_profile_test"
+Directory: /ws/build/path_optimizer
+"route_cost_profile_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_optimizer':
+ - /ws/build/path_optimizer/route_cost_profile_test
+[OK] a peak licenses the following pieces through the XY slope cone
+[OK] a later peak licenses climb anticipation before reaching that peak
+[OK] cone distance ignores vertical excursion and inputs remain unchanged
+[OK] explicit slope and headroom change only their expected cone limits
+[OK] absent and malformed references return explicit empty outcomes without queries
+[OK] cell-pitch swath samples along then across the chord and finds a one-cell ridge
+[OK] terrain functor state changes in the borrowed original callback
+[OK] default 2.3 pitch preserves floating-step positions without forcing the chord endpoint
+[OK] a coarse terrain cell retains the 2.3 maximum sampling pitch
+[OK] a present failed gradient provider prevents height fallback for every swath sample
+[OK] height fallback rejects infinity while a successful gradient retains legacy height handling
+[OK] a zero-XY chord uses the fixed positive-X chord direction once
+[OK] zone relief uses maximum XY proximity, rim fade and finite chord endpoints
+[OK] shadow queries retain original ordered zone indices and minimum ceiling across the swath
+[OK] one unshadowed in-reach sample cancels the entire piece lift and stops sampling
+[OK] negative infinity short-circuits before later zones at the same sample
+[OK] unreached and disabled zones cannot reuse an earlier shadow lift
+[OK] committed AGL at near, half-fade and far samples averages to one-quarter roughness
+[OK] terrain-following relief fades completely at the 2.5 AGL boundary
+[OK] a failed gradient counts in the denominator and never falls back to height
+[OK] height-only terrain enables zero roughness without calling the height provider
+[OK] ride cost can request roughness without creating time relief factors
+[OK] slope deadband and full-roughness saturation keep the expected bounds
+[OK] roughness uses the same maximum pitch and does not append an unsampled endpoint
+[OK] disabled, missing and short inputs return fresh inactive tables without queries
+[OK] terrain-aware profile construction leaves geometry and references unchanged
+[OK] mutating caller storage and live callback backing data cannot rewrite completed tables
+[OK] owned results outlive all inputs without retaining terrain callbacks
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_optimizer/test_results/path_optimizer/route_cost_profile_test.xml' with successful test
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"route_cost_profile_test" end time: Oct 10 08:42 UTC
+"route_cost_profile_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/2 Testing: optimizer_session_test
+2/2 Test: optimizer_session_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_optimizer/test_results/path_optimizer/optimizer_session_test.xml" "--package-name" "path_optimizer" "--generate-result-on-success" "--command" "/ws/build/path_optimizer/optimizer_session_test" "/ws/src/mmp_path_planning/src/path_optimizer/../path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_optimizer
+"optimizer_session_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_optimizer':
+ - /ws/build/path_optimizer/optimizer_session_test /ws/src/mmp_path_planning/src/path_optimizer/../path_manager/config/optimizer_params.yaml
+[OK] short routes refuse before any configured optimizer or callback is needed
+[OK] missing waypoint has a distinct empty refusal
+[OK] a valid request cannot enter a never-configured backend
+[OK] standalone parameter setup declares and honors the headroom override without PathManager
+[OK] owned API versus legacy settings+solve accepts the same real solve
+[OK] owned API versus legacy settings+solve has exactly equal seed/final coefficients, durations and envelope
+[OK] owned API versus legacy settings+solve has exactly equal edited route and leg attribution
+[OK] the complete caller request survives midpoint and lead-in insertion unchanged
+[OK] insertions preserve the authored edge's piece provenance
+[OK] non-finite route returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite waypoint returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite head position returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite head velocity returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite head acceleration returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite paired cap returns an empty malformed result with the untouched diagnostic route
+[OK] infinite paired cap returns an empty malformed result with the untouched diagnostic route
+[OK] zero seed speed returns an empty malformed result with the untouched diagnostic route
+[OK] negative seed speed returns an empty malformed result with the untouched diagnostic route
+[OK] NaN seed speed returns an empty malformed result with the untouched diagnostic route
+[OK] infinite seed speed returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite floor returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite ceiling returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite altitude weight returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite prescribed tail velocity returns an empty malformed result with the untouched diagnostic route
+[OK] non-finite prescribed tail acceleration returns an empty malformed result with the untouched diagnostic route
+[OK] malformed head with conflicting solve settings returns an empty malformed result with the untouched diagnostic route
+[OK] all malformed requests refuse before terrain or SDF providers are queried
+[OK] malformed admission preserves the backend's previously applied solve settings accepts the same real solve
+[OK] malformed admission preserves the backend's previously applied solve settings has exactly equal seed/final coefficients, durations and envelope
+[OK] malformed admission preserves the backend's previously applied solve settings has exactly equal edited route and leg attribution
+[OK] valid input recovers after all malformed refusals accepts the same real solve
+[OK] valid input recovers after all malformed refusals has exactly equal seed/final coefficients, durations and envelope
+[OK] valid input recovers after all malformed refusals has exactly equal edited route and leg attribution
+[OK] unprescribed non-finite tail fields remain ignored accepts the same real solve
+[OK] unprescribed non-finite tail fields remain ignored has exactly equal seed/final coefficients, durations and envelope
+[OK] unprescribed non-finite tail fields remain ignored has exactly equal edited route and leg attribution
+[OK] a prescribed velocity does not activate the ignored acceleration field accepts the same real solve
+[OK] a prescribed velocity does not activate the ignored acceleration field has exactly equal seed/final coefficients, durations and envelope
+[OK] a prescribed velocity does not activate the ignored acceleration field has exactly equal edited route and leg attribution
+[OK] a prescribed acceleration does not activate the ignored velocity field accepts the same real solve
+[OK] a prescribed acceleration does not activate the ignored velocity field has exactly equal seed/final coefficients, duratio[WARN] [1791621754.564025708] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] cap_ref size 3 != clean_path size 2 — falling back to scalar cap
+[WARN] [1791621754.564390609] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] cap_ref size 3 != clean_path size 2 — falling back to scalar cap
+[WARN] [1791621754.564672432] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] cap_ref size 1 != clean_path size 2 — falling back to scalar cap
+[WARN] [1791621754.564675137] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [LEG-POLICY] edge_leg size 2 != clean_path size 2 - 1 — route provenance dropped for this solve
+[WARN] [1791621754.564954095] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [ALT-CAP] cap_ref size 1 != clean_path size 2 — falling back to scalar cap
+[WARN] [1791621754.564956550] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [LEG-POLICY] edge_leg size 2 != clean_path size 2 - 1 — route provenance dropped for this solve
+[WARN] [1791621754.565665301] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [COLLISION] t=0.000 pos=(20.000, 30.000, 4.000) d=-1.000 inside obstacle
+[WARN] [1791621754.566110353] [optimizer_session_test]: [POLY_TRAJ_OPT][drone 0] [COLLISION] t=0.000 pos=(20.000, 30.000, 4.000) d=-1.000 inside obstacle
+ns and envelope
+[OK] a prescribed acceleration does not activate the ignored velocity field has exactly equal edited route and leg attribution
+[OK] mismatched non-finite cap values keep the scalar fallback accepts the same real solve
+[OK] mismatched non-finite cap values keep the scalar fallback has exactly equal seed/final coefficients, durations and envelope
+[OK] mismatched non-finite cap values keep the scalar fallback has exactly equal edited route and leg attribution
+[OK] mismatched cap/provenance fallback accepts the same real solve
+[OK] mismatched cap/provenance fallback has exactly equal seed/final coefficients, durations and envelope
+[OK] mismatched cap/provenance fallback has exactly equal edited route and leg attribution
+[OK] malformed edge attribution is dropped as one whole map
+[OK] environment retains callback objects after their source object is destroyed
+[OK] real collision refusal returns edited geometry but no partial seed, stale flight or envelope
+[OK] the real backend queries both borrowed SDF and owned terrain callback bindings
+[OK] risk-only rebinding retains the existing terrain and distance field
+[OK] an empty full environment releases old callback captures
+[OK] empty environment removes the rejected solve's bindings accepts the same real solve
+[OK] empty environment removes the rejected solve's bindings has exactly equal seed/final coefficients, durations and envelope
+[OK] empty environment removes the rejected solve's bindings has exactly equal edited route and leg attribution
+[OK] cleared terrain and SDF providers are never queried by subsequent solves
+[OK] risk binding owns copied zone geometry and invokes its ordered visibility callback
+[OK] empty risk binding clears prior zones and providers
+[OK] one configured session can solve a different mission after failures and environment replacements
+[OK] later successes, failures and environment updates cannot rewrite earlier results or input
+[OK] a failed parameter reconfiguration revokes the previous setup's readiness
+[OK] successful reconfiguration restores the session accepts the same real solve
+[OK] successful reconfiguration restores the session has exactly equal seed/final coefficients, durations and envelope
+[OK] successful reconfiguration restores the session has exactly equal edited route and leg attribution
+[OK] owned result remains evaluable after optimizer, terrain callbacks and nodes are destroyed
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_optimizer/test_results/path_optimizer/optimizer_session_test.xml' with successful test
+<end of output>
+Test time =   0.15 sec
+----------------------------------------------------------
+Test Passed.
+"optimizer_session_test" end time: Oct 10 08:42 UTC
+"optimizer_session_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 10 08:42 UTC

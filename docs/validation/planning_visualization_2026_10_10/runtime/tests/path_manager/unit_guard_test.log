@@ -1,0 +1,28 @@
+8/33 Testing: unit_guard_test
+8/33 Test: unit_guard_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/path_manager/test_results/path_manager/unit_guard_test.xml" "--package-name" "path_manager" "--generate-result-on-success" "--command" "/ws/build/path_manager/unit_guard_test" "/ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml"
+Directory: /ws/build/path_manager
+"unit_guard_test" start time: Oct 10 08:40 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/path_manager':
+ - /ws/build/path_manager/unit_guard_test /ws/src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+  [OK]   셋이 일치하면(전부 50) 조용히 지나간다 — 100 이 아니어도
+  [OK]   출하값 100 일치도 조용하다
+  [OK]   XY 만 어긋나면 콘솔 ERROR 가 난다
+  [OK]   ...어긋난 XY 값을 그대로 말한다
+  [OK]   ...멀쩡한 Z 값도 함께 보여 어느 쪽인지 구분된다
+  [OK]   Z 만 어긋나도 콘솔 ERROR 가 난다
+  [OK]   ...어긋난 Z 값을 그대로 말한다
+  [OK]   ...멀쩡한 XY 값도 함께 보여 어느 쪽인지 구분된다
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/path_manager/test_results/path_manager/unit_guard_test.xml' with successful test
+<end of output>
+Test time =   0.18 sec
+----------------------------------------------------------
+Test Passed.
+"unit_guard_test" end time: Oct 10 08:40 UTC
+"unit_guard_test" time elapsed: 00:00:00
+----------------------------------------------------------
+

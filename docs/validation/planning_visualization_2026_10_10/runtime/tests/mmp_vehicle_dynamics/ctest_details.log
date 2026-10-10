@@ -1,0 +1,281 @@
+Start testing: Oct 10 08:42 UTC
+----------------------------------------------------------
+1/6 Testing: flight_dynamics_test
+1/6 Test: flight_dynamics_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/flight_dynamics_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/flight_dynamics_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"flight_dynamics_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/flight_dynamics_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml
+Running main() from /opt/ros/humble/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 23 tests from 2 test suites.
+[----------] Global test environment set-up.
+[----------] 15 tests from FlightDynamics
+[ RUN      ] FlightDynamics.StraightLevelTrimIncludesGravity
+[       OK ] FlightDynamics.StraightLevelTrimIncludesGravity (0 ms)
+[ RUN      ] FlightDynamics.NearZeroLiftArcDoesNotTriggerBankLimit
+[       OK ] FlightDynamics.NearZeroLiftArcDoesNotTriggerBankLimit (0 ms)
+[ RUN      ] FlightDynamics.CoordinatedTurnMatchesClosedForm
+[       OK ] FlightDynamics.CoordinatedTurnMatchesClosedForm (0 ms)
+[ RUN      ] FlightDynamics.SteadyClimbMatchesEnergyBalance
+[       OK ] FlightDynamics.SteadyClimbMatchesEnergyBalance (0 ms)
+[ RUN      ] FlightDynamics.PenaltyGradientMatchesFiniteDifference
+[       OK ] FlightDynamics.PenaltyGradientMatchesFiniteDifference (0 ms)
+[ RUN      ] FlightDynamics.RepresentativeLevelCruiseIsInsideEnvelope
+[       OK ] FlightDynamics.RepresentativeLevelCruiseIsInsideEnvelope (0 ms)
+[ RUN      ] FlightDynamics.ConeBankEnforcesAtHighLift
+[       OK ] FlightDynamics.ConeBankEnforcesAtHighLift (0 ms)
+[ RUN      ] FlightDynamics.BankPenaltyBoundedNearZeroLift
+[       OK ] FlightDynamics.BankPenaltyBoundedNearZeroLift (0 ms)
+[ RUN      ] FlightDynamics.FlightPathComponentFormBoundedAndActive
+[       OK ] FlightDynamics.FlightPathComponentFormBoundedAndActive (0 ms)
+[ RUN      ] FlightDynamics.NoDeceleratingBarrierDuringInitialAcceleration
+[       OK ] FlightDynamics.NoDeceleratingBarrierDuringInitialAcceleration (0 ms)
+[ RUN      ] FlightDynamics.QFloorIsInertAboveStall
+[       OK ] FlightDynamics.QFloorIsInertAboveStall (0 ms)
+[ RUN      ] FlightDynamics.QFloorBlendBoundaries
+[       OK ] FlightDynamics.QFloorBlendBoundaries (0 ms)
+[ RUN      ] FlightDynamics.SubStallAeroIsBoundedAndSpeedFlat
+[       OK ] FlightDynamics.SubStallAeroIsBoundedAndSpeedFlat (0 ms)
+[ RUN      ] FlightDynamics.BankConeGuardsNegativeLiftPushover
+[       OK ] FlightDynamics.BankConeGuardsNegativeLiftPushover (0 ms)
+[ RUN      ] FlightDynamics.GentlePushoverStaysClean
+[       OK ] FlightDynamics.GentlePushoverStaysClean (0 ms)
+[----------] 15 tests from FlightDynamics (0 ms total)
+
+[----------] 8 tests from HandoffVerdict
+[ RUN      ] HandoffVerdict.MarginBackedFloorIsSpeedMinTimesOnePlusMargin
+[       OK ] HandoffVerdict.MarginBackedFloorIsSpeedMinTimesOnePlusMargin (0 ms)
+[ RUN      ] HandoffVerdict.KnownTrimPasses
+[       OK ] HandoffVerdict.KnownTrimPasses (0 ms)
+[ RUN      ] HandoffVerdict.SubActivationSpeedIsRefusedThoughUtilizationReadsZero
+[       OK ] HandoffVerdict.SubActivationSpeedIsRefusedThoughUtilizationReadsZero (0 ms)
+[ RUN      ] HandoffVerdict.SpeedBoundariesAreInclusiveWithinOneMicrometrePerSecond
+[       OK ] HandoffVerdict.SpeedBoundariesAreInclusiveWithinOneMicrometrePerSecond (0 ms)
+[ RUN      ] HandoffVerdict.FlightPathConeIsInclusiveExactlyAtTheLimit
+[       OK ] HandoffVerdict.FlightPathConeIsInclusiveExactlyAtTheLimit (0 ms)
+[ RUN      ] HandoffVerdict.NonFiniteComponentsAreNamedAndBeatOtherViolations
+[       OK ] HandoffVerdict.NonFiniteComponentsAreNamedAndBeatOtherViolations (0 ms)
+[ RUN      ] HandoffVerdict.ThrustExceededIsReportedByName
+[       OK ] HandoffVerdict.ThrustExceededIsReportedByName (0 ms)
+[ RUN      ] HandoffVerdict.DragPolarIsOneDefinitionSharedWithTheModel
+[       OK ] HandoffVerdict.DragPolarIsOneDefinitionSharedWithTheModel (0 ms)
+[----------] 8 tests from HandoffVerdict (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 23 tests from 2 test suites ran. (0 ms total)
+[  PASSED  ] 23 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml'
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"flight_dynamics_test" end time: Oct 10 08:42 UTC
+"flight_dynamics_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/6 Testing: vehicle_model_test
+2/6 Test: vehicle_model_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/vehicle_model_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/vehicle_model_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"vehicle_model_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/vehicle_model_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml
+Running main() from /opt/ros/humble/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 3 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 3 tests from VehicleModel
+[ RUN      ] VehicleModel.FixedWingDelegationPreservesEveryNumericalOutput
+[       OK ] VehicleModel.FixedWingDelegationPreservesEveryNumericalOutput (0 ms)
+[ RUN      ] VehicleModel.GeometryUsesVehicleForcesAndNotOnlySpeedLimits
+[       OK ] VehicleModel.GeometryUsesVehicleForcesAndNotOnlySpeedLimits (0 ms)
+[ RUN      ] VehicleModel.OwnedImmutableParametersAndExplicitTransitionCapability
+[       OK ] VehicleModel.OwnedImmutableParametersAndExplicitTransitionCapability (0 ms)
+[----------] 3 tests from VehicleModel (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 3 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 3 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml'
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"vehicle_model_test" end time: Oct 10 08:42 UTC
+"vehicle_model_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/6 Testing: point_mass_eom_test
+3/6 Test: point_mass_eom_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/point_mass_eom_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/point_mass_eom_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"point_mass_eom_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/point_mass_eom_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml
+[==========] Running 7 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 7 tests from PointMassEom
+[ RUN      ] PointMassEom.VelocityComponents
+[       OK ] PointMassEom.VelocityComponents (0 ms)
+[ RUN      ] PointMassEom.LevelSteadyFlightAllRatesZero
+[       OK ] PointMassEom.LevelSteadyFlightAllRatesZero (0 ms)
+[ RUN      ] PointMassEom.SteadyTurnHeadingRate
+[       OK ] PointMassEom.SteadyTurnHeadingRate (0 ms)
+[ RUN      ] PointMassEom.SteadyClimbRatesZero
+[       OK ] PointMassEom.SteadyClimbRatesZero (0 ms)
+[ RUN      ] PointMassEom.ForceClosureUnsaturated
+[       OK ] PointMassEom.ForceClosureUnsaturated (0 ms)
+[ RUN      ] PointMassEom.SaturationIsExplicit
+[       OK ] PointMassEom.SaturationIsExplicit (0 ms)
+[ RUN      ] PointMassEom.RepresentabilityIsExplicit
+[       OK ] PointMassEom.RepresentabilityIsExplicit (0 ms)
+[----------] 7 tests from PointMassEom (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 7 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 7 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml'
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"point_mass_eom_test" end time: Oct 10 08:42 UTC
+"point_mass_eom_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/6 Testing: trajectory_simulation_test
+4/6 Test: trajectory_simulation_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml" "--package-name" "mmp_vehicle_dynamics" "--output-file" "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/trajectory_simulation_test.txt" "--command" "/ws/build/mmp_vehicle_dynamics/trajectory_simulation_test" "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml"
+Directory: /ws/build/mmp_vehicle_dynamics
+"trajectory_simulation_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /ws/build/mmp_vehicle_dynamics/trajectory_simulation_test --gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml
+Running main() from /opt/ros/humble/src/gtest_vendor/src/gtest_main.cc
+[==========] Running 8 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 8 tests from TrajectorySimulation
+[ RUN      ] TrajectorySimulation.InjectedModelAndControllerDrivePhysicalHistory
+[       OK ] TrajectorySimulation.InjectedModelAndControllerDrivePhysicalHistory (0 ms)
+[ RUN      ] TrajectorySimulation.ChunkBoundariesDoNotChangeStateOrMetrics
+[       OK ] TrajectorySimulation.ChunkBoundariesDoNotChangeStateOrMetrics (0 ms)
+[ RUN      ] TrajectorySimulation.BorrowedPlaybackAndOwnedResultHaveDistinctLifetimes
+[       OK ] TrajectorySimulation.BorrowedPlaybackAndOwnedResultHaveDistinctLifetimes (0 ms)
+[ RUN      ] TrajectorySimulation.UnrepresentableStepsAreExcludedOnlyFromAggregateAudit
+[       OK ] TrajectorySimulation.UnrepresentableStepsAreExcludedOnlyFromAggregateAudit (0 ms)
+[ RUN      ] TrajectorySimulation.ExplicitCancellationRetainsOwnedPartialHistory
+[       OK ] TrajectorySimulation.ExplicitCancellationRetainsOwnedPartialHistory (0 ms)
+[ RUN      ] TrajectorySimulation.SamplingKeepsFloatValuesAndPreviousPieceAtSeam
+[       OK ] TrajectorySimulation.SamplingKeepsFloatValuesAndPreviousPieceAtSeam (0 ms)
+[ RUN      ] TrajectorySimulation.InvalidInputIsRejectedBeforeStrategyCalls
+[       OK ] TrajectorySimulation.InvalidInputIsRejectedBeforeStrategyCalls (0 ms)
+[ RUN      ] TrajectorySimulation.StrategyExceptionsPropagateWithoutInventingCompletion
+[       OK ] TrajectorySimulation.StrategyExceptionsPropagateWithoutInventingCompletion (0 ms)
+[----------] 8 tests from TrajectorySimulation (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 8 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 8 tests.
+-- run_test.py: return code 0
+-- run_test.py: inject classname prefix into gtest result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml'
+-- run_test.py: verify result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml'
+<end of output>
+Test time =   0.03 sec
+----------------------------------------------------------
+Test Passed.
+"trajectory_simulation_test" end time: Oct 10 08:42 UTC
+"trajectory_simulation_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/6 Testing: python_binding_test
+5/6 Test: python_binding_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/python_binding_test.xml" "--package-name" "mmp_vehicle_dynamics" "--generate-result-on-success" "--env" "PYTHONPATH=/ws/install/mmp_vehicle_dynamics/local/lib/python3.10/dist-packages" "OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml" "--command" "/usr/bin/python3" "/ws/src/mmp_vehicle_dynamics/test/python_binding_test.py"
+Directory: /ws/build/mmp_vehicle_dynamics
+"python_binding_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: extra environment variables:
+ - OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+ - PYTHONPATH=/ws/install/mmp_vehicle_dynamics/local/lib/python3.10/dist-packages
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /usr/bin/python3 /ws/src/mmp_vehicle_dynamics/test/python_binding_test.py
+[OK]   export: Parameters
+[OK]   export: Evaluation
+[OK]   export: CostGradient
+[OK]   export: EnvelopeLimit
+[OK]   export: BANK_MEANINGFUL_LOAD_FACTOR
+[OK]   export: BANK_NEGATIVE_NZ
+[OK]   export: parameters_are_valid
+[OK]   export: air_density
+[OK]   export: evaluate_inverse_dynamics
+[OK]   export: flight_envelope_penalty
+[OK]   export: envelope_utilization
+[OK]   export: is_within_envelope
+[OK]   export: envelope_limit_name
+[OK]   export: parameters_from_ros
+[OK]   export: load_planner_parameters
+[OK]   export: FrameUnits
+[OK]   default Parameters are valid
+[OK]   cruise 160 m/s sits inside the envelope
+[OK]   cruise thrust between limits
+[OK]   level cruise load factor ~1
+[OK]   sub-stall 80 m/s flagged as minimum-speed violation
+[OK]   sub-stall penalty positive, gradient favors speeding up
+[OK]   planner-yaml Parameters are valid
+[OK]   margin follows the LIVE config (0.08, not the header 0.02)
+[OK]   speed_min follows the live config (122)
+[OK]   bank limit deg->rad conversion
+[OK]   frame units read from config (100/100 today)
+[OK]   parameters_from_ros accepts bare suffixes
+==== python_binding_test: failures=0 ====
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/python_binding_test.xml' with successful test
+<end of output>
+Test time =   0.12 sec
+----------------------------------------------------------
+Test Passed.
+"python_binding_test" end time: Oct 10 08:42 UTC
+"python_binding_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/6 Testing: config_snapshot_test
+6/6 Test: config_snapshot_test
+Command: "/usr/bin/python3" "-u" "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py" "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/config_snapshot_test.xml" "--package-name" "mmp_vehicle_dynamics" "--generate-result-on-success" "--env" "OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml" "--command" "/usr/bin/python3" "/ws/src/mmp_vehicle_dynamics/test/config_snapshot_test.py"
+Directory: /ws/build/mmp_vehicle_dynamics
+"config_snapshot_test" start time: Oct 10 08:42 UTC
+Output:
+----------------------------------------------------------
+-- run_test.py: extra environment variables:
+ - OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml
+-- run_test.py: invoking following command in '/ws/build/mmp_vehicle_dynamics':
+ - /usr/bin/python3 /ws/src/mmp_vehicle_dynamics/test/config_snapshot_test.py
+  snapshot 19 optimization/* scalars  authority 56
+  [OK]   all 19 snapshot values equal the authority
+PASS: 0 failed check(s)
+-- run_test.py: return code 0
+-- run_test.py: generate result file '/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/config_snapshot_test.xml' with successful test
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"config_snapshot_test" end time: Oct 10 08:42 UTC
+"config_snapshot_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 10 08:42 UTC
+
+gtest =   0.12 sec*proc
+

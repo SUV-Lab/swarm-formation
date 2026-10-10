@@ -1,0 +1,402 @@
+{
+  "backtraceGraph" : 
+  {
+    "commands" : 
+    [
+      "add_test",
+      "ament_add_test",
+      "ament_add_gtest_test",
+      "ament_add_gtest"
+    ],
+    "files" : 
+    [
+      "/opt/ros/humble/share/ament_cmake_test/cmake/ament_add_test.cmake",
+      "/opt/ros/humble/share/ament_cmake_gtest/cmake/ament_add_gtest_test.cmake",
+      "/opt/ros/humble/share/ament_cmake_gtest/cmake/ament_add_gtest.cmake",
+      "/ws/src/mmp_vehicle_dynamics/CMakeLists.txt"
+    ],
+    "nodes" : 
+    [
+      {
+        "file" : 3
+      },
+      {
+        "command" : 3,
+        "file" : 3,
+        "line" : 99,
+        "parent" : 0
+      },
+      {
+        "command" : 2,
+        "file" : 2,
+        "line" : 93,
+        "parent" : 1
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 86,
+        "parent" : 2
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 3
+      },
+      {
+        "file" : 3
+      },
+      {
+        "command" : 3,
+        "file" : 3,
+        "line" : 101,
+        "parent" : 5
+      },
+      {
+        "command" : 2,
+        "file" : 2,
+        "line" : 93,
+        "parent" : 6
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 86,
+        "parent" : 7
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 8
+      },
+      {
+        "file" : 3
+      },
+      {
+        "command" : 3,
+        "file" : 3,
+        "line" : 106,
+        "parent" : 10
+      },
+      {
+        "command" : 2,
+        "file" : 2,
+        "line" : 93,
+        "parent" : 11
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 86,
+        "parent" : 12
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 13
+      },
+      {
+        "file" : 3
+      },
+      {
+        "command" : 3,
+        "file" : 3,
+        "line" : 108,
+        "parent" : 15
+      },
+      {
+        "command" : 2,
+        "file" : 2,
+        "line" : 93,
+        "parent" : 16
+      },
+      {
+        "command" : 1,
+        "file" : 1,
+        "line" : 86,
+        "parent" : 17
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 18
+      },
+      {
+        "file" : 3
+      },
+      {
+        "command" : 1,
+        "file" : 3,
+        "line" : 113,
+        "parent" : 20
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 21
+      },
+      {
+        "file" : 3
+      },
+      {
+        "command" : 1,
+        "file" : 3,
+        "line" : 125,
+        "parent" : 23
+      },
+      {
+        "command" : 0,
+        "file" : 0,
+        "line" : 125,
+        "parent" : 24
+      }
+    ]
+  },
+  "kind" : "ctestInfo",
+  "tests" : 
+  [
+    {
+      "backtrace" : 4,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml",
+        "--package-name",
+        "mmp_vehicle_dynamics",
+        "--output-file",
+        "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/flight_dynamics_test.txt",
+        "--command",
+        "/ws/build/mmp_vehicle_dynamics/flight_dynamics_test",
+        "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/flight_dynamics_test.gtest.xml"
+      ],
+      "name" : "flight_dynamics_test",
+      "properties" : 
+      [
+        {
+          "name" : "LABELS",
+          "value" : 
+          [
+            "gtest"
+          ]
+        },
+        {
+          "name" : "REQUIRED_FILES",
+          "value" : 
+          [
+            "/ws/build/mmp_vehicle_dynamics/flight_dynamics_test"
+          ]
+        },
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/mmp_vehicle_dynamics"
+        }
+      ]
+    },
+    {
+      "backtrace" : 9,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml",
+        "--package-name",
+        "mmp_vehicle_dynamics",
+        "--output-file",
+        "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/vehicle_model_test.txt",
+        "--command",
+        "/ws/build/mmp_vehicle_dynamics/vehicle_model_test",
+        "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/vehicle_model_test.gtest.xml"
+      ],
+      "name" : "vehicle_model_test",
+      "properties" : 
+      [
+        {
+          "name" : "LABELS",
+          "value" : 
+          [
+            "gtest"
+          ]
+        },
+        {
+          "name" : "REQUIRED_FILES",
+          "value" : 
+          [
+            "/ws/build/mmp_vehicle_dynamics/vehicle_model_test"
+          ]
+        },
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/mmp_vehicle_dynamics"
+        }
+      ]
+    },
+    {
+      "backtrace" : 14,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml",
+        "--package-name",
+        "mmp_vehicle_dynamics",
+        "--output-file",
+        "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/point_mass_eom_test.txt",
+        "--command",
+        "/ws/build/mmp_vehicle_dynamics/point_mass_eom_test",
+        "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/point_mass_eom_test.gtest.xml"
+      ],
+      "name" : "point_mass_eom_test",
+      "properties" : 
+      [
+        {
+          "name" : "LABELS",
+          "value" : 
+          [
+            "gtest"
+          ]
+        },
+        {
+          "name" : "REQUIRED_FILES",
+          "value" : 
+          [
+            "/ws/build/mmp_vehicle_dynamics/point_mass_eom_test"
+          ]
+        },
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/mmp_vehicle_dynamics"
+        }
+      ]
+    },
+    {
+      "backtrace" : 19,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml",
+        "--package-name",
+        "mmp_vehicle_dynamics",
+        "--output-file",
+        "/ws/build/mmp_vehicle_dynamics/ament_cmake_gtest/trajectory_simulation_test.txt",
+        "--command",
+        "/ws/build/mmp_vehicle_dynamics/trajectory_simulation_test",
+        "--gtest_output=xml:/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/trajectory_simulation_test.gtest.xml"
+      ],
+      "name" : "trajectory_simulation_test",
+      "properties" : 
+      [
+        {
+          "name" : "LABELS",
+          "value" : 
+          [
+            "gtest"
+          ]
+        },
+        {
+          "name" : "REQUIRED_FILES",
+          "value" : 
+          [
+            "/ws/build/mmp_vehicle_dynamics/trajectory_simulation_test"
+          ]
+        },
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/mmp_vehicle_dynamics"
+        }
+      ]
+    },
+    {
+      "backtrace" : 22,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/python_binding_test.xml",
+        "--package-name",
+        "mmp_vehicle_dynamics",
+        "--generate-result-on-success",
+        "--env",
+        "PYTHONPATH=/ws/install/mmp_vehicle_dynamics/local/lib/python3.10/dist-packages",
+        "OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml",
+        "--command",
+        "/usr/bin/python3",
+        "/ws/src/mmp_vehicle_dynamics/test/python_binding_test.py"
+      ],
+      "name" : "python_binding_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/mmp_vehicle_dynamics"
+        }
+      ]
+    },
+    {
+      "backtrace" : 25,
+      "command" : 
+      [
+        "/usr/bin/python3",
+        "-u",
+        "/opt/ros/humble/share/ament_cmake_test/cmake/run_test.py",
+        "/ws/build/mmp_vehicle_dynamics/test_results/mmp_vehicle_dynamics/config_snapshot_test.xml",
+        "--package-name",
+        "mmp_vehicle_dynamics",
+        "--generate-result-on-success",
+        "--env",
+        "OPTIMIZER_YAML=/ws/src/mmp_vehicle_dynamics/../mmp_path_planning/src/path_manager/config/optimizer_params.yaml",
+        "--command",
+        "/usr/bin/python3",
+        "/ws/src/mmp_vehicle_dynamics/test/config_snapshot_test.py"
+      ],
+      "name" : "config_snapshot_test",
+      "properties" : 
+      [
+        {
+          "name" : "TIMEOUT",
+          "value" : 60.0
+        },
+        {
+          "name" : "WORKING_DIRECTORY",
+          "value" : "/ws/build/mmp_vehicle_dynamics"
+        }
+      ]
+    }
+  ],
+  "version" : 
+  {
+    "major" : 1,
+    "minor" : 0
+  }
+}
