@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -117,6 +118,43 @@ int main(int argc, char **argv)
                 (request.path.back() - request.goal_pos).norm() == 0.0,
             "optimizer midpoint insertion leaves the caller's request unchanged");
 
+      // Reject a full manager profile at the independent-worker boundary.
+      // A valid key before the unsupported keys must not partially apply.
+      const std::vector<std::string> profile_keys = {
+          "optimization/weight_time", "optimization/obstacle_clearance",
+          "optimization/alt_cap_headroom"};
+      const auto pristine_parameters = node->get_parameters(profile_keys);
+      size_t parameter_writes = 0;
+      const auto parameter_probe = node->add_on_set_parameters_callback(
+          [&](const std::vector<rclcpp::Parameter> &) {
+            ++parameter_writes;
+            rcl_interfaces::msg::SetParametersResult accepted;
+            accepted.successful = true;
+            return accepted;
+          });
+      bool unsupported_rejected = false;
+      try {
+        manager.makeConfiguredOptimizer({
+            rclcpp::Parameter("optimization/weight_time", 1234.0),
+            rclcpp::Parameter("optimization/obstacle_clearance", 8.0),
+            rclcpp::Parameter("optimization/alt_cap_headroom", 9.0)});
+      } catch (const std::invalid_argument &error) {
+        unsupported_rejected = std::string(error.what()).find(
+            "optimization/obstacle_clearance") != std::string::npos;
+      }
+      check(unsupported_rejected,
+            "worker rejects shared clearance override with the unsupported key");
+      const auto after_rejection = manager.sliceSolveConfig();
+      check(after_rejection.max_vel == config.max_vel &&
+                after_rejection.alt_cap_headroom == config.alt_cap_headroom &&
+                after_rejection.alt_floor_headroom == config.alt_floor_headroom &&
+                after_rejection.ground_height == config.ground_height &&
+                after_rejection.weight_altitude == config.weight_altitude,
+            "rejected worker profile leaves every slice setting unchanged");
+      check(parameter_writes == 0 &&
+                node->get_parameters(profile_keys) == pristine_parameters,
+            "rejected worker profile makes no transient or retained ROS writes");
+
       auto compatibility_optimizer = manager.makeConfiguredOptimizer();
       poly_traj::Trajectory compatibility;
       const bool compatible = manager.solveSlice(
@@ -124,7 +162,7 @@ int main(int argc, char **argv)
           request.head_pos, request.head_vel, request.head_acc, request.goal_pos,
           request.tail, request.suppress_crossing_exempt, &compatibility);
       check(compatible && coefficients(compatibility) == retained_coefficients,
-            "existing bool adapter returns identical durations and coefficients");
+            "real solve after rejected profile preserves exact durations and coefficients");
       check(!manager.solveSlice(*compatibility_optimizer, {}, {},
                                  request.head_pos, request.head_vel,
                                  request.head_acc, request.goal_pos, request.tail,

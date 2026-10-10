@@ -504,6 +504,10 @@ namespace ego_planner
     ~PolyTrajOptimizer() = default;
 
     void setParam(const rclcpp::Node::SharedPtr &node);
+    // Configure the same solver from local overrides without temporarily
+    // mutating the shared ROS node. Existing defaults and normalization apply.
+    void setParam(const rclcpp::Node::SharedPtr &node,
+                  const std::vector<rclcpp::Parameter> &parameter_overrides);
     // Serial setup only. An explicit immutable model survives setParam and
     // is the physical authority; ROS dynamics_* physical overrides do not
     // replace it. Null restores the current ROS fixed-wing parameter model.

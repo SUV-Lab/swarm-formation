@@ -107,6 +107,13 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/../path_manager/config/optimizer_params.yaml
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 120)
+  add_executable(optimizer_configuration_test test/optimizer_configuration_test.cpp)
+  target_link_libraries(optimizer_configuration_test ${PROJECT_NAME}_lib)
+  ament_add_test(optimizer_configuration_test
+    COMMAND $<TARGET_FILE:optimizer_configuration_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/../path_manager/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

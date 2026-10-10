@@ -1,3 +1,4 @@
+#include "path_optimizer/ros_parameter_view.h"
 #include "path_optimizer/poly_traj_optimizer.h"
 #include "path_optimizer/route_cost_profile.h"
 #include "path_planner/risk_shape.h"
@@ -3885,8 +3886,16 @@ namespace ego_planner
 
   void PolyTrajOptimizer::setParam(const rclcpp::Node::SharedPtr &node)
   {
+    setParam(node, {});
+  }
+
+  void PolyTrajOptimizer::setParam(
+      const rclcpp::Node::SharedPtr &node,
+      const std::vector<rclcpp::Parameter> &parameter_overrides)
+  {
     parameters_initialized_ = false;
     node_ = node;
+    const RosParameterView parameters(node_, parameter_overrides);
     // Re-entrant declare: setParam runs AGAIN on every forced optimizer
     // re-init ([CHAIN] per-segment requirement overrides re-read the whole
     // parameter surface per segment), and rclcpp throws on re-declaring an
@@ -3895,7 +3904,7 @@ namespace ego_planner
       if (!node_->has_parameter(name)) node_->declare_parameter(name, def);
     };
     declare_once("optimization/constrain_points_perPiece", 3);
-    node_->get_parameter("optimization/constrain_points_perPiece", cps_num_prePiece_);
+    parameters.get_parameter("optimization/constrain_points_perPiece", cps_num_prePiece_);
     // K = cps_num_prePiece_ is the per-piece integration divisor in
     // addPVAGradCost2CT (step = T1/K, alpha = j/K, cost += .../K) and the
     // constraint-point count in getInitConstrainPoints (pts sized N*K+1, then
@@ -3913,7 +3922,7 @@ namespace ego_planner
     // [RISK-PAR] 0 = all cores, 1 = serial inline (pre-parallel code path),
     // n > 1 = capped. Results are bit-identical for every setting.
     declare_once("optimization/risk_parallel_threads", 0);
-    node_->get_parameter("optimization/risk_parallel_threads",
+    parameters.get_parameter("optimization/risk_parallel_threads",
                          risk_parallel_threads_);
     if (risk_parallel_threads_ < 0) risk_parallel_threads_ = 0;
 
@@ -3923,13 +3932,13 @@ namespace ego_planner
     // it) and unreadable (declared with the wrong type) are different facts
     // and are reported differently.
     const auto read_bool = [&](const char *name, bool &out) {
-      if (!node_->has_parameter(name)) {
+      if (!parameters.has_parameter(name)) {
         RCLCPP_WARN(node_->get_logger(),
                     "[PARAM] %s is not declared; keeping the compiled "
                     "default %s", name, out ? "true" : "false");
         return;
       }
-      if (!node_->get_parameter(name, out)) {
+      if (!parameters.get_parameter(name, out)) {
         RCLCPP_ERROR(node_->get_logger(),
                      "[PARAM] %s is declared but could not be read; keeping "
                      "%s", name, out ? "true" : "false");
@@ -3952,41 +3961,41 @@ namespace ego_planner
         RCLCPP_INFO(node_->get_logger(), "Debug logging: disabled (using RCLCPP only)");
     }
     declare_once("optimization/weight_obstacle", 1000.0);
-    node_->get_parameter("optimization/weight_obstacle", wei_obs_);
+    parameters.get_parameter("optimization/weight_obstacle", wei_obs_);
     // Crash-plane barrier: must dominate the strongest soft gradient
     // (wei_dynamics_ * penalty_speed = 50000 in the live config) — see the
     // ground half-space in sdfGradCostP.
     declare_once("optimization/weight_ground_barrier", 250000.0);
-    node_->get_parameter("optimization/weight_ground_barrier", wei_ground_barrier_);
+    parameters.get_parameter("optimization/weight_ground_barrier", wei_ground_barrier_);
     declare_once("optimization/weight_swarm", 0.0);
-    node_->get_parameter("optimization/weight_swarm", wei_swarm_);
+    parameters.get_parameter("optimization/weight_swarm", wei_swarm_);
     declare_once("optimization/weight_feasibility", 1.0);
-    node_->get_parameter("optimization/weight_feasibility", wei_feas_);
+    parameters.get_parameter("optimization/weight_feasibility", wei_feas_);
     declare_once("optimization/weight_sqrvariance", 1.0);
-    node_->get_parameter("optimization/weight_sqrvariance", wei_sqrvar_);
+    parameters.get_parameter("optimization/weight_sqrvariance", wei_sqrvar_);
     declare_once("optimization/weight_time", 0.0);
-    node_->get_parameter("optimization/weight_time", wei_time_);
+    parameters.get_parameter("optimization/weight_time", wei_time_);
     declare_once("optimization/weight_formation", 0.0);
-    node_->get_parameter("optimization/weight_formation", wei_formation_);
+    parameters.get_parameter("optimization/weight_formation", wei_formation_);
     wei_formation_base_ = wei_formation_;  // Store base weight for adaptive adjustment
 
     declare_once("optimization/weight_smoothness", 1.0);
-    node_->get_parameter("optimization/weight_smoothness", wei_smooth_);
+    parameters.get_parameter("optimization/weight_smoothness", wei_smooth_);
     declare_once("optimization/weight_Risk", 0.0);
-    node_->get_parameter("optimization/weight_Risk", wei_risk_);
+    parameters.get_parameter("optimization/weight_Risk", wei_risk_);
     declare_once("optimization/weight_Risk_barrier", 0.0);
-    node_->get_parameter("optimization/weight_Risk_barrier", wei_risk_barrier_);
+    parameters.get_parameter("optimization/weight_Risk_barrier", wei_risk_barrier_);
 
     declare_once("optimization/dynamics_enable", true);
-    node_->get_parameter("optimization/dynamics_enable", dynamics_requested_);
+    parameters.get_parameter("optimization/dynamics_enable", dynamics_requested_);
     dynamics_enable_ = dynamics_requested_;
     declare_once("optimization/weight_dynamics", 0.0);
-    node_->get_parameter("optimization/weight_dynamics", wei_dynamics_);
+    parameters.get_parameter("optimization/weight_dynamics", wei_dynamics_);
     declare_once("optimization/dynamics_unit_xy_m", 100.0);
-    node_->get_parameter("optimization/dynamics_unit_xy_m", dyn_unit_xy_m_);
+    parameters.get_parameter("optimization/dynamics_unit_xy_m", dyn_unit_xy_m_);
     declare_once("optimization/dynamics_unit_z_m", 100.0);
-    node_->get_parameter("optimization/dynamics_unit_z_m", dyn_unit_z_m_);
-    auto dynamics_param = [this](const char *name, double default_value,
+    parameters.get_parameter("optimization/dynamics_unit_z_m", dyn_unit_z_m_);
+    auto dynamics_param = [this, &parameters](const char *name, double default_value,
                                  double &value) {
       // Guarded: path_manager's initSearcher declares
       // optimization/dynamics_flight_path_max_deg first (geodesic slope cap
@@ -3994,7 +4003,7 @@ namespace ego_planner
       // throw ParameterAlreadyDeclaredException on the first plan.
       if (!node_->has_parameter(name))
         node_->declare_parameter(name, default_value);
-      node_->get_parameter(name, value);
+      parameters.get_parameter(name, value);
     };
     dynamics_param("optimization/dynamics_mass_kg", 1300.0,
                    dynamics_params_.mass_kg);
@@ -4106,71 +4115,71 @@ namespace ego_planner
     }
 
     declare_once("optimization/swarm_clearance", 0.5);
-    node_->get_parameter("optimization/swarm_clearance", swarm_clearance_);
+    parameters.get_parameter("optimization/swarm_clearance", swarm_clearance_);
     declare_once("optimization/max_vel", 1.0);
-    node_->get_parameter("optimization/max_vel", max_vel_);
+    parameters.get_parameter("optimization/max_vel", max_vel_);
     declare_once("optimization/max_acc", 1.0);
-    node_->get_parameter("optimization/max_acc", max_acc_);
+    parameters.get_parameter("optimization/max_acc", max_acc_);
     // Stall floor (frame units/s); 0 disables. See feasibilityGradCostV.
     declare_once("optimization/min_vel", 0.0);
-    node_->get_parameter("optimization/min_vel", min_vel_);
+    parameters.get_parameter("optimization/min_vel", min_vel_);
 
     // Initial-velocity lead-in horizon in seconds (0 = disabled/legacy behavior).
     declare_once("optimization/lead_in_time", 1.0);
-    node_->get_parameter("optimization/lead_in_time", lead_in_time_);
+    parameters.get_parameter("optimization/lead_in_time", lead_in_time_);
 
     // Post-convergence per-term vertical-force attribution sweep (heavy log,
     // one-shot on the final trajectory). Turn on to diagnose "trajectory
     // climbs over open water" humps: it names the lifting term or proves the
     // hump is intrinsic min-jerk overshoot. Default OFF.
     declare_once("optimization/diag_vertical", false);
-    node_->get_parameter("optimization/diag_vertical", diag_vertical_);
+    parameters.get_parameter("optimization/diag_vertical", diag_vertical_);
 
     // Arc-varying cap: cone slope + headroom. PathManager may already have
     // declared the shared headroom; standalone optimizer users must also
     // have their YAML/NodeOptions override declared and consumed here.
     declare_once("optimization/alt_cap_slope", 0.10);
-    node_->get_parameter("optimization/alt_cap_slope", alt_cap_slope_);
+    parameters.get_parameter("optimization/alt_cap_slope", alt_cap_slope_);
     declare_once("optimization/alt_cap_headroom", 0.4);
-    node_->get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_opt_);
+    parameters.get_parameter("optimization/alt_cap_headroom", alt_cap_headroom_opt_);
     // [ZONE-RELAX] Stage 3: zone-proximity cap relaxation (0 = off/legacy).
     declare_once("optimization/alt_cap_zone_relax", 0.0);
-    node_->get_parameter("optimization/alt_cap_zone_relax", alt_cap_zone_relax_);
+    parameters.get_parameter("optimization/alt_cap_zone_relax", alt_cap_zone_relax_);
     // [OCCLUSION-CAP] H3: visibility-aware cap, occlusion margin below the
     // LOS shadow ceiling in z-units (<=0 = off/legacy).
     declare_once("optimization/alt_cap_shadow_margin", 0.0);
-    node_->get_parameter("optimization/alt_cap_shadow_margin", alt_cap_shadow_margin_);
+    parameters.get_parameter("optimization/alt_cap_shadow_margin", alt_cap_shadow_margin_);
     // [RIDE] H1: per-piece time-weight relief over rough terrain (0 = off).
     declare_once("optimization/time_rough_relief", 0.0);
-    node_->get_parameter("optimization/time_rough_relief", time_rough_relief_);
+    parameters.get_parameter("optimization/time_rough_relief", time_rough_relief_);
     time_rough_relief_ = std::clamp(time_rough_relief_, 0.0, 0.9);
     // [RIDE] H1: direct speed price over rough ground (0 = off).
     declare_once("optimization/weight_ride", 0.0);
-    node_->get_parameter("optimization/weight_ride", wei_ride_);
+    parameters.get_parameter("optimization/weight_ride", wei_ride_);
     // [H5] bounded-z warp (0/false = off, byte-identical).
     declare_once("optimization/h5_bounded_z", false);
-    node_->get_parameter("optimization/h5_bounded_z", h5_bounded_z_);
+    parameters.get_parameter("optimization/h5_bounded_z", h5_bounded_z_);
     declare_once("optimization/h5_min_width", 0.10);
-    node_->get_parameter("optimization/h5_min_width", h5_min_width_);
+    parameters.get_parameter("optimization/h5_min_width", h5_min_width_);
     declare_once("optimization/h5_seed_margin", 0.05);
-    node_->get_parameter("optimization/h5_seed_margin", h5_seed_margin_);
+    parameters.get_parameter("optimization/h5_seed_margin", h5_seed_margin_);
     declare_once("optimization/h5_floor_slack", 0.0);
-    node_->get_parameter("optimization/h5_floor_slack", h5_floor_slack_);
+    parameters.get_parameter("optimization/h5_floor_slack", h5_floor_slack_);
     declare_once("optimization/h5_fd_check", false);
-    node_->get_parameter("optimization/h5_fd_check", h5_fd_check_);
+    parameters.get_parameter("optimization/h5_fd_check", h5_fd_check_);
     // [H4] z-corridor decision-layer diagnostic (logging only; see
     // logH4ZCorridor). Off = byte-identical.
     declare_once("optimization/h4_corridor_diag", false);
-    node_->get_parameter("optimization/h4_corridor_diag", h4_corridor_diag_);
+    parameters.get_parameter("optimization/h4_corridor_diag", h4_corridor_diag_);
     declare_once("optimization/h4_shadow_margin", 0.10);
-    node_->get_parameter("optimization/h4_shadow_margin", h4_shadow_margin_);
+    parameters.get_parameter("optimization/h4_shadow_margin", h4_shadow_margin_);
     declare_once("optimization/h4_climb_slope", 0.60);
-    node_->get_parameter("optimization/h4_climb_slope", h4_climb_slope_);
+    parameters.get_parameter("optimization/h4_climb_slope", h4_climb_slope_);
     // [H4-COMMIT] seed-authority z commit (default off = byte-identical).
     declare_once("optimization/h4_commit", false);
-    node_->get_parameter("optimization/h4_commit", h4_commit_);
+    parameters.get_parameter("optimization/h4_commit", h4_commit_);
     declare_once("optimization/h4_commit_swath", 3.0);
-    node_->get_parameter("optimization/h4_commit_swath", h4_commit_swath_);
+    parameters.get_parameter("optimization/h4_commit_swath", h4_commit_swath_);
 
     // Log initialization based on enable_debug_logs setting
     if (enable_debug_logs_) {
@@ -4187,7 +4196,7 @@ namespace ego_planner
     // Set initial formation based on optimizer_params.yaml
     int initial_formation_type = 2; // Default to REGULAR_SQUARE
     declare_once("optimization/formation_type", initial_formation_type);
-    node_->get_parameter("optimization/formation_type", initial_formation_type);
+    parameters.get_parameter("optimization/formation_type", initial_formation_type);
 
     LOG_INFO("Setting initial formation type: %d", initial_formation_type);
     setDesiredFormation(initial_formation_type);

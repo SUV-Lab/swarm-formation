@@ -13,6 +13,7 @@ ROS 없이 배포하는 독립 SDK를 제공하는 단계는 아니다.
 | 지도 준비 | Python `mmp_terrain.map_loader.load_map()` | `MapLoadInput`: 명시적 파일·미션·world·회랑·해상도 설정 | 소유하는 float32 지형, 실제 범위·해상도와 해석한 미션·프레임 |
 | 전체 계획 | C++ `MissionPlanner::plan()` | `PlanSettings`, `PlanningEnvironment`, 명시적 backend, `MissionPlanRequest` | 상태·사유, 소유하는 최종/참고 궤적, 평가·단계와 실행 메타데이터 |
 | 채택 전 계획 계산 | C++ `RosPlanningBackend::compute()` | 초기화한 backend와 동일한 미션 요청 | 소유하는 `PlanningComputation`; 실행 저장소의 후보 채택은 별도 호환 단계 |
+| 지형·위험장 계산 | C++ `TerrainData` 질의와 `terrain_risk::buildMask()/visibility()` | 기존 프레임의 지형, 위험원, 검증된 설정 | 소유하는 horizon mask 또는 높이·가시성·gradient; ROS 발행 없음 |
 | 외부 궤적 평가 | C++ `evaluateFlight()` | 궤적, 단계 분할, 환경 조회, 선택 모델, 위험 정책·귀속, 평가 설정 | 소유하는 `FlightEvaluationReport`; 실행 저장소·발행 변경 없음 |
 | 추종 시뮬레이션 | C++ `simulate()` / `SimulationSession::step()` | 참조, 초기 상태, 운동 모델, 제어기, 적분 설정 | 소유하는 상태 이력·추종 오차·동역학 집계와 완료/취소 상태 |
 | 표시 준비·연결 | C++ `path_manager::visualization`의 `make*()`와 ROS 표시 어댑터 | 표시할 경로·궤적·위험·장애물 데이터와 필요한 조회·설정 | 소유하는 기존 ROS 표시 메시지. 실제 RViz 렌더링 완료를 반환하지 않음 |
@@ -43,7 +44,7 @@ flowchart LR
 
 | 설치된 imported target | 책임 | 남는 의존성 |
 |---|---|---|
-| `path_manager::path_manager_calculations` | generic planner facade, 환경 값 검증, 평가·궤적 연결·경로 처리, 구간 최적화 호출, 전환/종말/경유점 계산 | Eigen, 기존 optimizer·vehicle target. optimizer의 ROS 관련 전이 의존성은 유지 |
+| `path_manager::path_manager_calculations` | generic planner facade, 환경 값 검증, 평가·궤적 연결·경로 처리·지형 위험장, 구간 최적화 호출, 전환/종말/경유점 계산 | Eigen, 기존 optimizer·vehicle target. optimizer의 ROS 관련 전이 의존성은 유지 |
 | `path_manager::path_manager_lib` | 전체 계획의 현재 ROS backend, PathManager·SegmentChainPlanner 조정, FSM, 환경·메시지·시각화 연결 | calculations를 전이 제공하고 기존 ROS·지도·탐색·SDF 연결 유지 |
 | `path_optimizer::path_optimizer_lib` | `PolyTrajOptimizer::solve()`와 기존 MINCO·L-BFGS 전체, 설정·비용 프로필 연결 | 기존 ROS·탐색·기체 의존성 유지 |
 | `mmp_vehicle_dynamics::mmp_vehicle_dynamics` | 공유 물리, 계획용 `VehicleModel`, 시뮬레이션 엔진·운동 모델·제어기 | 계산 target에는 Eigen. 패키지 자체는 ROS 노드도 빌드 |
@@ -59,6 +60,7 @@ MINCO·L-BFGS의 내부 알고리즘은 solver 하나의 경계 안에 유지한
 |---|---|---|
 | 계획 | `path_manager/mission_planner.h`, `mission_plan.h`, `plan_settings.h`, `planning_environment.h` | [계획 사용법](planning_library_usage_ko.md), `path_manager/examples/mission_planner_example.cpp` |
 | backend 선택·계산 결과 | `mission_planning_backend.h`, `ros_planning_backend.h`, `planning_computation.h` | [계산·채택·평가 계약](planning_computation_usage_ko.md) |
+| 지형·위험장 | `path_manager/terrain_data.h`, `terrain_risk.h` | 아래 지형·위험장 계약 |
 | 평가 | `path_manager/flight_evaluator.h`, `flight_evaluation.h` | [계산·채택·평가 계약](planning_computation_usage_ko.md), `path_manager/examples/flight_evaluator_example.cpp` |
 | 교체 경계 | `path_manager/route_search_backend.h`, `mmp_vehicle_dynamics/vehicle_model.hpp` | [계획 사용법](planning_library_usage_ko.md)의 모델·탐색 주입 규약 |
 | 시뮬레이션 | `mmp_vehicle_dynamics/trajectory_simulation.hpp` | [vehicle README](../../../mmp_vehicle_dynamics/README.md), `mmp_vehicle_dynamics/src/trajectory_simulation_example.cpp` |
@@ -132,6 +134,43 @@ follower와 비교하려면 같은 float32 직렬화 입력으로 시뮬레이�
 `PlanSettings.attach_visualization=false`는 manager의 `/viz/*`, `/debug/pipeline`,
 `/planning/front_end_path` 표시 준비·발행을 끈다. 전체 ROS, terrain/SDF, 실행/철회
 동작을 끄는 옵션은 아니다. 표시 연결을 생략해도 계획 계산은 같은 구현을 사용한다.
+
+## 지형·위험장과 worker 설정
+
+`terrain_risk::buildMask(zone, terrain, settings)`는 하나의 위험원에 대한 horizon
+mask를 값으로 반환한다. 입력 지형은 빌려 쓰며 복사하지 않는다. 재구축할 때
+`buildMask(zone, terrain, settings, std::move(previous_mask))`로 기존 sample buffer
+용량을 재사용할 수 있다. 이동한 이전 mask는 반환값으로 교체한 뒤 사용한다.
+
+`shadowCeiling()`, `groundedZ()`, `visibilityValue()`, `visibility()`는 같은 지형·mask와
+명시적 설정을 사용한다. 높이·길이는 기존 계획 프레임이며 별도 SI 변환을 수행하지
+않는다. `Settings`는 ROS 설정의 투영으로 기본값 저장소가 아니다. 호출자는 기존과
+동일하게 유효한 지형 geometry, 유한한 질의 좌표, 양의 finite softness, builder가
+만든 변경하지 않은 mask를 제공한다. disabled/invalid/null mask는 기존 ideal
+visibility 규칙을 따른다. malformed mask를 검증하는 새 정책을 추가한 API는 아니다.
+
+`TerrainData`의 셀 중심·행/열·NaN·water·gradient·thread-local memo 규칙은 그대로다.
+샘플 배열을 같은 객체에서 교체하는 호출자는 `generation`을 증가시킨다. `PathManager`
+환경 설치는 이를 기존 위치에서 수행한다. 질의와 동시에 지형·mask를 변경하지 않는다.
+
+하위 API `PathManager::makeConfiguredOptimizer(overrides)`는 route worker가 달리
+사용할 수 있는 `optimization/weight_time`, `optimization/weight_Risk`,
+`optimization/max_vel`, `optimization/risk_parallel_threads`만 허용한다. 다른 키는
+설정 전에 `std::invalid_argument`로 거부한다. route mode의 phase/segment 프로필은 기존 세 키만
+허용하며 thread budget은 조정기가 정한다. 각 설정의 타입·정규화·기본값은 기존 reader와
+solver가 결정한다. override 값을 적용하기 위해 공유 ROS 파라미터를 바꾸지 않는다.
+최초 기본 파라미터 선언은 기존 ROS 초기화 책임이므로 선언 콜백까지 없다는 뜻은 아니다.
+worker 생성과 환경 변경은 직렬로 하고, 환경과 manager는 모든 worker solve보다 오래 산다.
+
+독립 optimizer의 `PolyTrajOptimizer::setParam(node, overrides)`는 기존 전체 optimizer
+설정 reader에 호출별 값만 우선한다. 읽은 수치를 저장하므로 override vector는 반환 후
+파괴할 수 있다. node와 환경 lifetime은 기존 solver 규약을 따른다. MINCO·L-BFGS 본체는
+`solve()` 안에 유지된다.
+
+순차 baseline과 single-shot fallback의 전체 설정 덮어쓰기는 기존 경로를 유지한다.
+clearance가 FE·위험장·코너 검사·표시·평가와 연결되므로 위 worker API를 이 경로에
+그대로 적용하면 같은 입력의 계산이 달라질 수 있다. 호출별 direct-plan 설정과 위험장
+조회 전달까지 함께 정리할 후속 경계이며, 이번 worker 분리로 제거됐다고 보지 않는다.
 
 ## 실패·예외·부분 결과
 

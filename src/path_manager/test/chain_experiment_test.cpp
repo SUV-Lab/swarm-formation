@@ -4483,8 +4483,37 @@ int main(int argc, char **argv)
   // envelope and must never be misclassified as INITIAL_MODE_UNSUPPORTED.
   if (with_initok) start_vel = Eigen::Vector3d(0.0, -1.6, 0.2);
   const bool vel_commanded = with_departop || with_initok;
+  // A route worker's private profile must never become a temporary public
+  // mission parameter, even during construction and edge/merge repair.
+  // Existing variants below prove these are real solves with the requested
+  // speeds/tails/seams; the callback catches transient changes a final-value
+  // check alone cannot see.
+  const bool inspect_worker_profiles =
+      with_par || with_phaseweight || with_mergetail || with_depedge || with_arredge;
+  const std::vector<std::string> worker_keys = {
+      "optimization/weight_time", "optimization/weight_Risk",
+      "optimization/max_vel", "optimization/risk_parallel_threads"};
+  const auto worker_pristine = node->get_parameters(worker_keys);
+  size_t worker_parameter_writes = 0;
+  const auto worker_parameter_probe = node->add_on_set_parameters_callback(
+      [&](const std::vector<rclcpp::Parameter> &changes) {
+        if (inspect_worker_profiles)
+          for (const auto &change : changes)
+            if (std::find(worker_keys.begin(), worker_keys.end(),
+                          change.get_name()) != worker_keys.end())
+              ++worker_parameter_writes;
+        rcl_interfaces::msg::SetParametersResult accepted;
+        accepted.successful = true;
+        return accepted;
+      });
   const path_manager::PlanResult pres =
       chain.plan(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED, start_pos, start_vel, start_acc, false), goal, mtail);
+  if (inspect_worker_profiles) {
+    expect(worker_parameter_writes == 0,
+           "worker and retry profiles never mutate shared mission parameters");
+    expect(node->get_parameters(worker_keys) == worker_pristine,
+           "shared optimizer parameters retain their pristine typed values");
+  }
   if (vel_commanded)
     expect(pres.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "within-envelope commanded start not misclassified as "

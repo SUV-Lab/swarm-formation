@@ -1,0 +1,81 @@
+{
+  "pass": true,
+  "baseline_parent": "73d0a692e5f84871f4b6a368db2bc6c33e6f2fd9",
+  "baseline_planning": "b14dd9d6169518cf064c03efcca933441538f9b5",
+  "ctest": 43,
+  "runtime": {
+    "pass": true,
+    "R2_results_exact": 6,
+    "warmups": 1,
+    "measured_runs": 5,
+    "actual_gui": {
+      "evaluation": {
+        "before_count": 38,
+        "after_count": 38,
+        "ordered": true,
+        "pass": true
+      },
+      "postprocessing": {
+        "before_count": 2,
+        "after_count": 2,
+        "ordered": true,
+        "pass": true
+      },
+      "cost_profile": {
+        "before_count": 10,
+        "after_count": 10,
+        "ordered": false,
+        "pass": true
+      },
+      "abort": {
+        "pass": true,
+        "numeric_exact": true
+      },
+      "pass": true
+    },
+    "frozen_identity_count": 421,
+    "measurement_source_exact": true,
+    "installed_only_compile": true,
+    "performance_comparison": "performance_comparison.json",
+    "wall_median_before_s": 0.762541609,
+    "wall_median_after_s": 0.754433113,
+    "wall_median_change_percent": -1.0633512852673666,
+    "peak_rss_median_before_kib": 713552,
+    "peak_rss_median_after_kib": 713804,
+    "interpretation": "Five measured runs per build show overlapping plan-wall, plan-CPU and peak-RSS ranges, with no material regression signal for this R2 sample. This is not proof of universal performance equivalence or a general speedup. Before and after series are separated in time; no CPU pinning or exclusive whole-machine reservation. Original measurement binary is retained for alternating A/B if a regression signal appears."
+  },
+  "terrain": {
+    "pass": true,
+    "comparison": "All serialized mask metadata/float samples and double query values/gradients byte-for-byte; no normalization or tolerance.",
+    "bytes": 12053232,
+    "cases": 8,
+    "masks": 40,
+    "queries": 203520,
+    "scalar_records": 1520610,
+    "baseline_sha256": "50aec6ca0e14e6235ca3cbba74ea3bf1156024130c83f86b2b4fdbafa81f3d03",
+    "after_sha256": "50aec6ca0e14e6235ca3cbba74ea3bf1156024130c83f86b2b4fdbafa81f3d03",
+    "after_installed_libraries": {
+      "libpath_manager_lib.a": "dbe9f23b0dc38d2b07616599b83cb25f2dde3e6620702e81b7d3e6385449d7fd",
+      "libpath_manager_calculations.a": "3028fef5fdff7dad893b533d2e5127af25a4a3b5f66b5cb08d9dca1a64e30774"
+    },
+    "after_fixture_executable_sha256": "1e659efb5c29492fc6e1eae8ac5a38ab8d1f20ca30371bdc7ed7a1b5951bbbe8"
+  },
+  "solver": {
+    "original_head": "b14dd9d6169518cf064c03efcca933441538f9b5",
+    "same_optimizer_outside_parameter_reader": true,
+    "algorithm_body_sha256": "9861bb40619b7e5d82d9e025dff4664eb8cd0fd2ea8cd959b2fbc282891123de"
+  },
+  "chain_printed_metrics": {
+    "variants": 71,
+    "metrics": 5160,
+    "same_printed_values": true
+  },
+  "deferred": [
+    "baseline/fallback full-surface temporary ROS parameter mutation",
+    "PM environment/SDF/execution ownership coupling"
+  ],
+  "prohibited_directories_not_read": [
+    "reports",
+    "experiments"
+  ]
+}

@@ -1366,3 +1366,120 @@ target만 연결한다. 지도 예제는 단계 5에서 검증한 설치 Python 
 시뮬레이션 교체 경계는 기존 3DOF와 무상태 제어기 범위다. 새 VTOL 상태·전환 제어,
 동시 환경 갱신, ROS 제거·C++ 지형 이식은 앞으로 별도 설계할 작업이다. 이번 계획의
 단계 1–6은 완료했으며, 새 기능 요구가 생기기 전 추가 추상화나 solver 분해는 하지 않는다.
+
+## 내부 조정·설정·지형 계산 정리 (2026-10-11)
+
+후속 단계 1–6 이후에도 큰 조정 함수와 호출 간 scratch 상태가 남아 있다는 검토에
+따라 추가로 정리했다. 시작 기준은 상위 `73d0a69`, 계획 `b14dd9d`이며 현재 checkout을
+사용했다. stash는 복원하지 않았다. `reports`와 `experiments` 디렉터리를 읽거나
+traverse하지 않도록 명시적 파일·패키지 목록만 사용했다.
+
+### 선택한 경계와 구현 순서
+
+| 대상 | 입력 → 출력·보존할 책임 | 변경 파일 |
+|---|---|---|
+| chain 조정 | `StartHead`, mission tail, waypoints, committed route → `PlanningComputation` 및 완료 진단 | `segment_chain_planner.h/.cpp` |
+| 호출별 상태 | 요청 N/auto 옵션 → phase 후보·head policy·평가·확정 N을 가진 stack `PlanContext` | 같은 chain 파일 |
+| 독립 optimizer 구성 | mission ROS 값 + 허용된 worker override → 자기 설정을 가진 optimizer | `ros_parameter_view.h`, `optimizer_worker_profile.h`, optimizer `setParam`, PM factory |
+| terrain sampler | 기존 지형 배열·generation·위치 → 높이·gradient | `terrain_data.h` (기존 구현 그대로 이동) |
+| terrain risk | 위험원·빌린 지형·명시적 설정 → 소유하는 mask; mask/위치 → ceiling·visibility·gradient | `terrain_risk.h/.cpp`, PM thin adapter |
+
+첫 checkpoint는 chain/worker 설정을 통합하고 실제 R2와 전체 회귀·RViz ABORT 복구로
+검증했다. 두 번째 checkpoint에서 terrain-risk 계산과 worker 공개 입력 제한을 통합했다.
+큰 MINCO·L-BFGS 본체는 변경하지 않았으며 solver 설정 읽기 경계만 수정했다.
+
+### 실제로 정리한 구조
+
+`planImpl`은 525줄에서 37줄의 모드 선택으로 줄었다. multi-waypoint 처리와 baseline의
+준비·순차 solve·마무리, route의 입력 검사·batch solve·repair·최종 평가를 각각 나눴다.
+기존 523줄의 `computeOverRoute`는 context 전달 wrapper와 122줄의 route 조정으로
+정리했다. 단순히 줄 수를 줄이기 위해 알고리즘을 쪼개지 않고 기존 계산 함수를 호출한다.
+
+phase 후보·note·metric·jitter·head/evaluation 등 계산 scratch 13개를 요청별 context로
+이동했다. merge에서 감소한 작업 N과 외부에 보이는 확정 N을 구분하여 restore guard를
+없앴다. 완료 진단은 `last_plan_` snapshot으로 남는다. legacy `planOverRoute()`의
+이전 확정 N 사용과 `setTransitionActive()` 호환 규약은 유지하며, 동일 객체의 동시
+계획을 새로 허용한 것은 아니다.
+
+route worker·phase-edge retry·merge retry는 공유 노드 값을 변경하지 않고 설정한다.
+초기 병렬 worker의 CPU thread 배분과 retry의 원래 mission thread 설정을 구분한다.
+프로필 우선순위, soft/hard 제한 병합, one-shot failure 주입 reset, 실패 사유, product ID
+소모 횟수, restore→평가→발행 순서를 유지했다. 하나의 shared whitelist로 worker
+설정 범위를 정의하며 PM 공유 clearance/headroom 변경을 worker API에서 차단한다.
+
+terrain-risk 계산은 기존 `path_manager_calculations` target에 추가했다. 새 작은
+라이브러리/패키지는 만들지 않았다. terrain 객체의 identity/generation과 thread-local
+memo, float horizon 저장, arithmetic 순서, NaN/water 규칙을 유지한다. DEM snapshot을
+추가하지 않으며 재구축 시 기존 mask buffer 용량을 재사용한다. PM 헤더·소스에서 약
+407줄의 sampler/위험도 계산을 옮겼다. 환경 설치, SDF/obstacle, generation/ABORT,
+ROS 경고·표시·실행 저장은 PM에 남는다. source-ground 경고는 같은 zone의 계산 후에
+기록하며 경고→ready의 외부 로그 순서는 같다.
+
+### 변경 전 기준과 검증
+
+변경 전 소스·설치물 250개가 직전 검증 상태와 같음을 확인하고 원본 실행 파일과
+라이브러리를 별도로 보존했다. 변경 전부터 실제 RViz에서 R2 임무와 ABORT/새 명령
+복구를 실행했다. 측정은 실제 Python loader로 같은 지형을 준비한 뒤 외부 설치
+consumer의 `MissionPlanner::plan()`만 steady clock/CPU로 계측한다. 지도 로드·초기화·
+직렬화·종료는 plan 시간에서 제외한다.
+
+- 첫 checkpoint CTest **42/42**, 최종 **43/43** (계획 34, optimizer 3, 차량 6).
+  기존 chain 변형 **71/71**, risk **154/154** 포함. worker 설정 시 공유 파라미터
+  callback이 호출되지 않는 실제 phase/parallel/retry 검사도 통과했다.
+- 실제 L-BFGS에서 node override와 local overlay의 seed/최종 계수·시간·경로·귀속·
+  envelope가 정확히 같다. 다른 worker로 설정이 새지 않고 override 입력을 파괴한
+  뒤에도 solver가 유효하다. 잘못된 타입은 설정 실패 후 solve 진입을 거부한다.
+- terrain-risk 순수 계산 **34/34**. 원본 설치 PM과 최종 설치 PM의 **8사례·40mask·
+  203,520질의**, mask와 query/gradient의 **12,053,232 bytes**가 정규화·허용오차 없이
+  같다. SHA256 `50aec6ca0e14e6235ca3cbba74ea3bf1156024130c83f86b2b4fdbafa81f3d03`.
+- 71개 chain 변형에서 출력된 수치 진단 **5,160개**도 이전 기록과 같다. timestamp와
+  병렬 log 순서만 제외한 printed-value 비교이며 계수 전체 비교를 대신하지 않는다.
+- 원본/최종 각각 예열 1회 + 측정 5회의 외부 R2 반환 결과가 모두 같다. **190조각**,
+  double 총 시간 **521.0625247312521초**와 결과 전체 SHA256
+  `33b40dc818378be2343349bd31bff20c309bbb7aa2725d1f00e76b88ce1ebfe5`를 유지했다.
+  별도 RViz float32 wire는 **521.0625259429216초**이며 같은 표현끼리 비교한다.
+
+| 측정 | 변경 전 | 변경 후 |
+|---|---:|---:|
+| plan 시간 중앙값 | 0.762542 s | 0.754433 s |
+| plan 시간 범위(5회) | 0.737676–0.803406 s | 0.749823–0.796042 s |
+| 클라이언트 프로세스 lifetime peak RSS 중앙값 | 713,552 KiB | 713,804 KiB |
+
+시간 중앙값 차이는 약 −1.06%, RSS 차이는 약 +0.035%로 이 표본에서 성능 저하 징후를
+발견하지 못했다. 시간 범위는 겹치며 일반적인 속도 향상을 입증한 자료는 아니다.
+RSS는 이미 적재한 지형과 planner를 포함한 클라이언트 프로세스 전체 최대치로,
+계획만의 추가 할당량이나 별도 Python loader를 포함한 시스템 전체 메모리가 아니다.
+CPU 고정·전체 머신 예약은 하지 않았고, 최종 측정 중 빌드/CTest/GUI를 겹치지 않았다.
+
+최종 실제 RViz에서도 R2 임무 로드·계획·ABORT·새 명령 복구를 반복했고, 계수·시간·
+전단 경로·평가·후처리·비용 프로필이 같다. 실행 전후 소스·설치 header/target·archive·
+node **421개**의 해시를 확인했다.
+
+R2와 별도로 지형 위험 fixture를 원본/최종 각각 준비 실행 1회 후 교차 5회 측정했다.
+전체 fixture 경과 시간 중앙값은 **0.135456→0.136463초**(+0.74%, 약 1 ms), 사용자
+CPU **0.029034→0.028036초**, process peak RSS **22,964→22,708 KiB**였다.
+PM 초기화·mask 생성·질의·파일 기록·종료를 포함하며 hot loop만의 계측은 아니다.
+준비 실행을 포함한 12회 모두 수치가 같았고 바이너리 해시를 유지했다.
+
+계산식 보존 검수에서 optimizer `.cpp`의 `setParam`과 신규 include를 제외한 전체
+코드가 원본과 동일함을 확인했다. 기존 컴파일 경고는 남아 있으며, 두 checkpoint 모두
+컨테이너의 명시적 optimizer/PM 패키지 경로로 증분 Release 빌드를 수행했다. 새 머신의
+완전한 clean workspace 빌드나 모든 미션에서의 성공률을 주장하지 않는다.
+
+증거는 [이번 검증 자료](../validation/internal_cleanup_2026_10_11/README.md)에
+보존한다. `verify.py`는 보존 자료의 해시·수치 비교를 재확인하며 ROS를 새로 실행하는
+시험과 구분한다.
+
+### 남는 내부 경계
+
+전체 ROS 제거·Python 로더 C++ 이식 외에도 순차 baseline과 single-shot fallback의
+전체 설정 덮어쓰기, PM의 환경 소유/SDF/실행 연결은 남는다. baseline의 clearance는
+FE·optimizer·코너 검사·표시가 공유하는 위험장에 사용된다. retained searcher의
+callback은 최종 평가·ABORT에서도 쓰이므로 임시 optimizer만 바꾸거나 숨은 PM 값을
+scope로 바꾸는 방법은 올바른 분리가 아니다.
+
+다음 구조 변경이 필요해지면 호출별 direct-plan context로 optimizer, 네 PM scalar,
+unit/FPA/model, 위험장 조회를 `prepareRoute`→FE→`optimizeStage`에 전달해야 한다.
+종료/예외 시 retained searcher가 mission 위험장을 다시 보도록 하되 정책 epoch와
+현재 ABORT 동작을 보존해야 한다. 이번 변경에서는 검증된 기존 경로를 유지했다.
+독립적인 개선 지점으로 기록하며 현재 내부 구조까지 모두 정리됐다고 표현하지 않는다.

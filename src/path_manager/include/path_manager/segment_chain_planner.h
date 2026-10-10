@@ -1,6 +1,8 @@
 #ifndef SEGMENT_CHAIN_PLANNER_H
 #define SEGMENT_CHAIN_PLANNER_H
 
+#include <chrono>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -88,7 +90,7 @@ public:
                   const ego_planner::TailBoundary &mission_tail =
                       ego_planner::TailBoundary{});
 
-  int segments() const { return segments_; }
+  int segments() const { return last_plan_.segments; }
 
   // [S13] planRouteParallel decomposed (contract 2 §13): commitRoute runs
   // the ONE front-end pass and hands back the committed route + cap;
@@ -158,19 +160,19 @@ public:
   // Empty after an entry refusal or an evaluation that could not run. A
   // failed flight gate may still leave diagnostics for its rejected candidate.
   const std::vector<PhaseSpan> &lastPhaseSpans() const {
-    return last_spans_;
+    return last_plan_.spans;
   }
   // The whole-flight verdict of the LAST evaluation. Regressions assert on
   // this rather than on log text: a log-string check passes when the log is
   // missing, when the check never ran, and when an older file is read by
   // mistake — three ways to certify a safety property nobody measured.
-  const FlightVerdict &lastFlightVerdict() const { return last_verdict_; }
+  const FlightVerdict &lastFlightVerdict() const { return last_plan_.verdict; }
   // [HEAD-POLICY] What the head policy actually DID on the last plan. A
   // regression that asserts "the plan flew" cannot tell whether the floor
   // correction was applied — the solver may cope with a sub-floor head
   // anyway — so re-deriving the source at the far end of the call chain
   // went undetected. The decision is observable rather than inferred.
-  const HeadPolicy &lastHeadPolicy() const { return last_head_policy_; }
+  const HeadPolicy &lastHeadPolicy() const { return last_plan_.head_policy; }
   // Test seam: judge a SYNTHESISED flight. The refusal branch for a
   // hard-zone contact cannot be reached by planning — the 3-pass exists to
   // prevent exactly that trajectory — so the regression has to supply one.
@@ -205,9 +207,9 @@ public:
   // [S13] Coordinator-owned: while true, every single-shot fallback inside
   // the route mode returns FAILED instead of re-planning from the mission
   // start (contract §10 — the cruise planner must never re-plan the regime
-  // the transition exists to handle). Cleared by resetPlanState at every
-  // plan() entry; the coordinator re-asserts it after entry.
-  void setTransitionActive(bool on) { transition_active_ = on; }
+  // the transition exists to handle). The compatibility adapter applies it to
+  // explicit-route calls; a full plan() always starts a fresh request.
+  void setTransitionActive(bool on) { legacy_transition_active_ = on; }
 
   // Clip the head of a committed route at an arc length. PUBLIC only so the
   // tag-suffix rule can be pinned by a pure-function regression: it is const,
@@ -231,26 +233,67 @@ public:
                 std::vector<size_t> *out_edge_leg = nullptr) const;
 
 private:
-  PlanResult planInto(PlanningComputation &computed, const StartHead &head,
+  // One synchronous request owns all scratch state. Route retries get fresh
+  // child contexts; confirmed_segments is the configured/auto-resolved count,
+  // while segments may shrink after a successful merge in that attempt.
+  struct PlanContext {
+    explicit PlanContext(int count)
+        : segments(count), confirmed_segments(count) {}
+    int segments;
+    int confirmed_segments;
+    bool auto_segments{false};
+    bool transition_active{false};
+    bool phase_applied{false};
+    std::string phase_note;
+    std::vector<int> dep_candidates, arr_candidates;
+    double phase_tan_grade{1e9};
+    double phase_turn_radius_u{0.0};
+    int jitter_fail_segment{0};
+    HeadPolicy head_policy{};
+    FlightVerdict verdict{};
+    std::vector<PhaseSpan> spans;
+  };
+  struct PlanDiagnostics {
+    int segments{2};
+    bool auto_segments{false};
+    HeadPolicy head_policy{};
+    FlightVerdict verdict{};
+    std::vector<PhaseSpan> spans;
+  };
+  void captureDiagnostics(PlanContext &state) const;
+  std::optional<CommittedRoute> commitRouteInContext(
+      const PlanContext &state, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel);
+  FlightVerdict evaluateFlightInContext(
+      PlanContext &state, const poly_traj::Trajectory &flight,
+      const std::vector<PhaseSpan> &spans,
+      const std::vector<size_t> *piece_leg, uint64_t piece_epoch) const;
+  PlanResult computeRouteAttempt(
+      PlanContext &state, PlanningComputation &computed,
+      const CommittedRoute &route, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
+      const ego_planner::TailBoundary &mission_tail,
+      const TransitionPrefix *transition);
+  PlanResult planInto(PlanContext &state, PlanningComputation &computed, const StartHead &head,
       const std::vector<Eigen::Vector3d> &waypoints,
       const ego_planner::TailBoundary &mission_tail);
-  PlanResult computeOverRoute(
+  PlanResult computeOverRoute(PlanContext &state,
       PlanningComputation &computed, const CommittedRoute &route,
       const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
       bool run_parallel, const ego_planner::TailBoundary &mission_tail,
       const TransitionPrefix *transition = nullptr);
   // [AUTO-N] chain/segments option interpretation — ONE shared step, run
-  // right after resetPlanState() so EVERY mission shape (plain chain and
+  // at the fresh request entry so EVERY mission shape (plain chain and
   // the transition coordinator alike) sees the same N policy. Leaving it
   // inside planImpl let the transition branch run on the reset defaults:
   // the live smoke chained 2 segments with no cruise span while the
   // config said auto-sized (review find).
-  void readSegmentsOption();
+  void readSegmentsOption(PlanContext &state);
   // [S13] The ONE coordinator function owning the section-13 sequence:
   // commit -> snapshot -> entry screening -> generate -> cut -> chain with
-  // the transition prefix. transition_active_ is asserted for its whole
-  // scope, so every fallback inside returns FAILED.
-  PlanResult planTransitionMission(
+  // the transition prefix. the request carries transition_active throughout,
+  // so every fallback inside returns FAILED.
+  PlanResult planTransitionMission(PlanContext &state,
       PlanningComputation &computed, const StartHead &head,
       const std::vector<Eigen::Vector3d> &waypoints,
       const ego_planner::TailBoundary &mission_tail);
@@ -299,22 +342,23 @@ private:
     std::string label;  // "a=b, c=d" for the report; empty = none
   };
   // Profiles and the optimizers configured from them form one preparation
-  // result. Node parameter changes finish before any slice worker starts.
+  // result. Each worker consumes its own value overlay without changing node
+  // parameter values. Initial parallel workers share the core budget.
   struct RouteWorkerSetup {
     SegmentOverrides departure, cruise, arrival;
     std::vector<SegmentOverrides> effective;
     std::vector<std::unique_ptr<ego_planner::PolyTrajOptimizer>> optimizers;
   };
-  RouteWorkerSetup prepareRouteWorkers(std::vector<Contract> &contracts,
+  RouteWorkerSetup prepareRouteWorkers(const PlanContext &state, std::vector<Contract> &contracts,
                                        bool run_parallel,
                                        bool phase_requested);
-  PlanResult planRouteFallback(
+  PlanResult planRouteFallback(PlanContext &state,
       PlanningComputation &computed,
       const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
       const ego_planner::TailBoundary &mission_tail,
       const std::vector<SegmentOverrides> &effective_overrides,
       const char *why, bool as_degraded);
-  std::vector<SegmentOverrides> readSegmentOverrides() const;
+  std::vector<SegmentOverrides> readSegmentOverrides(const PlanContext &state) const;
   // One "name=value" string-array parameter parsed against declared types
   // (the seg<i> parser, generalized for the phase profiles).
   SegmentOverrides readOverrideList(const std::string &pname,
@@ -331,14 +375,14 @@ private:
   // baseline to restore; failures repair through the retry ladders or the
   // gated single-shot fallback (DEGRADED), which a transition-active plan
   // forbids outright.
-  PlanResult planRouteParallel(
+  PlanResult planRouteParallel(PlanContext &state,
       PlanningComputation &computed, const StartHead &head,
       const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
       const ego_planner::TailBoundary &mission_tail);
 
   // plan() minus the final-boundary validation (which must run exactly
   // once): every internal exit path receives the validated tail.
-  PlanResult planImpl(
+  PlanResult planImpl(PlanContext &state,
       PlanningComputation &computed, const StartHead &head,
       const std::vector<Eigen::Vector3d> &waypoints,
       const ego_planner::TailBoundary &mission_tail);
@@ -394,6 +438,69 @@ private:
     // Empty when the committed route had no provenance to slice.
     std::vector<size_t> edge_leg;
   };
+  struct BaselineSegments {
+    std::vector<SegmentOverrides> overrides;
+    std::vector<double> max_velocity;
+    double global_max_velocity{std::numeric_limits<double>::infinity()};
+    std::vector<Contract> contracts;
+    std::vector<RouteSlice> slices;
+    uint64_t route_epoch{0};
+  };
+  struct BaselineRunResult {
+    std::vector<poly_traj::Trajectory> runs;
+    poly_traj::Trajectory chained;
+    int failed_segment{-1};
+  };
+  struct RouteRunResults {
+    std::vector<poly_traj::Trajectory> runs;
+    std::vector<char> ok;
+    std::vector<double> solve_ms;
+    double wall_ms{0.0};
+  };
+  struct RouteWork {
+    std::chrono::steady_clock::time_point started;
+    bool run_parallel{false};
+    double author_ms{0.0};
+    std::vector<Contract> contracts;
+    std::vector<RouteSlice> slices;
+    RouteWorkerSetup workers;
+    RouteRunResults solved;
+    std::string soft_drop_note;
+  };
+  PlanResult planMultiWaypoint(
+      PlanContext &state, PlanningComputation &computed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail);
+  PlanResult planBaselineMission(
+      PlanContext &state, PlanningComputation &computed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail);
+  BaselineSegments prepareBaselineSegments(
+      const PlanContext &state, const StartHead &head,
+      const poly_traj::Trajectory &baseline) const;
+  BaselineRunResult solveBaselineSegments(
+      const PlanContext &state, PlanningComputation &computed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail,
+      const poly_traj::Trajectory &baseline, const BaselineSegments &prepared);
+  std::optional<PlanResult> validateRouteAttempt(
+      const CommittedRoute &committed, const StartHead &head,
+      const TransitionPrefix *transition) const;
+  RouteRunResults solveRouteSegments(
+      PlanContext &state, const RouteWork &work, const StartHead &effective_head,
+      const ego_planner::TailBoundary &mission_tail,
+      const RouteSliceConfig &slice_config, bool suppress_crossing_exempt);
+  std::optional<PlanResult> repairRouteSegments(
+      PlanContext &state, PlanningComputation &computed,
+      const CommittedRoute &committed, const StartHead &head,
+      const std::vector<Eigen::Vector3d> &waypoints,
+      const ego_planner::TailBoundary &mission_tail, RouteWork &work,
+      const RouteSliceConfig &slice_config, bool suppress_crossing_exempt,
+      bool phase_requested);
+  PlanResult finishRouteFlight(
+      PlanContext &state, PlanningComputation &computed, RouteWork &work,
+      const ego_planner::TailBoundary &mission_tail,
+      const TransitionPrefix *transition, double front_end_ms);
   // One proposed repair owns its geometry and boundary conditions. The
   // coordinator adopts it only after the solve accepts the entire repair.
   struct MergeRetryCandidate {
@@ -404,15 +511,15 @@ private:
     SegmentOverrides overrides;
     std::string soft_drop_note;
   };
-  std::vector<int> selectMergeNeighbors(
+  std::vector<int> selectMergeNeighbors(const PlanContext &state,
       int failed, const std::vector<RouteSlice> &slices,
       size_t contract_count) const;
-  MergeRetryCandidate prepareMergeRetry(
+  MergeRetryCandidate prepareMergeRetry(const PlanContext &state,
       int failed, int neighbor, const std::vector<RouteSlice> &slices,
       const std::vector<Contract> &contracts, const StartHead &effective_head,
       const ego_planner::TailBoundary &mission_tail,
       bool suppress_crossing_exempt) const;
-  MergeRetryProfile mergedRetryProfile(
+  MergeRetryProfile mergedRetryProfile(const PlanContext &state,
       const MergeRetryCandidate &candidate, const RouteWorkerSetup &workers,
       bool phase_requested) const;
 
@@ -425,12 +532,12 @@ private:
   struct PhaseRetrySolution {
     poly_traj::Trajectory edge, neighbor;
   };
-  std::optional<PhaseRetryCandidate> preparePhaseRetry(
+  std::optional<PhaseRetryCandidate> preparePhaseRetry(const PlanContext &state,
       const CommittedRoute &route, int vertex, bool departure,
       const std::vector<Contract> &contracts, const StartHead &effective_head,
       const ego_planner::TailBoundary &mission_tail,
       bool suppress_crossing_exempt) const;
-  std::optional<PhaseRetrySolution> solvePhaseRetry(
+  std::optional<PhaseRetrySolution> solvePhaseRetry(const PlanContext &state,
       const PhaseRetryCandidate &candidate,
       const std::vector<SegmentOverrides> &effective_overrides,
       const RouteSliceConfig &config, double peak_max) const;
@@ -476,7 +583,7 @@ private:
   HandoffScreenResult screenHandoffCandidates(
       const std::vector<Eigen::Vector3d> &route, const Eigen::Vector3d &v0,
       const ReachLimits &rl, double arr_min_arc_u) const;
-  bool authorContractsFromRoute(const std::vector<Eigen::Vector3d> &route,
+  bool authorContractsFromRoute(PlanContext &state, const std::vector<Eigen::Vector3d> &route,
                                 const Eigen::Vector3d &v0,
                                 std::vector<Contract> *contracts) const;
 
@@ -502,10 +609,6 @@ private:
   // Records a refusal's execution invalidation effect, applied only by the
   // execution adapter. Does not clear stored trajectory during calculation.
   void invalidateStoredTrajectory(PlanningComputation &computed) const;
-  // Clears every per-plan member so nothing survives into the next mission
-  // (review find: segments_ is decremented mid-plan by the merge ladder and
-  // the phase blackboard is only reset on the phase-enabled path).
-  void resetPlanState();
   // Turn-out seed following the INITIAL velocity: arc (radius = margin x
   // R_min) chasing the handoff bearing, then a straight leg, z smoothstep.
   // The route slice must NOT seed the departure solve when the initial
@@ -520,43 +623,22 @@ private:
   // [AUTO-N] resolves chain/segments==0 into a mission-sized N from the
   // piece count; returns false when the mission is too small to split
   // (the caller flies the single-shot result instead).
-  bool resolveAutoSegments(int pieces, const char *source);
+  bool resolveAutoSegments(PlanContext &state, int pieces, const char *source);
 
   // [JITTER] measurement-only contract perturbation (chain/jitter/*, all
   // default 0 = off) for the junction sensitivity experiment.
   void applyContractJitter(const std::vector<Eigen::Vector3d> &route,
                            std::vector<Contract> *contracts);
-  // [JITTER] deterministic worker-failure injection (1-based; 0 = off) for
-  // testing the merge-retry ladder.
-  int jitter_fail_segment_{0};
-  // [S13] see setTransitionActive.
-  bool transition_active_{false};
-
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<PathManager> pm_;
   swarm_formation::LogManager *log_;  // FSM-owned, outlives this component
-  // Working segment count for the CURRENT plan: resolved per plan from
-  // segments_requested_ (or auto-sizing) and mutated in flight by the merge
-  // ladder. Never read across plans — resetPlanState restores it.
-  int segments_;
-  // The construction-time request, the one value that outlives a plan.
   const int segments_requested_;
   bool inherit_route_;
-  bool auto_segments_{false};
-  // [PHASE] set during route authoring (const method -> mutable): whether
-  // the departure/arrival handoff rules actually pinned junctions, and the
-  // human-readable fallback note when they could not (planRouteParallel
-  // attaches it to the PlanResult as PHASE_BOUNDARY_FALLBACK).
-  mutable bool phase_applied_{false};
-  mutable std::string phase_note_;
-  // [PHASE-DEP] screened handoff candidates (route vertex indices, first =
-  // the authored one) + the physics the edge-retry ladder reuses.
-  mutable std::vector<int> dep_candidates_, arr_candidates_;
-  mutable std::vector<PhaseSpan> last_spans_;
-  mutable FlightVerdict last_verdict_{};
-  HeadPolicy last_head_policy_{};
-  mutable double phase_tan_grade_{1e9};
-  mutable double phase_turn_radius_u_{0.0};
+  // Compatibility readout and explicit-route adapter option only. Private
+  // calculation helpers receive PlanContext and never consume this snapshot.
+  mutable PlanDiagnostics last_plan_;
+  bool legacy_transition_active_{false};
+
 };
 
 }  // namespace path_manager

@@ -66,6 +66,7 @@ add_library(${PROJECT_NAME}_calculations
   src/flight_evaluator.cpp
   src/direct_trajectory_solver.cpp
   src/mission_geometry.cpp
+  src/terrain_risk.cpp
   src/route_postprocessing.cpp
   src/mission_route_search.cpp
   src/route_search_backend.cpp
@@ -533,6 +534,13 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 180)
+  add_executable(terrain_risk_calculation_test test/terrain_risk_calculation_test.cpp)
+  target_link_libraries(terrain_risk_calculation_test ${PROJECT_NAME}_calculations)
+  ament_add_test(terrain_risk_calculation_test
+    COMMAND $<TARGET_FILE:terrain_risk_calculation_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+
   ament_add_test(terrain_memo_test
     COMMAND $<TARGET_FILE:terrain_memo_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO

@@ -1,4 +1,6 @@
+#include "path_optimizer/ros_parameter_view.h"
 #include "path_manager/path_manager.h"
+#include "path_manager/optimizer_worker_profile.h"
 #include "path_manager/direct_trajectory_solver.h"
 #include "path_manager/mission_geometry.h"
 #include "path_manager/route_postprocessing.h"
@@ -436,11 +438,31 @@ namespace path_manager
     std::unique_ptr<ego_planner::PolyTrajOptimizer>
     PathManager::makeConfiguredOptimizer()
     {
+        return makeConfiguredOptimizer({});
+    }
+
+    std::unique_ptr<ego_planner::PolyTrajOptimizer>
+    PathManager::makeConfiguredOptimizer(
+        const std::vector<rclcpp::Parameter> &parameter_overrides)
+    {
         {
             // Check prerequisites
             if (!node_) {
                 throw std::runtime_error("Node is null");
             }
+
+            // A worker may only vary its own costs, speed ceiling and
+            // thread budget. Validate the complete list before configuring
+            // anything: full mission profiles also affect shared manager
+            // machinery and cannot be applied to one independent worker.
+            for (const auto &parameter : parameter_overrides) {
+                if (!findOptimizerWorkerParameter(parameter.get_name())) {
+                    throw std::invalid_argument(
+                        "unsupported independent optimizer override: " +
+                        parameter.get_name());
+                }
+            }
+            const ego_planner::RosParameterView parameters(node_, parameter_overrides);
 
             auto poly_traj_opt_ = std::make_unique<ego_planner::PolyTrajOptimizer>();
 
@@ -454,7 +476,7 @@ namespace path_manager
             poly_traj_opt_->setDroneId(traj_.local_traj.drone_id);
             if (vehicle_model_override_)
                 poly_traj_opt_->setVehicleModel(vehicle_model_override_);
-            poly_traj_opt_->setParam(node_);
+            poly_traj_opt_->setParam(node_, parameter_overrides);
 
             // Four optimization/* values are consumed by PathManager, not by
             // setParam — re-read them on every (forced) re-init, or a
@@ -463,13 +485,13 @@ namespace path_manager
             // own copy (alt_cap_headroom_opt_), which setParam does re-read:
             // the scalar cap and the arc-varying envelope must share one
             // headroom (see the note at its declaration in setParam).
-            node_->get_parameter("optimization/obstacle_clearance",
+            parameters.get_parameter("optimization/obstacle_clearance",
                                  opt_obstacle_clearance_);
-            node_->get_parameter("optimization/weight_altitude",
+            parameters.get_parameter("optimization/weight_altitude",
                                  weight_altitude_);
-            node_->get_parameter("optimization/alt_cap_headroom",
+            parameters.get_parameter("optimization/alt_cap_headroom",
                                  alt_cap_headroom_);
-            node_->get_parameter("optimization/alt_floor_headroom",
+            parameters.get_parameter("optimization/alt_floor_headroom",
                                  alt_floor_headroom_);
 
             ego_planner::OptimizerRuntimeSettings runtime_settings;
@@ -489,7 +511,7 @@ namespace path_manager
                 bool reject_on = true;
                 if (!node_->has_parameter("optimization/collision_reject"))
                     node_->declare_parameter("optimization/collision_reject", true);
-                node_->get_parameter("optimization/collision_reject", reject_on);
+                parameters.get_parameter("optimization/collision_reject", reject_on);
                 runtime_settings.collision_reject = reject_on;
 
                 // [CONV-REJECT] non-convergence gate: an L-BFGS failure exit
@@ -510,11 +532,11 @@ namespace path_manager
                         "optimization/audit_envelope_violation_hard_max"))
                     node_->declare_parameter(
                         "optimization/audit_envelope_violation_hard_max", 0.30);
-                node_->get_parameter("optimization/audit_envelope_reject",
+                parameters.get_parameter("optimization/audit_envelope_reject",
                                      env_reject_on);
-                node_->get_parameter(
+                parameters.get_parameter(
                     "optimization/audit_envelope_violation_max", env_viol_max);
-                node_->get_parameter(
+                parameters.get_parameter(
                     "optimization/audit_envelope_violation_hard_max",
                     env_viol_hard);
                 runtime_settings.envelope_reject = env_reject_on;
@@ -540,13 +562,13 @@ namespace path_manager
                     dp("optimization/lbfgs_s_curv", 0.0);
                     int mem = 64, past = 3, maxls = 0;
                     double geps = 0.1, delta = 1.0e-6, fdec = 0.0, scurv = 0.0;
-                    node_->get_parameter("optimization/lbfgs_mem_size", mem);
-                    node_->get_parameter("optimization/lbfgs_g_epsilon", geps);
-                    node_->get_parameter("optimization/lbfgs_past", past);
-                    node_->get_parameter("optimization/lbfgs_delta", delta);
-                    node_->get_parameter("optimization/lbfgs_max_linesearch", maxls);
-                    node_->get_parameter("optimization/lbfgs_f_dec", fdec);
-                    node_->get_parameter("optimization/lbfgs_s_curv", scurv);
+                    parameters.get_parameter("optimization/lbfgs_mem_size", mem);
+                    parameters.get_parameter("optimization/lbfgs_g_epsilon", geps);
+                    parameters.get_parameter("optimization/lbfgs_past", past);
+                    parameters.get_parameter("optimization/lbfgs_delta", delta);
+                    parameters.get_parameter("optimization/lbfgs_max_linesearch", maxls);
+                    parameters.get_parameter("optimization/lbfgs_f_dec", fdec);
+                    parameters.get_parameter("optimization/lbfgs_s_curv", scurv);
                     runtime_settings.lbfgs_mem_size = mem;
                     runtime_settings.lbfgs_g_epsilon = geps;
                     runtime_settings.lbfgs_past = past;
@@ -1845,83 +1867,22 @@ void PathManager::rebuildTerrainRiskMasks()
         return;
     }
 
-    constexpr double kTwoPi = 6.28318530717958647692;
     size_t total_samples = 0;
+    const auto settings = terrainRiskSettings();
     for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
         const auto &zone = risk_zones_[zi];
         if (!(zone.reach > 0.0)) continue;
 
         TerrainRiskMask &mask = terrain_risk_masks_[zi];
-        mask.source = zone.center;
-        // The optimizer's smooth barrier extends 5% beyond the moat rim. The
-        // horizon field covers it as well so both terms use one LOS mask.
-        mask.max_range = 1.05 * zone.reach;
-        const double requested_step =
-            risk_mask_radial_step_ > 0.0 ? risk_mask_radial_step_
-                                         : terrain_data_.resolution;
-        const double step = std::max(0.02, requested_step);
-        // Lower clamp 16, not 2: the ray march can only shadow ring ri from
-        // strictly nearer rings, so ring 1 is always clear and a 2-ring mask
-        // (any zone with reach <~ one DEM cell) would be ALL clear — masking
-        // silently off while "horizon ready" still logs. 16 rings keeps the
-        // always-clear ring at <=max_range/15 (sub-DEM-cell, where LOS
-        // blocking is geometrically impossible anyway).
-        mask.radial_count = std::clamp(
-            static_cast<int>(std::ceil(mask.max_range / step)) + 1, 16, 8192);
-        mask.radial_step =
-            mask.max_range / static_cast<double>(mask.radial_count - 1);
-        // At the outer rim, adjacent rays are no farther apart than one
-        // radial/DEM sample. This avoids angular gaps behind narrow ridges.
-        mask.angular_count = std::clamp(
-            static_cast<int>(std::ceil(kTwoPi * mask.max_range /
-                                       mask.radial_step)),
-            72, 4096);
-        const float clear_ceiling = static_cast<float>(
-            zone.center.z() - 2.0 * mask.max_range -
-            20.0 * risk_mask_softness_ - 1.0);
-        mask.shadow_ceiling.assign(
-            static_cast<size_t>(mask.angular_count) * mask.radial_count,
-            clear_ceiling);
-
-        const float source_ground =
-            terrain_data_.getElevation(zone.center.x(), zone.center.y());
-        if (std::isfinite(source_ground) && zone.center.z() <= source_ground &&
-            log_manager_) {
+        auto built = terrain_risk::buildMask(
+            zone, terrain_data_, settings, std::move(mask));
+        mask = std::move(built.mask);
+        if (built.source_at_or_below_ground && log_manager_) {
             log_manager_->warnf(
                 "[RISK-MASK] zone[%zu] source z=%.2f is at/below DEM %.2f; "
                 "center.z is used literally as the source height",
-                zi, zone.center.z(), static_cast<double>(source_ground));
+                zi, zone.center.z(), static_cast<double>(built.source_ground));
         }
-
-        const double dtheta = kTwoPi / mask.angular_count;
-        for (int ai = 0; ai < mask.angular_count; ++ai) {
-            const double theta = (static_cast<double>(ai) + 0.5) * dtheta;
-            const double ct = std::cos(theta);
-            const double st = std::sin(theta);
-            double max_slope = -std::numeric_limits<double>::infinity();
-            const size_t row = static_cast<size_t>(ai) * mask.radial_count;
-            for (int ri = 1; ri < mask.radial_count; ++ri) {
-                const double range = ri * mask.radial_step;
-                // Liu et al. (2023), Eq. (9): the shadow ceiling at this
-                // range is generated by the maximum elevation angle among
-                // all NEARER samples. The current sample is incorporated only
-                // after storing, so terrain does not occlude a point sitting
-                // exactly on its own range sample.
-                if (std::isfinite(max_slope)) {
-                    mask.shadow_ceiling[row + ri] = static_cast<float>(
-                        zone.center.z() + range * max_slope);
-                }
-                const float h = terrain_data_.getElevation(
-                    zone.center.x() + range * ct,
-                    zone.center.y() + range * st);
-                if (std::isfinite(h)) {
-                    max_slope = std::max(
-                        max_slope,
-                        (static_cast<double>(h) - zone.center.z()) / range);
-                }
-            }
-        }
-        mask.valid = true;
         total_samples += mask.shadow_ceiling.size();
         if (log_manager_) {
             log_manager_->infof(
@@ -1943,140 +1904,31 @@ void PathManager::rebuildTerrainRiskMasks()
 double PathManager::riskShadowCeiling(size_t zone_index,
                                       const Eigen::Vector3d &pos) const
 {
-    if (!risk_terrain_mask_enable_ || zone_index >= terrain_risk_masks_.size())
-        return -std::numeric_limits<double>::infinity();
-    const TerrainRiskMask &mask = terrain_risk_masks_[zone_index];
-    if (!mask.valid || mask.radial_count < 2 || mask.angular_count < 2)
-        return -std::numeric_limits<double>::infinity();
-
-    const double dx = pos.x() - mask.source.x();
-    const double dy = pos.y() - mask.source.y();
-    const double range = std::hypot(dx, dy);
-    if (range <= 1e-9 || range > mask.max_range)
-        return -std::numeric_limits<double>::infinity();
-
-    constexpr double kTwoPi = 6.28318530717958647692;
-    double theta = std::atan2(dy, dx);
-    if (theta < 0.0) theta += kTwoPi;
-    // Samples were built at angular cell centres (i+0.5)*dtheta.
-    double af = theta * mask.angular_count / kTwoPi - 0.5;
-    int a0 = static_cast<int>(std::floor(af));
-    const double at = af - std::floor(af);
-    a0 = (a0 % mask.angular_count + mask.angular_count) % mask.angular_count;
-    const int a1 = (a0 + 1) % mask.angular_count;
-
-    const double rf = std::min(
-        range / mask.radial_step,
-        static_cast<double>(mask.radial_count - 1));
-    const int r0 = std::clamp(static_cast<int>(std::floor(rf)),
-                              0, mask.radial_count - 1);
-    const int r1 = std::min(r0 + 1, mask.radial_count - 1);
-    const double rt = rf - r0;
-    auto sample = [&mask](int ai, int ri) -> double {
-        return static_cast<double>(mask.shadow_ceiling[
-            static_cast<size_t>(ai) * mask.radial_count + ri]);
-    };
-    const double z0 = (1.0 - rt) * sample(a0, r0) + rt * sample(a0, r1);
-    const double z1 = (1.0 - rt) * sample(a1, r0) + rt * sample(a1, r1);
-    return (1.0 - at) * z0 + at * z1;
+    return terrain_risk::shadowCeiling(
+        terrainRiskMask(zone_index), risk_terrain_mask_enable_, pos);
 }
 
-// [RISK-GROUNDED] (manager/risk_grounded, default ON) The visibility sigmoid's
-// ∂v/∂z = v(1-v)/σ ≥ 0 is a pure DOWN-pull
-// ("lower = terrain-occluded"); over a ridge
-// inside a zone it out-guns the terrain cubic 48x and settles the equilibrium
-// BELOW the surface (measured -0.355 u, VDIAG terr +4803 vs risk -4574).
-// Grounding evaluates the sigmoid at z_eff = smoothmax(z, terrain + band):
-// below the clearance band there is no legal terrain-occluded state, so the z-pull
-// fades to zero while xy-steering (shadow seams) is untouched. Softplus with
-// width = risk_mask_softness_ keeps value and analytic z-gradient ONE C1
-// surface (project hard rule); the xy central differences query this same
-// clamped scalar so they inherit the clamp (incl. its ∂h/∂xy) automatically.
-// Cascades to every consumer of the shared field: optimizer moat/barrier,
-// FE getRiskNorm, guard getRiskCost, and the barrier-exemption predicates —
-// a terrain-hugging forced transit then reads v>0.5 and is exempted as
-// designed.
 double PathManager::riskGroundedZ(const Eigen::Vector3d &pos,
                                   double *dzeff_dz) const
 {
-    if (dzeff_dz) *dzeff_dz = 1.0;
-    if (!risk_grounded_ || !terrain_data_.valid) return pos.z();
-    float h = 0.f, gx = 0.f, gy = 0.f;
-    if (!terrain_data_.getElevationAndGrad(pos.x(), pos.y(), &h, &gx, &gy))
-        return pos.z();  // off-DEM: no terrain, no clamp
-    const double floor_z = static_cast<double>(h) + opt_obstacle_clearance_;
-    // Blend width = σ (validated). MEASURED DEAD END (2026-07-20, do not
-    // retry): narrowing to σ/4 or σ/2 to stop the softplus tail leaking
-    // low-exposure pull below the band (VDIAG: terr +1108 vs risk -902 at
-    // clr=0.108 → 3.7 m graze) BROKE the complex-field stress case both
-    // times (-1004 + collision). The width is not a local optimizer knob: it
-    // reshapes the
-    // shared field for the FRONT-END too (max_risk_simple 106.6 → 0.5 =
-    // different seed homotopy), reigniting the cost conflict. The 3.7 m graze
-    // is instead addressed by the clearance band itself
-    // (optimization/obstacle_clearance): a higher band raises the clamp
-    // floor AND the terrain cubic at the leak depth quadratically, moving
-    // the equilibrium up without touching the field's shape.
-    const double w = std::max(1e-6, risk_mask_softness_);
-    const double a = (pos.z() - floor_z) / w;
-    if (a > 30.0) return pos.z();  // far above the band: identity (s=1)
-    if (a < -30.0) {
-        if (dzeff_dz) *dzeff_dz = 0.0;
-        return floor_z;
-    }
-    if (dzeff_dz) *dzeff_dz = 1.0 / (1.0 + std::exp(-a));
-    return floor_z + w * std::log1p(std::exp(a));
+    return terrain_risk::groundedZ(
+        terrain_data_, terrainRiskSettings(), pos, dzeff_dz);
 }
 
 double PathManager::riskVisibilityValue(size_t zone_index,
                                         const Eigen::Vector3d &pos) const
 {
-    const double ceiling = riskShadowCeiling(zone_index, pos);
-    if (!std::isfinite(ceiling)) return 1.0;
-    const double z_eff = riskGroundedZ(pos, nullptr);
-    const double q = (z_eff - ceiling) / risk_mask_softness_;
-    if (q >= 40.0) return 1.0;
-    if (q <= -40.0) return 0.0;
-    return 1.0 / (1.0 + std::exp(-q));
+    return terrain_risk::visibilityValue(
+        terrainRiskMask(zone_index), terrain_data_, terrainRiskSettings(), pos);
 }
 
 double PathManager::riskVisibility(size_t zone_index,
                                    const Eigen::Vector3d &pos,
                                    Eigen::Vector3d *grad) const
 {
-    const double value = riskVisibilityValue(zone_index, pos);
-    if (!grad) return value;
-    grad->setZero();
-    if (zone_index >= terrain_risk_masks_.size() ||
-        !terrain_risk_masks_[zone_index].valid ||
-        value <= 1e-12 || value >= 1.0 - 1e-12) {
-        return value;
-    }
-
-    // The polar horizon table is bilinear but its xy chain rule is awkward at
-    // angle wrap and at the source. A small central difference of the SAME
-    // scalar query gives L-BFGS a consistent gradient without putting ray
-    // marching in the optimization loop. z is analytic.
-    const double eps = std::clamp(
-        0.25 * terrain_risk_masks_[zone_index].radial_step, 0.02, 0.50);
-    Eigen::Vector3d pp = pos;
-    Eigen::Vector3d pm = pos;
-    pp.x() += eps;
-    pm.x() -= eps;
-    grad->x() = (riskVisibilityValue(zone_index, pp) -
-                 riskVisibilityValue(zone_index, pm)) / (2.0 * eps);
-    pp = pos;
-    pm = pos;
-    pp.y() += eps;
-    pm.y() -= eps;
-    grad->y() = (riskVisibilityValue(zone_index, pp) -
-                 riskVisibilityValue(zone_index, pm)) / (2.0 * eps);
-    // Analytic z-grad through the (optional) grounded clamp: chain rule with
-    // ∂z_eff/∂z — value itself already came from the clamped scalar above.
-    double dzeff_dz = 1.0;
-    (void)riskGroundedZ(pos, &dzeff_dz);
-    grad->z() = value * (1.0 - value) / risk_mask_softness_ * dzeff_dz;
-    return value;
+    return terrain_risk::visibility(
+        terrainRiskMask(zone_index), terrain_data_, terrainRiskSettings(), pos,
+        grad);
 }
 
 // Draped visibility-boundary heatmap. One latched GridMap summarises the
