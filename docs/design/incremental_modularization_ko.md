@@ -1251,3 +1251,54 @@ helper를 추가한 뒤 두 모드의 비교를 완료했다. 제품 코드는 �
 증거는 [단계 4 검증 자료](../validation/planning_visualization_2026_10_10/README.md)에
 보관한다. 다음 단계는 기존 Python 지도 처리의 같은 계산 경로를 함수로 제공하는
 작업이며, ROS 서비스의 설정·rollback·발행 책임은 유지한다.
+
+## 후속 단계 5 — Python 지도 처리와 ROS 서비스 연결 (2026-10-10)
+
+단계 4의 상위 `7100f0f` / 계획 `fcc5aac` 이후 기존 TerrainPublisher의 파일 읽기·
+미션 좌표 해석·회랑 범위와 해상도 선택·리샘플링·NaN·단위 변환을 Python 함수로
+옮겼다. `mmp_terrain.map_loader`는 ROS 노드·메시지나 프로세스 환경 변수를 읽지
+않으며, 기존 서비스도 같은 함수 경로를 사용한다.
+
+| 공개 경계 | 입력·결과와 책임 |
+|---|---|
+| `MapLoadInput` | 파일·미션·world·회랑·해상도와 명시적 자산 override, live 영역 입력 |
+| `resolve_map_mission()` | 자산을 한 번 pin하고 미션·프레임 snapshot 반환 |
+| `load_map()` | 소유하는 float32 지형, 실제 범위·해상도·자산 경로·해석한 미션 반환 |
+| `normalize_elevation()` | 기존 float32 변환과 NaN 규칙 적용 |
+| `ros_terrain.to_grid_map()` | 준비된 결과와 외부 stamp를 기존 GridMap layout으로 직렬화 |
+
+기본값 정의는 map_loader 한 곳에 두고 기존 클래스 상수·호출은 호환 연결로 유지한다.
+행 X/열 Y, 북쪽부터 시작하는 raster 순서, 100 m 단위, 미션의 m AGL, 열 우선
+메시지 순서와 원래 연산 순서를 보존했다. 결과에 raw DEM 사본과 열린 raster를
+추가 보관하지 않는다. 명시적으로 전달한 snapshot은 같은 요청·자산에 속해야 하고
+호출 중 변경하지 않는다. live zone/obstacle 입력은 immutable tuple로 복사한다.
+
+서비스의 token, 숫자 0의 sticky 설정, resolve-only, 명령 필드 선검증, 오류 rollback,
+토픽 mirror와 발행 책임은 ROS 어댑터에 남는다. Startup에는 기존과 같이 명령 필드
+검사를 추가하지 않는다. 빈 YAML 목록의 live topic fallback과 명시적 빈 자산 override의
+기존 거부도 보존했다. `world="none"`은 지형 삭제 결과이며 파일·해석 오류는 예외다.
+상위 `src/mmp_terrain/docs/map_loader_api_ko.md`와 설치되는 Python 예제에 계약을 기록했다.
+
+### 검증
+
+변경 전 설치된 TerrainPublisher와 자산·설정을 보존해 기준을 확보했다. 설치 모듈을
+명시적으로 로드한 최종 검사에서 기존 53개와 새 공개 API 검사 16개, 합계 **69/69**가
+통과했다. ROS import를 거부한 환경에서도 순수 로더를 사용했고, 설치된 example도
+실제 R2 자산으로 실행했다. 변경 소스와 그대로 유지한 입력 **45개**의 해시가 일치했다.
+
+R2의 **2804×4119**, **30 m**, **654,218개 NaN** 지형은 모든 float32 비트와 NaN mask가
+원본과 같다. normalized F-order SHA256은
+`2c3155296b152caf3c3b0cff82f18a9e84c064413f12992ef205e4d241221ff1`이다.
+해석된 미션·프레임·응답, 진단 순서, 유효 설정과 GridMap bytes를 포함한 **27개** 비교가
+통과했다. 메시지 header stamp만 제외했다. 순수 호출과 실제 ROS 노드의 callback 경로를
+비교했으며, 추가로 실제 RViz 서비스 입력·R2 계획·환경 변경 ABORT·새 임무 복구도
+실행했다. 190개 궤적 조각·계수·시간·전단 경로와 평가·후처리·비용 프로필이 같다.
+
+컨테이너에서 `src/mmp_terrain`만 명시하여 패키지를 빌드했다. 격리 검증 뒤 공백 6곳을
+정리한 변경은 AST가 같음을 확인하고 최종 설치 시험을 수행했다. 진행 중 새 검사의
+NumPy 배열 비교 assertion을 수정한 기록도 최종 결과와 구분해 보존한다.
+증거는 상위 저장소 `docs/validation/map_loader_2026_10_10`에 보관한다. 큰 원시 DEM·
+배열 자체를 저장소에 복제하지 않으며, 오프라인 해시 검수는 새 runtime 시험이 아니다.
+
+다음 단계 6은 검증된 계산 함수를 하나의 계산 target으로 묶고, 기존 전체 계획 target의
+호환성을 유지하며 설치된 API만 쓰는 외부 프로젝트와 현재 사용법 색인을 제공한다.
