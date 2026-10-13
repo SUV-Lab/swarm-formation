@@ -65,7 +65,7 @@ void exercise(const char *config)
     set(name, values);
   };
   const auto clear = [&] {
-    for (int i = 1; i <= 3; ++i)
+    for (int i = 1; i <= 4; ++i)
       profile("chain/seg" + std::to_string(i) + "/params", {});
     for (const char *phase : {"departure", "cruise", "arrival"})
       profile(std::string("chain/phase/") + phase + "/params", {});
@@ -124,26 +124,67 @@ void exercise(const char *config)
             capped.trajectory.getVel(capped.trajectory.getTotalDuration() * 0.5).norm() < 1.9,
         "a real effective hard ceiling still reaches the fallback optimizer");
 
-  // A superseded invalid phase value must stay superseded if a cruise
-  // worker needs the real merged-span retry, not just in early fallback.
-  clear();
-  set("chain/segments", 4);
-  set("chain/phase/enable", true);
-  profile("chain/phase/cruise/params", {"optimization/max_vel=2.0"});
-  profile("chain/seg2/params", {"optimization/max_vel=2.0"});
-  profile("chain/seg3/params", {"optimization/max_vel=2.0"});
-  set("chain/jitter/fail_segment", 2);
-  const auto merge_reference = planner.plan(request);
-  check(merge_reference.hasTrajectory() && merge_reference.phases.size() == 3,
-        "one failed cruise worker is rescued by the real four-to-three span merge");
-  profile("chain/phase/cruise/params",
-          {"optimization/max_vel=0.5", "optimization/max_vel=nan"});
-  set("chain/jitter/fail_segment", 2);
-  const auto merge_overridden = planner.plan(request);
-  check(merge_overridden.hasTrajectory() && merge_reference.hasTrajectory() &&
-            coefficients(merge_overridden.trajectory) == coefficients(merge_reference.trajectory) &&
-            coefficients(merge_overridden.reference_trajectory) == coefficients(merge_reference.reference_trajectory),
-        "merge retry keeps effective segment ceilings over an invalid lower-precedence phase");
+  // Exercise the actual four-to-three merge after either serial or parallel
+  // workers. Equivalent effective worker limits must produce the same merge,
+  // whether a phase default was superseded or a mission default was implicit.
+  for (const bool parallel : {false, true}) {
+    const std::string mode = parallel ? "parallel merge" : "serial merge";
+    clear();
+    set("chain/segments", 4);
+    set("chain/phase/enable", true);
+    set("chain/parallel", parallel);
+    const auto shared_max_vel = node->get_parameter("optimization/max_vel").as_double();
+    const auto shared_threads = node->get_parameter("optimization/risk_parallel_threads").as_int();
+    const auto merge = [&] {
+      set("chain/jitter/fail_segment", 2);
+      return planner.plan(request);
+    };
+    const auto same_merge = [&](const pm::MissionPlanResult &result,
+                                const pm::MissionPlanResult &reference,
+                                const std::string &label) {
+      check(result.hasTrajectory() && reference.hasTrajectory() &&
+                result.phases.size() == 3 && reference.phases.size() == 3 &&
+                coefficients(result.trajectory) == coefficients(reference.trajectory) &&
+                coefficients(result.reference_trajectory) == coefficients(reference.reference_trajectory),
+            mode + " " + label);
+    };
+
+    profile("chain/phase/cruise/params", {"optimization/max_vel=2.0"});
+    profile("chain/seg2/params", {"optimization/max_vel=2.0"});
+    profile("chain/seg3/params", {"optimization/max_vel=2.0"});
+    const auto merge_reference = merge();
+    check(merge_reference.hasTrajectory() && merge_reference.phases.size() == 3,
+          mode + " rescues one failed cruise worker with a real four-to-three span merge");
+    profile("chain/phase/cruise/params", {"optimization/max_vel=0.5"});
+    same_merge(merge(), merge_reference,
+               "keeps explicit segment ceilings over a valid lower-precedence phase");
+    profile("chain/phase/cruise/params",
+            {"optimization/max_vel=0.5", "optimization/max_vel=nan"});
+    same_merge(merge(), merge_reference,
+               "keeps effective segment ceilings over an invalid lower-precedence phase");
+
+    // The untouched neighbor inherits optimization/max_vel=2.0. Omitting
+    // its override cannot let the other worker's 4.0 ceiling relax that
+    // portion of the merged trajectory.
+    profile("chain/phase/cruise/params", {});
+    profile("chain/seg2/params", {"optimization/max_vel=4.0"});
+    profile("chain/seg3/params", {"optimization/max_vel=2.0"});
+    const auto explicit_default = merge();
+    check(explicit_default.hasTrajectory() && explicit_default.phases.size() == 3,
+          mode + " merges distinct explicit worker ceilings");
+    profile("chain/seg3/params", {});
+    same_merge(merge(), explicit_default,
+               "preserves an inherited mission ceiling exactly like its explicit value");
+
+    profile("chain/phase/cruise/params", {"optimization/max_vel=2.0"});
+    profile("chain/seg2/params", {"optimization/max_vel=2.0"});
+    profile("chain/seg3/params", {"optimization/max_vel=2.0"});
+    same_merge(merge(), merge_reference,
+               "recovers the original complete trajectories after different retry profiles");
+    check(node->get_parameter("optimization/max_vel").as_double() == shared_max_vel &&
+              node->get_parameter("optimization/risk_parallel_threads").as_int() == shared_threads,
+          mode + " leaves shared optimizer defaults unchanged after failed workers and retries");
+  }
   set("chain/phase/enable", false);
 
   for (const std::string mode : {"early", "baseline", "route", "parallel"}) {

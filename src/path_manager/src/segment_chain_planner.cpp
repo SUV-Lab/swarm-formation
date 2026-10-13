@@ -2319,43 +2319,45 @@ SegmentChainPlanner::mergedRetryProfile(const PlanContext &state,
   MergeRetryProfile profile;
   std::map<std::string, rclcpp::Parameter> values;
   // Arrival wins when a merge spans both ends; otherwise use departure or
-  // cruise by position. Per-segment soft overrides may be dropped, while
-  // every hard maximum survives as the conservative minimum.
+  // cruise by position. Only soft weights come from the raw phase profile:
+  // its hard maximum may have been superseded by a segment override.
   if (phase_requested) {
     const SegmentOverrides &phase =
         candidate.hi + 1 == state.segments ? workers.arrival
         : candidate.lo == 0           ? workers.departure
                                       : workers.cruise;
-    for (const auto &parameter : phase.params)
-      if (whitelistFind(parameter.get_name()))
+    for (const auto &parameter : phase.params) {
+      const OvrKey *key = whitelistFind(parameter.get_name());
+      if (key && key->tag == OvrTag::kSoft)
         values[parameter.get_name()] = parameter;
-    // Invalid phase values reached here only if every affected original
-    // worker overrode them with a valid segment value. Do not resurrect an
-    // earlier phase occurrence; the validated effective hard limits below
-    // are the requirements of this merged span.
-    for (const auto &error : phase.invalid_hard) values.erase(error.first);
+    }
   }
+  double max_velocity = std::numeric_limits<double>::infinity();
   for (int side : {candidate.lo, candidate.hi}) {
+    // Preserve each original worker's actual limit, including an inherited
+    // default absent from its sparse override list. The manager's cruise
+    // speed and freshly read ROS parameters are not this configured value.
+    const double worker_max_velocity =
+        workers.optimizers[static_cast<size_t>(side)]->configuredMaxVelocity();
+    if (!std::isfinite(worker_max_velocity) || worker_max_velocity <= 0.0)
+      throw InvalidHardProfile(
+          "invalid hard profile for merge worker: optimization/max_vel must be finite and positive");
+    max_velocity = std::min(max_velocity, worker_max_velocity);
     for (const auto &parameter :
          workers.effective[static_cast<size_t>(side)].params) {
       const OvrKey *key = whitelistFind(parameter.get_name());
-      if (!key) continue;
-      if (key->tag == OvrTag::kSoft) {
-        const auto existing = values.find(parameter.get_name());
-        if (existing == values.end() ||
-            existing->second.as_double() != parameter.as_double())
-          profile.soft_drop_note +=
-              (profile.soft_drop_note.empty() ? "" : ", ") +
-              parameter.get_name();
-        continue;
-      }
-      const double value = parameter.as_double();
+      if (!key || key->tag != OvrTag::kSoft) continue;
       const auto existing = values.find(parameter.get_name());
-      if (existing == values.end() || value < existing->second.as_double())
-        values[parameter.get_name()] =
-            rclcpp::Parameter(parameter.get_name(), value);
+      if (existing == values.end() ||
+          existing->second.as_double() != parameter.as_double())
+        profile.soft_drop_note +=
+            (profile.soft_drop_note.empty() ? "" : ", ") +
+            parameter.get_name();
     }
   }
+  // max_vel is the route-worker whitelist's sole hard maximum.
+  values["optimization/max_vel"] =
+      rclcpp::Parameter("optimization/max_vel", max_velocity);
   for (const auto &entry : values) {
     profile.overrides.params.push_back(entry.second);
     profile.overrides.label +=

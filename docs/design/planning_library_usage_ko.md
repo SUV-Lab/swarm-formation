@@ -182,6 +182,12 @@ route chain과 early fallback은 활성 phase→segment 순서로 profile을 합
 phase의 잘못된 값이 유효한 segment 값으로 덮이면 후자를 사용한다. 이 검사는 chain
 profile 경계의 계약이며 optimizer의 모든 파라미터 검증을 대신하지 않는다.
 
+구간 병합 재시도의 `optimization/max_vel`은 두 원본 worker optimizer에 실제로
+설정된 값 중 작은 값이다. phase/segment에서 명시한 값과 상속된 기본값을 똑같이
+취급한다. 덮어쓴 원본 phase 제한이나 manager의 순항 속도를 다시 합성하지 않으며,
+재시도 시점의 ROS 파라미터도 다시 읽지 않는다. soft 가중치 선택과 단일 계획
+fallback의 기존 규칙은 유지한다.
+
 동적 장애물은 유한한 중심과 양수·유한한 반지름/크기가 필요하다. 잘못된 입력은 `-1`로
 거부하며 대기열·환경 세대·yaw RNG를 바꾸지 않는다. 정상 입력의 `-2`(지연 설치) 및
 0 이상의 장애물 ID 의미는 유지한다. raw ROS GridMap도 값 입력과 같은 구조 검사를

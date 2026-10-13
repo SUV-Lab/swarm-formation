@@ -508,6 +508,12 @@ namespace ego_planner
     // mutating the shared ROS node. Existing defaults and normalization apply.
     void setParam(const rclcpp::Node::SharedPtr &node,
                   const std::vector<rclcpp::Parameter> &parameter_overrides);
+    // The configured optimization/max_vel in planner units/s, including
+    // inherited defaults and local overrides. Zero until setParam completes.
+    // Reading the stored value does not consult live ROS parameters.
+    double configuredMaxVelocity() const {
+        return parameters_initialized_ ? max_vel_ : 0.0;
+    }
     // Serial setup only. An explicit immutable model survives setParam and
     // is the physical authority; ROS dynamics_* physical overrides do not
     // replace it. Null restores the current ROS fixed-wing parameter model.
