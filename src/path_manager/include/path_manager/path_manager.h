@@ -374,6 +374,10 @@ namespace path_manager
     // Terrain data interface
     // Rejected input leaves terrain, auto resolution and revisions unchanged.
     // The ROS receipt must describe only an accepted replacement or clear.
+    // Clear also removes the SDF and installed/queued dynamic obstacles;
+    // risk zones remain. This setter does not generally revalidate execution.
+    // A replacement that enables deferred-obstacle installation does recheck
+    // that batch; ordinary terrain-change revalidation belongs to the caller.
     TerrainUpdate setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg);
     bool hasTerrainData() const { return environment_->terrain().valid; }
     // Terrain elevation at (x, y) in frame units; false over water / off-DEM
@@ -399,35 +403,28 @@ namespace path_manager
 
     // Dynamic obstacle interface (RViz-driven). Patches are layered on top of
     // the static terrain ESDF; the next plan picks them up via min(static,dyn).
-    // Returns patch id (>= 0) on success, -1 if SDF not built yet or out of map.
+    // Returns an installed patch ID (>= 0), -2 when accepted into the queue
+    // until an SDF exists, or -1 for invalid input / failed installation.
+    // Adding or clearing obstacles here does not revalidate adopted execution;
+    // the ROS obstacle callback explicitly performs that check after its batch.
     int  addDynamicSphere(const Eigen::Vector3d& center, double radius,
                           const std::string& model = "");
-    // Axis-aligned box: collision (SDF kCube) == visual mesh bbox. size = full extents.
+    // size is the full box extent. The generated yaw is shared by the SDF
+    // collision primitive and visual mesh.
     int  addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vector3d& size,
                        const std::string& model = "");
     void clearDynamicObstacles();
 
-    // [ENV-CHANGE] Re-check the trajectory currently stored for execution
-    // against the CURRENT obstacle set, from `t_from` seconds into it to its
-    // end, and invalidate it if what remains is no longer flyable.
-    //
-    // Why this exists: dynamic obstacles can be replaced while a flight is in
-    // progress, and EXEC_TRAJ does not replan — it is single-shot, so it only
-    // waits for the stored trajectory to finish. Nothing re-examined the
-    // flight when the world under it changed, so a mission kept flying into
-    // an obstacle that arrived after take-off. A failed re-plan does not
-    // describe this case either: no re-plan is attempted at all.
-    //
-    // The three cases:
-    //   - nothing stored -> nothing to do, true
-    //   - the remainder is still clear -> keep flying it, true
-    //   - the remainder is blocked -> zero duration and start_time, false.
-    //     EXEC_TRAJ already reads that as "the plan was REFUSED, this is not
-    //     arrival" and parks in WAIT_POSITION, so the stop path is the one
-    //     that already exists rather than a second one.
-    // The already-flown prefix is deliberately not judged: it cannot be
-    // unflown, and refusing on it would ground a flight over a hazard it has
-    // already passed.
+    // [ENV-CHANGE] Sample the remaining execution trajectory against the
+    // current occupancy predicate, from t_from seconds after trajectory start
+    // to its end. This is not a complete dynamics/risk-policy evaluation.
+    // Nothing stored, no remainder, or a clear remainder returns true without
+    // revoking execution. A blocked remainder returns false, writes hit when
+    // supplied, and revokes the stored execution; the flown prefix is ignored.
+    // A registered observer is notified before the live slot is cleared.
+    // With ReplanFSM's observer and publisher available, withdrawal publishes
+    // ABORT and enters WAIT_EXTERNAL_RECOVERY. PathManager itself publishes
+    // no execution control and prescribes no recovery maneuver.
     // Why the stored trajectory was withdrawn. Mirrors
     // TrajectoryExecutionControl's REASON_* so the wire value is not
     // re-derived from a string.
@@ -447,19 +444,21 @@ namespace path_manager
     // CHANGING, and a periodic re-send that changes nothing would otherwise
     // ground every mission that had a zone anywhere.
     uint64_t riskZoneFingerprint() const;
-    // The same check driven from wherever the environment changed, using the
-    // flight's own elapsed time. `what` names the trigger in the log.
+    // Explicitly request the same check using elapsed ROS time since the
+    // stored flight's start. Environment setters do not all call this helper.
+    // `what` names the trigger in the log.
     void revalidateAfterEnvChange(const char *what, EnvChangeReason reason);
-    // Drop the stored trajectory because the world changed in a way this node
-    // cannot re-judge. Same two fields every other refusal zeroes.
+    // Revoke execution with the fixed POLICY_UNEVALUATED reason and clear its
+    // visualization. The caller decides when policy can no longer be judged;
+    // this method does not detect zone changes or evaluate the replacement.
     void invalidateStoredTrajectoryForEnvChange();
     size_t numDynamicObstacles() const { return environment_->distanceField().numActiveObstacles(); }
 
-    // Runtime risk-zone reset (called when ObstacleScenarioPanel / mission
-    // authority publishes a new RiskZoneArray). Atomically replaces the
-    // internal zone list. A* / optimizer are re-bound on next planGlobalTraj.
-    // Thread/timing: callers must ensure this is invoked on the same
-    // callback group as trajectory commands (handled in ReplanFSM).
+    // Runtime risk-zone reset. Accepted input replaces the internal zone list,
+    // refreshes visualization and rebinds the searcher and primary optimizer.
+    // It does not revalidate or revoke adopted execution; the ROS callback
+    // owns that policy. Serialize with plans, workers and other environment
+    // updates (the existing ReplanFSM callback group provides this ordering).
     // [PA-7] Returns false and changes NOTHING when any zone is malformed.
     // Validating here as well as at the message boundary means no caller can
     // install a zone whose peak violates the (0, 1] the struct declares.
@@ -787,13 +786,11 @@ namespace path_manager
     double max_acc_;
     double length_per_piece_ = 2.0;
     double obstacle_clearance_ = 1.0;
-    // Virtual ground / ceiling planes. If set ≥ 0, these altitudes are
-    // voxelised as solid obstacle layers when the SDF is built, so the
-    // optimizer naturally treats "flying below ground" or "above ceiling"
-    // as collision (with a smooth lateral gradient). A value < 0 (e.g.
-    // the default -0.1) disables that plane. Without these, L-BFGS can
-    // drift the trajectory below the start altitude to dodge obstacles,
-    // which is non-physical.
+    // Virtual ground / ceiling: absolute planner z in u, not AGL. The legacy
+    // activation rule is > -0.5; <= -0.5 disables a plane. Thus the no-override
+    // defaults below (-0.1) are ACTIVE. These values feed front-end altitude
+    // checks/masks and optimizer plane penalties; they are not SDF voxels.
+    // YAML overrides and the numeric defaults remain separate configuration.
     double ground_height_ = -0.1;    // frame units (absolute world z; 1 u = 100 m)
     double virtual_ceil_height_ = -0.1;  // frame units (absolute world z)
     // Airspace kept above the highest terrain the route crosses (and above

@@ -9,7 +9,8 @@
 #include <vector>
 
 namespace path_manager {
-  // Terrain elevation data extracted from GridMap
+  // Terrain elevation data extracted from GridMap. Geometry/elevation use
+  // planner units (u); origin is the minimum X/Y corner, not the first cell.
   // [TERRAIN-FRAME] grid_map core convention (what the RViz plugin renders):
   //   wx = origin_x + length_x - (row + 0.5) * res   (matrix ROW spans X, mirrored)
   //   wy = origin_y + length_y - (col + 0.5) * res   (matrix COL spans Y, mirrored)
@@ -114,8 +115,9 @@ namespace path_manager {
     // and on steep (cliff) cells the mismatch kills the L-BFGS line search
     // (-1008 rounding error at near-optimal points). Analytic-per-patch
     // gradients are the same smoothness class the well-validated SDF term had
-    // (trilinear value + its exact gradient). Returns false over pure water /
-    // outside the DEM (no terrain there).
+    // (trilinear value + its exact gradient). Invalid/outside-DEM queries
+    // return false. Pure water returns true with height and gradient zero;
+    // getElevation() instead returns -infinity for that all-water stencil.
     bool getElevationAndGrad(double world_x, double world_y,
                              float *h, float *dhdx, float *dhdy) const {
       // [ELEV-MEMO] 1-entry memo. The optimizer evaluates the SAME constraint

@@ -227,6 +227,11 @@ struct Commands {
 // aim_m: the point to steer at (SI). gamma_cmd: carried command for the
 // rate limit. bank_level: authority for this candidate. lim: the limit set
 // whose speed window the thrust servo tracks.
+// The legacy servo uses v_lo=max(1.02*end_speed_min_mps, 1.1*stall)
+// and v_hi=0.98*end_speed_max_mps. Stall is computed at the state's altitude
+// with lift_coefficient_max*(1-1e-3). These are command-law margins, not a
+// replacement for the end-state acceptance window; waypoint_eval compensates
+// its supplied window for the 1.02/0.98 factors to reuse the same law.
 Commands synthesizeCommands(const mmp_vehicle_dynamics::Parameters &dyn,
                             const mmp_vehicle_dynamics::PointMassState &s,
                             const Eigen::Vector3d &aim_m, double gamma_cmd,

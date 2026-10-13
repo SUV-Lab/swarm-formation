@@ -20,6 +20,8 @@ struct DirectAltitudeConfig {
   double raw_max_z{-1e9};
   double cap_headroom{0.0};
   double floor_headroom{0.0};
+  // Absolute planner z (u), not AGL. Legacy sentinel: > -0.5 enables the
+  // ground plane; <= -0.5 disables it.
   double ground_height{-1.0};
   double weight{0.0};
 };
@@ -59,6 +61,8 @@ enum class DirectTrajectoryStatus {
   SUCCESS,
   ROUTE_TOO_SHORT,
   NO_WAYPOINTS,
+  // Also includes the optimizer's NOT_CONFIGURED and MALFORMED_INPUT statuses;
+  // this adapter does not distinguish them from a numerical solve failure.
   OPTIMIZER_FAILED,
 };
 

@@ -22,6 +22,12 @@ struct OptimizerAltitudeBand {
 // Geometry, head, band and prescribed tail values must be finite. A paired
 // cap must also be finite; mismatched caps and tags retain the legacy fallback
 // policy. These admission checks do not impose flight feasibility policy.
+// Explicit head state and waypoints.back() define the trajectory boundaries.
+// path supplies inner seed geometry, segment lengths and derived arrival
+// direction; its endpoints are not replaced wholesale by those boundaries.
+// Keep the two representations consistent: admission does not check endpoint
+// agreement. Intermediate waypoints are risk-barrier/taper anchors, not
+// additional interpolation constraints.
 struct OptimizerSolveRequest {
   std::vector<Eigen::Vector3d> path;
   std::vector<Eigen::Vector3d> waypoints;

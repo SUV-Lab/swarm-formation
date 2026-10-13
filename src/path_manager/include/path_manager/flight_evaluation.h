@@ -26,7 +26,13 @@ struct PhaseSpan {
 };
 
 struct FlightVerdict {
-  bool evaluated{false};  // false: degenerate input, nothing was judged
+  // False when whole-flight evaluation was not run (including direct plans),
+  // or evaluateFlight refused invalid input/settings or missing required
+  // providers. FlightEvaluationReport::issue explains refusal when available.
+  bool evaluated{false};
+  // This legacy default is not evidence of clearance. Check evaluated before
+  // interpreting clean or either unflyable predicate; both predicates return
+  // false for an unevaluated verdict.
   bool clean{true};
   bool underground{false};
   bool no_cruise{false};

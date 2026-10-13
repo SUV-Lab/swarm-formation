@@ -1,0 +1,1309 @@
+{
+  "purpose": "Change detection for allowlisted source/test/build files, not a claim that all numerical bodies were semantically audited.",
+  "main_head": "a297f2342cebe33ff0e9edd2eb55db0172ea65bb",
+  "planner_head": "d2ef5496432b86cfb19d10be5658a369c9cc3725",
+  "working_tree_included": true,
+  "files": [
+    {
+      "file": "map/audit_cache.py",
+      "lines": 239,
+      "sha256": "f3eea737a76890946358b6de0ac7c7025e56795aeb75ac7a86c6636b18714f31"
+    },
+    {
+      "file": "map/audit_dem_tiles.py",
+      "lines": 360,
+      "sha256": "99db3b18ed1a5711bf976b81709520e2b8b3e1e708dd9467028746d820271fce"
+    },
+    {
+      "file": "map/audit_geodetic_kernel.py",
+      "lines": 328,
+      "sha256": "7dba1adf5bb1796302b9402982748295e548f931d9beda5049930ef167bb7f8a"
+    },
+    {
+      "file": "map/audit_harmonize.py",
+      "lines": 580,
+      "sha256": "14ec050e5f78303e954a9320d11fea01f1c0be38c32bf8845a720fb1da777d6c"
+    },
+    {
+      "file": "map/audit_land_mask.py",
+      "lines": 152,
+      "sha256": "57279e94a26c264a870e6b6f029908d440942482b270108352bb1e398df5ba6f"
+    },
+    {
+      "file": "map/bake_tiles.py",
+      "lines": 1104,
+      "sha256": "28eb5a7287e0502ea033bfd32f03d339841d1f8c46080f09fa48224f8b9735f8"
+    },
+    {
+      "file": "map/build_aoi_probe.py",
+      "lines": 522,
+      "sha256": "4caeb58897e17de42b37f066e27fc46b70befa4e9c98879c7cdeadf1b0437ec7"
+    },
+    {
+      "file": "map/build_composites.py",
+      "lines": 152,
+      "sha256": "af8061027d25bc131df01e275c2f64612cf4c18a7acd8f7668b82fed3ff239a4"
+    },
+    {
+      "file": "map/build_coverage_manifest.py",
+      "lines": 668,
+      "sha256": "75d38609cff59bde710e5d75603e44c22f31858b16e5765d0ba227e5eececc18"
+    },
+    {
+      "file": "map/build_land_mask.py",
+      "lines": 210,
+      "sha256": "9448fe9f4b5d443b8df05b59f6457d930c6644ee1dc97c0b1ef1bb5a80312c13"
+    },
+    {
+      "file": "map/build_target_grid.py",
+      "lines": 306,
+      "sha256": "2a7795662a468dbdc5ea49b52a27c1232120147407a6dc60074cd310a7ddff95"
+    },
+    {
+      "file": "map/census_jpeg_quality.py",
+      "lines": 332,
+      "sha256": "783499eca56e6f8ae23bf6c64b30e92ae1e3547968f99280623192cc0620d645"
+    },
+    {
+      "file": "map/composite_corridor.py",
+      "lines": 512,
+      "sha256": "126381a88dba2f3f001fae041e3538cfe786703e0a73af84bd4b317119801a13"
+    },
+    {
+      "file": "map/convert_frame_coords.py",
+      "lines": 414,
+      "sha256": "625ef5f68836091d8c0ae281f12aa01febfbd9b6777c83a930f01da7aacb7341"
+    },
+    {
+      "file": "map/coverage_mask.py",
+      "lines": 345,
+      "sha256": "4fa7fde4f7ffb30447b8541bb76ecdc8ae2469f280953692c082f507df63ec40"
+    },
+    {
+      "file": "map/fetch_bmng.py",
+      "lines": 155,
+      "sha256": "b52d4224b2fe8ce566a2d66f3446b1b3e19369359c21e68065a0c77c0d40c4be"
+    },
+    {
+      "file": "map/fetch_coastline.py",
+      "lines": 174,
+      "sha256": "fc1485b33f05a5a86892c318bf182b41c23c0386a916bd2a8ad2ccf3288a44a0"
+    },
+    {
+      "file": "map/fetch_dem_tiles.py",
+      "lines": 449,
+      "sha256": "3ee7d973bca579f52ba54397abd3ebf26ba68910a5e56d088b4ca9da39bcd4c5"
+    },
+    {
+      "file": "map/fetch_s2_corridor.py",
+      "lines": 504,
+      "sha256": "99ed0c8e133864040148bb401fcae5dd0b96b70553aa7189b0656e3cf70b6ef8"
+    },
+    {
+      "file": "map/gshhg_rings.py",
+      "lines": 179,
+      "sha256": "5df3110f5d9a60cfc269d94de9872d475a85cfda6ad3dbd157ab38b2a14eb256"
+    },
+    {
+      "file": "map/harmonize.py",
+      "lines": 550,
+      "sha256": "faeb2968332ad6cb2e591b4020f436d64f673628d72d92da180e58e3fde1e09b"
+    },
+    {
+      "file": "map/mission_lonlat.py",
+      "lines": 326,
+      "sha256": "76de786022e9016b1f58ef9b99870dccb1e5ccc3a56edd2c747b70bcee871030"
+    },
+    {
+      "file": "map/mmp_paths.py",
+      "lines": 79,
+      "sha256": "2bd788d48c6720ede81cf381759017bf692a561d6ace2abf32d77dd40d806f6d"
+    },
+    {
+      "file": "map/prewarm.py",
+      "lines": 161,
+      "sha256": "0bf97dd4d6df231cb7c7129afe9299c057b712d1828ed61dbf8b290c9bc0a5b8"
+    },
+    {
+      "file": "map/prewarm_fast.py",
+      "lines": 109,
+      "sha256": "f76137c3f338f9e22453a953f5cdec2b4357b2fc912de74a7c6aec07f8308ba3"
+    },
+    {
+      "file": "map/prewarm_hgt.py",
+      "lines": 75,
+      "sha256": "145dc3cd52d6db276e95d704a6d3a6eb2413117b0b5b227cc425cf62d0340ae4"
+    },
+    {
+      "file": "map/repair_sea.py",
+      "lines": 283,
+      "sha256": "c4db3dc7c7b466fb3b85831e0cb26d260788cf541b12b91fed14620dc1dfbc2c"
+    },
+    {
+      "file": "map/reselect_scenes.py",
+      "lines": 92,
+      "sha256": "b9f3bc6ef44eb794655c3e892cb9414b36d2e5643691afb3a34c92dc03fe5fb8"
+    },
+    {
+      "file": "map/seal_composites.py",
+      "lines": 273,
+      "sha256": "d4b3dd85837ea8c4de5641f34e33436987640f3ac539eef88afc73703afade73"
+    },
+    {
+      "file": "map/stream_s2_full.py",
+      "lines": 716,
+      "sha256": "8b88a5307fc2be6840d519bcd96a056ac2b7c31b2987336f2bdcf1eb3254c0fa"
+    },
+    {
+      "file": "map/survey_buffers.py",
+      "lines": 346,
+      "sha256": "3258bb3ae2824eeba44f502dde9ec4bf77016a53bb4c7e8bfa77c941b86cbfc6"
+    },
+    {
+      "file": "map/survey_full_imagery.py",
+      "lines": 909,
+      "sha256": "e1769bebf271918b3d6892ad816046369947a96f5c6634e3afe33151c3543789"
+    },
+    {
+      "file": "map/survey_s2_costs.py",
+      "lines": 469,
+      "sha256": "efc47de8b9abe7253377af7057fb2d20f81b9a06c29883abe0d5dc5f6cd9b76e"
+    },
+    {
+      "file": "map/swap_and_rebake.py",
+      "lines": 178,
+      "sha256": "6877207a536fa29c27d0a7c310c500c2fb5848e7e0f1e254925f48b4d87c90e6"
+    },
+    {
+      "file": "map/test_asset_install_e2e.py",
+      "lines": 354,
+      "sha256": "776d2925043cbcdee55833de6cc4f7aa5449e57ee0dcef5fa1537d4e82662e35"
+    },
+    {
+      "file": "map/test_asset_pin.py",
+      "lines": 148,
+      "sha256": "48c8d97de483607e7f8436ead1792b46001c3aa6204ac6e1f8cd7fdca5a49cc6"
+    },
+    {
+      "file": "map/test_asset_registry.py",
+      "lines": 488,
+      "sha256": "58409c8c54a6964938f28edac81964e14624d10a0b0d30506d7c3592a5e73ff2"
+    },
+    {
+      "file": "map/test_audit_cache.py",
+      "lines": 115,
+      "sha256": "47d0442b245511593e1855140c0bc3f9309bec258b16a3ed7bf001d93ebfc68d"
+    },
+    {
+      "file": "map/test_audit_harmonize.py",
+      "lines": 250,
+      "sha256": "3775b2a6cba85765b828f81819f5445dd884907fb5f0d5531e1ad54e5474908c"
+    },
+    {
+      "file": "map/test_bake_tiles.py",
+      "lines": 797,
+      "sha256": "37cfff074a53ab926f05cefd5b4393faf9fa955e9f3d866d1a49a1870ade489b"
+    },
+    {
+      "file": "map/test_build_aoi_probe.py",
+      "lines": 264,
+      "sha256": "0191878a40758cfbeeacd753275b28d5f2d4b6694687114fcd0fa19e09099ea2"
+    },
+    {
+      "file": "map/test_build_coverage_manifest.py",
+      "lines": 815,
+      "sha256": "0a9ca51d539d281c1f39d5d87d61d8e3b7a69e29e6980bb09a1355c5c7475a17"
+    },
+    {
+      "file": "map/test_build_target_grid.py",
+      "lines": 230,
+      "sha256": "691f4a7aad81d31022e7fc2024a261224497963aad754697045493318782c3fb"
+    },
+    {
+      "file": "map/test_bundle_gate.py",
+      "lines": 352,
+      "sha256": "44dd96f444a8cd2e7e329f16a5ae8ab811439bae1dd03ca1df77b077c2db637d"
+    },
+    {
+      "file": "map/test_bundle_manifest.py",
+      "lines": 236,
+      "sha256": "cfb8a283a0e9ee920072dfc3e9e9e63643b31c581b7e0c1e7c434f8625cf95d0"
+    },
+    {
+      "file": "map/test_cache_guard.py",
+      "lines": 715,
+      "sha256": "1db167d7258811a7e4264e6fd7e364fd6d1605a611bd9eb04fc8a782d07b8df8"
+    },
+    {
+      "file": "map/test_census_jpeg_quality.py",
+      "lines": 272,
+      "sha256": "b489225aab829367c187ba4830bcb8ae6d4138ec5c55fa67cf2eb9ec1be1c855"
+    },
+    {
+      "file": "map/test_composite_corridor.py",
+      "lines": 509,
+      "sha256": "b44cd3b4f7af3c5cd7be163f651667da235d3b468edb3519e11c8e8fe84043a8"
+    },
+    {
+      "file": "map/test_convert_frame_coords.py",
+      "lines": 260,
+      "sha256": "20e733a17a56bc42116635879b580a44e82d8b1af929b19e38b897ff7b45b6db"
+    },
+    {
+      "file": "map/test_coverage_mask.py",
+      "lines": 586,
+      "sha256": "38e4d8fd2cf0332f83503c4e259493a999798cad6b8fc55916b2e519c95bd066"
+    },
+    {
+      "file": "map/test_fetch_bmng.py",
+      "lines": 175,
+      "sha256": "101950094182a7c0eae725d4eed17c906df70f7cf007bf0e012025e79be2d60c"
+    },
+    {
+      "file": "map/test_fetch_dem_tiles.py",
+      "lines": 889,
+      "sha256": "282ee77fce61162b15b0f82e0fc5ec87a9b33a46c1cdbb9962909739c162443d"
+    },
+    {
+      "file": "map/test_fetch_s2_corridor.py",
+      "lines": 447,
+      "sha256": "3acc6115f9b3bf30b31618c8cba6acc299ef0abe2ca5bf09816c0bd1d9be44e0"
+    },
+    {
+      "file": "map/test_full_map_assembler.py",
+      "lines": 278,
+      "sha256": "53018545b16ea210654824519461818cb25868aa289d0f72657e283535713776"
+    },
+    {
+      "file": "map/test_harmonize_identity.py",
+      "lines": 150,
+      "sha256": "38f05e1dec8d5aedf7456ee59b3648afbbabc9bdfc106a73c92608421ccf0e97"
+    },
+    {
+      "file": "map/test_harmonize_paths.py",
+      "lines": 81,
+      "sha256": "cd1d35d0b4ccbd820826b8f2dd43beb48a23f244acace0128392a9f661face16"
+    },
+    {
+      "file": "map/test_harmonize_references.py",
+      "lines": 138,
+      "sha256": "322ecb826d88bd8dfe12df2f58ae9e3eea7b881a6e4ac22f8c5a174aa6d7fa17"
+    },
+    {
+      "file": "map/test_land_mask.py",
+      "lines": 66,
+      "sha256": "7e3d91ab4e8acbec493a5cb01a3b62bdfdac2fbd8be2b59628660fc1b9e842c2"
+    },
+    {
+      "file": "map/test_lod_threshold_policy.py",
+      "lines": 257,
+      "sha256": "95d4e8eabe06745ec1c6b3a2dff0fffcc125744ced107de19ed25739683451bd"
+    },
+    {
+      "file": "map/test_map_loader.py",
+      "lines": 197,
+      "sha256": "77f91e78a99cf631d09c41d9ca2f6699f238548efd3049ac54dbb520c4f22904"
+    },
+    {
+      "file": "map/test_map_loader_ros.py",
+      "lines": 67,
+      "sha256": "d58df3aa910428e97e15e4479a87ba7cdc25740d0145a20b9f25c2bc8017754f"
+    },
+    {
+      "file": "map/test_mission_lonlat.py",
+      "lines": 338,
+      "sha256": "29abe63c15e3e8d4638e8eaa094c4f403337cad4b9491d164ddada58ca993367"
+    },
+    {
+      "file": "map/test_mission_resolve.py",
+      "lines": 427,
+      "sha256": "0e9f575a366b443d8a8a9cf718a01ec54f9fe8297b1f91d55ff9101c83ad926e"
+    },
+    {
+      "file": "map/test_repair_sea.py",
+      "lines": 109,
+      "sha256": "2244ca498f6b03c77813b50b94aad66f9eab4943fae9722d6996632edb6992a8"
+    },
+    {
+      "file": "map/test_s2_feather.py",
+      "lines": 169,
+      "sha256": "f01838cdbdde0221eb3b06a3f82b20aedac2b77c53e22274b1b43d37e28fbf23"
+    },
+    {
+      "file": "map/test_seal_composites.py",
+      "lines": 273,
+      "sha256": "d044b7cafe2b8608c42c9932e3d7ad09ceb33649ed2b0dc6bbc4251aaff3b183"
+    },
+    {
+      "file": "map/test_seal_staged_cache.py",
+      "lines": 484,
+      "sha256": "6dde897ccd1d6a53455fa538f2fb645bb6a30d22e37afef218795b9a71f69e80"
+    },
+    {
+      "file": "map/test_source_coverage.py",
+      "lines": 851,
+      "sha256": "084faac5cf06a1ea097b7f000397b71a89640b5451a351b04771e7a92476c8fc"
+    },
+    {
+      "file": "map/test_stream_s2_full.py",
+      "lines": 261,
+      "sha256": "3198abd55da999e8093cb6b6109a208a6a89cdc45f7b17ff8b1936ee611f6ccd"
+    },
+    {
+      "file": "map/test_survey_buffers.py",
+      "lines": 393,
+      "sha256": "cfa3a3fa288ea9590e986e0fa142b255a9e2df7a26fa6e41ceb2a42f2677d31b"
+    },
+    {
+      "file": "map/test_survey_full_imagery.py",
+      "lines": 295,
+      "sha256": "6f5045f3ef53f074f5414828d23458dd767ffb83a54583387695a4abcf5eac5b"
+    },
+    {
+      "file": "map/test_survey_s2_costs.py",
+      "lines": 107,
+      "sha256": "4975de39fd4b6a4950c71944921b894d9f3a41c3e8a67b41df6aa4fb019c31be"
+    },
+    {
+      "file": "map/test_terrain_publisher_env.py",
+      "lines": 605,
+      "sha256": "9f4c2c3444be1222fc603bf7ab569cbf218cd850cf0c0e4b5b13f6812a154869"
+    },
+    {
+      "file": "map/test_tile_render.py",
+      "lines": 200,
+      "sha256": "1292bbdcf04962b25cbf2c924f3dd32b89daf5279ab83a8f1ebaf752e9b53f49"
+    },
+    {
+      "file": "map/test_verify_bake_regions.py",
+      "lines": 157,
+      "sha256": "b46d91f16a29d00a44d8a6a1e7435057af21edd4b094319ed5c4002bebc72909"
+    },
+    {
+      "file": "map/test_windowed_mosaic.py",
+      "lines": 698,
+      "sha256": "3cd64cd46c85260785da3d88264623d483392fc39ad47cf1ed49e588fd421bab"
+    },
+    {
+      "file": "map/verify_bake_regions.py",
+      "lines": 226,
+      "sha256": "da84a8ad048e6ec60e3f1a973e1e5b1803c3c95409c1b409525556e0c37a58cb"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/CMakeLists.txt",
+      "lines": 838,
+      "sha256": "666900340b2ee7c7b3228c99927818659a5ec7ffe008ef8233e526916684998d"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/examples/flight_evaluator_example.cpp",
+      "lines": 37,
+      "sha256": "ce6243d68b1fe6da364498b44afde0ddec7d02dcc75e1b01170a57e393a59e2c"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/examples/library_consumer/CMakeLists.txt",
+      "lines": 24,
+      "sha256": "86ab9356c37127ecf0bce8c1687041112cb0969eae929f690e84c96c35a4b1d0"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/examples/mission_planner_example.cpp",
+      "lines": 80,
+      "sha256": "ce1df2d62e8fa5ad1e4ec9651d8ded9e95296d1f54866f5ca022dc1b8fbb9007"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/examples/planning_visualization_example.cpp",
+      "lines": 27,
+      "sha256": "2e32d0fc46fb9a58e692763ea5f32dadf724f726e4424c5a4b427f3b935cd65d"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/builtin_route_search.h",
+      "lines": 65,
+      "sha256": "73ca27a8dedf1eb906c2065fa925f5d8b487c6d15b1ea4a5fed000ef0cbe1bf1"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/committed_route.h",
+      "lines": 25,
+      "sha256": "854bcb6315eeb71e05c44f1d36244e8a401641479ce030a4b68f7c2ae17a75bd"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/direct_plan_settings.h",
+      "lines": 25,
+      "sha256": "c5868dc47a4ddb497e9d4c64dac6dd3a325c961fcf1185b17438366131c5d499"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/direct_trajectory_solver.h",
+      "lines": 89,
+      "sha256": "a6d942a54d34f93dd30f09a6a0917ffd532b0337228736ff42687775a0f09b87"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/flight_assembly.h",
+      "lines": 45,
+      "sha256": "4d0ffe0004e7034c17fec19499949afb22e693edfa3129bdaf3c1c5d4e6fcdc8"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluation.h",
+      "lines": 93,
+      "sha256": "9089f3925b90332b5e2109bb3c8bacb557408134d58dd5486986332ed19d53c2"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/flight_evaluator.h",
+      "lines": 191,
+      "sha256": "911b966a7ad5df93a7877d567d9d00f9edbd86976173be51e8119556f05339bf"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/mission_geometry.h",
+      "lines": 69,
+      "sha256": "727a3a35c667f51bcb69532b359722d77b73d8c78605cd9ee257f7c9fe004be9"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/mission_plan.h",
+      "lines": 64,
+      "sha256": "a804891a74690a03e2d5a89b6a75be451954dd54dc92bf1afa686cbce54440bc"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/mission_planner.h",
+      "lines": 36,
+      "sha256": "605e158ba6153c9f1f213a9380e8a979454736b6e857d0bebc4d822aac9f8979"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/mission_planning_backend.h",
+      "lines": 32,
+      "sha256": "a783af4de964dd55fa08ec27cdf1ce62da7ba59c72bd06fa577e54e6f2a5e43b"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/mission_route_search.h",
+      "lines": 58,
+      "sha256": "abda9e188d1dca0cac12da6ce8b4c189b0096d95249785c1158f60fa19ca55c5"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/optimizer_worker_profile.h",
+      "lines": 39,
+      "sha256": "c54b48335aa4637632bf7296e5c9394817f402412f9d4fd1142a3d6cf6a93616"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/path_manager.h",
+      "lines": 930,
+      "sha256": "fdbc55a8de5affea2731ef30bf4ef6cd82fb1267d61fcdf66d9fcd609f55312b"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/plan_settings.h",
+      "lines": 35,
+      "sha256": "0ec1b0f39540f76d2e91311259e1bc7176830ee4d0282e864d561cc13090aebe"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/planning_computation.h",
+      "lines": 63,
+      "sha256": "4b2185166ec1fafda60a752889d4012003f81c551683bf35ebe00223d130797c"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/planning_environment.h",
+      "lines": 53,
+      "sha256": "8520c8e48b3613e15cb18708e682fdf3d9ddc21a37c81a9616e395b9e9b0e253"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/planning_environment_store.h",
+      "lines": 157,
+      "sha256": "cd1a81e8d85bc052d876cf3f3307d02ee67ec657a2fec3cc897e58bff0710554"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/planning_execution.h",
+      "lines": 72,
+      "sha256": "5163c6cfc673af4ff111fda4459f118df4eacceef09ea88bb2b21c93baa928ad"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/planning_result.h",
+      "lines": 151,
+      "sha256": "0d1d38aa548aa3baf472ea283c8d6d49b3a926b058e4467bd312a4d18ad75346"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/planning_visualization_data.h",
+      "lines": 115,
+      "sha256": "274007d5d7ef127983e811599ac49020dedfd07beb72ced422872312cf924004"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/quintic_hermite.h",
+      "lines": 39,
+      "sha256": "38b9780e2195df67df102cda31915588afc6fbd331cb43390406bd8eb5010f7c"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/replan_fsm.h",
+      "lines": 256,
+      "sha256": "45c46e85de0d763e0867abe938d7b9bb463422967250e1cf1a67d4b3eb7564ec"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/risk_zone.h",
+      "lines": 18,
+      "sha256": "f6a85698b0e86207fb953b4e9f328f50a79dfeffd5fbe8eb826c2ae415d67669"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/ros_planning_backend.h",
+      "lines": 96,
+      "sha256": "d3cc822e57d6041957a7ac85fd874ca8a9317b7c8e00b2b41e48c0c98dcbdd30"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/ros_planning_visualization.h",
+      "lines": 32,
+      "sha256": "1f67ed3223b4f22026c75b8b181f9c7d4327cb3b94ee324d30f8a68bc0d062a3"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/ros_route_search.h",
+      "lines": 13,
+      "sha256": "775489d14587ed14682875fbd0b833f2b97c99c49564d3bc0394739317a85cad"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/ros_terrain_grid.h",
+      "lines": 41,
+      "sha256": "1989eb27658ec9d2440f7bfd8cca8e1a002c1658ba1ca2d955b34623312392e5"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/route_postprocessing.h",
+      "lines": 84,
+      "sha256": "5db4c1a68af4b6bd63a83c56df4e22a210c208ba624b759a0b77e0c5c862b32f"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/route_search_backend.h",
+      "lines": 139,
+      "sha256": "0b239be59c2dd318e4d6843b398dd768196b67b67fde44c2fd56d61bdeec55c7"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/route_slice_batch.h",
+      "lines": 52,
+      "sha256": "c2211514fe758b5e80e2b1989974297d6461720366923d200c5a77738e6ac8f5"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/route_slice_solver.h",
+      "lines": 64,
+      "sha256": "cc7a93c88a2f30eebdf51ec93b2e755ded570f84a6e4d70fcd9017657626c2d0"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/segment_chain_planner.h",
+      "lines": 653,
+      "sha256": "cf0961dfafc19caf81541f035a2e9b0be6e7a3e34aba6e113a1896e73fc8d3e3"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/start_state.h",
+      "lines": 378,
+      "sha256": "a231689ae2ec8ff546af9412d5292038301287bae85f4b7cb830b7e871ebf688"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/terminal_phase.h",
+      "lines": 56,
+      "sha256": "e40fed79bc155a26d8197927d81af4e1d7fb05541d4d52eee269ad3f36a7fbb6"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/terrain_data.h",
+      "lines": 252,
+      "sha256": "bf6a62231f7ef1d99a8c60124fa10b5b29d04a8008727b0168fc6e75bd2cce3a"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/terrain_risk.h",
+      "lines": 65,
+      "sha256": "73d56f36894d5f9c04621a6ac34bdf08b46f5b10d21b7807eb6aa917ca0c5424"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/traj_sampling.h",
+      "lines": 91,
+      "sha256": "9b1adf92fe34a006b14692dfff891c911db0919d84e3893235632c3bf158d489"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/trajectory_message.h",
+      "lines": 22,
+      "sha256": "8b3a6b77aef2bba62f6a0ca6001cb4042891defacfc3ce06f668eb1a56f3c065"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/transition_phase.h",
+      "lines": 258,
+      "sha256": "076205d907a1cd21f63e8332c1a1edb1162642362a40626c7e724ddc989e24cc"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/waypoint_eval.h",
+      "lines": 437,
+      "sha256": "2093dcc1c91cc8db55eb84f53032d0045b02ef7281516f8c84ed660dfe3b2563"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/include/path_manager/zone_policy.h",
+      "lines": 54,
+      "sha256": "9e460f6e9b09eed6490cd3f3d43de6df5a68ab007e18ebd62ecb7f3858967430"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/launch/path_manager.launch.py",
+      "lines": 270,
+      "sha256": "9d2726059d805a0235369a8a7400f5a6e21484c84a8cd22dacdf9ae4bc1ee4ec"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/launch/rviz_path_manager.launch.py",
+      "lines": 132,
+      "sha256": "ae191f879c93d37e2ea0a89e290d2e0609061981cb4a4d94b47d61442dcd463e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/builtin_route_search.cpp",
+      "lines": 161,
+      "sha256": "54c3b0f8e730858b6a10d122fd98e5dc8ae3a8c5c7658a160a7817f46a2a173c"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/direct_trajectory_solver.cpp",
+      "lines": 65,
+      "sha256": "e1394951e7eda35848525efa87fea90d70ae753a9cab7fd0fd5291b582c78ffc"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/flight_assembly.cpp",
+      "lines": 64,
+      "sha256": "b3e0600a95c83a6e82c0e5fee74728ddf38601c0ea6068e9c7b971ca422677ef"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/flight_evaluator.cpp",
+      "lines": 680,
+      "sha256": "79acff35f7858e345e4a2421f8a86cfa8ef1b743b34f899a0d5f8c0ae9db18aa"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/mission_geometry.cpp",
+      "lines": 112,
+      "sha256": "4805100ad556f8b5748a9fc70b52fd6390cc0748e14523cae0fe051cd030c20a"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/mission_planner.cpp",
+      "lines": 47,
+      "sha256": "79af5526015110f4a3de98fd39554e9bce1dac9405b11f58436f7d760870bcdf"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/mission_route_search.cpp",
+      "lines": 43,
+      "sha256": "f5afd540a1f807d5c071382af280372ad4384249a9d55dae3d9c6e21b2d94d05"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/node.cpp",
+      "lines": 18,
+      "sha256": "12e0ff8304575284876749e9fd7333de286f8e673561a5b7d848b8fe101a6a1a"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/path_manager.cpp",
+      "lines": 2426,
+      "sha256": "a4e695b681b3744e1ce9a26645854849c6fe5f334307ee5941be72fd6c03f3c4"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/planning_environment.cpp",
+      "lines": 42,
+      "sha256": "85221d28cb26ce98754975d918efb411220c54beda561b5c0ac90dcc9f81caa7"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/planning_environment_store.cpp",
+      "lines": 678,
+      "sha256": "c9dd20d52b7f7be4ae986809245f8a33d040cedac1535e0adbe98712a9a41f0e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/planning_execution.cpp",
+      "lines": 109,
+      "sha256": "c4cc7691a2f7f728c5f9768a4597270b18605ea6875db7ae7af81f7d1ffb7489"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/planning_visualization_data.cpp",
+      "lines": 1281,
+      "sha256": "3f07e15cfe7bd4d20575e00d3727705aefb3c0d59e79e4c194b6f0926ffb5a59"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/replan_fsm.cpp",
+      "lines": 1465,
+      "sha256": "a38a595f91d6a2c20d47c007818ffdbad985cbcdb6aaa8292c03c0164c813810"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/ros_planning_backend.cpp",
+      "lines": 405,
+      "sha256": "0e3239e35da3e839d991f2f932558c236f487a75ea49b3774b599cfc52c3e6cc"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/ros_planning_visualization.cpp",
+      "lines": 45,
+      "sha256": "f10a5ed795de4322c1219344a6ee70c4d4d503a4232d680c82b7ffbc5a4cda85"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/ros_route_search.cpp",
+      "lines": 36,
+      "sha256": "23580d22db0f29a461a3e31ea552d2ebb0d7f23bd6ba22811919ad57135cae6c"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/ros_terrain_grid.cpp",
+      "lines": 94,
+      "sha256": "3a4d688b7490a0cd1ec64f1682ad918c167109777dad22fb5cc178d56726dbd4"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/route_postprocessing.cpp",
+      "lines": 186,
+      "sha256": "e6351704669e03cbc7a3478baecf8cc1f802d06b7bfdb999b574a3e7441918c7"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/route_search_backend.cpp",
+      "lines": 78,
+      "sha256": "eb3bd5ab66c340ae9229b441962082d279dd34cb03536e5252244e28f5f6c1e7"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/route_slice_batch.cpp",
+      "lines": 70,
+      "sha256": "da52013e2440aabb4f985707b0dfd48d1cc65ce6b746ad2fab68b283ffba92c8"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/route_slice_solver.cpp",
+      "lines": 49,
+      "sha256": "eaaea52cc753170af9c3c839b096c9aed3fdbc41e5c857795396b7ce51804345"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/segment_chain_planner.cpp",
+      "lines": 3748,
+      "sha256": "2c5d6192a3422a55bfd9225044a98036885eca600da7a34812825c302c13985b"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/terminal_phase.cpp",
+      "lines": 146,
+      "sha256": "d26dfa3bc847bbe71a8df200de8c5b684e41c0cc6b8eeb0598e4bf7fc2cb664d"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/terrain_grid_validation.h",
+      "lines": 12,
+      "sha256": "b747869860fdf175cc3c428d4f2cb6086a5699a9052c2a4ee44f0f84c29918ae"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/terrain_risk.cpp",
+      "lines": 228,
+      "sha256": "b850e530692a99310ac8fd6e35e92e6bfa83eb0b005fb350aeaa201923c9f462"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/trajectory_message.cpp",
+      "lines": 33,
+      "sha256": "9da513850ca9cc9f43813ca6798f5ccff9252234bd1d5ad19682175553fe74c5"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/transition_phase.cpp",
+      "lines": 995,
+      "sha256": "3a11513456d43c62dccd1d01cd1a46bc6ff438ead422bf5bcb3aa9a741bcf008"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/src/waypoint_eval.cpp",
+      "lines": 1034,
+      "sha256": "e592d586785ab6ef30b4ffc43f915357290a5eaafe7c1e0ce917dc0bedc48fdf"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/chain_experiment_test.cpp",
+      "lines": 5018,
+      "sha256": "1381da25be91dcd6b162c27c13b5082bdd75b095ad5bfa00380a1eab8d570eda"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/chain_profile_contract_test.cpp",
+      "lines": 193,
+      "sha256": "cca65d9690c31f91f19375280e6f2ba90ae3151af24e1f434679ccb3187daa47"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/committed_route_test.cpp",
+      "lines": 346,
+      "sha256": "d7b221b1a3f386647e49d07f7e35f6d0452fbc3000fb1eca16ff000380ebc23e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/direct_plan_settings_test.cpp",
+      "lines": 324,
+      "sha256": "e022e9f0aa2ddf13be2fbcce6ab63b95fe101e5e070d5978e96c522a12b54e41"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/direct_trajectory_solver_test.cpp",
+      "lines": 344,
+      "sha256": "6aed962f9674a62f784474ce42c226abe47c300c80f41fc31a9057018e2ee461"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/exec_abort_test.cpp",
+      "lines": 261,
+      "sha256": "a9ff0ce3fc246868aafc24d60fd9bbdaadfebbe151c509505ce51508c88143b0"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/execution_adoption_test.cpp",
+      "lines": 299,
+      "sha256": "596d01deb16bf61eb3b1dfa496dd099e575e27a885bbaa5efef3ad8f26c44d8e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/flight_assembly_test.cpp",
+      "lines": 136,
+      "sha256": "9bf2fe2d04726971907d88585c016322d1a2f0305de5ae765bea53544337eca6"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/flight_evaluator_test.cpp",
+      "lines": 380,
+      "sha256": "7331fbf3034b1880e63479c7e01342e0ef5f053cf87af0f7fc3b3e0174cd8f0b"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/fsm_scenarios_test.cpp",
+      "lines": 404,
+      "sha256": "fa00b2b82b65a87e18f0f47e1c63e99793c085fbbba6388a7341a372db01d515"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/load_obstacles_test.cpp",
+      "lines": 143,
+      "sha256": "9bed2a8914d25374a162f1fcb7f8c497a5a86b81a8b3d467116ff20b7f6f7de3"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/log_visibility_test.cpp",
+      "lines": 254,
+      "sha256": "83fb4fbcc8bd48ae6d5deab7acddda6a7d74b4c93db782144960663e411b8a80"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/mission_geometry_test.cpp",
+      "lines": 274,
+      "sha256": "c165f2260ee7cde042c40ceb86d19176be13e38eab50726f033e44c6228e5089"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/mission_planner_core_test.cpp",
+      "lines": 169,
+      "sha256": "b3bccc7e8f6710d39e4ce6df61242806a2f048cbb19b85809b5c3e465d85920f"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/mission_planner_test.cpp",
+      "lines": 250,
+      "sha256": "5443e05b3d9f9484e10ee6b71ad51e1eba9c98c2a072d1b30c820051a1dc9ff6"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/mission_route_search_test.cpp",
+      "lines": 187,
+      "sha256": "61ed35fa71084cdc1911273f0f31acedde80f701ae92f2bf838386edadf31804"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/mission_sequence_test.cpp",
+      "lines": 270,
+      "sha256": "dcd32807c158c9c3f9cd0d7feef775b6289321cc646b6a27d497e4863fbb0192"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/param_contract_test.cpp",
+      "lines": 204,
+      "sha256": "d05e2eb95d5fc472b1e8a4213c9f0cabf92e24a9a49857930d5580d27dd483e6"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/planning_environment_store_test.cpp",
+      "lines": 195,
+      "sha256": "1eaa1ecb069e1c05d51c9cf57f95839a01467f4f080d1e3607deea5e5c1e5ed0"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/planning_execution_test.cpp",
+      "lines": 171,
+      "sha256": "1d467409b93bf1c4cdc839d41bcae256ccf467ea6b4785c483bbad2dac4d5c10"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/planning_visualization_test.cpp",
+      "lines": 166,
+      "sha256": "97e99138a020c9a5dff3b89b9c446d910cfe4d3eddb159e9edb12f573c89dd3e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/risk_contract_test.cpp",
+      "lines": 336,
+      "sha256": "ff367066eba0d02900cb975c0e79bc5acd6400c84e74c3ab8a1c12aa3107d505"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/risk_scenarios_test.cpp",
+      "lines": 442,
+      "sha256": "5da29eccadecac58ca1d95c997d206da586912465355f8e5eb304ff127bf0b29"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/ros_planning_backend_test.cpp",
+      "lines": 278,
+      "sha256": "8540fa189acfeb7827ca9413c4a5d4e788bee47e0419f1467e5ce51013d2d11b"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/route_postprocessing_test.cpp",
+      "lines": 395,
+      "sha256": "b4e9cacb919a159672317fb36b96dc3974fb0f1354bdf6b6b2f5d4bd57d876fe"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/route_search_backend_test.cpp",
+      "lines": 429,
+      "sha256": "1fa271f0d49ede086c9fa56b892fb5d3d0441d6b4c96b3ca7f2d28b56bb2eca0"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/route_slice_batch_test.cpp",
+      "lines": 286,
+      "sha256": "1c9feb4b85ed0ea476a5ebbe376cd57739fe280e04d3c22409a40a1f6cbcb416"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/route_slice_solver_test.cpp",
+      "lines": 212,
+      "sha256": "e8abf4a432c98e3e16a6c5acbf0d4d7685ca0b213e629375ff1b9edf484461e1"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/start_claim_test.cpp",
+      "lines": 415,
+      "sha256": "35f8d54a2315451eb4d086ce79ed28f588efc13b48f6e29d494b6337a6be0b00"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/terrain_memo_test.cpp",
+      "lines": 121,
+      "sha256": "97161214846550c2400bfd8466225df520135264d3caa04980a799e9290f95b1"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/terrain_pitch_test.cpp",
+      "lines": 210,
+      "sha256": "56b6632f3392b66f00097df9bc68e669c3a62678da8d3d3c936c7c5b1b5923d3"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/terrain_risk_calculation_test.cpp",
+      "lines": 144,
+      "sha256": "5ad82f81b5714986ec7a7dc707f77c020c03250920c895c08ba1b3f302ce2cf7"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/terrain_risk_mask_test.cpp",
+      "lines": 359,
+      "sha256": "e335d59cb04596275339a2b547c6672ee9c5defba7af49150693ce423068a866"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/trajectory_message_test.cpp",
+      "lines": 76,
+      "sha256": "91e5482c5abc7abce8154ae75a74d630a6909225f7cc2e785a3e50d379be46a1"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/transition_experiment_test.cpp",
+      "lines": 1042,
+      "sha256": "06237042fa0ba14ee5eecce0ad64bc9f3c345c36422a9666b78c45265039bb4e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/unit_guard_test.cpp",
+      "lines": 154,
+      "sha256": "a58ddc28274b5994efe3db1c9b30124379ae51d596b6048e7852a1f5bd763b26"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/vehicle_model_injection_test.cpp",
+      "lines": 348,
+      "sha256": "cb487dd4d88da8c6d00f49dd7479de00dcd1e370de9ae48217daeeda1143e9d6"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_manager/test/waypoint_experiment_test.cpp",
+      "lines": 892,
+      "sha256": "a0d0c27120fb6dc3e44258c173cc5782e338a86e8e710ad824c78c43cdcf2ed4"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/CMakeLists.txt",
+      "lines": 122,
+      "sha256": "8b9cb74dfbeff34f154b8b2034eb0268e9fc41ff0b65937e965a296e7661918e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/lbfgs.hpp",
+      "lines": 1484,
+      "sha256": "eafa7ce5b5bfd73400faaa744bb9a41ed05adbb2ebeec3af839f009b9cafe921"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/optimizer_environment.h",
+      "lines": 68,
+      "sha256": "f79faf9a835cbd1782ad3fc485bf91af4f1242d747ef5e8fb9b5c5e1c6559457"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/optimizer_request.h",
+      "lines": 65,
+      "sha256": "613cdc3e8dc46fe842a83902e1078e72924625ae4d32e9116ec7e022cc1dda9e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/plan_container.hpp",
+      "lines": 100,
+      "sha256": "59e9e85e73a64b4b1e181e766da92909b60f79a976160875be5288f79994ab79"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/poly_traj_optimizer.h",
+      "lines": 805,
+      "sha256": "be23be50bbc8da88ce6e1de4a60d1cf37399dfac47c80ffee86f8bc75719692c"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/poly_traj_utils.hpp",
+      "lines": 1274,
+      "sha256": "b80a86603e936097dad9f54d724595938c1eecabc946e80a87bc5ee9e95dbd72"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/root_finder.hpp",
+      "lines": 1092,
+      "sha256": "759e7dad2f81e66c370478175031408b5ba5aede6e0102ae56810395d2e87083"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/ros_parameter_view.h",
+      "lines": 46,
+      "sha256": "98b36654dd5f24ff80f4ba15aa7d545024a9a9c12784af4c1e341f1813869d8f"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/route_cost_profile.h",
+      "lines": 97,
+      "sha256": "eda4a7efd239f5fd2c705930bdbf1886d9f9e4215c83cd0b7cd50f9b99de2004"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/include/path_optimizer/tail_boundary.h",
+      "lines": 35,
+      "sha256": "9ccb7b54eb4cda667df304104a60e67d9803c994df48667e164246ff85d2fa2e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/src/optimizer_session.cpp",
+      "lines": 96,
+      "sha256": "6316a381fb830cc634f1ae6ea30845c51e936268142b8f3871c28121e2e77e72"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/src/poly_traj_optimizer.cpp",
+      "lines": 4390,
+      "sha256": "5ff5c146996fe77f5530cefc3a3f6b0021c497ed00dfda89f57c26fcbf981de4"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/src/route_cost_profile.cpp",
+      "lines": 277,
+      "sha256": "3e2e18d472196e8eb68a87b7f04997d69bde1456813cae9ca99d8e1ffa55e229"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/test/optimizer_configuration_test.cpp",
+      "lines": 120,
+      "sha256": "0a761e08a5d94baff3f353576ffab3f8b66820f5a680afa012cec6098fa582b0"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/test/optimizer_session_test.cpp",
+      "lines": 358,
+      "sha256": "5764d7c4f918f8baafee034dc9844c73fee122742d4d8f42f3aa1b66a78fe568"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_optimizer/test/route_cost_profile_test.cpp",
+      "lines": 386,
+      "sha256": "4a4f6b6d48e0d2690975ba339b89c10baf8255b244f4edf4a797812c0298d11e"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/CMakeLists.txt",
+      "lines": 162,
+      "sha256": "6828e604ce5be520fd4825e3c48182b70745c410ad221c42913413621e5154f8"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/include/path_planner/dyn_a_star.h",
+      "lines": 1085,
+      "sha256": "d2830c77af0ed2a0040bb8cd4cc47489750f360294d85b583e9a6ce06390b1de"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/include/path_planner/eikonal_godunov.h",
+      "lines": 77,
+      "sha256": "8f3ec4be4ad9666b129c245a2404f92150c055b43391abda9e8a517fdbf37f1f"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/include/path_planner/fm2_gpu.h",
+      "lines": 28,
+      "sha256": "f37adc53cd4e63ecdb86680e5f19fb784220ec14954697f921891125e4bbb069"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/include/path_planner/risk_shape.h",
+      "lines": 79,
+      "sha256": "d7de8a161ddcd366ef70e83614769775736ca72ce1569198cb9a1411cd1291ac"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/include/path_planner/sdf/distance_field.h",
+      "lines": 66,
+      "sha256": "101f9ec3380a18745cfb9c8e2c76e60bed86cf63808990b03d36e2edd2e7eb16"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/include/path_planner/sdf/sdf_manager.h",
+      "lines": 162,
+      "sha256": "508ed9fe234701d4e11c5b5234aa99362aa92c31244f71afbd7b88d67771e4a8"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/src/dyn_a_star.cpp",
+      "lines": 2293,
+      "sha256": "e4cf55375e22375bc30ad0a5a88b5bdb97458984737de8d3e0065425edcbf069"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/src/fm2_gpu.cu",
+      "lines": 290,
+      "sha256": "0fc766b38ed53236fc795f65d2bbf86e9bc51dcfc955d34dc76f8e79d35bdc6d"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/src/fm2_gpu_test.cpp",
+      "lines": 165,
+      "sha256": "4e3a347b81461c5f0f86803f8ecdcd39285a14a118d84b5a1072a43e37125d3b"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/src/sdf/sdf_dynamic_test.cpp",
+      "lines": 232,
+      "sha256": "a0a9539ac0bc8150d95ac66e06b1c24e8df8fa260e1f08c075ea67d1c9d0dc12"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/src/sdf/sdf_manager.cpp",
+      "lines": 956,
+      "sha256": "9f76264f5f604aa7a289a87d1fd4fc99da0e86e8a9951d7dae02b16299b112b8"
+    },
+    {
+      "file": "src/mmp_path_planning/src/path_planner/src/sdf/sdf_tool.cpp",
+      "lines": 113,
+      "sha256": "b678fbd7b7819590c6b5f365ed821352ca72a6302d3444f6eb1a51629f5c5226"
+    },
+    {
+      "file": "src/mmp_terrain/examples/load_map_example.py",
+      "lines": 45,
+      "sha256": "9eeb0c1166137af958a7bba500371c1665c9fdbf7825b1acd166f5638738dcf6"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/__init__.py",
+      "lines": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/asset_paths.py",
+      "lines": 116,
+      "sha256": "4fb134189c80409d5e2908760358cc9ed77026b3f754e0147c4887c9fb0648f8"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/frame.py",
+      "lines": 235,
+      "sha256": "3082ede881d7677fe1afd9d8932cbd079b9e9178dd696fd62fcd1cdb3957a0e2"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/full_map_assembler.py",
+      "lines": 353,
+      "sha256": "c07cdb36834ee040b6d82618a728d964caedbcff4dadffe52d2bf8acaac80e40"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/hillshade.py",
+      "lines": 94,
+      "sha256": "e78ed16cd64f87d38d16df55e7324501b90c4274436790bd369ddb7492247698"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/map_loader.py",
+      "lines": 529,
+      "sha256": "001963d62e92b97aeef20014326ac470bb4848361f11c04359ecabff7ab4f1c4"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/mission.py",
+      "lines": 330,
+      "sha256": "26644771628aef5e348c4a0b9eb4a96c70e1d1ce3d85f8fc9cad7db9603b4860"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/ros_terrain.py",
+      "lines": 35,
+      "sha256": "009c5f8e2706e0e8fcaf364f6887446f00390a485309dfe6145aaf6a1440db42"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/source_coverage.py",
+      "lines": 801,
+      "sha256": "4bf4665245904cb66caa5fd36f72943d3273b696f5a43c7e3c990188eababadb"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/terrain_publisher.py",
+      "lines": 450,
+      "sha256": "852cf7a11bf52833cbac1fe2367350b4fe997a303609300cdfa4203914927727"
+    },
+    {
+      "file": "src/mmp_terrain/mmp_terrain/windowed_mosaic.py",
+      "lines": 638,
+      "sha256": "a41d34496c5aaf09eefd0be982451e79f16f9e4b5d18dd16e691dce29c138a40"
+    },
+    {
+      "file": "src/mmp_terrain/setup.py",
+      "lines": 37,
+      "sha256": "eac562c2eaa17746ac7d617ea84f7362be116b19b4741c8a40cadc8154ed585f"
+    },
+    {
+      "file": "src/mmp_terrain/tiles/cache_guard.py",
+      "lines": 821,
+      "sha256": "0dbe43a4ac6dab9154a06750bdd9f21154447f843aa778b5b3fb4c0fb5c866dc"
+    },
+    {
+      "file": "src/mmp_terrain/tiles/server.py",
+      "lines": 847,
+      "sha256": "7fa09d5dd00ef27d7e3d0eb6da4a556703ce9d12ee2d3a3bc83317bc78de3762"
+    },
+    {
+      "file": "src/mmp_terrain/tools/make_dem_mosaic.py",
+      "lines": 417,
+      "sha256": "8f77af5289022767f4921e9a69b67f91e885b300b1275e97bef343ff1f0bc41a"
+    },
+    {
+      "file": "src/mmp_traj_utils/CMakeLists.txt",
+      "lines": 12,
+      "sha256": "97445cc58016412461901dffa5cf43f972397204a66c7ef83d3bbf674c5ff5d5"
+    },
+    {
+      "file": "src/mmp_traj_utils/include/mmp_traj_utils/poly_traj.hpp",
+      "lines": 158,
+      "sha256": "b5e4254c5d5c316950129e4b18c8e180f3f6426f5a9922b8a55293ff8a6b2c5d"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/CMakeLists.txt",
+      "lines": 138,
+      "sha256": "180c83f1949e0aef2499fd682c671fb628de5fbf6ac05bf06edcec154b4700b0"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/include/mmp_vehicle_dynamics/flight_dynamics.hpp",
+      "lines": 223,
+      "sha256": "68f3543ad7604822be2f5602a738661e0947a92db7e9f7378e0d9b722b895ac0"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/include/mmp_vehicle_dynamics/point_mass_eom.hpp",
+      "lines": 151,
+      "sha256": "2cd7754ef8c08addb9768c4f53877dbc90d2a10a46ebcfcb1091a4fe38e5051b"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/include/mmp_vehicle_dynamics/trajectory_abort_state.hpp",
+      "lines": 58,
+      "sha256": "49442c24e39f70f1b74b637b1fb80fff516f670af5b5a0aa2d972c51b237bd50"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/include/mmp_vehicle_dynamics/trajectory_simulation.hpp",
+      "lines": 184,
+      "sha256": "60e8894430057aa41a669d63a172d41316c5fc243e48e5566508013ab25a4651"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/include/mmp_vehicle_dynamics/vehicle_model.hpp",
+      "lines": 102,
+      "sha256": "3fc0335b06baa75fcae835dde891fe7e07e0e976d28ad324d99a00b2844fb5c0"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/python/mmp_vehicle_dynamics/__init__.py",
+      "lines": 122,
+      "sha256": "ec3acbb8a646fb7658645cc40160d76bf4c1fd0ff3243a3f383217049d532246"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/src/dynamics_sim_node.cpp",
+      "lines": 493,
+      "sha256": "e7444c5935f93d9ed8de161631f793e9cbbf8f1c75cc9136187b604ca112505b"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/src/flight_dynamics.cpp",
+      "lines": 761,
+      "sha256": "d379f0811ae48ac0dbb88aa0e9851d699cb48833537d153c4a1d5ea4d0e4b558"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/src/python_bindings.cpp",
+      "lines": 135,
+      "sha256": "77c8a52c273346f461c64b067fa9f09b6f01241c15e28eeefa2b4fe1a4321e1b"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/src/trajectory_simulation.cpp",
+      "lines": 381,
+      "sha256": "4542ecd835ac167df0abc9e3da5980ab14cb81a656864e442796b72c8325e780"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/src/trajectory_simulation_example.cpp",
+      "lines": 27,
+      "sha256": "69df82a778571d78b7cf3c5a8ac7683aa04771642914440d52f57d6ebef6ce2b"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/src/vehicle_model.cpp",
+      "lines": 83,
+      "sha256": "76db2f6e667ffc6592ccc39a07eb95a7241f7452b475f4cca79e8ee29c741e6a"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/test/config_snapshot_test.py",
+      "lines": 91,
+      "sha256": "367d95f50ea8f16f54dd1f88ee848b600751101f2526b0c322d9cff41fbca04c"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/test/flight_dynamics_test.cpp",
+      "lines": 592,
+      "sha256": "46fdd6a5b358f265f2fb504be61a427050cc6796b799751739af3b49eb506f38"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/test/point_mass_eom_test.cpp",
+      "lines": 170,
+      "sha256": "eda12e397277b4c6a4ede19c48c1e94e13e408ac5ab55c121db47778be83efcb"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/test/python_binding_test.py",
+      "lines": 102,
+      "sha256": "23df451bc34f9930905eda3587bea8d41b339b43a19a9d6b4d94b1fa6e67e3f6"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/test/trajectory_simulation_test.cpp",
+      "lines": 219,
+      "sha256": "724311456021d5aef5cba759ee41f5b3587581ae73d1a2e9d630578a48d0e419"
+    },
+    {
+      "file": "src/mmp_vehicle_dynamics/test/vehicle_model_test.cpp",
+      "lines": 139,
+      "sha256": "573fc1053f60f61899b31970cffd12735f27bf1a76f7252693d5b10dca4c27cc"
+    }
+  ],
+  "source_edits_during_review": []
+}

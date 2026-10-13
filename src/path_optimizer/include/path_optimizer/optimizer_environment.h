@@ -35,6 +35,8 @@ struct OptimizerRuntimeSettings {
   int lbfgs_max_linesearch{0};
   double lbfgs_f_dec{0.0};
   double lbfgs_s_curv{0.0};
+  // Absolute planner z (u), not AGL. Each legacy plane is enabled when
+  // > -0.5 and disabled when <= -0.5.
   double ground_height{-1.0};
   double virtual_ceil_height{-1.0};
   double risk_goal_taper_radius{0.0};

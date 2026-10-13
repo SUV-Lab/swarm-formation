@@ -349,7 +349,7 @@ void ReplanFSM::computeAndPublishPaths() {
             {
                 bool success = false;
                 try {
-                    success = planFromGlobalTraj(1);
+                    success = publishExecutionTrajectory();
                 } catch (const std::exception& e) {
                     RCLCPP_ERROR(node_->get_logger(), "Exception during trajectory planning in SEQUENTIAL_START: %s", e.what());
                     log_manager_->errorf("Exception during trajectory planning in SEQUENTIAL_START: %s", e.what());
@@ -384,7 +384,7 @@ void ReplanFSM::computeAndPublishPaths() {
         }
 
         case GEN_NEW_TRAJ: {
-            bool success = planFromGlobalTraj(1);
+            bool success = publishExecutionTrajectory();
             if (success) {
                 changeFSMExecState(EXEC_TRAJ, "FSM");
             } else {
@@ -404,8 +404,10 @@ void ReplanFSM::computeAndPublishPaths() {
                 break;
             }
             auto local_traj = &path_manager_->executionTrajectory();
-            // A refused plan zeroes duration and start_time
-            // (SegmentChainPlanner::invalidateStoredTrajectory). Without
+            // Applying a refused plan's recorded invalidation zeroes duration
+            // and start_time. recordExecutionInvalidation only records this
+            // effect in PlanningComputation; the execution store applies it.
+            // Without
             // this guard the completion test below reads
             // t_cur = min(0, huge) = 0 and "0 > 0 - 0.2" is TRUE, so a
             // refusal arriving mid-flight was reported as [reached goal]
@@ -513,7 +515,7 @@ void ReplanFSM::globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
                                 drone_id_, msg.trajectory_id, stamp);
 }
 
-bool ReplanFSM::planFromGlobalTraj(int trial_times) {
+bool ReplanFSM::publishExecutionTrajectory() {
     // The live execution slot still decides whether a flight was withdrawn.
     // The normal publication consumes the owned library result, so packaging
     // does not depend on the planner's coefficient storage or scratch values.
@@ -528,7 +530,7 @@ bool ReplanFSM::planFromGlobalTraj(int trial_times) {
             ? pending_plan_->start_time : local_traj.start_time;
         const auto &reference = pending_plan_
             ? pending_plan_->reference_trajectory : path_manager_->referenceTrajectory().traj;
-        log_manager_->infof("[planFromGlobalTraj] Using pre-optimized trajectory (duration=%.3f)", local_traj.duration);
+        log_manager_->infof("[publishExecutionTrajectory] Using pre-optimized trajectory (duration=%.3f)", local_traj.duration);
 
         const auto msg = makeTrajectoryMessage(
             trajectory, drone_id_, local_traj.traj_id,
@@ -551,7 +553,7 @@ bool ReplanFSM::planFromGlobalTraj(int trial_times) {
     }
 
     pending_plan_.reset();
-    log_manager_->errorf("[planFromGlobalTraj] local_traj not ready — planGlobalTraj() may have failed");
+    log_manager_->errorf("[publishExecutionTrajectory] local_traj not ready — planGlobalTraj() may have failed");
     return false;
 }
 

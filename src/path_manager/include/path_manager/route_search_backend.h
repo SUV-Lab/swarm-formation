@@ -38,6 +38,8 @@ struct RouteSearchZone {
 // objective weights and discretization choices belong to concrete backends.
 struct RouteQueryConstraints {
   double obstacle_clearance{0.5};
+  // Absolute planner z (u), not AGL. Each legacy plane is enabled when
+  // > -0.5 and disabled when <= -0.5.
   double ground_height{-1.0};
   double virtual_ceiling{-1.0};
   double dynamic_obstacle_margin{0.0};
@@ -73,6 +75,9 @@ struct RouteSearchProblem {
   RouteSearchIdentity identity;
   RouteQueryConstraints constraints;
   RouteSearchEnvironment environment;
+  // Optional shared model. For overlapping limits use the already resolved
+  // constraints, which may include adapter overrides. The built-in backend
+  // consumes constraints and does not query this model directly.
   mmp_vehicle_dynamics::VehicleModel::Ptr model;
 };
 

@@ -9,6 +9,9 @@
 namespace ego_planner {
 
 using TerrainHeightQuery = std::function<float(double, double)>;
+// Query at planner (x_u, y_u). On true, outputs are height_u, dh/dx and dh/dy
+// in the same planner frame; slopes are planner-z units per planner-XY unit,
+// not SI-converted slopes. False means no height/gradient sample is supplied.
 using TerrainHeightGradientQuery =
     std::function<bool(double, double, float *, float *, float *)>;
 using ShadowCeilingQuery =

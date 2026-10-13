@@ -33,10 +33,15 @@ struct RouteSliceConfig {
   double max_vel{0.0};
   double alt_cap_headroom{0.0};
   double alt_floor_headroom{0.0};
+  // Absolute planner z (u), not AGL. Legacy sentinel: > -0.5 enables the
+  // ground plane; <= -0.5 disables it.
   double ground_height{-1.0};
   double weight_altitude{0.0};
 };
 
+// ROUTE_TOO_SHORT is this adapter's early path-size check. Every unsuccessful
+// optimizer result, including NOT_CONFIGURED and MALFORMED_INPUT, is reported
+// as OPTIMIZER_FAILED; that status does not imply a numerical solve was run.
 enum class RouteSliceStatus { SUCCESS, ROUTE_TOO_SHORT, OPTIMIZER_FAILED };
 
 struct RouteSliceResult {

@@ -97,17 +97,19 @@ public:
         const mmp_mission_msgs::msg::RiskZoneArray::SharedPtr msg);
     void polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg);
     void globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg);
-    // Callback groups:
-    // - timer_callback_group: FSM timer only (MutuallyExclusive, dedicated for 10ms timer)
-    // - subscription_callback_group: Formation and broadcast subscriptions (MutuallyExclusive)
-    // - position_callback_group: Position updates (MutuallyExclusive, separate to avoid blocking)
-    // This separation prevents timer stalls when subscriptions are processing
+    // The FSM timer and planning subscriptions share the mutually exclusive
+    // subscription group, serializing planning, execution state and publication.
+    // timer_callback_group_ is retained but is not assigned to the FSM timer.
     rclcpp::CallbackGroup::SharedPtr timer_callback_group_;
     rclcpp::CallbackGroup::SharedPtr subscription_callback_group_;
 
 private:
     rclcpp::Node::SharedPtr node_;
-    bool planFromGlobalTraj(int trial_times = 1);
+    // Publish the adopted execution trajectory and, when enabled, its reference.
+    // Updates FSM bookkeeping and consumes pending_plan_; does not plan or retry.
+    // True means a live execution slot was available and publication was issued,
+    // not that DDS delivery to subscribers was confirmed.
+    bool publishExecutionTrajectory();
     // Pure planning trigger: runs global planning for given waypoints and handles
     // success/FSM transition. No message dependency (uses member state + waypoints).
     void triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints,

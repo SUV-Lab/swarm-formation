@@ -55,6 +55,8 @@ struct PlanningComputation {
 };
 
 struct ExecutionReceipt {
+  // Execution effects were accepted, including failure/no-product effects.
+  // This does not mean that a new trajectory was produced or passed evaluation.
   bool applied{false};
   uint64_t trajectory_id{0};
   int drone_id{-1};

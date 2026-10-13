@@ -1,0 +1,65 @@
+{
+  "scope": "Contract documentation and four private method names only",
+  "heads": {
+    "main": "13ced33052fcbe7580b96e79d4f44574fefb6f6d",
+    "planner": "068f386f7a3eadd21ab1bd9308727e6eca7ba641"
+  },
+  "source_files_checked": 286,
+  "changed_source_files": 27,
+  "comments_only_files": 21,
+  "source_scope_pass": true,
+  "before_build_pass": true,
+  "after_build_pass": true,
+  "default_build_pass": true,
+  "default_dependencies_resolved": true,
+  "ctest": {
+    "path_manager": 45,
+    "path_optimizer": 3,
+    "mmp_vehicle_dynamics": 6
+  },
+  "tests_pass": true,
+  "chain_variants": 75,
+  "risk_checks": 154,
+  "installed_examples": 4,
+  "public_headers": 21,
+  "api_r2": {
+    "byte_identical": true,
+    "pieces": 190,
+    "duration_s": 521.0625247312521,
+    "fields_equal": {
+      "schema": true,
+      "source": true,
+      "input_unchanged": true,
+      "serialized_after_planner_destruction": true,
+      "status": true,
+      "final": true,
+      "reference": true,
+      "phases": true,
+      "evaluation": true,
+      "identity": true,
+      "terrain": true
+    }
+  },
+  "gui_r2": {
+    "pieces": 190,
+    "duration_s": 521.0625259429216,
+    "comparison_pass": true
+  },
+  "gui_abort_recovery": {
+    "before": {
+      "pass": true,
+      "numeric_exact": true
+    },
+    "after": {
+      "pass": true,
+      "numeric_exact": true
+    }
+  },
+  "before_r2_initial_source_stability_failure_preserved": true,
+  "before_r2_frozen_pass": true,
+  "after_r2_pass": true,
+  "independent_reviews_no_blockers": true,
+  "committed": false,
+  "new_performance_benchmark": false,
+  "pass": true
+}

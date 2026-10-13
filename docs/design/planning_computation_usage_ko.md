@@ -43,10 +43,12 @@ MissionPlanner::plan(request)                 기존 전체 계획 호출
 | `PlanningComputation.status / evaluation / phases` | 기존 성공·저하·실패 판정, 전체 비행 평가, 단계 종료 시각 | 결과 값 소유. 단계의 `t_end`는 궤적 시작부터 상대 초 |
 | `identity_advances / invalidate_execution` | 과거 중간 계산들이 소비하던 ID 수와 명시적 무효화 의도 | ROS 실행 호환 메타데이터. 새 알고리즘 입력이나 궤적 품질 지표 아님 |
 | `environment_generation`와 채택 문맥 필드 | 계산 완료 시점의 환경·manager·계산/실행 문맥 | 같은 프로세스의 채택 검사 전용. 외부 저장·재생용 영구 식별자나 환경 스냅샷 아님 |
-| `ExecutionReceipt` | 실행 효과가 적용됐는지, 적용 후 실행 ID와 drone ID | `applied=false`이면 실행 상태에 적용하지 않았음 |
+| `ExecutionReceipt` | 실행 효과가 적용됐는지, 적용 후 실행 ID와 drone ID | `applied=false`이면 실행 상태에 적용하지 않았음. `true`는 실패 무효화 효과 적용도 포함하므로 새 궤적 성공과 같지 않음 |
 | `MissionPlanResult` | 기존 전체 계획 API의 결과 | 성공 시 소유 궤적과 채택 ID. 실패 시 과거·거부 궤적을 노출하지 않음 |
 
 현재 기본 환산은 `1 u = 100 m`이지만 경계에서 SI로 일괄 변환하지 않는다. 기존 `dynamics_unit_xy_m`, `dynamics_unit_z_m` 설정이 적용되는 곳과 원래 planner 좌표를 사용하는 곳을 구분한다. `VehicleModel`에 전달하는 물리 PVA만 SI로 환산한다.
+현 MMP 축은 +X 북쪽·+Y 서쪽·+Z 위쪽이며, m로의 배율 변환은 ENU로의 회전이 아니다.
+다항식 질의 시각은 궤적 시작 기준 상대 초이고 `start_time` 같은 ROS 시각과 구별한다.
 
 ## 계산 결과를 확인한 후 실행에 채택
 
@@ -110,9 +112,10 @@ optimizer가 사용하는 clearance·altitude weight·headroom과 canonical miss
 초기화한다. 독립 worker와 slice는 생성 시점의 기본값을 읽으며, 그 생성이 primary의
 초기화 값을 갱신하지 않는다. 호출별 `DirectPlanSettings` 역시 공유 기본값을 바꾸지 않는다.
 
-기존 호환성을 위해 남은 public `PathManager::traj_`를 외부에서 직접 수정하는 것도
-이 프로토콜의 지원 범위가 아니다. FSM은 제한된 const 조회만 사용한다. 그 조회가
-반환한 참조는 manager 수명을 빌리므로 장기간 보관할 데이터에는 소유 결과를 사용한다.
+실행 저장소는 `PathManager` 내부에 있으며 public `traj_` 필드는 없다. FSM은
+`executionTrajectory()`·`referenceTrajectory()`의 const 조회를 사용한다. 이 조회는
+현재 저장소를 빌리므로 이후 실행 변경까지 같은 값이 유지된다고 가정하지 않는다.
+manager를 파괴한 뒤 참조를 사용할 수도 없다. 장기간 보관할 데이터에는 소유 결과를 사용한다.
 
 ## 독립 궤적 평가
 
@@ -175,13 +178,13 @@ path_manager::FlightEvaluationReport evaluateFlatFlight(
 
 기존 0.1초 표본 간격과 leg 경계 별도 검사, cruise 진입 latch, 위험 접촉 판정 수식을 유지한다. 이 함수는 연속 시간 충돌 증명이나 일반 SDF 충돌 감사 전체를 대체하지 않는다. `TRANSITION`은 기존 규칙대로 cruise envelope 통계에서 제외되지만 지형·위험 평가는 수행한다. `PhaseSpan.name`은 출력 이름이고 `PhaseKind`가 판단 규칙을 선택한다.
 
-`verdict.evaluated`를 먼저 확인한다. `unflyable()`은 미평가 입력에서 false이므로 그것만으로 평가 성공 여부를 판단하지 않는다. 성공·저하·실패로 변환하는 기존 정책은 chain coordinator에 남는다. chain 비활성 직접 계획은 기존 optimizer 검사를 유지하고, 새 전체 비행 평가를 자동으로 추가하지 않는다. chain 내부 직접 fallback과 다중 경유점 직접 경로의 기존 전체 평가는 유지한다.
+`verdict.evaluated`를 먼저 확인한다. 미평가 기본값은 `clean=true`, `unflyable()==false`이므로 어느 한 값만으로 평가 성공 여부를 판단하지 않는다. 평가된 clean 결과를 요구할 때는 `evaluated && clean`을 확인한다. 이것은 기존 coordinator가 사용하는 `evaluated && !unflyable()` 수락 정책과 같지 않으며, 성공·저하·실패로 변환하는 기존 정책은 chain coordinator에 남는다. chain 비활성 직접 계획은 기존 optimizer 검사를 유지하고, 새 전체 비행 평가를 자동으로 추가하지 않는다. chain 내부 직접 fallback과 다중 경유점 직접 경로의 기존 전체 평가는 유지한다.
 
 ## 수명·병렬성·예외·남은 ROS 연결
 
 - 계산 결과와 평가 보고서는 값을 소유한다. 계산 중 지형·거리장·위험 조회와 evaluator의 궤적·단계·귀속 포인터는 동기 호출이 끝날 때까지 유효하고 안정적이어야 한다. 결과가 환경의 수명을 연장하거나 불변 복사본을 만들지는 않는다.
 - 같은 planner의 외부 호출과 환경·설정 변경은 직렬이다. 내부 구간 worker는 독립 optimizer를 사용하며 공유 환경을 읽는다. 명시 주입한 `VehicleModel`은 불변이고 concurrent const 질의를 지원해야 한다. 모델이 일반적으로 모든 VTOL 상태·전환 제어를 지원한다는 뜻은 아니다.
 - 계산 중 기존 전단·궤적 시각화 발행은 일부 남아 있다. 후보의 실행 채택을 생략했다고 모든 ROS 표시가 생략되는 것은 아니다. 표시 준비와 ROS 발행은 후속 단계에서 분리했으며, `PlanSettings.attach_visualization=false`로 manager의 표시 연결을 생략할 수 있다. [표시 API 사용법](planning_visualization_usage_ko.md)을 참고한다.
-- 실제 ROS 실행에서는 FSM의 콜백·실행 상태·발행·pending 결과 처리와 ABORT 순서를 유지한다. FSM은 `executionTrajectory()`와 `referenceTrajectory()`의 제한된 const 조회를 사용한다. 환경 ABORT는 철회 대상 ID가 살아 있을 때 발행하고 이어서 실행 유효 상태를 지운다.
+- 실제 ROS 실행에서는 FSM의 콜백·실행 상태·발행·pending 결과 처리와 ABORT 순서를 유지한다. FSM은 `executionTrajectory()`와 `referenceTrajectory()`의 제한된 const 조회를 사용한다. 실행 저장소는 활성 궤적 철회 시 연결된 observer를 먼저 통지하고 이어서 실행 유효 상태를 지운다. FSM observer와 발행기가 있을 때 이 통지는 ABORT 발행과 `WAIT_EXTERNAL_RECOVERY` 전환으로 이어진다. 공개 환경 setter의 일반 경로에는 이 재검증·철회가 자동으로 포함되지 않는다([환경 갱신 계약](planning_library_usage_ko.md#환경-전달과-갱신)).
 - 초기화·잘못된 설정의 기존 예외 계약과 동기 평가 제공자의 예외 전파를 유지한다. 모든 예외를 `PlanResult::FAILED`로 변환하지 않는다. 내부 병렬 worker에서 처리하지 않은 예외가 발생하면 현재 구현은 프로세스를 종료할 수 있다. 이 단계에서 worker 예외 수집·복구 정책을 새로 도입하지 않았다.
 - `PolyTrajOptimizer::solve()` 안의 MINCO·L-BFGS는 그대로 유지한다. 이 문서는 계획·실행·평가 계약을 다룬다. 후속 단계에서 분리한 시뮬레이션 계산·Python 지도 처리·표시 준비는 [기능별 API 색인](modularized_function_api_ko.md)을 참고한다. 독립 렌더러와 전체 ROS 제거는 아직 제공 범위에 포함하지 않는다.

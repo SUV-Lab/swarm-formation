@@ -11,8 +11,11 @@
 
 namespace path_manager {
 
-// Original planner frame/units. ROW spans world X and COL spans world Y;
-// elevation[col * rows + row] is the original float cell-center sample.
+// Original planner frame: geometry and elevation are in planner units (u).
+// ROW spans world X and COL spans world Y, both in decreasing world direction:
+// x = center_x + length_x/2 - (row + 0.5)*resolution,
+// y = center_y + length_y/2 - (col + 0.5)*resolution.
+// elevation[col * rows + row] is the column-major float cell-center sample.
 // Keep explicit lengths/center and NaN payloads. No transpose, ring-buffer
 // adjustment, resampling or unit conversion is performed at this boundary.
 // TerrainData remains the single authority for the existing mirrored sampler.
@@ -26,6 +29,8 @@ struct TerrainGrid {
 
 // Representation checks only. Nonfinite cell heights are retained. Extra
 // payload cells are permitted and retained, matching existing GridMap ingest.
+// Does not check rows*resolution == length_x or cols*resolution == length_y;
+// callers must supply mutually consistent grid geometry.
 // Returns a synchronous error and clears it on success.
 bool validateTerrainGrid(const TerrainGrid &terrain, std::string *error = nullptr);
 

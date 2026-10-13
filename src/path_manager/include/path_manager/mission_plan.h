@@ -25,6 +25,10 @@ struct MissionPlanRequest {
   std::vector<Eigen::Vector3d> waypoints;
   ego_planner::TailBoundary tail;
   StartAltitude start_altitude{StartAltitude::ABSOLUTE};
+  // Legacy RosPlanningBackend behavior: formation_type is metadata only.
+  // Pattern/size reach the primary optimizer after a successful computation,
+  // so they may affect a later solve reusing it; they do not configure all
+  // independently created segment workers for this request.
   std::string formation_type{"none"};
   std::vector<Eigen::Vector3d> formation_pattern;
   int formation_size{1};
@@ -36,6 +40,10 @@ struct MissionPlanRequest {
 };
 
 struct MissionPlanResult {
+  // In RosPlanningBackend, rejected adoption (including a SUCCESS/DEGRADED
+  // computation without a product) returns FAILED with textual detail and
+  // no dedicated PlanReason code. Existing computation failures retain their
+  // status when their execution effects are accepted.
   PlanResult status;
   // Value-owned coefficients. No data here refers to planner scratch or
   // execution storage; later plans/environment changes cannot rewrite it.

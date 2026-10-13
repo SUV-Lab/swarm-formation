@@ -219,10 +219,10 @@ void SegmentChainPlanner::degradeForVerdict(PlanResult *r,
   }
 }
 
-void SegmentChainPlanner::invalidateStoredTrajectory(PlanningComputation &computed) const
+void SegmentChainPlanner::recordExecutionInvalidation(PlanningComputation &computed) const
 {
   // Record the gate's execution effect; calculation never clears a live slot.
-  // The compatibility wrapper/FSM applies this together with the final result.
+  // The backend or compatibility plan wrapper applies it with the final result.
   computed.invalidate_execution = true;
 }
 
@@ -440,9 +440,9 @@ PlanResult SegmentChainPlanner::planImpl(PlanContext &state,
     if (author) {
       // [PHASE] Route mode applies WHITELISTED optimizer-owned overrides
       // per worker (phase profiles + seg<i>), in the serial construction
-      // window — see planRouteParallel. Non-whitelisted keys are dropped
+      // window — see planFromRoute. Non-whitelisted keys are dropped
       // loudly there.
-      return planRouteParallel(state, computed, head, waypoints, par, mission_tail);
+      return planFromRoute(state, computed, head, waypoints, par, mission_tail);
     } else if (par) {
       log_->warnf("[CHAIN] chain/parallel needs chain/author_from_route "
                   "(the baseline is inherently sequential) — running the "
@@ -503,7 +503,7 @@ PlanResult SegmentChainPlanner::planMultiWaypoint(
                    "mission — set manager/allow_unmeasured_zone_policy to "
                    "fly it uncleared" : "");
     log_->errorf("[STITCH-GATE] %s", why);
-    invalidateStoredTrajectory(computed);
+    recordExecutionInvalidation(computed);
     return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE,
                                      why);
   }
@@ -580,7 +580,7 @@ PlanResult SegmentChainPlanner::planBaselineMission(
              !bv.evaluated ? "" :
                  (!bv.policy_measurable ? "zone policy unevaluated" : ""));
     log_->errorf("[STITCH-GATE] %s", why);
-    invalidateStoredTrajectory(computed);
+    recordExecutionInvalidation(computed);
     return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
   };
 
@@ -696,7 +696,7 @@ PlanResult SegmentChainPlanner::planBaselineMission(
                 "stitched chain failed the whole-flight evaluation — "
                 "baseline flown instead");
     else
-      invalidateStoredTrajectory(computed);
+      recordExecutionInvalidation(computed);
     return r;
   }
 
@@ -1514,12 +1514,10 @@ bool SegmentChainPlanner::authorContractsFromRoute(PlanContext &state,
   return true;
 }
 
-// [S13] The route-parallel plan decomposed into its two real stages, so a
-// transition coordinator can call them SEPARATELY: commit the global route
-// once, run a transition toward an entry point ON it, cut the route there,
-// and hand planOverRoute the slice with the transition end state as the
-// head. planRouteParallel itself is now just the no-transition composition
-// of the two.
+// The transition coordinator commits the route once, builds a transition to
+// an entry on it, then passes the remaining slice and handoff to computeOverRoute.
+// planFromRoute composes route preparation and computation without a transition.
+// Both defer execution application to the backend or compatibility plan wrapper.
 
 SegmentChainPlanner::StartRegime SegmentChainPlanner::classifyStartState(
     const Eigen::Vector3d &pos_u, const Eigen::Vector3d &vel_u,
@@ -1934,7 +1932,7 @@ PlanResult SegmentChainPlanner::planTransitionMission(PlanContext &state,
                        mission_tail, &prefix);
 }
 
-PlanResult SegmentChainPlanner::planRouteParallel(PlanContext &state,
+PlanResult SegmentChainPlanner::planFromRoute(PlanContext &state,
     PlanningComputation &computed, const StartHead &head,
     const std::vector<Eigen::Vector3d> &waypoints,
     bool run_parallel, const ego_planner::TailBoundary &mission_tail)
@@ -2119,7 +2117,7 @@ PlanResult SegmentChainPlanner::planRouteFallback(PlanContext &state,
                  fv.viol_pct, 100.0 * fv.util_peak);
       }
       log_->errorf("[ENVELOPE] %s — FAILED (DIRECT_FALLBACK_UNSAFE)", why2);
-      invalidateStoredTrajectory(computed);
+      recordExecutionInvalidation(computed);
       return PlanResult::failedBecause(
           PlanReason::DIRECT_FALLBACK_UNSAFE,
           std::string(why) + "; " + why2);
@@ -3068,7 +3066,7 @@ PlanResult SegmentChainPlanner::finishRouteFlight(
                 joined.acceleration_error, transition->junction_pva_tol_u,
                 joined.jerk_jump);
     if (!joined.joined) {
-      invalidateStoredTrajectory(computed);
+      recordExecutionInvalidation(computed);
       return PlanResult::failedBecause(
           PlanReason::TRANSITION_JUNCTION_UNSOUND,
           "chain head is not on the transition tail");
@@ -3148,7 +3146,7 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
   if (!fv.evaluated) {
     log_->errorf("[STITCH-GATE] whole-flight evaluation did not run "
                  "(malformed spans or degenerate flight) — FAILED");
-    invalidateStoredTrajectory(computed);
+    recordExecutionInvalidation(computed);
     return PlanResult::failedBecause(
         PlanReason::STITCHED_FLIGHT_UNSAFE,
         "stitched flight could not be evaluated (span contract violation "
@@ -3180,7 +3178,7 @@ PlanResult SegmentChainPlanner::stitchedVerdictResult(
     // Record the refusal even if no product exists yet. The execution
     // adapter reproduces the legacy withdrawal, including after an earlier
     // baseline/direct solve, without exposing an intermediate flight.
-    invalidateStoredTrajectory(computed);
+    recordExecutionInvalidation(computed);
     return PlanResult::failedBecause(PlanReason::STITCHED_FLIGHT_UNSAFE, why);
   }
   if (fv.evaluated && fv.envelope_bad) {

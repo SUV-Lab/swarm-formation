@@ -64,7 +64,9 @@ class RosPlanningBackend final : public MissionPlanningBackend {
 
  private:
   void requireInitialized() const;
-  PlanResult planDirect(const StartHead &head,
+  // Compute the direct-mode product without applying it to execution storage.
+  // May declare the legacy final-boundary-relaxation ROS parameter on first use.
+  PlanResult computeDirect(const StartHead &head,
                         const std::vector<Eigen::Vector3d> &waypoints,
                         const ego_planner::TailBoundary &tail,
                         PlanningComputation &computation);

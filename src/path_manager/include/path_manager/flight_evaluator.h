@@ -54,9 +54,11 @@ struct FlightEvaluationEnvironment {
 // externally generated trajectory. Every piece has a finite positive duration
 // and finite coefficients, and total duration must be finite. Numerically
 // malformed input is unevaluated before any environment/model callback.
-// References/pointers are borrowed only for
-// evaluateFlight(). The final span ends at total duration; transitions lead
-// contiguously and a terminal span is last. Sample spacing stays fixed at
+// trajectory/phases are stored by reference; construction does not extend their
+// lifetimes. Keep those sources, and piece_leg when supplied, alive and stable
+// while this input is used, through evaluateFlight() returning. The final span
+// ends at total duration; transitions lead contiguously and a terminal span
+// is last. Sample spacing stays fixed at
 // 0.1 s, matching the existing whole-flight gate (it is not continuous CCD).
 struct FlightEvaluationInput {
   FlightEvaluationInput(const poly_traj::Trajectory &flight,
@@ -109,6 +111,9 @@ struct FlightPhaseMetrics {
   // traverse of the authored volume, and those two call for opposite
   // responses. q < 1 is inside the authored ellipsoid; the gate fires at
   // q < 1.05, so q_min is the number that says which one happened.
+  // The legacy zone_hard_t_*, zone_hard_runs and zone_hard_qmin* names cover
+  // BOTH authored and standoff contact with HARD_AVOID zones. Only
+  // zone_hard_n/zone_hard_s above are restricted to authored-volume contact.
   double zone_hard_t_first{-1.0};
   double zone_hard_t_last{-1.0};
   int zone_hard_runs{0};       // contiguous contact intervals

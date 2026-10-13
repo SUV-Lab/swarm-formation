@@ -26,9 +26,11 @@ struct ZonePolicySnapshot {
     // search (multi-waypoint mission: each leg rewrites the whole
     // policy state, so the buffers describe only the LAST leg —
     // publishing that as plan-wide policy is fail-open; review find).
-    // Valid means exactly: ONE single-goal search ran on current
-    // data. Contract 2 requires that; an invalid snapshot is
-    // fail-closed at every consumer.
+    // The plan-wide producer requires one measured search on current data
+    // (or the no-zone case); a per-leg snapshot attests its own leg's search.
+    // true is a legacy construction default, not proof of measured policy.
+    // Producers must set false for unknown policy and fill matching provenance
+    // when attesting it; contact providers also validate generation/epoch/shape.
     bool valid{true};
     struct Entry {
         RiskZone zone;  // SHAPE COPY — identity, not an index

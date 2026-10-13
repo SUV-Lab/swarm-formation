@@ -9,8 +9,11 @@ namespace path_manager {
 // This facade creates no ROS node and stores no second copy of live settings.
 // Serialize synchronous calls on an instance; configured internal segment
 // workers may still run in parallel. Replace model/search implementations only
-// while idle between missions. Live environment updates during execution retain
-// the ROS adapter's existing revalidation and trajectory withdrawal policy.
+// while idle between missions. Environment setters delegate to the backend.
+// With RosPlanningBackend, ordinary setter calls update planning inputs without
+// revalidating or withdrawing the adopted flight; ReplanFSM's topic callbacks
+// perform that execution policy. Terrain installation can also flush deferred
+// obstacles, which revalidates that newly installed batch.
 class MissionPlanner {
  public:
   MissionPlanner(PlanSettings settings, PlanningEnvironment environment,
@@ -22,8 +25,12 @@ class MissionPlanner {
   void setVehicleModel(mmp_vehicle_dynamics::VehicleModel::Ptr model);
   void setRouteSearchBackend(std::shared_ptr<RouteSearchBackend> backend);
   bool setTerrain(TerrainGrid terrain, std::string *error = nullptr);
+  // RosPlanningBackend also clears the SDF and installed/pending dynamic
+  // obstacles. Authored risk zones are retained.
   void clearTerrain();
   bool setRiskZones(const std::vector<RiskZone> &zones);
+  // RosPlanningBackend: >=0 installed ID, -2 accepted but deferred until the
+  // SDF is ready, -1 rejected. Acceptance does not imply execution validation.
   int addDynamicSphere(const Eigen::Vector3d &center, double radius,
                        const std::string &model = "");
   int addDynamicBox(const Eigen::Vector3d &center, const Eigen::Vector3d &size,

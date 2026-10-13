@@ -1,0 +1,69 @@
+{
+  "checked_at_utc": "2026-10-12T13:22:29.241927+00:00",
+  "scope": "Read-only static public API/name/contract audit. This is artifact validation, not build/runtime verification.",
+  "branches": {
+    "main": "lgh/dev",
+    "planner": "mmp_dev"
+  },
+  "heads": {
+    "main": "a297f2342cebe33ff0e9edd2eb55db0172ea65bb",
+    "planner": "d2ef5496432b86cfb19d10be5658a369c9cc3725"
+  },
+  "source_fingerprints": {
+    "count": 260,
+    "changed": [],
+    "all_match_initial": true
+  },
+  "claude_copies_match_original": true,
+  "build_run": false,
+  "tests_run": false,
+  "runtime_run": false,
+  "application_edits": false,
+  "existing_diagram_edits": false,
+  "files": [
+    {
+      "file": "README.md",
+      "bytes": 28726,
+      "sha256": "caa7e0f93bc1b429df1690fd0fdfd642c0a8b386b7ccede6fe5bfb62ef2ef7f1"
+    },
+    {
+      "file": "claude_raw_review.json",
+      "bytes": 745369,
+      "sha256": "42d561dc215b1577c6ba953b3cba6d89586d32bad5b3e551795118edf908dda0"
+    },
+    {
+      "file": "claude_review.md",
+      "bytes": 251603,
+      "sha256": "1424a58ddec2903d2ceebf6ad2bf2f971492346ffab265fc55a5e69feedf2a2b"
+    },
+    {
+      "file": "orchestration_review.md",
+      "bytes": 12883,
+      "sha256": "f3c23de139c50d4b4a65c3c939bdd88fa755941a9ed90df7130e21b197440def"
+    },
+    {
+      "file": "public_api_review.md",
+      "bytes": 15259,
+      "sha256": "b366258f6dff1e57c28813ea4f723d1aa546467b7685f26ee78e7b0a540c7b6f"
+    },
+    {
+      "file": "reference_counts.json",
+      "bytes": 40692,
+      "sha256": "a3c8e437d315473d24b11058127ae9b82674bb388c6fea8c97754a9f0d795f80"
+    },
+    {
+      "file": "source_snapshot.json",
+      "bytes": 49377,
+      "sha256": "552ad0ec2eaa613fdca4738e9733415471936156031f62fa4dde9d4ed28045dd"
+    },
+    {
+      "file": "supporting_review.md",
+      "bytes": 11399,
+      "sha256": "b1979064c8fa9aaee23d67f7cb0487f8fc34003d7b26b4739b88d2eeaf584c52"
+    }
+  ],
+  "readme_local_links": {
+    "count": 9,
+    "missing": []
+  }
+}

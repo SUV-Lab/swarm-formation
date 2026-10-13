@@ -17,8 +17,9 @@
 namespace path_manager {
 
 // Coordinates the existing baseline and route-authored planning modes.
-// RosPlanningBackend owns this component; ROS command adoption and execution
-// remain in ReplanFSM. Route mode commits one front-end route, prepares
+// RosPlanningBackend owns this component and applies its computed execution
+// effects through PathManager. ReplanFSM retains ROS command handling,
+// publication and execution state. Route mode commits one front-end route, prepares
 // boundary contracts, solves independent segments sequentially or in
 // parallel, then applies the existing retry/fallback and whole-flight gates.
 // Geometry, units, three-pass routing policy and phase semantics are shared
@@ -40,39 +41,17 @@ public:
                       swarm_formation::LogManager *log_manager,
                       int segments, bool inherit_route = true);
 
-  // Chained plan of one mission. Same contract as planGlobalTraj: on true,
-  // path_manager->executionTrajectory() holds a flyable local trajectory (the chained result,
-  // or the baseline when the chain degraded). Under chain mode the GLOBAL
-  // slot holds the baseline OPTIMIZED trajectory — not the MINCO seed — so
-  // /planning/initial_trajectory becomes the baseline-vs-chain comparison
-  // channel in RViz.
-  //
-  // start_vel_synthesized is forwarded to the baseline run and the first
-  // segment ([VEL-ALIGN] applies to both the same way); later segments start
-  // from a contract state, which is trajectory-derived and never re-aimed.
-  // Returns the planner<->FSM contract (planning_result.h): FAILED = do not
-  // fly, SUCCESS = all stated requirements met, DEGRADED = flyable under an
-  // approved relaxation (reason + detail say which).
-  // mission_tail: the mission's FINAL boundary ([PHASE]). Validated once
-  // at this entry (shared envelope validator, finiteness); invalid without
-  // the planning/allow_final_boundary_relaxation opt-in fails the plan.
-  // start_vel_commanded ([ENVELOPE], contract 1): the start velocity is an
-  // EXPLICIT operator input (use_initial_velocity / test injection), not a
-  // synthesized or trajectory-derived state. Commanded inputs are validated
-  // against the cruise envelope at this entry — outside it the plan FAILS
-  // (INITIAL_MODE_UNSUPPORTED) before the front end or any optimizer runs;
-  // they are never clamped. Non-commanded starts keep the [STALL-FLOOR]
-  // clamp doctrine (our own proxy states may be repaired, inputs may not).
-  // The head is a VALUE: the state plus where it came from. It replaced
-  // three booleans with eight combinations for four legal states — and the
-  // illegal ones were reachable, and one of them shipped: a prescribed
-  // acceleration was discarded whenever the velocity arrived in the scalar
-  // form, because the classifier asked for
-  // "start_vel_commanded && start_acc_commanded" and the scalar form sets
-  // the first to false. Passing the head means the policy sees what the
-  // operator actually said, and forgetting the provenance is a compile
-  // error rather than a convention.
   // Calculate an owned result without adopting into the execution slot.
+  // StartHead supplies PVA (u, u/s, u/s^2), provenance and whether acceleration
+  // was prescribed. Unspecified provenance and non-finite states are refused.
+  // Provenance controls validation, transition dispatch and the existing
+  // re-aim/floor policy; later segment heads are validated junction states.
+  // mission_tail is the final boundary, subject to the existing validation
+  // and planning/allow_final_boundary_relaxation policy.
+  // The status is PlanResult, not bool: FAILED has no executable result;
+  // SUCCESS/DEGRADED retain their existing gates and relaxation reasons.
+  // For baseline chain mode, the reference is the optimized baseline rather
+  // than the MINCO seed. Route chain mode retains its full-flight reference.
   // The result owns its trajectories, phases and verdict after this planner
   // is destroyed. Its sealed execution context is valid only for the same
   // live manager, current environment/execution revision, and a single apply;
@@ -85,7 +64,9 @@ public:
       const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
       const ego_planner::TailBoundary &mission_tail = {});
 
-  // Compatibility: compute, then immediately apply execution effects.
+  // Compatibility: compute, then immediately apply execution effects through
+  // PathManager, including any recorded failure invalidation. This wrapper
+  // does not publish the execution trajectory; that remains with ReplanFSM.
   PlanResult plan(const StartHead &head,
                   const std::vector<Eigen::Vector3d> &waypoints,
                   const ego_planner::TailBoundary &mission_tail =
@@ -93,14 +74,13 @@ public:
 
   int segments() const { return last_plan_.segments; }
 
-  // [S13] planRouteParallel decomposed (contract 2 §13): commitRoute runs
-  // the ONE front-end pass and hands back the committed route + cap;
-  // planOverRoute authors/solves/stitches over an already committed route
-  // (or a slice of one) from an arbitrary head PVA, with a fail-closed
-  // input contract (sizes, finiteness, head-on-route). A transition
-  // coordinator calls them separately with the transition in between;
-  // planRouteParallel is their no-transition composition. Public: the
-  // coordinator and the harness drive these seams directly.
+  // Public route seams: commitRoute prepares a route and cap; planOverRoute
+  // computes over a committed route (or slice), then applies execution effects.
+  // The private planFromRoute and transition coordinator instead compose
+  // commitRouteInContext and computeOverRoute without applying execution.
+  // The transition path inserts its prefix and slices the committed route
+  // before computing the remaining flight. Route admission checks sizes,
+  // finiteness and head-on-route consistency.
   std::optional<CommittedRoute> commitRoute(
       const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
       bool run_parallel);
@@ -371,7 +351,7 @@ private:
   SegmentOverrides readOverrideList(const std::string &pname,
                                     const std::string &who) const;
 
-  // [CHAIN-PAR] Route-parallel mode (chain/author_from_route [+
+  // [CHAIN-PAR] Route-based mode (chain/author_from_route [+
   // chain/parallel]): NO baseline solve. One front-end-only pass commits
   // the route (~0.3 s even at 337 km); junction contracts are authored on
   // it — zone-clear, low-CURVATURE (the a-priori calm: a = v^2 * kappa)
@@ -382,7 +362,7 @@ private:
   // baseline to restore; failures repair through the retry ladders or the
   // gated single-shot fallback (DEGRADED), which a transition-active plan
   // forbids outright.
-  PlanResult planRouteParallel(PlanContext &state,
+  PlanResult planFromRoute(PlanContext &state,
       PlanningComputation &computed, const StartHead &head,
       const std::vector<Eigen::Vector3d> &waypoints, bool run_parallel,
       const ego_planner::TailBoundary &mission_tail);
@@ -560,7 +540,7 @@ private:
       const std::vector<Contract> &contracts,
       const std::vector<size_t> &edge_leg = {}) const;
 
-  // [CHAIN-PAR] see planRouteParallel. Contract.t carries pseudo-time
+  // [CHAIN-PAR] see planFromRoute. Contract.t carries pseudo-time
   // (arc / cruise) for the logs. v0 = the mission's effective start velocity
   // — the departure handoff screening needs it ([PHASE-DEP] design v2).
   // [S13] Handoff screening (frozen v4 [PHASE] rules) extracted whole so
@@ -615,7 +595,7 @@ private:
       int upto_vertex = -1) const;
   // Records a refusal's execution invalidation effect, applied only by the
   // execution adapter. Does not clear stored trajectory during calculation.
-  void invalidateStoredTrajectory(PlanningComputation &computed) const;
+  void recordExecutionInvalidation(PlanningComputation &computed) const;
   // Turn-out seed following the INITIAL velocity: arc (radius = margin x
   // R_min) chasing the handoff bearing, then a straight leg, z smoothstep.
   // The route slice must NOT seed the departure solve when the initial

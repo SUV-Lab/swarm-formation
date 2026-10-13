@@ -8,8 +8,9 @@
 현재 실제 구현은 **ROS 2 Humble을 사용하는 `RosPlanningBackend`**다. 일반 입력과
 `MissionPlanner` 헤더·구현에는 ROS 타입이 없지만, 설치된 계산 라이브러리는 여전히
 ROS를 필요로 한다. 기존 `ReplanFSM`도 같은 계획 API를 사용하며 콜백·토픽 발행·실행
-상태·ABORT·재계획은 ROS 실행 계층에 남는다. `plan()`은 동기 계산 호출이고, 반환된
-궤적을 실제로 실행하는 명령은 별도다.
+상태·ABORT·재계획은 ROS 실행 계층에 남는다. `plan()`은 동기 계산 후 실행 저장소에
+효과를 적용한다. 성공 결과를 채택하거나 실패 결과에 기록된 무효화를 반영하지만,
+반환된 궤적을 실제로 실행하도록 발행하는 명령은 별도다.
 
 2026-10-10 후속 단계에서는 내부 계산 결과 생성과 실행 저장소 채택을 분리했다.
 기존 `plan()`의 사용법은 유지한다. 채택하지 않고 계산만 수행하는
@@ -95,6 +96,11 @@ YAML을 쓰려면 `RosPlanningOptions::node_options.arguments()`에
 초기 설정을 바꾸려면 node 생성·설정 단계에서 적용한다. 설정의 적용 시점은 기존
 소비자별 의미를 유지하며, 모든 ROS 파라미터가 실행 중 즉시 갱신된다는 뜻은 아니다.
 
+`manager/ground_height`·`manager/virtual_ceil_height`는 AGL이 아닌 절대 planner z(`u`)다.
+기존 활성 규칙은 `> -0.5`이며 `<= -0.5`는 비활성이다. YAML이나 명시 override가 없을 때의
+기본값 `-0.1`은 두 plane을 활성화한다. 배포 YAML의 값과 구별해야 하며, 이 문서 정리는
+해당 기본값이나 탐색·최적화 동작을 변경하지 않는다.
+
 초기화한 primary optimizer의 `optimization/obstacle_clearance`, `weight_altitude`,
 `alt_cap_headroom`, `alt_floor_headroom`과 이에 연결된 mission 위험장은 초기화 시점 값을
 유지한다. 실행과 worker 계산을 마친 뒤 live ROS 기본값을 바꾸었다면, primary 경로와
@@ -154,6 +160,8 @@ ROS 실행 연결에서 manager가 필요하면 생성한 `RosPlanningBackend`�
 초기 적용 순서는 지형 → 위험영역 → 동적 장애물이다. 지형 삭제는 optional 미지정으로
 표현하지 않고 `clearTerrain()`을 호출한다. 이후에는 `setTerrain`, `setRiskZones`,
 `addDynamicSphere`, `addDynamicBox`, `clearDynamicObstacles`로 갱신한다.
+`clearTerrain()`은 지형과 SDF, 이미 설치되었거나 대기 중인 동적 장애물도 지운다.
+위험영역 목록은 유지하므로 전체 환경 초기화와는 다르다.
 
 `setTerrain(grid, &error)`가 `false`이면 이전 지형은 유지된다. `setRiskZones()`도
 갱신 수락 여부를 반환한다. 장애물 추가의 반환값은 `>= 0`이면 추가 ID, `-2`이면
@@ -161,13 +169,27 @@ ROS 실행 연결에서 manager가 필요하면 생성한 `RosPlanningBackend`�
 
 `TerrainGrid`는 중심, 길이, 해상도, 행·열 수와 `std::vector<float>`를 소유한다.
 row는 X, col은 Y에 대응하며 데이터 인덱스는 `elevation[col * rows + row]`다.
+row와 col이 증가하면 각각 X와 Y는 감소한다. 셀 중심은
+`x = center_x + length_x/2 - (row + 0.5)*resolution`,
+`y = center_y + length_y/2 - (col + 0.5)*resolution`이며 길이·높이는 planner 단위 `u`다.
 원래 배열과 NaN, 여분 payload를 보존하고 경계에서 전치·회전·재샘플링·단위 변환을
 하지 않는다. 실제 방향 반영과 샘플링은 기존 지형 구현이 담당한다. ROS `GridMap`
 연결은 [ros_terrain_grid.h](../../src/path_manager/include/path_manager/ros_terrain_grid.h)에 있다.
 
 이 입력이 값을 소유한다는 사실은 계산 중 환경이 불변 snapshot이라는 뜻이 아니다.
-같은 planner의 계획 호출과 환경·설정 변경은 직렬로 사용한다. 실행 중 ROS 환경
-갱신은 기존 실행 계층의 재검증·궤적 철회 정책을 따른다.
+같은 planner의 계획 호출과 환경·설정 변경은 직렬로 사용한다.
+
+공개 setter는 계획 환경을 갱신하며, 일반 경로에서 이미 채택한 실행 궤적을
+재검증하거나 철회하지 않는다. 미채택 계산의 문맥이 오래되어 채택을 거부하는 것과
+현재 실행 궤적의 철회는 다르다. 수락된 환경 변화는 이전에 계산한 미채택 결과를
+stale로 만들어 이후 적용을 거부할 수 있다. 장애물 추가가 `-2`로 대기 접수된 경우도
+미채택 계산 문맥을 무효화한다. 예외적으로 새 지형에서 SDF가 준비되어 대기 장애물을
+설치하면 그 배치에 대한 재검증이 수행된다. 지형 변화 자체의 일반 재검증 보장은 아니다.
+
+기존 `ReplanFSM`의 지형·장애물·위험영역 토픽 콜백은 갱신 후 각자의 재검증·철회
+정책을 별도로 수행한다. 철회할 실행이 있고 FSM observer와 발행기가 연결된 경우에는
+ABORT를 발행하고 `WAIT_EXTERNAL_RECOVERY`로 들어간다. 공개 setter 직호출에 이
+ROS 실행 정책이 자동 적용된다고 가정하면 안 된다. 이미 반환한 소유 궤적 값은 유지된다.
 
 ## 입력 거부와 profile 우선순위
 

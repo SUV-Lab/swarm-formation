@@ -317,7 +317,7 @@ PlanningComputation RosPlanningBackend::compute(MissionPlanRequest request)
   if (chain_enabled_)
     computation = chain_->compute(request.head, request.waypoints, request.tail);
   else
-    computation.status = planDirect(request.head, request.waypoints,
+    computation.status = computeDirect(request.head, request.waypoints,
                                     request.tail, computation);
   if (!computation.status.hasTrajectory())
     return manager_->sealPlanningComputation(std::move(computation));
@@ -330,7 +330,7 @@ PlanningComputation RosPlanningBackend::compute(MissionPlanRequest request)
   return manager_->sealPlanningComputation(std::move(computation));
 }
 
-PlanResult RosPlanningBackend::planDirect(
+PlanResult RosPlanningBackend::computeDirect(
     const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints,
     const ego_planner::TailBoundary &tail, PlanningComputation &computation)
 {

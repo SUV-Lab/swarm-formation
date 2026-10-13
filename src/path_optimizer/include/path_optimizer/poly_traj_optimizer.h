@@ -663,9 +663,10 @@ namespace ego_planner
                                   const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                   Eigen::MatrixXd &optimal_points, const bool use_formation);
 
-    // High-level entry: build a MINCO initial trajectory from the front-end
-    // path, then optimize it. This is the single replaceable seam — a custom
-    // optimizer backend reimplements this and never exposes MINCO internals.
+    // Legacy nonvirtual entry: build a MINCO initial trajectory from the
+    // front-end path, then optimize it. New callers should use solve(request)
+    // for an owned result. This method is not a polymorphic backend extension
+    // point; MINCO and L-BFGS remain one optimizer implementation unit.
     // clean_path may be modified (a midpoint is inserted for degenerate input).
     //
     // cap_ref_z: the front-end's COMMITTED z per clean_path vertex (pre-

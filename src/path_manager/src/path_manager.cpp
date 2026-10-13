@@ -1603,7 +1603,8 @@ std::optional<PlannedTrajectory> PathManager::optimizeStage(
 {
         // Stage 2 = trajectory optimization. The optimizer owns the MINCO
         // initial-trajectory build + L-BFGS; we only pass the front-end path
-        // and return owned results. Swap optimizeFromPath() to replace the backend.
+        // through solveDirectTrajectory/PolyTrajOptimizer::solve and return
+        // owned results. Legacy optimizeFromPath is not a virtual backend seam.
         if (!context.optimizer) {
             log_manager_->errorf("Optimizer not initialized");
             return std::nullopt;
@@ -2146,12 +2147,8 @@ void PathManager::clearDynamicObstacles()
     publishDynamicObstacles();
 }
 
-// Add obstacles that were requested before the SDF existed. Called right after
-// the SDF is built/loaded, so they make it into the very first plan.
-// [ENV-CHANGE] Every path by which the world under a flight can change has to
-// reach revalidateStoredTrajectory, not just the obstacle topic. This one is
-// the deferred queue: obstacles that arrived before the SDF existed are
-// installed HERE, so this is where they first become able to block anything.
+// Query the active zone content; the caller decides whether a replacement
+// requires execution withdrawal under the existing fail-closed policy.
 uint64_t PathManager::riskZoneFingerprint() const
 {
     return environment_->riskZoneFingerprint();
@@ -2175,6 +2172,11 @@ void PathManager::revalidateAfterEnvChange(const char *what,
                              : 0.0;
     Eigen::Vector3d hit;
     if (!revalidateStoredTrajectory(t_cur, &hit, reason)) {
+        // revoke() has already notified any registered observer. In ReplanFSM
+        // that observer publishes ABORT (when its publisher is available) and
+        // enters WAIT_EXTERNAL_RECOVERY. Without that adapter only the local
+        // execution slot is withdrawn. The legacy log text below is retained
+        // for compatibility; its "open decision" wording predates the observer.
         log_manager_->errorf(
             "[ENV-CHANGE] %s blocked the flight in progress at "
             "(%.2f, %.2f, %.2f) — the stored trajectory is invalidated. NOTE: "
@@ -2187,6 +2189,9 @@ void PathManager::revalidateAfterEnvChange(const char *what,
 
 void PathManager::flushPendingObstacles()
 {
+    // Deferred inputs first become collision obstacles once an SDF exists.
+    // Revalidate after this batch; ordinary environment setter calls do not
+    // all perform execution revalidation.
     const auto pending = environment_->takePendingObstacles();
     if (pending.empty()) return;
     for (const auto &p : pending) {
