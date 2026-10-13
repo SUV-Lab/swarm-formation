@@ -104,6 +104,12 @@ ID는 계산할 때 실행 저장소에서 발급하지 않는다. 명시 채택
 
 같은 객체의 호출은 직렬로 한다. 특히 **계산과 채택 사이에 live ROS 파라미터나 기타 설정을 변경하지 않는다.** 임의 ROS 파라미터 변경 전체를 추적하는 설정 스냅샷·revision은 제공하지 않는다. 결과를 오래 보관한 뒤 재생하는 기능도 이 채택 API의 범위가 아니다.
 
+미션 사이의 live ROS 기본값 변경도 모든 소비자에 즉시 적용되지는 않는다. primary
+optimizer가 사용하는 clearance·altitude weight·headroom과 canonical mission 위험장을
+갱신하려면 계산·실행·worker 사용을 끝낸 뒤 `PathManager::initOptimizer(true)`로 다시
+초기화한다. 독립 worker와 slice는 생성 시점의 기본값을 읽으며, 그 생성이 primary의
+초기화 값을 갱신하지 않는다. 호출별 `DirectPlanSettings` 역시 공유 기본값을 바꾸지 않는다.
+
 기존 호환성을 위해 남은 public `PathManager::traj_`를 외부에서 직접 수정하는 것도
 이 프로토콜의 지원 범위가 아니다. FSM은 제한된 const 조회만 사용한다. 그 조회가
 반환한 참조는 manager 수명을 빌리므로 장기간 보관할 데이터에는 소유 결과를 사용한다.
@@ -175,7 +181,7 @@ path_manager::FlightEvaluationReport evaluateFlatFlight(
 
 - 계산 결과와 평가 보고서는 값을 소유한다. 계산 중 지형·거리장·위험 조회와 evaluator의 궤적·단계·귀속 포인터는 동기 호출이 끝날 때까지 유효하고 안정적이어야 한다. 결과가 환경의 수명을 연장하거나 불변 복사본을 만들지는 않는다.
 - 같은 planner의 외부 호출과 환경·설정 변경은 직렬이다. 내부 구간 worker는 독립 optimizer를 사용하며 공유 환경을 읽는다. 명시 주입한 `VehicleModel`은 불변이고 concurrent const 질의를 지원해야 한다. 모델이 일반적으로 모든 VTOL 상태·전환 제어를 지원한다는 뜻은 아니다.
-- 계산 중 기존 전단·궤적 시각화 발행은 일부 남아 있다. 후보의 실행 채택을 생략했다고 모든 ROS 표시가 생략되는 것은 아니다. 시각화 입력·발행 분리는 다음 단계 4의 범위다.
+- 계산 중 기존 전단·궤적 시각화 발행은 일부 남아 있다. 후보의 실행 채택을 생략했다고 모든 ROS 표시가 생략되는 것은 아니다. 표시 준비와 ROS 발행은 후속 단계에서 분리했으며, `PlanSettings.attach_visualization=false`로 manager의 표시 연결을 생략할 수 있다. [표시 API 사용법](planning_visualization_usage_ko.md)을 참고한다.
 - 실제 ROS 실행에서는 FSM의 콜백·실행 상태·발행·pending 결과 처리와 ABORT 순서를 유지한다. FSM은 `executionTrajectory()`와 `referenceTrajectory()`의 제한된 const 조회를 사용한다. 환경 ABORT는 철회 대상 ID가 살아 있을 때 발행하고 이어서 실행 유효 상태를 지운다.
 - 초기화·잘못된 설정의 기존 예외 계약과 동기 평가 제공자의 예외 전파를 유지한다. 모든 예외를 `PlanResult::FAILED`로 변환하지 않는다. 내부 병렬 worker에서 처리하지 않은 예외가 발생하면 현재 구현은 프로세스를 종료할 수 있다. 이 단계에서 worker 예외 수집·복구 정책을 새로 도입하지 않았다.
-- `PolyTrajOptimizer::solve()` 안의 MINCO·L-BFGS는 그대로 유지한다. 시뮬레이터 분리, Python 지도 처리의 함수화, 독립 시각화, 전체 ROS 제거는 이 문서의 완료 범위에 포함하지 않는다.
+- `PolyTrajOptimizer::solve()` 안의 MINCO·L-BFGS는 그대로 유지한다. 이 문서는 계획·실행·평가 계약을 다룬다. 후속 단계에서 분리한 시뮬레이션 계산·Python 지도 처리·표시 준비는 [기능별 API 색인](modularized_function_api_ko.md)을 참고한다. 독립 렌더러와 전체 ROS 제거는 아직 제공 범위에 포함하지 않는다.

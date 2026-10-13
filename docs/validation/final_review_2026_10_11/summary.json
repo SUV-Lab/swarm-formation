@@ -1,0 +1,36 @@
+{
+  "pass": true,
+  "review_base": {
+    "parent": "a297f2342cebe33ff0e9edd2eb55db0172ea65bb",
+    "planner": "d2ef5496432b86cfb19d10be5658a369c9cc3725"
+  },
+  "ctest": 48,
+  "chain_variants": 73,
+  "risk_checks": 154,
+  "python_tests": 69,
+  "installed_cpp_examples": 4,
+  "new_chain_cases": 5,
+  "new_chain_cases_failing_before_fix": 4,
+  "nonfinite_override_followup_failed_before_fix": [
+    "direct",
+    "chain"
+  ],
+  "owned_r2_pieces": 190,
+  "owned_r2_duration_s": 521.0625247312521,
+  "owned_r2_sha256": "33b40dc818378be2343349bd31bff20c309bbb7aa2725d1f00e76b88ce1ebfe5",
+  "r2_all_owned_fields_exact": true,
+  "rviz_pieces": 190,
+  "rviz_duration_s": 521.0625259429216,
+  "rviz_abort_recovery_exact": true,
+  "frozen_input_and_install_files": 421,
+  "separate_prefix_build": "vehicle + optimizer + manager; existing underlay dependencies",
+  "normal_install_updated": true,
+  "solver_body_edited": false,
+  "repeated_performance_benchmark": false,
+  "summary_harness_correction": "71 expected -> source-derived 73; unchanged raw tests were all passing",
+  "notes": [
+    "ROS removal and C++ terrain port remain out of scope",
+    "Before/after targeted corrections intentionally change previously incorrect edge-case behavior",
+    "Results are case-specific regression checks, not an overall mission success rate"
+  ]
+}

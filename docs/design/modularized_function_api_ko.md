@@ -6,6 +6,11 @@ ROS 실행, 기존 좌표계·단위·파라미터와 기본 알고리즘을 유
 주고받는 계산과 ROS 실행·발행을 구분한다. 전체 기능을 같은 언어로 옮기거나
 ROS 없이 배포하는 독립 SDK를 제공하는 단계는 아니다.
 
+2026-10-13 검토에서 아래 API와 기존 실행의 연결을 확인했다. 등록 시험과 R2 비교는
+통과했지만, 구간 병합 재시도에서 개별 구간 설정에 덮인 공통 속도 제한을 다시 적용하는
+결함이 재현되어 수정 대기 중이다. 모듈 경계 구현과 최종 검수 통과를 구분하며,
+현재 결과와 재현 자료는 [모듈화 체크포인트](../validation/modularization_checkpoint_2026_10_13/README.md)를 따른다.
+
 ## 기능 선택
 
 | 필요한 기능 | 공개 진입점 | 호출자가 준비할 것 | 반환과 후속 사용 |
@@ -33,6 +38,8 @@ flowchart LR
     A --> V[표시 메시지 make 함수]
     P --> R[ROS backend · manager · chain]
     R --> C[path_manager_calculations]
+    R -. 소유 .-> X[PlanningExecutionStore · 채택/철회/ID]
+    R -. 소유 .-> N[PlanningEnvironmentStore · 지형/위험장/SDF]
     E --> C
     C --> O[path_optimizer_lib · 기존 MINCO/L-BFGS]
     S --> D[mmp_vehicle_dynamics]
@@ -44,8 +51,8 @@ flowchart LR
 
 | 설치된 imported target | 책임 | 남는 의존성 |
 |---|---|---|
-| `path_manager::path_manager_calculations` | generic planner facade, 환경 값 검증, 평가·궤적 연결·경로 처리·지형 위험장, 구간 최적화 호출, 전환/종말/경유점 계산 | Eigen, 기존 optimizer·vehicle target. optimizer의 ROS 관련 전이 의존성은 유지 |
-| `path_manager::path_manager_lib` | 전체 계획의 현재 ROS backend, PathManager·SegmentChainPlanner 조정, FSM, 환경·메시지·시각화 연결 | calculations를 전이 제공하고 기존 ROS·지도·탐색·SDF 연결 유지 |
+| `path_manager::path_manager_calculations` | generic planner facade, 실행 값·채택·철회 저장소, 환경 값 검증, 평가·궤적 연결·경로 처리·지형 위험장, 구간 최적화 호출, 전환/종말/경유점 계산 | Eigen, 기존 optimizer·vehicle target. optimizer의 ROS 관련 전이 의존성은 유지 |
+| `path_manager::path_manager_lib` | 전체 계획의 현재 ROS backend, PathManager·SegmentChainPlanner 조정, FSM, 환경 저장소와 메시지·시각화 연결 | calculations를 전이 제공하고 기존 ROS·지도·탐색·SDF 연결 유지 |
 | `path_optimizer::path_optimizer_lib` | `PolyTrajOptimizer::solve()`와 기존 MINCO·L-BFGS 전체, 설정·비용 프로필 연결 | 기존 ROS·탐색·기체 의존성 유지 |
 | `mmp_vehicle_dynamics::mmp_vehicle_dynamics` | 공유 물리, 계획용 `VehicleModel`, 시뮬레이션 엔진·운동 모델·제어기 | 계산 target에는 Eigen. 패키지 자체는 ROS 노드도 빌드 |
 
@@ -71,6 +78,34 @@ MINCO·L-BFGS의 내부 알고리즘은 solver 하나의 경계 안에 유지한
 PathManager·SegmentChainPlanner·ReplanFSM 내부 필드나 실행 저장소를 조작하지 않고
 위 진입점을 사용한다. 채택·철회가 필요한 기존 실행 어댑터만 계산 결과의 호환
 채택 인터페이스를 사용한다. 일반 외부 호출자는 `MissionPlanner::plan()`이면 된다.
+
+`planning_execution.h`, `planning_environment_store.h`, `direct_plan_settings.h`는
+현재 구현·실행 어댑터를 구성하는 하위 경계다. 이 헤더가 설치된다는 이유로 일반
+호출자가 세 객체를 직접 조립해야 하는 것은 아니다. `MissionPlanner`는 PM이나
+이 저장소를 반환하지 않으며, ROS 전용 `executionManager()`는 기존 FSM·실행
+어댑터 연결에 한정한다.
+
+## 내부 저장소와 실행 어댑터
+
+| 소유자 | 직접 소유하는 상태·책임 | 어댑터에 남는 책임 |
+|---|---|---|
+| `PlanningExecutionStore` | 현재/참조 궤적 값, 단조 증가 ID, 계산 토큰, `seal()`·`apply()`·`revoke()` | 시각·환경 세대 전달, ABORT 메시지 발행과 FSM 복구 |
+| `PlanningEnvironmentStore` | 지형·SDF·위험장·장애물·지연 설치 입력, 갱신 세대와 환경 질의 | ROS 설정 해석, solver 연결, 갱신 후 궤적 재검증·표시 순서 |
+| 호출별 direct-plan 문맥 | 해당 계산의 optimizer·설정, clearance를 포함한 위험장 조회 입력 | 동일 manager의 호출·환경 갱신 직렬화, 기존 경로·평가 정책 |
+
+PM의 공개 가변 `traj_`는 제거했다. `executionTrajectory()`와
+`referenceTrajectory()`는 실행 어댑터용 const 대여 뷰이며, 다음 실행 변경이나
+PM 소멸 이후 보관해 사용할 결과가 아니다. swarm 입력도 private 벡터로 분리하여
+유휴 상태에서 `replaceSwarmTrajectories()`로 교체하고 const 뷰로만 읽는다.
+환경 저장소 역시 private이며 지형·SDF·위험원·장애물 읽기는 const 조회로 제공한다.
+환경 저장소의 GridMap 입력 등 기존 ROS 의존성은 아직 유지한다.
+
+환경 변경으로 실행을 철회할 때 저장소는 궤적 ID·기체 ID·환경 세대·사유·위치·시각을
+`ExecutionRevocation` 값으로 캡처한다. FSM이 이를 받아 ABORT를 발행하고 대기 중
+결과를 폐기한 **뒤** 저장소가 활성 슬롯과 계산 토큰을 무효화하는 기존 순서를 유지한다.
+실패한 중간 계산이 소비한 ID와 진단 궤적의 기존 의미도 채택 경계에서 보존한다.
+관찰자는 저장소를 재진입하여 변경하지 않는다. 관찰자 예외 시에는 기존 동기 훅과
+같이 무효화 전 상태가 남으므로 정상 철회 완료로 간주하면 안 된다.
 
 ## 단위와 시간
 
@@ -150,8 +185,9 @@ mask를 값으로 반환한다. 입력 지형은 빌려 쓰며 복사하지 않�
 visibility 규칙을 따른다. malformed mask를 검증하는 새 정책을 추가한 API는 아니다.
 
 `TerrainData`의 셀 중심·행/열·NaN·water·gradient·thread-local memo 규칙은 그대로다.
-샘플 배열을 같은 객체에서 교체하는 호출자는 `generation`을 증가시킨다. `PathManager`
-환경 설치는 이를 기존 위치에서 수행한다. 질의와 동시에 지형·mask를 변경하지 않는다.
+샘플 배열을 같은 객체에서 교체하는 호출자는 `generation`을 증가시킨다. PM을 통한
+환경 설치에서는 `PlanningEnvironmentStore`가 기존 갱신 규칙을 수행한다.
+질의와 동시에 지형·mask를 변경하지 않는다.
 
 하위 API `PathManager::makeConfiguredOptimizer(overrides)`는 route worker가 달리
 사용할 수 있는 `optimization/weight_time`, `optimization/weight_Risk`,
@@ -161,16 +197,22 @@ visibility 규칙을 따른다. malformed mask를 검증하는 새 정책을 추
 solver가 결정한다. override 값을 적용하기 위해 공유 ROS 파라미터를 바꾸지 않는다.
 최초 기본 파라미터 선언은 기존 ROS 초기화 책임이므로 선언 콜백까지 없다는 뜻은 아니다.
 worker 생성과 환경 변경은 직렬로 하고, 환경과 manager는 모든 worker solve보다 오래 산다.
+worker는 생성 시 위험원 geometry·DEM sampling pitch·설정·기체 모델 연결을 보관하지만
+조회 콜백은 live manager를 사용한다. 모든 worker solve가 끝난 뒤 환경·모델·공유 설정을
+변경하고, 다음 solve 전에 `makeConfiguredOptimizer()`로 worker를 다시 만든다.
 
 독립 optimizer의 `PolyTrajOptimizer::setParam(node, overrides)`는 기존 전체 optimizer
 설정 reader에 호출별 값만 우선한다. 읽은 수치를 저장하므로 override vector는 반환 후
 파괴할 수 있다. node와 환경 lifetime은 기존 solver 규약을 따른다. MINCO·L-BFGS 본체는
 `solve()` 안에 유지된다.
 
-순차 baseline과 single-shot fallback의 전체 설정 덮어쓰기는 기존 경로를 유지한다.
-clearance가 FE·위험장·코너 검사·표시·평가와 연결되므로 위 worker API를 이 경로에
-그대로 적용하면 같은 입력의 계산이 달라질 수 있다. 호출별 direct-plan 설정과 위험장
-조회 전달까지 함께 정리할 후속 경계이며, 이번 worker 분리로 제거됐다고 보지 않는다.
+순차 baseline 구간과 single-shot fallback의 프로필은 하위
+`computeGlobalTrajectory(DirectPlanSettings, ...)`가 호출별 optimizer와 설정으로
+처리한다. clearance는 FE·코너 검사·위험장·표시까지 해당 호출의 값으로 전달하며
+미션 optimizer·설정과 전체 비행 평가의 문맥은 유지한다. 공유 ROS 파라미터를
+임시로 덮어쓰거나 optimizer를 원복하는 방식은 제거했다. 이 경계는 기존 전체
+프로필을 처리하는 직렬 어댑터 입력이며, 위 네 키만 허용하는 병렬 worker API와
+별개다. 독립 환경 snapshot이나 동일 PM에 대한 동시 호출을 허용하지 않는다.
 
 ## 실패·예외·부분 결과
 

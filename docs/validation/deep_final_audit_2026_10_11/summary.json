@@ -1,0 +1,142 @@
+{
+  "pass": true,
+  "ctest": 54,
+  "packages": {
+    "path_manager": 45,
+    "path_optimizer": 3,
+    "mmp_vehicle_dynamics": 6
+  },
+  "chain_variants": 75,
+  "risk_checks": 154,
+  "python_tests": 70,
+  "installed_examples": 4,
+  "public_headers": 21,
+  "independent_computation_assertions": 4413,
+  "vehicle_asan_ubsan_tests": 41,
+  "path_manager_ubsan_tests": 45,
+  "r2_owned_byte_exact": true,
+  "r2_owned_sha256": "33b40dc818378be2343349bd31bff20c309bbb7aa2725d1f00e76b88ce1ebfe5",
+  "rviz_r2_exact": true,
+  "abort_recovery_exact": true,
+  "input_hashes_unchanged": 435,
+  "chain_printed_match": 74,
+  "chain_random_yaw_controlled_exact": true,
+  "environment_lifecycle": {
+    "before_sha256": "4ecce4dff050fc195fa87bddfa95975e64dc49ef1e91184d262e886bc402806f",
+    "after_sha256": "dfe6ebc3fa0ad2b582f27de3eb0c0a22733824663a8ab3970aa39fef3ac145dc",
+    "bytes": 3405520,
+    "phases": [
+      {
+        "phase": 0,
+        "offset": 0,
+        "bytes": 271373,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 1,
+        "offset": 271373,
+        "bytes": 271365,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 2,
+        "offset": 542738,
+        "bytes": 271373,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 3,
+        "offset": 814111,
+        "bytes": 271365,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 4,
+        "offset": 1085476,
+        "bytes": 271366,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 5,
+        "offset": 1356842,
+        "bytes": 341445,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 6,
+        "offset": 1698287,
+        "bytes": 341449,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 7,
+        "offset": 2039736,
+        "bytes": 341445,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 8,
+        "offset": 2381181,
+        "bytes": 341445,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      },
+      {
+        "phase": 9,
+        "offset": 2722626,
+        "bytes": 341449,
+        "equal": false,
+        "differing_bytes": 14,
+        "first_differing_byte": 71
+      },
+      {
+        "phase": 10,
+        "offset": 3064075,
+        "bytes": 341445,
+        "equal": true,
+        "differing_bytes": 0,
+        "first_differing_byte": null
+      }
+    ],
+    "pass_expected": true,
+    "query_points": 48125,
+    "all_query_values_exact": true,
+    "only_change": {
+      "phase": 9,
+      "field": "cleared SDF xy voxel size after rejected 0.5-resolution map",
+      "before": [
+        0.5,
+        0.5
+      ],
+      "after": [
+        0.7,
+        0.7
+      ],
+      "last_accepted_resolution": 0.7
+    }
+  },
+  "optimizer_cpp_unchanged": true,
+  "defect_groups_fixed": 6,
+  "source_snapshot_count": 32,
+  "performance": "No new timing/performance or general mission success-rate claim.",
+  "initial_test_registration_error": "Body passed; missing ament result-generation option corrected. An outdated configured run was interrupted; final reconfigured Release54 and clean UBSan45 passed.",
+  "prohibited_directories": "reports and experiments not read or traversed.",
+  "source_scope": "Current dirty work preserved; no stash restore, commit, push, or unrelated file edits."
+}

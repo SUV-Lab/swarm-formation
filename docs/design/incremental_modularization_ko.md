@@ -1483,3 +1483,130 @@ unit/FPA/model, 위험장 조회를 `prepareRoute`→FE→`optimizeStage`에 전
 종료/예외 시 retained searcher가 mission 위험장을 다시 보도록 하되 정책 epoch와
 현재 ABORT 동작을 보존해야 한다. 이번 변경에서는 검증된 기존 경로를 유지했다.
 독립적인 개선 지점으로 기록하며 현재 내부 구조까지 모두 정리됐다고 표현하지 않는다.
+
+
+## 최종 검토 — 호출 계약의 경계 조건 수정 (2026-10-11)
+
+상위 `a297f234` / 계획 `d2ef5496` 이후 기능별 1~6단계와 최신 내부 정리를 별도 검토했다.
+[항목별 검토](final_modularization_review_2026_10_11_ko.md)에 실제 함수 연결, 완료 범위와
+남는 책임을 정리했다. 기능 경계 구현 완료를 내부 결합 제거 또는 결함 부재로 해석하지 않는다.
+
+새 조합 검사에서 종단 상태 덮어쓰기, 전달한 전환 prefix의 fallback 누락,
+비유한 요청 override의 지속 설정 오염을 재현했다. 종단 속도·가속도의 미지정 성분만
+채우고, 실제 prefix로 호출별 전환 상태를 정하며, 두 override를 적용 전 함께 검증한다.
+MINCO/L-BFGS·좌표계·설정 기본값·정상 R2 수치는 바꾸지 않았다. 환경/모델/설정 변경 뒤
+worker 재생성 규약과 과거 시점으로 남은 사용 문서도 보완했다.
+
+별도 Release build/install의 세 패키지 빌드와 CTest **48/48**(chain **73/73**, risk
+**154/154**), 설치 Python **69/69**, 외부 CMake 예제 **4/4**가 통과했다. 새 종단/prefix
+CTest 5개 중 4개와 비유한 override의 후속 정상 요청 검사는 수정 전 실패를 확인했다.
+외부 R2의 소유 double 결과는 기존 전체 JSON과 같고, 일반 `/ws/install` 재빌드 뒤
+실제 RViz R2·환경 ABORT·ID를 갱신한 복구도 수치 동일성을 유지했다. 421개 소스·입력·
+설치물 전후 해시가 같다. 새 반복 성능 측정은 하지 않았다.
+
+원본 결과와 집계 스크립트의 변형 개수 보정까지
+[최종 검토 검증 기록](../validation/final_review_2026_10_11/README.md)에 보존한다.
+후속 구조 우선순위는 호출별 baseline/fallback 설정 전달, manager의 환경/실행 책임
+분리, 호환 호출자 정리 후 내부 접근 제한이다. 이번 검토에 해당 구조 작업을 추가로
+섞지는 않았다. 기존 미추적 그림·stash·무관한 자료와 금지한 디렉터리는 건드리지 않았다.
+
+
+## 잔여 경계 정리 1 — 호출별 baseline/fallback 설정 (2026-10-11)
+
+사용자가 지정한 남은 범위는 호출별 설정, 환경/실행 소유권, 내부 접근 제한 세 가지다.
+기준은 직전 최종 검토를 마친 미커밋 작업 상태이며 그 설치물과 검증 자료는 보존했다.
+이후 수치 비교는 그 상태를 기준으로 한다. ROS 제거·C++ 지형 이식·MINCO/L-BFGS
+내부 분해는 이번에도 수행하지 않는다.
+
+`DirectPlanSettings::overrides`를 받는 `PathManager::computeGlobalTrajectory()`는
+호출마다 별도 optimizer를 구성한다. 일반 호출은 기존 미션 optimizer를 재사용한다.
+`DirectSolveContext`가 optimizer와 네 manager 소비 설정(clearance/altitude weight/
+cap/floor headroom), 단위·FPA를 경로 준비→탐색→최적화까지 전달한다. 지형 위험장과
+표시 콜백은 해당 clearance를 값으로 캡처한다. 병렬 worker의 제한된 네 설정 API는
+그대로 유지한다. baseline은 segment별 last-wins 오버레이, hard-limit fallback은
+기존 mission-wide min을 전달하며 ROS 파라미터 적용/복구와 강제 재초기화를 없앴다.
+
+탐색기가 마지막 visibility callback을 보관하므로 explicit direct 호출의 모든 종료
+경로에서 **콜백 연결만 미션 조회로 돌린다**. 공유 설정 값을 임시 변경하는 구조가
+아니다. 정책 epoch/leg disposition은 유지하고 전체 비행 평가는 기존 미션 기준이다.
+구성 오류만 `DirectPlanConfigurationError`로 구분한다. 외부 탐색기의 예외를 실패
+결과로 바꾸는 기존 route 어댑터 정책은 그대로다.
+
+첫 별도 Release 빌드가 통과했고 설치 API의 R2 전체 결과가 기존 JSON과 정확히
+일치했다(190 pieces, double duration 521.0625247312521 s). direct 설정 경계 검사는
+41개 통과했다. 기존 73변형의 계산 assertions는 통과했다. 신규 파라미터 감시자가
+ROS 최초 기본값 선언까지 업데이트로 집계한 실패는 선언/기존 값 갱신을 구분하도록
+수정했으며, 다음 통합 검사에서 재실행한다. 초기 로그 수치 비교의 무작위 장애물
+방향 차이는 같은 yaw seed로 추가 비교한다. 최종 전체 검사 집계는 아래 후속 기록에
+따로 남긴다.
+
+
+## 잔여 경계 정리 2 — 실행 저장소 소유권 (2026-10-11)
+
+`PlanningExecutionStore`가 현재/참고 궤적, 단조 증가 ID, context/revision과 채택·철회를
+소유한다. 환경 generation과 시각은 인수로 받으며 ROS node·publisher·환경 자체를
+보관하지 않는다. PM은 비공개 owner에 계산 완료값을 seal/apply하고 const view만
+제공한다. 공개 가변 `traj_`를 없애고 FSM·chain·기존 테스트의 호출자를 정식 계산/채택
+프로토콜로 옮겼다. swarm 입력은 별도 비공개 저장소와 값 교체 함수로 분리했다.
+
+`ExecutionRevocation`은 철회할 ID·기체·사유·탐지점·시각·환경 generation을 값으로
+전달한다. observer를 호출한 뒤 현재 슬롯을 무효화하는 기존 순서와 실패 중간 결과가
+소비하던 ID 수를 유지한다. ROS 발행·pending 정리·FSM 상태 전이는 기존 어댑터다.
+
+별도 빌드 후 CTest **52/52**, chain **75/75**, risk **154/154**가 통과했다.
+설정 감시자의 최초 선언 구분도 이 빌드에서 다시 실행해 통과했다. 신규 실행 owner의
+ROS 없는 계약 검사 22개와 설치 API의 R2 전체 JSON 동일성도 확인했다. 환경 owner
+통합과 접근 범위 compile-time 검사 추가 후 최종 전체 검증을 한 번 더 수행한다.
+
+
+## 잔여 경계 정리 3 — 환경 소유권·접근 범위 및 최종 검수 (2026-10-11)
+
+`PlanningEnvironmentStore`로 terrain·세대·SDF·bbox/grid latch·작성/유효 위험구역·
+mask·동적 장애물·대기열·yaw RNG를 옮겼다. 정규화된 설정은 불변 값으로 받고 자동
+XY voxel 선택만 환경 상태로 둔다. PM은 const 조회와 명시적 ingest/ensure/refresh/
+add/clear 함수를 사용한다. 지연 장애물 설치 후 재검사와 이후 위험장 갱신, terrain
+수신 뒤 FSM 재검사, risk setter와 실행 철회의 분리 순서를 그대로 유지했다.
+
+최종 검토에서 새 worker의 기본값과 slice 고도 설정을 함께 값으로 읽도록 맞췄다.
+또 일반 미션의 retained visibility callback은 현재 primary 설정을 조회하고,
+임시 호출만 clearance를 캡처하도록 구분했다. 명시적 재초기화 직후·다음 탐색 전
+FE/manager/optimizer 위험장 일치까지 회귀 검사에 포함했다.
+
+공개 `traj_` 접근을 제거한 뒤 모든 허용된 소스·테스트·설치 예제의 호출자를 검사했다.
+내부 owner 접근 불가, const 실행/참고/swarm/risk view, generic API에 execution
+manager 노출 없음 등을 정적 검사 9개로 고정했다. 내부 어댑터 헤더와 직렬 사용 규약은
+유지하며 일반 사용자는 기존 `MissionPlanner::plan(request)`를 호출한다.
+
+최종 별도 build/install과 일반 `/ws/install` 빌드, CTest **53/53**(chain **75/75**,
+risk **154/154**), Python **69/69**, 설치 외부 예제 **4/4**가 통과했다. direct 설정
+50개·실행 owner 22개·환경 owner 18개 검사와 기존 등록 검사 보존을 확인했다.
+환경 fixture는 최종 설치물에 연결해 mask/visibility 203,520조회와 terrain/SDF
+11단계 48,125점 조회 모두 원본과 바이트 단위 동일했다. 고정 yaw 비교도 동일했다.
+
+R2 전체 소유 결과 JSON 및 실제 RViz 메시지 계수/시간이 같고, 실제 환경 ABORT 후
+새 ID 복구 수치도 같다. 검증 구간의 433개 명시적 입력·소스·설치물 해시가 유지됐다.
+검수용 GUI·노드·loader·격리 display는 종료했다. 새 성능 측정이나 모든 임무 성공률을
+주장하지 않는다. 기존 MINCO/L-BFGS 본체와 좌표·단위·기본값은 변경하지 않았다.
+
+[잔여 세 경계 구현 설명](remaining_modularization_2026_10_11_ko.md)과
+[보존 검증 자료](../validation/remaining_boundaries_2026_10_11/README.md)에 결과를 정리했다.
+설정/chain, 환경, 실행/공개 API를 나누어 독립 검수했고 검토 범위에서 추가로 조치할
+결함은 발견하지 않았다. **이번에 합의한 세 완료 기준은 충족했다.** ROS 제거·C++ 지형
+이식과 별개로 새 구조 과제를 완료 조건에 추가하지 않는다. 변경은 작업 폴더에 남겼다.
+
+
+## 확장 최종 감사 — 입력 거부·복구 경계 재검토 (2026-10-11)
+
+앞선 완료 판정을 새 독립 검토 네 개와 실제 재실행으로 다시 확인했다. 정상 계산 구조는
+합의한 범위를 충족하며, 기존 구현에도 남아 있던 ROS override 검증 우회, fallback
+profile 우선순위·NaN hard limit, 지형 거부 원자성·ready, 장애물 입력, Python parameter
+중간 예외 rollback 문제를 수정했다. phase/segment 오류도 값과 같은 우선순위로 합성하고
+merge retry에 검증된 제한을 전달한다. MINCO/L-BFGS 내부는 그대로다.
+
+최종 Release CTest 54/54, Python 70/70, chain 75/75, risk 154/154, 설치 예제 4/4,
+공개 헤더 21개, vehicle ASan+UBSan 41/41, PM UBSan 45/45를 통과했다. 독립 계산 대조
+4,413개 검사와 새 R2 소유 JSON/실제 RViz 계수·시간·ABORT 복구 동일성을 확인했다.
+환경 lifecycle 48,125 지점 조회도 같으며, 거부된 지도의 해상도를 잘못 기억하던 메타데이터
+두 값은 의도적으로 교정됐다. 이번 수정 범위·초기 테스트 등록 오류·검증 한계까지
+[상세 감사](deep_final_audit_2026_10_11_ko.md)와
+[원본 검증 자료](../validation/deep_final_audit_2026_10_11/README.md)에 기록했다.

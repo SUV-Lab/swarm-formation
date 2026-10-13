@@ -95,6 +95,14 @@ YAML을 쓰려면 `RosPlanningOptions::node_options.arguments()`에
 초기 설정을 바꾸려면 node 생성·설정 단계에서 적용한다. 설정의 적용 시점은 기존
 소비자별 의미를 유지하며, 모든 ROS 파라미터가 실행 중 즉시 갱신된다는 뜻은 아니다.
 
+초기화한 primary optimizer의 `optimization/obstacle_clearance`, `weight_altitude`,
+`alt_cap_headroom`, `alt_floor_headroom`과 이에 연결된 mission 위험장은 초기화 시점 값을
+유지한다. 실행과 worker 계산을 마친 뒤 live ROS 기본값을 바꾸었다면, primary 경로와
+mission 위험장에 적용하려면 `PathManager::initOptimizer(true)`로 명시적으로 다시
+초기화한다. 새 독립 worker와 그 slice 설정은 생성 시점의 기본값을 읽지만, worker
+생성만으로 primary 설정을 바꾸지는 않는다. `DirectPlanSettings`는 한 호출의 독립 설정이며
+공유 ROS 기본값이나 primary 설정을 갱신하는 API가 아니다.
+
 ROS 실행 연결에서 manager가 필요하면 생성한 `RosPlanningBackend`의
 `executionManager()`를 초기화 후 사용한다. 이것은 별도의 planner가 아니라 backend가
 사용하는 동일 `PathManager`의 공유 참조다. 일반 라이브러리 호출에는 필요하지 않다.
@@ -118,7 +126,7 @@ ROS 실행 연결에서 manager가 필요하면 생성한 `RosPlanningBackend`�
 | `start_altitude = COMMAND_AGL` | 시작 z를 현재 지형과 기존 최소 AGL 규칙으로 한 번 변환. 지형이 없으면 기존 동작대로 절대 고도로 유지 |
 | `waypoints` | x·y는 planner 좌표, z는 기존 미션 AGL 규약. 지형이 있을 때 최소 AGL과 지형 높이를 적용 |
 | `tail` | `TailBoundary`의 속도·가속도 지정 플래그와 값. 미지정은 기존 도착 규칙 사용 |
-| `length_per_piece`, `obstacle_clearance` | 양수면 기존 manager 설정에 적용하고 이후 호출에도 유지. 0 이하이면 이전 설정 유지 |
+| `length_per_piece`, `obstacle_clearance` | 두 값 모두 유한해야 하며, 아니면 어느 설정도 적용하기 전에 거부. 양수면 기존 manager 설정에 적용하고 이후 호출에도 유지. 유한한 0 이하 값은 이전 설정 유지 |
 
 `start_altitude`는 시작점에만 적용된다. `ABSOLUTE`를 선택했다고 경유점의 z도 절대
 고도로 바뀌지는 않는다. 지형이 없는 경우 경유점도 기존 고도 해석을 유지한다.
@@ -160,6 +168,24 @@ row는 X, col은 Y에 대응하며 데이터 인덱스는 `elevation[col * rows 
 이 입력이 값을 소유한다는 사실은 계산 중 환경이 불변 snapshot이라는 뜻이 아니다.
 같은 planner의 계획 호출과 환경·설정 변경은 직렬로 사용한다. 실행 중 ROS 환경
 갱신은 기존 실행 계층의 재검증·궤적 철회 정책을 따른다.
+
+## 입력 거부와 profile 우선순위
+
+ROS 미션 명령의 `length_per_piece`·`obstacle_clearance`도 위의 같은 요청 검증을 거친다.
+하나가 비유한이면 다른 양수 override도 먼저 적용하지 않는다. 거부 후 수정한 같은
+sequence를 재전송할 수 있다.
+
+route chain과 early fallback은 활성 phase→segment 순서로 profile을 합성하며 동일
+목록의 마지막 값이 우선한다. 사용하지 않는 phase는 적용하지 않는다. 최종 hard maximum
+(`optimization/max_vel`)은 유한·양수여야 하고 문자열 전체가 숫자로 해석돼야 한다.
+잘못된 최종 hard 값은 이전 값이나 기본값으로 몰래 복구하지 않고 계획 실패를 반환한다.
+phase의 잘못된 값이 유효한 segment 값으로 덮이면 후자를 사용한다. 이 검사는 chain
+profile 경계의 계약이며 optimizer의 모든 파라미터 검증을 대신하지 않는다.
+
+동적 장애물은 유한한 중심과 양수·유한한 반지름/크기가 필요하다. 잘못된 입력은 `-1`로
+거부하며 대기열·환경 세대·yaw RNG를 바꾸지 않는다. 정상 입력의 `-2`(지연 설치) 및
+0 이상의 장애물 ID 의미는 유지한다. raw ROS GridMap도 값 입력과 같은 구조 검사를
+통과한 뒤에만 반영하며, 명시적인 빈 GridMap의 clear 규약은 유지한다.
 
 ## 결과 처리와 소유권
 
@@ -266,5 +292,8 @@ MINCO·L-BFGS는 `solve()` 안의 기존 최적화 본체로 유지한다. 이�
 
 기존 병렬 구간 계획, 3-pass, ROS/RViz 실행, Python 지형 로더, follower와 단위 규약을
 유지한다. `PathManager`에는 환경·실행 저장소·시각화 연결이, `SegmentChainPlanner`에는
-조정·평가 책임이 남아 있다. 전체 ROS 제거, 지형 로더 C++ 이식, 독립 simulator와
-visualizer, 공개 SI 규약 전환, 범용 VTOL 지원은 현재 API의 제공 범위에 포함하지 않는다.
+조정·평가 책임이 남아 있다. 시뮬레이션 계산은 `simulate()` / `SimulationSession`으로,
+Python 지도 처리는 `load_map()`으로, 표시 준비는 메시지 생성 함수로 분리되어 있다.
+호출 방법은 [기능별 API 색인](modularized_function_api_ko.md)을 참고한다. 전체 ROS 제거,
+지형 로더 C++ 이식, 독립 렌더러, 공개 SI 규약 전환, 범용 VTOL 지원은 현재 제공 범위에
+포함하지 않는다.
