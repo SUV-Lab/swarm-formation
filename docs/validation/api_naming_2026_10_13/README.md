@@ -60,6 +60,14 @@ MINCO/L-BFGS 본체, ROS 연결, Python 지형 로더도 유지했다.
 
 `mmp_dev` 컨테이너에서 현재 소스를 빌드했다. 별도 Release build/install로 전후를
 비교했고, 완료 후 README 실행에서 사용하는 기본 `/ws/install`도 갱신했다.
+당시 두 빌드 모두 `--base-paths`로 실제 소스 경로를 지정하고 관련 4개 패키지를
+선택했다. **README의 `colcon build --symlink-install` 전체 자동 탐색은 이때
+검증하지 않았다.** 기본 설치 경로의 빌드 성공을 전체 워크스페이스 빌드 성공으로
+설명한 것은 잘못이다. 보존 archive의 `commands.txt`에 실제 명령이 남아 있다.
+사용자가 발견한 문서 사본 중복 탐색은 두 `docs/validation/COLCON_IGNORE`로
+수정했다. 이후 기본 명령으로 13개 전체 패키지가 빌드됐으며, 재현·수정 후 로그는
+[전체 빌드 후속 검증](../../../../../docs/validation/default_colcon_2026_10_13/README.md)에
+별도로 보존한다. 아래 표와 원본 archive는 이전 검증 시점의 기록이다.
 
 | 항목 | 결과 |
 |---|---|
