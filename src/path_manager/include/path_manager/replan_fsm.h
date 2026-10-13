@@ -84,7 +84,7 @@ public:
     };
 
     ReplanFSM(rclcpp::Node::SharedPtr node);
-    ~ReplanFSM() {};
+    ~ReplanFSM();
 
     void computeAndPublishPaths();
     void trajectoryCommandCallback(const mmp_mission_msgs::msg::TrajectoryCommand::SharedPtr msg);
@@ -122,12 +122,12 @@ private:
     std::shared_ptr<PathManager> path_manager_;
 
     // The library owns planning and its optimizer lifecycle. The manager
-    // alias above temporarily serves the existing execution/environment
-    // callbacks; they remain ROS responsibilities during this extraction.
+    // alias connects the existing ROS callbacks to the private environment
+    // and execution owners; this FSM retains publication and recovery.
     std::unique_ptr<MissionPlanner> mission_planner_;
     // Successful calculation waiting for its ROS publication tick. Consumed
-    // on publication; the manager remains the sole live execution/withdrawal
-    // authority. A refused replacement does not overwrite this value.
+    // on publication; the manager's execution owner remains the live adoption
+    // and withdrawal authority. A refused replacement preserves pending_plan_.
     std::optional<MissionPlanResult> pending_plan_;
 
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr optimized_path_pub_;
@@ -137,8 +137,7 @@ private:
     // discards it instead of starting to fly it.
     rclcpp::Publisher<mmp_traj_msgs::msg::TrajectoryExecutionControl>::SharedPtr
         exec_control_pub_;
-    void publishExecutionAbort(path_manager::PathManager::EnvChangeReason r,
-                               const Eigen::Vector3d &hit, double t_detected);
+    void publishExecutionAbort(const ExecutionRevocation &event);
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr global_path_pub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
     rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr terrain_sub_;

@@ -1,5 +1,6 @@
 #include "path_manager/segment_chain_planner.h"
 #include "path_manager/optimizer_worker_profile.h"
+#include "path_manager/direct_plan_settings.h"
 
 #include <optional>
 
@@ -67,50 +68,22 @@ const OvrKey *whitelistFind(const std::string &name)
   return key && key->tag != OvrTag::kThreadBudget ? key : nullptr;
 }
 
-// Compatibility guard for the single-shot fallback's hard-limit overlay.
-// Route workers and retries use explicit value overlays; this full-pipeline
-// fallback still reconfigures the manager and restores it before evaluation.
-class ScopedMissionParams {
- public:
-  ScopedMissionParams(const rclcpp::Node::SharedPtr &node,
-                      swarm_formation::LogManager *log)
-      : node_(node), log_(log) {}
-  void applyEffective(const std::vector<rclcpp::Parameter> &ps)
-  {
-    resetPristine();
-    for (const auto &p : ps)
-      if (!saved_.count(p.get_name()) && node_->has_parameter(p.get_name()))
-        saved_.emplace(p.get_name(), node_->get_parameter(p.get_name()));
-    if (!ps.empty()) node_->set_parameters(ps);
+// Lowered arrival speed supplies only unspecified boundary components.
+// Velocity and acceleration are independent operator claims.
+ego_planner::TailBoundary completeArrivalTail(
+    ego_planner::TailBoundary tail, const Eigen::Vector3d &default_velocity)
+{
+  if (!tail.prescribe_vel) {
+    tail.vel = default_velocity;
+    tail.prescribe_vel = true;
   }
-  void resetPristine()
-  {
-    if (saved_.empty()) return;
-    std::vector<rclcpp::Parameter> back;
-    back.reserve(saved_.size());
-    for (const auto &kv : saved_) back.push_back(kv.second);
-    node_->set_parameters(back);
+  if (!tail.prescribe_acc) {
+    tail.acc.setZero();
+    tail.prescribe_acc = true;
   }
-  void restoreNow()
-  {
-    if (done_) return;
-    done_ = true;
-    try {
-      resetPristine();
-    } catch (const std::exception &e) {
-      if (log_)
-        log_->errorf("[PHASE] mission-wide parameter restore FAILED: %s",
-                     e.what());
-    }
-  }
-  ~ScopedMissionParams() { restoreNow(); }
+  return tail;
+}
 
- private:
-  rclcpp::Node::SharedPtr node_;
-  swarm_formation::LogManager *log_;
-  std::map<std::string, rclcpp::Parameter> saved_;
-  bool done_{false};
-};
 }  // namespace
 
 namespace {
@@ -861,60 +834,19 @@ SegmentChainPlanner::solveBaselineSegments(
   const double vmax_global = prepared.global_max_velocity;
   bool any_over = false;
   for (const auto &so : seg_over) any_over |= !so.params.empty();
-  // Union of pristine (mission-wide) values of every overridden parameter.
-  std::map<std::string, rclcpp::Parameter> pristine;
-  if (any_over) {
-    for (const auto &so : seg_over)
-      for (const auto &p : so.params)
-        if (!pristine.count(p.get_name()))
-          pristine.emplace(p.get_name(), node_->get_parameter(p.get_name()));
-  }
-  // Mission-wide values must survive EVERY exit path (segment failure
-  // returns early with the baseline restored; the next mission's baseline
-  // must plan pristine). Local classes share the member function's access.
-  struct ParamRestore {
-    SegmentChainPlanner *self{nullptr};
-    const std::map<std::string, rclcpp::Parameter> *vals{nullptr};
-    bool done{false};
-    // Explicitly invoked BEFORE the final evaluation on every path — the
-    // stitched flight must be judged against MISSION-WIDE parameters and
-    // the mission-wide dynamics model, not whichever segment's overrides
-    // happened to be applied last. The destructor is only the backstop.
-    void restore() {
-      if (done || !self || !vals || vals->empty()) return;
-      done = true;
-      try {
-        std::vector<rclcpp::Parameter> back;
-        for (const auto &kv : *vals) back.push_back(kv.second);
-        self->node_->set_parameters(back);
-        self->pm_->initOptimizer(/*force_reinit=*/true);
-        self->pm_->deliverTrajToOptimizer();
-        self->log_->infof("[CHAIN] mission-wide parameters restored "
-                          "(%zu overridden)", vals->size());
-      } catch (const std::exception &e) {
-        self->log_->errorf("[CHAIN] parameter restore FAILED: %s — the next "
-                           "plan may run with segment overrides!", e.what());
-      }
-    }
-    ~ParamRestore() { restore(); }
-  } restore_guard{any_over ? this : nullptr, &pristine};
-
   // === Chained segment runs (sequential; each is a full pipeline run) ===
   auto &runs = result.runs;
   for (int i = 0; i < state.segments; ++i) {
     const bool last = (i + 1 == state.segments);
+    DirectPlanSettings segment_settings;
     if (any_over) {
-      // Pristine + this segment's overrides — a segment never inherits a
-      // neighbour's values. The forced re-init re-reads the whole optimizer
-      // parameter surface (setParam is re-entrant for exactly this).
-      std::map<std::string, rclcpp::Parameter> eff = pristine;
-      for (const auto &p : seg_over[i].params) eff[p.get_name()] = p;
-      std::vector<rclcpp::Parameter> apply;
-      apply.reserve(eff.size());
-      for (const auto &kv : eff) apply.push_back(kv.second);
-      node_->set_parameters(apply);
-      pm_->initOptimizer(/*force_reinit=*/true);
-      pm_->deliverTrajToOptimizer();
+      // Each segment overlays the unchanged mission settings. Preserve the
+      // existing last-wins rule for duplicate entries without node writes.
+      std::map<std::string, rclcpp::Parameter> effective;
+      for (const auto &parameter : seg_over[i].params)
+        effective[parameter.get_name()] = parameter;
+      for (const auto &entry : effective)
+        segment_settings.overrides.push_back(entry.second);
       if (!seg_over[i].label.empty())
         log_->infof("[CHAIN] segment %d/%d requirement overrides: %s",
                     i + 1, state.segments, seg_over[i].label.c_str());
@@ -933,9 +865,10 @@ SegmentChainPlanner::solveBaselineSegments(
                                                  contracts[i].acc);
     // A slow LAST segment cannot take the default arrival contract — that
     // would pin its tail at the mission-wide cruise speed, above its own
-    // ceiling. Prescribe the same level entry (the baseline's own arrival
-    // direction) at the segment's ceiling instead.
-    if (last && seg_vmax[static_cast<size_t>(i)] < vmax_global - 1e-12) {
+    // ceiling. Supply an unspecified final velocity at that ceiling along
+    // the baseline approach, preserving any prescribed final acceleration.
+    if (last && !seg_tail.prescribe_vel &&
+        seg_vmax[static_cast<size_t>(i)] < vmax_global - 1e-12) {
       const Eigen::Vector3d base_tail =
           baseline.getJuncVel(baseline.getPieceNum());
       if (base_tail.norm() > seg_vmax[static_cast<size_t>(i)] + 1e-9) {
@@ -943,9 +876,8 @@ SegmentChainPlanner::solveBaselineSegments(
         dir.z() = 0.0;  // level, like the arrival contract (no-op: the
                         // baseline tail is already level by that contract)
         if (dir.norm() > 1e-9) {
-          seg_tail = ego_planner::TailBoundary::pinned(
-              dir.normalized() * seg_vmax[static_cast<size_t>(i)],
-              Eigen::Vector3d::Zero());
+          seg_tail = completeArrivalTail(
+              seg_tail, dir.normalized() * seg_vmax[static_cast<size_t>(i)]);
           log_->infof("[CHAIN] arrival contract at the segment ceiling: "
                       "|v|=%.3f u/s level along the baseline approach",
                       seg_tail.vel.norm());
@@ -977,14 +909,20 @@ SegmentChainPlanner::solveBaselineSegments(
       prov.edge_leg = &slice->edge_leg;
       prov.epoch = route_epoch;
     }
-    auto segment_product = pm_->computeGlobalTrajectory(
-        seg_head, goal, seg_tail, /*junction_goal=*/!last,
-        slice ? &slice->path : nullptr, slice ? &slice->cap : nullptr,
-        prov.edge_leg ? &prov : nullptr);
+    // With any segment profile active, every segment gets a fresh session,
+    // including a segment whose own override list is empty.
+    auto segment_product = any_over
+        ? pm_->computeGlobalTrajectory(
+              segment_settings, seg_head, goal, seg_tail, /*junction_goal=*/!last,
+              slice ? &slice->path : nullptr, slice ? &slice->cap : nullptr,
+              prov.edge_leg ? &prov : nullptr)
+        : pm_->computeGlobalTrajectory(
+              seg_head, goal, seg_tail, /*junction_goal=*/!last,
+              slice ? &slice->path : nullptr, slice ? &slice->cap : nullptr,
+              prov.edge_leg ? &prov : nullptr);
     if (!segment_product) {
       log_->warnf("[CHAIN] segment %d/%d FAILED — restoring and flying the "
                   "baseline", i + 1, state.segments);
-      restore_guard.restore();
       result.failed_segment = i;
       return result;
     }
@@ -997,11 +935,8 @@ SegmentChainPlanner::solveBaselineSegments(
   chained = runs.front();
   for (size_t i = 1; i < runs.size(); ++i) chained.append(runs[i]);
 
-  // All segments planned — restore mission-wide parameters NOW, so the
-  // terminal build and the final evaluation run under the mission's own
-  // model, not the last segment's overrides.
-  restore_guard.restore();
-
+  // Segment sessions leave mission settings and model untouched, so terminal
+  // construction and whole-flight evaluation still use the mission context.
   return result;
 }
 
@@ -2096,35 +2031,26 @@ PlanResult SegmentChainPlanner::planRouteFallback(PlanContext &state,
     collect(readOverrideList("chain/phase/arrival/params", "phase-arrival"));
     for (const auto &so : readSegmentOverrides(state)) collect(so);
   }
-  ScopedMissionParams fguard(node_, log_);
+  std::optional<PlannedTrajectory> fallback_product;
   if (!hardmin.empty()) {
+    DirectPlanSettings settings;
+    settings.overrides.reserve(hardmin.size());
+    for (const auto &limit : hardmin)
+      settings.overrides.emplace_back(limit.first, limit.second);
     try {
-      std::vector<rclcpp::Parameter> hp2;
-      hp2.reserve(hardmin.size());
-      for (const auto &kv : hardmin) hp2.emplace_back(kv.first, kv.second);
-      fguard.applyEffective(hp2);
-      pm_->initOptimizer(/*force_reinit=*/true);
-      pm_->deliverTrajToOptimizer();
-      log_->warnf("[PHASE] fallback preserves %zu hard limit(s) "
-                  "conservatively (mission-wide min)", hardmin.size());
-    } catch (const std::exception &e) {
+      fallback_product = pm_->computeGlobalTrajectory(
+          settings, head, waypoints, mission_tail);
+    } catch (const DirectPlanConfigurationError &e) {
       return PlanResult::failed(
           std::string("hard-limit preservation failed: ") + e.what());
     }
+    log_->warnf("[PHASE] fallback preserves %zu hard limit(s) "
+                "conservatively (mission-wide min)", hardmin.size());
+  } else {
+    fallback_product = pm_->computeGlobalTrajectory(head, waypoints, mission_tail);
   }
-  auto fallback_product = pm_->computeGlobalTrajectory(head, waypoints, mission_tail);
   const bool fb_ok = fallback_product.has_value();
   if (fallback_product) computed.recordProduct(std::move(*fallback_product));
-  if (!hardmin.empty()) {
-    fguard.restoreNow();
-    try {
-      pm_->initOptimizer(/*force_reinit=*/true);
-      pm_->deliverTrajToOptimizer();
-    } catch (const std::exception &e) {
-      log_->errorf("[PHASE] optimizer restore after fallback failed: %s",
-                   e.what());
-    }
-  }
   if (!fb_ok)
     return PlanResult::failed(std::string(why) +
                               "; single-shot fallback failed too");
@@ -2566,7 +2492,9 @@ PlanResult SegmentChainPlanner::computeOverRoute(
 {
   PlanContext attempt(parent.segments);
   attempt.auto_segments = parent.auto_segments;
-  attempt.transition_active = parent.transition_active;
+  // A supplied prefix must survive every successful result. Protect it
+  // from direct fallback without requiring a second, mutable caller flag.
+  attempt.transition_active = parent.transition_active || transition != nullptr;
   const auto return_diagnostics = [&] {
     parent.segments = parent.confirmed_segments = attempt.confirmed_segments;
     parent.head_policy = attempt.head_policy;
@@ -2817,8 +2745,7 @@ SegmentChainPlanner::RouteRunResults SegmentChainPlanner::solveRouteSegments(
                              slices[ui].path[slices[ui].path.size() - 2];
         ad.z() = 0.0;
         if (ad.norm() < 1e-6) ad = Eigen::Vector3d::UnitX();
-        tb = ego_planner::TailBoundary::pinned(ad.normalized() * ceil_v,
-                                               Eigen::Vector3d::Zero());
+        tb = completeArrivalTail(tb, ad.normalized() * ceil_v);
         log_->infof("[PHASE] arrival tail at the segment ceiling: |v|=%.3f "
                     "u/s level", ceil_v);
       }
@@ -3444,8 +3371,8 @@ SegmentChainPlanner::readOverrideList(const std::string &pname,
       if (name.rfind("optimization/", 0) != 0) {
         log_->warnf("[CHAIN] %s override '%s': only optimization/* is "
                     "re-read per segment (manager/FSM parameters load at "
-                    "startup) — the value will be set but its consumer "
-                    "will not see it this mission", who.c_str(), name.c_str());
+                    "startup) — its consumer will not see this per-call "
+                    "value this mission", who.c_str(), name.c_str());
       }
       try {
         switch (node_->get_parameter(name).get_type()) {

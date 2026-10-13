@@ -9,6 +9,14 @@ using namespace std::chrono_literals;
 
 namespace path_manager {
 
+ReplanFSM::~ReplanFSM()
+{
+    // The ROS adapter owns this subscription to execution events. A retained
+    // manager must not keep a callback borrowing a destroyed state machine.
+    if (path_manager_) path_manager_->setExecutionRevocationObserver({});
+}
+
+
 ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     : node_(node),
       exec_state_(FSM_EXEC_STATE::INIT),
@@ -216,17 +224,16 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     exec_control_pub_ =
         node_->create_publisher<mmp_traj_msgs::msg::TrajectoryExecutionControl>(
             topic_prefix + "/planning/execution_control", trajectory_qos);
-    // Detection lives in PathManager (it owns the SDF and the stored
-    // trajectory); saying so on the wire lives here (this owns the
-    // publishers and the state machine). Every environment-change trigger —
+    // PathManager coordinates detection between its environment and execution
+    // owners; saying so on the wire lives here (this owns the publishers and
+    // the state machine). Every environment-change trigger —
     // the obstacle topic, the deferred-obstacle flush, a new DEM, a zone
     // update — reaches the same hook, so none of them can withdraw a flight
     // quietly.
     if (path_manager_) {
-        path_manager_->setEnvChangeHook(
-            [this](path_manager::PathManager::EnvChangeReason r,
-                   const Eigen::Vector3d &hit, double t_detected) {
-                publishExecutionAbort(r, hit, t_detected);
+        path_manager_->setExecutionRevocationObserver(
+            [this](const ExecutionRevocation &event) {
+                publishExecutionAbort(event);
             });
     }
 
@@ -242,8 +249,8 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     waypoint_marker_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
         "/viz/waypoints", 10);
 
-    // Every callback that MUTATES PathManager shared state (terrain_data_,
-    // risk_zones_, terrain_risk_masks_, the SDF dynamic layer) must sit on
+    // Every callback that MUTATES the manager's shared environment owner
+    // (terrain, risk zones/masks, the SDF dynamic layer) must sit on
     // subscription_callback_group_, the same MutuallyExclusive group that
     // runs trajectoryCommandCallback (and through it the whole planning
     // pipeline, which READS that state). A subscription created without a
@@ -307,8 +314,8 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // The FSM timer shares the SUBSCRIPTION group ON PURPOSE (it used to have
     // its own group "to prevent timer stalls"): with separate MutuallyExclusive
     // groups the MultiThreadedExecutor runs the 10 ms tick CONCURRENTLY with
-    // trajectoryCommandCallback -> planGlobalTraj, so the tick read traj_ and
-    // exec_state_ while the planner wrote them (data race, proven empirically
+    // trajectoryCommandCallback -> planning, so the tick read execution data
+    // and exec_state_ while planning wrote them (data race, proven empirically
     // with a temporary overlap counter). Sharing the group serializes them;
     // ticks during the multi-second plan are only flag-polling, so delaying
     // them until the plan finishes costs nothing in single-shot mode.
@@ -917,19 +924,20 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
 // stop this node can synthesise is a zero-velocity hold, and this platform's
 // cruise minimum is 122 m/s, so building one would be issuing an unflyable
 // command in the name of safety.
-void ReplanFSM::publishExecutionAbort(
-    path_manager::PathManager::EnvChangeReason r, const Eigen::Vector3d &hit,
-    double t_detected)
+void ReplanFSM::publishExecutionAbort(const ExecutionRevocation &event)
 {
+    const auto r = event.reason;
+    const auto &hit = event.hit;
+    const double t_detected = event.detected_time;
     if (!exec_control_pub_ || !path_manager_) return;
     pending_plan_.reset();
     using Ctl = mmp_traj_msgs::msg::TrajectoryExecutionControl;
     using R = path_manager::PathManager::EnvChangeReason;
     Ctl msg;
     msg.drone_id = drone_id_;
-    // The id of the trajectory being withdrawn — read BEFORE the slot is
-    // cleared. A consumer executing a different id must ignore this.
-    msg.trajectory_id = path_manager_->executionTrajectory().traj_id;
+    // The execution owner captured this identity BEFORE invalidating the
+    // slot. A consumer executing a different id must ignore this.
+    msg.trajectory_id = event.trajectory_id;
     msg.action = Ctl::ACTION_ABORT;
     msg.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
     msg.reason = (r == R::TERRAIN_BLOCKED)     ? Ctl::REASON_TERRAIN_BLOCKED
@@ -942,7 +950,7 @@ void ReplanFSM::publishExecutionAbort(
     // The whole environment, not just the zones: an obstacle or terrain
     // change is exactly what usually causes this abort, and the zone policy
     // generation does not move for either.
-    msg.environment_generation = path_manager_->environmentRevision();
+    msg.environment_generation = event.environment_generation;
     msg.detail = (r == R::TERRAIN_BLOCKED)
                      ? "a new terrain map blocks the remaining flight"
                  : (r == R::POLICY_UNEVALUATED)

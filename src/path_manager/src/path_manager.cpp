@@ -28,16 +28,11 @@ namespace path_manager
           is_optimizer_initialized_(false),
           current_formation_type_("")
     {
-        // A calculation need not ever populate execution storage now. The
-        // const execution view must therefore have a defined empty state.
-        traj_.global_traj = GlobalTrajData{};
-        traj_.global_traj.last_glb_t_of_lc_tgt = -1.0;
-        traj_.local_traj = LocalTrajData{};
-        traj_.local_traj.start_pos.setZero();
-        traj_.local_traj.drone_id = -1;
         log_manager_ = std::make_shared<swarm_formation::LogManager>(
             node_->get_name(), "./logs/runtime", swarm_formation::LogManager::INFO);
         
+        PlanningEnvironmentOptions environment_options{};
+        std::vector<RiskZone> initial_risk_zones;
         enable_debug_logs_ = false;
         if (node_->has_parameter("enable_debug_logs")) {
             node_->get_parameter("enable_debug_logs", enable_debug_logs_);
@@ -64,7 +59,7 @@ namespace path_manager
                 "PathManager: 'drone_id' is declared but could not be read "
                 "(type mismatch?) — refusing to plan as drone 0 by default.");
         }
-        traj_.local_traj.drone_id = drone_id;
+        execution_ = std::make_unique<PlanningExecutionStore>(drone_id);
 
         node_->declare_parameter("manager/max_vel", -1.0);
         node_->declare_parameter("manager/max_acc", -1.0);
@@ -128,16 +123,16 @@ namespace path_manager
         node_->get_parameter("manager/risk_goal_taper_radius",
                              risk_goal_taper_radius_);
         node_->get_parameter("manager/risk_terrain_mask_enable",
-                             risk_terrain_mask_enable_);
-        node_->get_parameter("manager/risk_zone_agl", risk_zone_agl_);
+                             environment_options.risk_terrain_mask_enable);
+        node_->get_parameter("manager/risk_zone_agl", environment_options.risk_zone_agl);
         node_->get_parameter("manager/risk_vertical_ratio",
-                             risk_vertical_ratio_);
-        risk_vertical_ratio_ = std::max(0.01, risk_vertical_ratio_);
+                             environment_options.risk_vertical_ratio);
+        environment_options.risk_vertical_ratio = std::max(0.01, environment_options.risk_vertical_ratio);
         node_->get_parameter("manager/risk_mask_radial_step",
-                             risk_mask_radial_step_);
+                             environment_options.risk_mask_radial_step);
         node_->get_parameter("manager/risk_mask_softness",
-                             risk_mask_softness_);
-        node_->get_parameter("manager/risk_grounded", risk_grounded_);
+                             environment_options.risk_mask_softness);
+        node_->get_parameter("manager/risk_grounded", environment_options.risk_grounded);
         node_->get_parameter("manager/risk_mask_viz_step",
                              risk_mask_viz_step_);
         node_->get_parameter("manager/risk_mask_viz_slice_offset",
@@ -165,7 +160,7 @@ namespace path_manager
                              risk_mask_viz_volume_alpha_);
         node_->get_parameter("manager/risk_mask_viz_agl",
                              risk_mask_viz_agl_);
-        risk_mask_softness_ = std::max(1e-4, risk_mask_softness_);
+        environment_options.risk_mask_softness = std::max(1e-4, environment_options.risk_mask_softness);
         risk_mask_viz_threshold_ =
             std::clamp(risk_mask_viz_threshold_, 0.0, 1.0);
         risk_mask_viz_contours_ = std::clamp(risk_mask_viz_contours_, 1, 9);
@@ -181,12 +176,12 @@ namespace path_manager
                         risk_mask_viz_mode_.c_str());
             risk_mask_viz_mode_ = "heatmap";
         }
-        node_->get_parameter("manager/sdf_voxel_size", sdf_voxel_size_);
-        node_->get_parameter("manager/sdf_voxel_z", sdf_voxel_z_);
+        node_->get_parameter("manager/sdf_voxel_size", environment_options.sdf_voxel_size);
+        node_->get_parameter("manager/sdf_voxel_z", environment_options.sdf_voxel_z);
         // sdf_voxel_size <= 0 resolves to the DEM cell size once terrain
         // arrives (setTerrainData) — finer only burns memory, coarser loses
         // data, and the right value differs per world.
-        if (sdf_voxel_z_ <= 0.0) sdf_voxel_z_ = 0.1;  // 10 m real (frame /100)
+        if (environment_options.sdf_voxel_z <= 0.0) environment_options.sdf_voxel_z = 0.1;  // 10 m real (frame /100)
         node_->get_parameter("manager/ground_height", ground_height_);
         node_->get_parameter("manager/virtual_ceil_height", virtual_ceil_height_);
         node_->get_parameter("manager/map_ceiling_headroom", map_ceiling_headroom_);
@@ -241,12 +236,11 @@ namespace path_manager
                 "dyn_yaw_seed: RANDOM -> %u (pin manager/dyn_yaw_seed to this "
                 "to reproduce)", applied);
           }
-          yaw_rng_.seed(applied);
+          environment_options.yaw_seed = applied;
         }
         // Patches must extend at least as far as the dynamic berth, or the
         // distance query reads +inf before the margin is reached.
-        if (dyn_obstacle_margin_ > sdf_manager_.influenceRadius())
-            sdf_manager_.setInfluenceRadius(dyn_obstacle_margin_);
+        environment_options.dynamic_influence_radius = dyn_obstacle_margin_;
 
         // Building-mesh rendering of dynamic obstacles (see publishDynamicObstacles).
         node_->declare_parameter("obstacle_mesh_resource",
@@ -271,7 +265,7 @@ namespace path_manager
         node_->get_parameter("obstacle_mesh_resource", obstacle_mesh_resource_);
         node_->get_parameter("obstacle_mesh_height", obstacle_mesh_height_);
         node_->get_parameter("obstacle_viz_scale", obstacle_viz_scale_);
-        node_->get_parameter("manager/obstacle_ground_snap", obstacle_ground_snap_);
+        node_->get_parameter("manager/obstacle_ground_snap", environment_options.obstacle_ground_snap);
         if (obstacle_viz_scale_ < 1.0) obstacle_viz_scale_ = 1.0;
 
         // Visual mesh catalog: model name -> mesh resource + rendered native size [m]
@@ -357,8 +351,8 @@ namespace path_manager
                     "NONE. A partially loaded set would hide %zu hazard(s).",
                     bad, tz_params.size() / 5, bad);
             } else {
-                risk_zones_raw_ = std::move(parsed);
-                log_manager_->infof("Loaded %zu risk zones (risk_weight=%.1f)", risk_zones_raw_.size(), risk_weight_);
+                initial_risk_zones = std::move(parsed);
+                log_manager_->infof("Loaded %zu risk zones (risk_weight=%.1f)", initial_risk_zones.size(), risk_weight_);
             }
         } else if (tz_params.empty()) {
             log_manager_->infof("No risk zones configured");
@@ -378,8 +372,9 @@ namespace path_manager
         // Terrain may arrive after construction. This first call publishes an
         // ideal circular fallback; setTerrainData() replaces it with the DEM-
         // masked field as soon as the heightmap is ready.
-        refreshEffectiveRiskZones();
-        rebuildTerrainRiskMasks();
+        environment_ = std::make_unique<PlanningEnvironmentStore>(
+            environment_options, log_manager_, std::move(initial_risk_zones));
+        publishEffectiveRiskField();
     }
 
     void PathManager::setVehicleModel(mmp_vehicle_dynamics::VehicleModel::Ptr model)
@@ -388,13 +383,13 @@ namespace path_manager
             throw std::invalid_argument("invalid vehicle model");
         if (poly_traj_opt_) poly_traj_opt_->setVehicleModel(model);
         vehicle_model_override_ = std::move(model);
-        ++execution_revision_;
+        execution_->invalidatePending();
     }
 
     void PathManager::setRouteSearchBackend(std::shared_ptr<RouteSearchBackend> backend)
     {
         route_search_backend_ = std::move(backend);
-        ++execution_revision_;
+        execution_->invalidatePending();
         // Existing flight/policy captures remain meaningful until the next
         // actual search advances the epoch. Do not treat algorithm selection
         // as a physical environment change or emit a synthetic ABORT.
@@ -404,12 +399,12 @@ namespace path_manager
     {
         if (is_optimizer_initialized_ && poly_traj_opt_ && !force_reinit)
         {
-            RCLCPP_DEBUG(node_->get_logger(), "Optimizer already initialized for drone %d", traj_.local_traj.drone_id);
+            RCLCPP_DEBUG(node_->get_logger(), "Optimizer already initialized for drone %d", execution_->current().drone_id);
             return;
         }
 
         if (force_reinit && is_optimizer_initialized_) {
-            RCLCPP_INFO(node_->get_logger(), "Force reinitializing optimizer for drone %d", traj_.local_traj.drone_id);
+            RCLCPP_INFO(node_->get_logger(), "Force reinitializing optimizer for drone %d", execution_->current().drone_id);
         }
 
         // Reset state in case of partial initialization
@@ -417,11 +412,16 @@ namespace path_manager
         poly_traj_opt_.reset();
 
         try {
-            RCLCPP_INFO(node_->get_logger(), "Initializing optimizer for drone %d...", traj_.local_traj.drone_id);
-            poly_traj_opt_ = makeConfiguredOptimizer();
+            RCLCPP_INFO(node_->get_logger(), "Initializing optimizer for drone %d...", execution_->current().drone_id);
+            const auto config = readDirectPlanConfig();
+            opt_obstacle_clearance_ = config.obstacle_clearance;
+            weight_altitude_ = config.weight_altitude;
+            alt_cap_headroom_ = config.alt_cap_headroom;
+            alt_floor_headroom_ = config.alt_floor_headroom;
+            poly_traj_opt_ = configureOptimizer(config, {});
             // Only mark as initialized after all steps succeed
             is_optimizer_initialized_ = true;
-            RCLCPP_INFO(node_->get_logger(), "Optimizer initialized successfully for drone %d", traj_.local_traj.drone_id);
+            RCLCPP_INFO(node_->get_logger(), "Optimizer initialized successfully for drone %d", execution_->current().drone_id);
         } catch (const std::exception& e) {
             RCLCPP_ERROR(node_->get_logger(), "Exception during optimizer initialization: %s", e.what());
             poly_traj_opt_.reset();  // Reset to nullptr on failure
@@ -445,23 +445,57 @@ namespace path_manager
     PathManager::makeConfiguredOptimizer(
         const std::vector<rclcpp::Parameter> &parameter_overrides)
     {
-        {
-            // Check prerequisites
-            if (!node_) {
-                throw std::runtime_error("Node is null");
+        for (const auto &parameter : parameter_overrides) {
+            if (!findOptimizerWorkerParameter(parameter.get_name())) {
+                throw std::invalid_argument(
+                    "unsupported independent optimizer override: " + parameter.get_name());
             }
+        }
+        return configureOptimizer(readDirectPlanConfig(parameter_overrides), parameter_overrides);
+    }
 
-            // A worker may only vary its own costs, speed ceiling and
-            // thread budget. Validate the complete list before configuring
-            // anything: full mission profiles also affect shared manager
-            // machinery and cannot be applied to one independent worker.
-            for (const auto &parameter : parameter_overrides) {
-                if (!findOptimizerWorkerParameter(parameter.get_name())) {
-                    throw std::invalid_argument(
-                        "unsupported independent optimizer override: " +
-                        parameter.get_name());
-                }
-            }
+    PathManager::DirectPlanConfig PathManager::readDirectPlanConfig(
+        const std::vector<rclcpp::Parameter> &overrides) const
+    {
+        if (!node_) throw std::runtime_error("Node is null");
+        DirectPlanConfig config{opt_obstacle_clearance_, weight_altitude_,
+            alt_cap_headroom_, alt_floor_headroom_};
+        const ego_planner::RosParameterView parameters(node_, overrides);
+        parameters.get_parameter("optimization/obstacle_clearance", config.obstacle_clearance);
+        parameters.get_parameter("optimization/weight_altitude", config.weight_altitude);
+        parameters.get_parameter("optimization/alt_cap_headroom", config.alt_cap_headroom);
+        parameters.get_parameter("optimization/alt_floor_headroom", config.alt_floor_headroom);
+        parameters.get_parameter("optimization/dynamics_unit_xy_m", config.dynamics_unit_xy_m);
+        if (!node_->has_parameter("optimization/dynamics_flight_path_max_deg"))
+            node_->declare_parameter("optimization/dynamics_flight_path_max_deg", 30.0);
+        parameters.get_parameter("optimization/dynamics_flight_path_max_deg", config.flight_path_max_deg);
+        return config;
+    }
+
+    RouteSliceConfig PathManager::sliceSolveConfig() const
+    {
+        const auto config = readDirectPlanConfig();
+        return {max_vel_, config.alt_cap_headroom, config.alt_floor_headroom,
+                ground_height_, config.weight_altitude};
+    }
+
+    PathManager::DirectSolveContext PathManager::missionSolveContext() const
+    {
+        auto config = readDirectPlanConfig();
+        // These four values are latched by explicit optimizer initialization.
+        // Live ROS edits take effect at the same boundary as before.
+        config.obstacle_clearance = opt_obstacle_clearance_;
+        config.weight_altitude = weight_altitude_;
+        config.alt_cap_headroom = alt_cap_headroom_;
+        config.alt_floor_headroom = alt_floor_headroom_;
+        return {config, poly_traj_opt_.get()};
+    }
+
+    std::unique_ptr<ego_planner::PolyTrajOptimizer> PathManager::configureOptimizer(
+        const DirectPlanConfig &config,
+        const std::vector<rclcpp::Parameter> &parameter_overrides)
+    {
+        {
             const ego_planner::RosParameterView parameters(node_, parameter_overrides);
 
             auto poly_traj_opt_ = std::make_unique<ego_planner::PolyTrajOptimizer>();
@@ -473,36 +507,20 @@ namespace path_manager
             // The id goes in FIRST: setParam logs through LOG_* , which
             // formats drone_id_ into every line it emits. Setting it after
             // meant those lines carried the pre-set value.
-            poly_traj_opt_->setDroneId(traj_.local_traj.drone_id);
+            poly_traj_opt_->setDroneId(execution_->current().drone_id);
             if (vehicle_model_override_)
                 poly_traj_opt_->setVehicleModel(vehicle_model_override_);
             poly_traj_opt_->setParam(node_, parameter_overrides);
 
-            // Four optimization/* values are consumed by PathManager, not by
-            // setParam — re-read them on every (forced) re-init, or a
-            // per-segment override ([CHAIN] chain/seg<i>/params) is a silent
-            // no-op, and alt_cap_headroom DESYNCHRONIZES from the optimizer's
-            // own copy (alt_cap_headroom_opt_), which setParam does re-read:
-            // the scalar cap and the arc-varying envelope must share one
-            // headroom (see the note at its declaration in setParam).
-            parameters.get_parameter("optimization/obstacle_clearance",
-                                 opt_obstacle_clearance_);
-            parameters.get_parameter("optimization/weight_altitude",
-                                 weight_altitude_);
-            parameters.get_parameter("optimization/alt_cap_headroom",
-                                 alt_cap_headroom_);
-            parameters.get_parameter("optimization/alt_floor_headroom",
-                                 alt_floor_headroom_);
-
             ego_planner::OptimizerRuntimeSettings runtime_settings;
             ego_planner::OptimizerEnvironment environment;
-            environment.distance_field = &sdf_manager_;
+            environment.distance_field = &environment_->distanceField();
             // Strictly below the front-end margin: a margin-respecting path then
             // carries ZERO obstacle cost, so its 10000-weighted gradient cannot
             // pin the geometry to the polyline and smoothness can round corners
             // inside the (margin - clearance) buffer.
             runtime_settings.obstacle_clearance =
-                std::min(opt_obstacle_clearance_, obstacle_clearance_);
+                std::min(config.obstacle_clearance, obstacle_clearance_);
             {
                 // [REJECT] ancestor safety net (default ON): an audit-failed
                 // (terrain/obstacle-overlapping) trajectory is discarded, not
@@ -583,40 +601,40 @@ namespace path_manager
             poly_traj_opt_->setRuntimeSettings(runtime_settings);
             // 2.5D terrain heightmap: the optimizer queries the DEM elevation
             // directly (exact z) instead of the coarse voxelised SDF, so terrain
-            // clearance matches the panel/DEM. terrain_data_ outlives the optimizer.
+            // clearance matches the panel/DEM. The terrain owner outlives the optimizer.
             environment.terrain_height =
                 [this](double x, double y) -> float {
-                    return terrain_data_.valid
-                             ? terrain_data_.getElevation(x, y)
+                    return environment_->terrain().valid
+                             ? environment_->terrain().getElevation(x, y)
                              : -std::numeric_limits<float>::infinity();
                 };
             // DEM cell in frame units — scales the SWATH-FLOOR sampling
             // pitch to the actual grid (corridor 30 m vs full_map 250 m).
             environment.terrain_cell_u =
-                terrain_data_.valid ? terrain_data_.resolution : 0.0;
+                environment_->terrain().valid ? environment_->terrain().resolution : 0.0;
             // Value + analytic slope of the same surface, for the terrain term
             // and alt-cap gate: cost and gradient must agree exactly (see
             // TerrainData::getElevationAndGrad).
             environment.terrain_gradient =
                 [this](double x, double y, float *h, float *gx, float *gy) -> bool {
-                    return terrain_data_.getElevationAndGrad(x, y, h, gx, gy);
+                    return environment_->terrain().getElevationAndGrad(x, y, h, gx, gy);
                 };
 
             // Pass risk zones to optimizer for trajectory fine-tuning (2nd stage)
-            if (!risk_zones_.empty()) {
-                for (const auto &tz : risk_zones_) {
+            if (!environment_->riskZones().empty()) {
+                for (const auto &tz : environment_->riskZones()) {
                     ego_planner::RiskZone oz;
                     oz.center = tz.center;
                     oz.reach = tz.reach;
                     oz.peak = tz.peak;
-                    oz.vertical_reach = tz.reach * risk_vertical_ratio_;
+                    oz.vertical_reach = tz.reach * environment_->verticalRatio();
                     environment.risk.zones.push_back(oz);
                 }
             }
             environment.risk.visibility =
-                [this](size_t zi, const Eigen::Vector3d &p,
+                [this, clearance = config.obstacle_clearance](size_t zi, const Eigen::Vector3d &p,
                        Eigen::Vector3d *grad) -> double {
-                    return riskVisibility(zi, p, grad);
+                    return riskVisibility(zi, p, grad, clearance);
                 };
             // [OCCLUSION-CAP] raw LOS horizon for the visibility-aware cap: same
             // zone indexing as the visibility callback above.
@@ -625,8 +643,8 @@ namespace path_manager
                     return riskShadowCeiling(zi, p);
                 };
             poly_traj_opt_->setEnvironment(std::move(environment));
-            if (!risk_zones_.empty()) {
-                log_manager_->infof("Passed %zu risk zones to optimizer", risk_zones_.size());
+            if (!environment_->riskZones().empty()) {
+                log_manager_->infof("Passed %zu risk zones to optimizer", environment_->riskZones().size());
             }
 
             // initOptimizer adopts this instance; parallel workers each
@@ -813,7 +831,7 @@ std::string PathManager::stateEnvelopeProblem(
     }
 
     std::optional<PathManager::PreparedRoute> PathManager::prepareRoute(
-        const StartHead &head,
+        const DirectSolveContext &context, const StartHead &head,
         const std::vector<Eigen::Vector3d> &waypoints, bool junction_goal,
         const std::vector<Eigen::Vector3d> *route_override,
         const std::vector<double> *cap_ref_override,
@@ -873,9 +891,9 @@ std::string PathManager::stateEnvelopeProblem(
         // Geometry preparation borrows the current terrain synchronously.
         // An absent callback preserves the no-terrain waypoint semantics.
         ElevationQuery elevation;
-        if (terrain_data_.valid) {
+        if (environment_->terrain().valid) {
             elevation = [this](double x, double y) {
-                return terrain_data_.getElevation(x, y);
+                return environment_->terrain().getElevation(x, y);
             };
         }
         auto resolved = resolveMissionWaypoints(
@@ -898,7 +916,7 @@ std::string PathManager::stateEnvelopeProblem(
         // serve a STALE map whose bbox no longer covers the mission, which
         // would silently plan terrain-less. We WARN (not refuse) so genuine
         // over-water missions still plan, but a stale-map swap is visible.
-        if (terrain_data_.valid) {
+        if (environment_->terrain().valid) {
             Eigen::Vector3d tlo, thi;
             if (computeTerrainBBox(&tlo, &thi)) {
                 auto oob = [&](const Eigen::Vector3d &p) {
@@ -919,16 +937,16 @@ std::string PathManager::stateEnvelopeProblem(
         }
 
         const MissionBoundsResult bounds = computeMissionBounds(
-            start_pos, wps, risk_zones_,
-            {map_ceiling_headroom_, risk_vertical_ratio_}, elevation);
+            start_pos, wps, environment_->riskZones(),
+            {map_ceiling_headroom_, environment_->verticalRatio()}, elevation);
         map_lower_bound_ = bounds.lower;
         map_upper_bound_ = bounds.upper;
-        if (bounds.included_zone_count < risk_zones_.size()) {
+        if (bounds.included_zone_count < environment_->riskZones().size()) {
             log_manager_->infof(
                 "[BBOX] %zu/%zu risk zones excluded from map bounds "
                 "(moat cannot reach the mission area)",
-                risk_zones_.size() - bounds.included_zone_count,
-                risk_zones_.size());
+                environment_->riskZones().size() - bounds.included_zone_count,
+                environment_->riskZones().size());
         }
         log_manager_->infof(
             "[BBOX] headroom=%.2f terrain_peak=%.2f zone_top=%.2f (%d zones, "
@@ -949,23 +967,9 @@ std::string PathManager::stateEnvelopeProblem(
         // of constant free space per world, and a pre-heightmap cache
         // silently resurrected voxel terrain (double-count vs the heightmap
         // term).
-        if (!sdf_built_) {
-            Eigen::Vector3d sdf_lo = map_lower_bound_;
-            Eigen::Vector3d sdf_hi = map_upper_bound_;
-            Eigen::Vector3d tlo, thi;
-            const bool full_world =
-                terrain_data_.valid && computeTerrainBBox(&tlo, &thi);
-            if (full_world) {
-                sdf_lo = tlo;  // world-wide grid: valid for every later mission
-                sdf_hi = thi;
-            }
-            if (!buildSDFForBounds(sdf_lo, sdf_hi)) {
-                RCLCPP_ERROR(node_->get_logger(), "SDF build failed");
-                return std::nullopt;
-            }
-            // A mission-bbox grid (no terrain yet) stays rebuildable so a
-            // later mission with terrain gets the world-wide grid.
-            if (full_world) sdf_built_ = true;
+        if (!environment_->ensureDistanceField(map_lower_bound_, map_upper_bound_)) {
+            RCLCPP_ERROR(node_->get_logger(), "SDF build failed");
+            return std::nullopt;
         }
 
 
@@ -975,8 +979,8 @@ std::string PathManager::stateEnvelopeProblem(
 
         // SDF sanity probe at start/goal.
         {
-            float d_start = sdf_manager_.getDistance(start_pos);
-            float d_goal  = sdf_manager_.getDistance(wps.back());
+            float d_start = environment_->distanceField().getDistance(start_pos);
+            float d_goal  = environment_->distanceField().getDistance(wps.back());
             log_manager_->infof("SDF probe: start=%.3f m, goal=%.3f m (margin=%.2f)",
                                 d_start, d_goal, obstacle_clearance_);
         }
@@ -1030,7 +1034,7 @@ std::string PathManager::stateEnvelopeProblem(
             }
         } else {
             auto profile = planFrontEnd(start_pos, wps,
-                                         allowsTakeoffRelief(head.src));
+                                         allowsTakeoffRelief(head.src), context);
             if (!profile) return std::nullopt;
             clean_path = std::move(profile->path);
             cap_ref = std::move(profile->cap_ref);
@@ -1061,7 +1065,7 @@ std::string PathManager::stateEnvelopeProblem(
     std::optional<CommittedRoute> PathManager::planCommittedRoute(
         const StartHead &head, const std::vector<Eigen::Vector3d> &waypoints)
     {
-        auto prepared = prepareRoute(head, waypoints, false, nullptr, nullptr,
+        auto prepared = prepareRoute(missionSolveContext(), head, waypoints, false, nullptr, nullptr,
                                       nullptr);
         if (!prepared) return std::nullopt;
         log_manager_->infof("[CHAIN-PAR] front-end only: %zu vertices "
@@ -1082,7 +1086,7 @@ std::string PathManager::stateEnvelopeProblem(
                                      const RouteProvenance *provenance)
     {
         if (front_end_only) {
-            auto prepared = prepareRoute(head, waypoints, junction_goal,
+            auto prepared = prepareRoute(missionSolveContext(), head, waypoints, junction_goal,
                 route_override, cap_ref_override, provenance);
             if (!prepared) return false;
             log_manager_->infof("[CHAIN-PAR] front-end only: %zu vertices "
@@ -1103,56 +1107,17 @@ std::string PathManager::stateEnvelopeProblem(
     PlanningComputation PathManager::sealPlanningComputation(
         PlanningComputation value) const
     {
-        // Route preparation can legitimately invalidate an earlier flight
-        // through environment hooks. Capture the context AFTER calculation;
-        // restoring a pre-call storage snapshot would resurrect that flight.
-        value.execution_context = execution_context_;
-        value.execution_revision = execution_revision_;
-        value.previous_identity_counter = traj_.next_traj_id_;
-        value.environment_generation = environmentRevision();
-        return value;
+        // Environment preparation may already have revoked an older flight.
+        // Seal against the live execution owner AFTER calculation completes.
+        return execution_->seal(std::move(value), environmentRevision());
     }
 
     ExecutionReceipt PathManager::applyPlanningComputation(
         const PlanningComputation &value)
     {
-        if (value.execution_context != execution_context_ ||
-            value.execution_revision != execution_revision_ ||
-            value.previous_identity_counter != traj_.next_traj_id_ ||
-            value.environment_generation != environmentRevision())
-            return {};
-        // A refused post-solve candidate may reproduce the historical
-        // invalidated slot, but must never become executable by accident.
-        if ((value.status.hasTrajectory() &&
-             (!value.product || value.invalidate_execution)) ||
-            (value.product && (value.identity_advances == 0 ||
-             value.product->trajectory.getPieceNum() == 0 ||
-             value.product->reference_trajectory.getPieceNum() == 0)) ||
-            (!value.product && value.identity_advances != 0) ||
-            (!value.status.hasTrajectory() && value.product &&
-             !value.invalidate_execution) ||
-            value.identity_advances >
-                std::numeric_limits<uint64_t>::max() - traj_.next_traj_id_)
-            return {};
-
-        ++execution_revision_;  // Consume even an accepted no-product failure.
-        if (value.product) {
-            const auto &product = *value.product;
-            // Preserve identities historically consumed by intermediate
-            // baseline and segment solves without exposing those solves as
-            // executable trajectories during computation.
-            traj_.next_traj_id_ += value.identity_advances - 1;
-            traj_.setGlobalTraj(product.reference_trajectory,
-                                product.reference_start_time);
-            traj_.setLocalTraj(product.trajectory, product.start_time,
-                               traj_.local_traj.drone_id);
-        }
-        if (value.invalidate_execution) {
-            traj_.local_traj.duration = 0.0;
-            traj_.local_traj.start_time = 0.0;
-            clearTrajectoryViz();
-        }
-        return {true, traj_.local_traj.traj_id, traj_.local_traj.drone_id};
+        const auto receipt = execution_->apply(value, environmentRevision());
+        if (receipt.applied && value.invalidate_execution) clearTrajectoryViz();
+        return receipt;
     }
 
     std::optional<PlannedTrajectory> PathManager::computeGlobalTrajectory(const StartHead &head,
@@ -1163,7 +1128,52 @@ std::string PathManager::stateEnvelopeProblem(
                                      const std::vector<double> *cap_ref_override,
                                      const RouteProvenance *provenance)
     {
-        auto prepared = prepareRoute(head, waypoints, junction_goal,
+        return computeGlobalTrajectory(missionSolveContext(), head, waypoints,
+            tail, junction_goal, route_override, cap_ref_override, provenance);
+    }
+
+    std::optional<PlannedTrajectory> PathManager::computeGlobalTrajectory(
+                                     const DirectPlanSettings &settings, const StartHead &head,
+                                     const std::vector<Eigen::Vector3d> &waypoints,
+                                     const ego_planner::TailBoundary &tail,
+                                     bool junction_goal,
+                                     const std::vector<Eigen::Vector3d> *route_override,
+                                     const std::vector<double> *cap_ref_override,
+                                     const RouteProvenance *provenance)
+    {
+        std::unique_ptr<ego_planner::PolyTrajOptimizer> optimizer;
+        DirectPlanConfig config;
+        try {
+            config = readDirectPlanConfig(settings.overrides);
+            optimizer = configureOptimizer(config, settings.overrides);
+            optimizer->setSwarmTrajs(&swarm_trajectories_);
+        } catch (const std::exception &error) {
+            throw DirectPlanConfigurationError(error.what());
+        }
+        // The searcher retains a borrowed visibility provider after prepare().
+        // Whole-mission evaluation must see the mission field on every exit,
+        // including exceptions, without resetting captured per-leg policies.
+        struct MissionVisibilityBinding {
+            decltype(searcher_) &searcher;
+            std::function<double(size_t, const Eigen::Vector3d &)> visibility;
+            ~MissionVisibilityBinding() { searcher.setRiskVisibility(std::move(visibility)); }
+        } binding{searcher_, [this](size_t i, const Eigen::Vector3d &p) {
+            return riskVisibilityValue(i, p);
+        }};
+        return computeGlobalTrajectory(DirectSolveContext{config, optimizer.get()},
+            head, waypoints, tail, junction_goal, route_override, cap_ref_override, provenance);
+    }
+
+    std::optional<PlannedTrajectory> PathManager::computeGlobalTrajectory(
+                                     const DirectSolveContext &context, const StartHead &head,
+                                     const std::vector<Eigen::Vector3d> &waypoints,
+                                     const ego_planner::TailBoundary &tail,
+                                     bool junction_goal,
+                                     const std::vector<Eigen::Vector3d> *route_override,
+                                     const std::vector<double> *cap_ref_override,
+                                     const RouteProvenance *provenance)
+    {
+        auto prepared = prepareRoute(context, head, waypoints, junction_goal,
                                       route_override, cap_ref_override,
                                       provenance);
         if (!prepared) return std::nullopt;
@@ -1182,12 +1192,9 @@ std::string PathManager::stateEnvelopeProblem(
         // stay here because the two callers report differently.
         //
         // The head arrives with its own provenance; nothing here derives it.
-        const double v_floor = poly_traj_opt_
-            ? poly_traj_opt_->dynamicsMinSpeedFloorUnits() : 0.0;
-        double um_xy_head = 100.0;
-        if (node_->has_parameter("optimization/dynamics_unit_xy_m"))
-            node_->get_parameter("optimization/dynamics_unit_xy_m",
-                                 um_xy_head);
+        const double v_floor = context.optimizer
+            ? context.optimizer->dynamicsMinSpeedFloorUnits() : 0.0;
+        const double um_xy_head = context.config.dynamics_unit_xy_m;
         const double head_eps_u =
             um_xy_head > 1e-9 ? kSpeedBoundaryEpsMps / um_xy_head : 0.0;
         const HeadPolicy hp = applyHeadPolicy(
@@ -1226,7 +1233,7 @@ std::string PathManager::stateEnvelopeProblem(
         // [LEG-POLICY] last_route_edge_leg_, not the local edge_leg: the
         // inherited-route branch leaves the local empty and the member is the
         // one place that has already been size-checked against clean_path.
-        auto product = optimizeStage(clean_path,
+        auto product = optimizeStage(context, clean_path,
                                     start_pos, start_vel_eff, start_acc, wps,
                                     cap_ref, prepared->raw_max_z, tail, last_route_edge_leg_);
 
@@ -1243,34 +1250,31 @@ std::string PathManager::stateEnvelopeProblem(
         return product;
     }
 
-bool PathManager::configureFrontEnd(RouteSearchProblem &problem)
+bool PathManager::configureFrontEnd(RouteSearchProblem &problem, const DirectSolveContext &context)
 {
     bindRiskZonesToSearcher();
     searcher_.setLogManager(log_manager_);
-    searcher_.setSDF(&sdf_manager_, map_lower_bound_,
-                     map_upper_bound_ - map_lower_bound_, sdf_voxel_size_, sdf_voxel_z_);
+    searcher_.setSDF(&environment_->distanceField(), map_lower_bound_,
+                     map_upper_bound_ - map_lower_bound_, environment_->voxelSize(), environment_->voxelZ());
     log_manager_->infof("[PM DBG] setRiskZones: %zu zones weight=%.3f",
-        astar_risks_.size(), risk_weight_);
-    bindRiskZonesToOptimizer();
+        environment_->searchRiskZones().size(), risk_weight_);
+    if (context.optimizer)
+        bindRiskZonesToOptimizer(*context.optimizer, context.config.obstacle_clearance);
 
     problem = RouteSearchProblem{};
     problem.identity.context_id = nextRouteSearchIdentity();
     problem.identity.environment_revision = environmentRevision();
-    problem.identity.zone_generation = zone_policy_generation_;
+    problem.identity.zone_generation = environment_->zoneGeneration();
     problem.identity.policy_epoch = zone_policy_epoch_;
     problem.constraints.obstacle_clearance = obstacle_clearance_;
     problem.constraints.ground_height = ground_height_;
     problem.constraints.virtual_ceiling = virtual_ceil_height_;
     problem.constraints.dynamic_obstacle_margin = dyn_obstacle_margin_;
-    problem.model = vehicle_model_override_ ? vehicle_model_override_ : vehicleModel();
+    problem.model = vehicle_model_override_ ? vehicle_model_override_
+        : (context.optimizer && context.optimizer->dynamicsEnabled()
+               ? context.optimizer->vehicleModel() : nullptr);
     {
-        double fpa_deg = 30.0;
-        if (!node_->has_parameter(
-                "optimization/dynamics_flight_path_max_deg"))
-            node_->declare_parameter(
-                "optimization/dynamics_flight_path_max_deg", 30.0);
-        node_->get_parameter("optimization/dynamics_flight_path_max_deg",
-                             fpa_deg);
+        const double fpa_deg = context.config.flight_path_max_deg;
         // Explicit models own this limit. The legacy ROS path deliberately
         // reads the live parameter at each search, even before optimizer
         // initialization or after a runtime parameter update.
@@ -1281,26 +1285,33 @@ bool PathManager::configureFrontEnd(RouteSearchProblem &problem)
     }
 
     auto &environment = problem.environment;
-    environment.distance_field = &sdf_manager_;
+    environment.distance_field = &environment_->distanceField();
     environment.lower = map_lower_bound_;
     environment.upper = map_upper_bound_;
-    environment.voxel_xy = sdf_voxel_size_;
-    environment.voxel_z = sdf_voxel_z_;
-    environment.fine_grid_shape = sdf_manager_.shape();
-    environment.terrain_cell_u = terrain_data_.valid ? terrain_data_.resolution : 0.0;
-    for (const auto &zone : astar_risks_)
+    environment.voxel_xy = environment_->voxelSize();
+    environment.voxel_z = environment_->voxelZ();
+    environment.fine_grid_shape = environment_->distanceField().shape();
+    environment.terrain_cell_u = environment_->terrain().valid ? environment_->terrain().resolution : 0.0;
+    for (const auto &zone : environment_->searchRiskZones())
         environment.zones.push_back({zone.center, zone.reach, zone.peak, zone.vertical_reach});
     environment.elevation = [this](double x, double y) -> float {
-        return terrain_data_.valid ? terrain_data_.getElevation(x, y)
+        return environment_->terrain().valid ? environment_->terrain().getElevation(x, y)
             : -std::numeric_limits<float>::infinity();
     };
     environment.elevation_gradient =
         [this](double x, double y, float *h, float *gx, float *gy) {
-            return terrain_data_.getElevationAndGrad(x, y, h, gx, gy);
+            return environment_->terrain().getElevationAndGrad(x, y, h, gx, gy);
         };
-    environment.risk_visibility = [this](size_t i, const Eigen::Vector3d &p) {
-        return riskVisibilityValue(i, p);
-    };
+    if (context.optimizer == poly_traj_opt_.get()) {
+        environment.risk_visibility = [this](size_t i, const Eigen::Vector3d &p) {
+            return riskVisibilityValue(i, p);
+        };
+    } else {
+        environment.risk_visibility =
+            [this, clearance = context.config.obstacle_clearance](size_t i, const Eigen::Vector3d &p) {
+                return riskVisibilityValue(i, p, clearance);
+            };
+    }
     // This object still supplies canonical occupancy/risk queries even when
     // another backend generates the route. Its algorithm tuning is private
     // to the built-in adapter; an external backend needs no FM2/A* options.
@@ -1308,7 +1319,7 @@ bool PathManager::configureFrontEnd(RouteSearchProblem &problem)
 }
 
 void PathManager::publishFrontEndRoute(
-    const std::vector<Eigen::Vector3d> &route, double search_ms)
+    const std::vector<Eigen::Vector3d> &route, double search_ms, double clearance)
 {
     if (!visualization_) return;
     log_manager_->infof("A* route: %zu waypoints (%.1f ms)",
@@ -1331,13 +1342,13 @@ void PathManager::publishFrontEndRoute(
         double survival = 1.0;
         std::string per_zone;
         const bool dump = route.size() <= kRiskDumpMax;
-        for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-            const auto &tz = risk_zones_[zi];
+        for (size_t zi = 0; zi < environment_->riskZones().size(); ++zi) {
+            const auto &tz = environment_->riskZones()[zi];
             const double q = riskEllipsoidRadius(tz, p);
             double moat = 0.0;
             double visibility = 0.0;
             if (q < 1.0) {
-                visibility = riskVisibilityValue(zi, p);
+                visibility = riskVisibilityValue(zi, p, clearance);
                 moat = tz.peak * mmp::risk::shape(q) * visibility;
             }
             survival *= (1.0 - std::min(moat, mmp::risk::kMoatCap));
@@ -1372,27 +1383,28 @@ void PathManager::publishFrontEndRoute(
 
 std::optional<RouteProfileResult> PathManager::planFrontEnd(
     const Eigen::Vector3d &start_pos,
-    const std::vector<Eigen::Vector3d> &waypoints, bool takeoff_start)
+    const std::vector<Eigen::Vector3d> &waypoints, bool takeoff_start,
+    const DirectSolveContext &context)
 {
     std::vector<Eigen::Vector3d> full_route;
     // [S13] policy epoch: dispositions are per-search state, so every
     // front-end run invalidates outstanding zone-policy snapshots; the
     // recorded generation says WHICH zone data this search saw.
     ++zone_policy_epoch_;
-    zone_policy_epoch_generation_ = zone_policy_generation_;
+    zone_policy_epoch_generation_ = environment_->zoneGeneration();
     zone_policy_epoch_searches_ = 0;
     leg_policies_.clear();
     last_search_policy_ = RouteSearchPolicy{};
     last_search_policy_measured_ = false;
 
     const MissionRouteSearchRequest request{
-        start_pos, waypoints, 1.0, traj_.local_traj.drone_id,
+        start_pos, waypoints, 1.0, execution_->current().drone_id,
         takeoff_start};
     // The backend only borrows this input during synchronous calls. Keep it
     // local so its model reference is released on every return/exception;
     // an idle route cache must not retain a previously replaced model.
     RouteSearchProblem problem;
-    if (!configureFrontEnd(problem)) return std::nullopt;
+    if (!configureFrontEnd(problem, context)) return std::nullopt;
 
     auto t_astar_start = std::chrono::steady_clock::now();
     bool leg_capture_voided = false;
@@ -1423,7 +1435,7 @@ std::optional<RouteProfileResult> PathManager::planFrontEnd(
         last_search_policy_ = std::move(result.policy);
         last_search_policy_measured_ = routeSearchPolicyMeasured(problem, last_search_policy_) &&
             problem.identity.environment_revision == environmentRevision() &&
-            problem.identity.zone_generation == zone_policy_generation_;
+            problem.identity.zone_generation == environment_->zoneGeneration();
         if (!routeSearchGeometryUsable(result)) {
             last_search_policy_measured_ = false;
             if (!result.detail.empty())
@@ -1505,16 +1517,16 @@ std::optional<RouteProfileResult> PathManager::planFrontEnd(
     if (corner_fillet_radius_ > 1e-6 && full_route.size() >= 3) {
         auto sample_ok = [&](const Eigen::Vector3d &p,
                              const Eigen::Vector3d &corner) {
-            if (sdf_manager_.hasData() &&
-                sdf_manager_.getDistance(p) < obstacle_clearance_) return false;
-            for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-                const auto &tz = risk_zones_[zi];
+            if (environment_->distanceField().hasData() &&
+                environment_->distanceField().getDistance(p) < obstacle_clearance_) return false;
+            for (size_t zi = 0; zi < environment_->riskZones().size(); ++zi) {
+                const auto &tz = environment_->riskZones()[zi];
                 const bool corner_in =
                     riskEllipsoidRadius(tz, corner) < 1.0 &&
-                    riskVisibilityValue(zi, corner) > 0.5;
+                    riskVisibilityValue(zi, corner, context.config.obstacle_clearance) > 0.5;
                 const bool p_in =
                     riskEllipsoidRadius(tz, p) < 1.0 &&
-                    riskVisibilityValue(zi, p) > 0.5;
+                    riskVisibilityValue(zi, p, context.config.obstacle_clearance) > 0.5;
                 if (p_in && !corner_in) return false;  // arc dips INTO a zone
             }
             return true;
@@ -1533,21 +1545,22 @@ std::optional<RouteProfileResult> PathManager::planFrontEnd(
 
     auto t_rrt_end = std::chrono::steady_clock::now();
     publishFrontEndRoute(full_route,
-        std::chrono::duration<double, std::milli>(t_rrt_end - t_astar_start).count());
+        std::chrono::duration<double, std::milli>(t_rrt_end - t_astar_start).count(),
+        context.config.obstacle_clearance);
 
     // Publish the filleted front-end route above before denoising its
     // optimization pins. The value result preserves the pre-filter cap
     // reference and edge provenance through every subdivision.
     ElevationQuery elevation;
-    if (terrain_data_.valid) {
+    if (environment_->terrain().valid) {
         elevation = [this](double x, double y) {
-            return terrain_data_.getElevation(x, y);
+            return environment_->terrain().getElevation(x, y);
         };
     }
     const size_t input_tag_count = route_leg.size();
     RouteProfileResult profile = prepareRouteProfile(
         {std::move(full_route), std::move(route_leg)}, start_pos, waypoints,
-        {length_per_piece_, obstacle_clearance_}, elevation, &sdf_manager_);
+        {length_per_piece_, obstacle_clearance_}, elevation, &environment_->distanceField());
     const auto &filtered_route = profile.filtered_route;
     const auto &clean_path = profile.path;
     if (profile.denoise.applied) {
@@ -1577,7 +1590,8 @@ std::optional<RouteProfileResult> PathManager::planFrontEnd(
     return profile;
 }
 
-std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
+std::optional<PlannedTrajectory> PathManager::optimizeStage(
+                                const DirectSolveContext &context, std::vector<Eigen::Vector3d> &clean_path,
                                 const Eigen::Vector3d &start_pos,
                                 const Eigen::Vector3d &start_vel,
                                 const Eigen::Vector3d &start_acc,
@@ -1590,7 +1604,7 @@ std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::V
         // Stage 2 = trajectory optimization. The optimizer owns the MINCO
         // initial-trajectory build + L-BFGS; we only pass the front-end path
         // and return owned results. Swap optimizeFromPath() to replace the backend.
-        if (!isOptimizerInitialized()) {
+        if (!context.optimizer) {
             log_manager_->errorf("Optimizer not initialized");
             return std::nullopt;
         }
@@ -1601,8 +1615,8 @@ std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::V
         // Keep the direct solve's pre-denoise ceiling restoration distinct
         // from slice solving: cap_ref values do not expand this scalar band.
         const DirectAltitudeConfig altitude_config{
-            raw_max_z, alt_cap_headroom_, alt_floor_headroom_,
-            ground_height_, weight_altitude_};
+            raw_max_z, context.config.alt_cap_headroom, context.config.alt_floor_headroom,
+            ground_height_, context.config.weight_altitude};
         const DirectAltitudeBand band = computeDirectAltitudeBand(
             clean_path, start_pos, waypoints.back(), altitude_config);
         if (band.path_max_z - band.path_max_z_denoised > 1e-6) {
@@ -1614,8 +1628,8 @@ std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::V
         log_manager_->infof(
             "[ALT] optimizer z-band [%.2f, %.2f] (mission min - %.2f, "
             "path max %.2f + %.2f; terrain owned by gated cap + 0.30 band)",
-            band.z_lo, band.z_hi, alt_floor_headroom_, band.path_max_z,
-            alt_cap_headroom_);
+            band.z_lo, band.z_hi, context.config.alt_floor_headroom, band.path_max_z,
+            context.config.alt_cap_headroom);
 
         DirectTrajectoryRequest request;
         request.path = std::move(clean_path);
@@ -1632,7 +1646,7 @@ std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::V
         request.suppress_crossing_exempt = suppressCrossingExemptNow();
         last_piece_leg_.clear();
         DirectTrajectoryResult solved =
-            solveDirectTrajectory(*poly_traj_opt_, std::move(request));
+            solveDirectTrajectory(*context.optimizer, std::move(request));
         // optimizeFromPath may insert points before it fails. Retain those
         // diagnostics and the exact piece mapping on both result paths.
         clean_path = std::move(solved.optimizer_path);
@@ -1663,8 +1677,8 @@ std::optional<PlannedTrajectory> PathManager::optimizeStage(std::vector<Eigen::V
         // (~20% of the zones' reach, so the dome/roof were sampled well off the
         // flown path near the rims where they vary fastest), z up to 2.5 u.
         // Sample the flown trajectory so the overlay and the trajectory agree.
-        publishTrajRisk(local_traj);
-        publishRiskProfile(local_traj);
+        publishTrajRisk(local_traj, context.config.obstacle_clearance);
+        publishRiskProfile(local_traj, context.config.obstacle_clearance);
         // Tube renders of the flown (optimized) and seed (global) trajectories.
         // Reference trajectory: pale + translucent, a faint "tunnel" the
         // cursor sphere and the flown path pass through.
@@ -1755,8 +1769,9 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
     stopMJO.reset(headState, tailState, 2);
     stopMJO.generate(stop_pos, Eigen::Vector2d(1.0, 1.0));
 
-    ++execution_revision_;
-    traj_.setLocalTraj(stopMJO.getTraj(), rclcpp::Clock(RCL_ROS_TIME).now().seconds(), traj_.local_traj.drone_id);
+    if (!execution_->adoptEmergencyTrajectory(
+            stopMJO.getTraj(), rclcpp::Clock(RCL_ROS_TIME).now().seconds()).applied)
+        return false;
 
     // The stop trajectory replaces the previous route, so every latched
     // route-derived diagnostic must change with it. Otherwise the altitude
@@ -1765,9 +1780,9 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
     if (visualization_) {
         visualization_->frontEndPath(visualization::makeFrontEndPath({}, node_->now()));
     }
-    publishTrajRisk(traj_.local_traj.traj);
-    publishRiskProfile(traj_.local_traj.traj);
-    publishTrajTube(traj_.local_traj.traj, visualization::TubeChannel::Optimized, "opt_path_drone_",
+    publishTrajRisk(execution_->current().traj);
+    publishRiskProfile(execution_->current().traj);
+    publishTrajTube(execution_->current().traj, visualization::TubeChannel::Optimized, "opt_path_drone_",
                     0.55f, 0.72f, 1.0f, 0.22f);
 
     RCLCPP_WARN(node_->get_logger(), "EMERGENCY STOP executed at position (%.2f, %.2f, %.2f)",
@@ -1780,155 +1795,55 @@ bool PathManager::EmergencyStop(const Eigen::Vector3d& stop_pos) {
     return true;
 }
 
-void PathManager::refreshEffectiveRiskZones()
+
+
+double PathManager::riskEllipsoidRadius(const RiskZone &zone, const Eigen::Vector3d &pos) const
 {
-    ++zone_policy_generation_;  // [S13] any zone/terrain re-derivation
-                                // invalidates every outstanding snapshot
-    risk_zones_ = risk_zones_raw_;
-    if (!risk_zone_agl_ || risk_zones_.empty()) return;
-    if (!terrain_data_.valid) {
-        // No DEM yet: raw z is used as-is; setTerrainData() re-derives.
-        if (log_manager_) {
-            log_manager_->infof(
-                "[RISK-ZONE] AGL grounding deferred until DEM arrives "
-                "(%zu zones)", risk_zones_.size());
-        }
-        return;
-    }
-    for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-        auto &tz = risk_zones_[zi];
-        const double z_agl = risk_zones_raw_[zi].center.z();
-        // Same water/off-DEM rule as groundedCenter: sea level is 0.
-        double base = 0.0;
-        const float h = terrain_data_.getElevation(tz.center.x(),
-                                                   tz.center.y());
-        if (std::isfinite(h) && h > 0.0f) base = static_cast<double>(h);
-        tz.center.z() = base + z_agl;
-        if (log_manager_) {
-            log_manager_->infof(
-                "[RISK-ZONE] zone[%zu] grounded: DEM h=%.2f + source height "
-                "%.2f -> source z=%.2f", zi, base, z_agl, tz.center.z());
-            if (z_agl > 2.0) {
-                log_manager_->warnf(
-                    "[RISK-ZONE] zone[%zu] source height %.1f units = %.0f m "
-                    "AGL — looks like an absolute altitude or a metres "
-                    "value (frame is 1 unit = 100 m)", zi, z_agl,
-                    100.0 * z_agl);
-            }
-        }
-    }
+    return environment_->ellipsoidRadius(zone, pos);
 }
 
-double PathManager::riskEllipsoidRadius(const RiskZone &zone,
-                                        const Eigen::Vector3d &pos) const
+double PathManager::riskZoneValue(size_t zone_index, const Eigen::Vector3d &pos) const
 {
-    if (!(zone.reach > 0.0) || !(risk_vertical_ratio_ > 0.0))
-        return std::numeric_limits<double>::infinity();
-    // CONTRACT: rv (vertical semi-axis) MUST match the value the optimizer and
-    // heatmap use — oz.vertical_reach = zone.reach * risk_vertical_ratio_. All
-    // three recompute it independently today. If a per-zone vertical override
-    // is ever added, thread zone.vertical_reach through HERE and the heatmap so
-    // the rendered/penalized moat geometry cannot silently diverge.
-    const double rv = zone.reach * risk_vertical_ratio_;
-    const Eigen::Vector3d d = pos - zone.center;
-    return std::sqrt(d.head<2>().squaredNorm() /
-                         (zone.reach * zone.reach) +
-                     d.z() * d.z() / (rv * rv));
+    return riskZoneValue(zone_index, pos, opt_obstacle_clearance_);
 }
 
-double PathManager::riskZoneValue(size_t zone_index,
-                                  const Eigen::Vector3d &pos) const
+double PathManager::riskZoneValue(size_t zone_index, const Eigen::Vector3d &pos,
+                                  double clearance) const
 {
-    if (zone_index >= risk_zones_.size()) return 0.0;
-    const auto &zone = risk_zones_[zone_index];
-    const double q = riskEllipsoidRadius(zone, pos);
-    // Early-out kept deliberately: shape() already returns 0 outside the
-    // envelope, but riskVisibilityValue() raycasts, and letting it run for a
-    // result that is multiplied by zero would pay for every miss.
-    if (!(q < 1.0)) return 0.0;
-    return std::min(zone.peak * mmp::risk::shape(q) *
-                        riskVisibilityValue(zone_index, pos),
-                    mmp::risk::kMoatCap);
+    return environment_->riskValue(zone_index, pos, clearance);
 }
 
-void PathManager::rebuildTerrainRiskMasks()
+double PathManager::riskShadowCeiling(size_t zone_index, const Eigen::Vector3d &pos) const
 {
-    terrain_risk_masks_.assign(risk_zones_.size(), TerrainRiskMask{});
-
-    if (!risk_terrain_mask_enable_ || !terrain_data_.valid ||
-        risk_zones_.empty()) {
-        if (log_manager_ && !risk_zones_.empty()) {
-            log_manager_->infof(
-                "[RISK-MASK] terrain masking %s; publishing ideal fallback (%zu zones)",
-                risk_terrain_mask_enable_ ? "waiting for DEM" : "disabled",
-                risk_zones_.size());
-        }
-        publishEffectiveRiskField();
-        return;
-    }
-
-    size_t total_samples = 0;
-    const auto settings = terrainRiskSettings();
-    for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
-        const auto &zone = risk_zones_[zi];
-        if (!(zone.reach > 0.0)) continue;
-
-        TerrainRiskMask &mask = terrain_risk_masks_[zi];
-        auto built = terrain_risk::buildMask(
-            zone, terrain_data_, settings, std::move(mask));
-        mask = std::move(built.mask);
-        if (built.source_at_or_below_ground && log_manager_) {
-            log_manager_->warnf(
-                "[RISK-MASK] zone[%zu] source z=%.2f is at/below DEM %.2f; "
-                "center.z is used literally as the source height",
-                zi, zone.center.z(), static_cast<double>(built.source_ground));
-        }
-        total_samples += mask.shadow_ceiling.size();
-        if (log_manager_) {
-            log_manager_->infof(
-                "[RISK-MASK] zone[%zu] horizon ready: %d azimuth x %d range "
-                "(dr=%.3f, R=%.1f)",
-                zi, mask.angular_count, mask.radial_count,
-                mask.radial_step, zone.reach);
-        }
-    }
-    if (log_manager_) {
-        log_manager_->infof(
-            "[RISK-MASK] built %zu terrain-horizon samples for %zu zones "
-            "(soft edge %.3f z-units)",
-            total_samples, risk_zones_.size(), risk_mask_softness_);
-    }
-    publishEffectiveRiskField();
+    return environment_->shadowCeiling(zone_index, pos);
 }
 
-double PathManager::riskShadowCeiling(size_t zone_index,
-                                      const Eigen::Vector3d &pos) const
+double PathManager::riskGroundedZ(const Eigen::Vector3d &pos, double *dzeff_dz) const
 {
-    return terrain_risk::shadowCeiling(
-        terrainRiskMask(zone_index), risk_terrain_mask_enable_, pos);
+    return environment_->groundedZ(pos, opt_obstacle_clearance_, dzeff_dz);
 }
 
-double PathManager::riskGroundedZ(const Eigen::Vector3d &pos,
-                                  double *dzeff_dz) const
+double PathManager::riskVisibilityValue(size_t zone_index, const Eigen::Vector3d &pos) const
 {
-    return terrain_risk::groundedZ(
-        terrain_data_, terrainRiskSettings(), pos, dzeff_dz);
+    return riskVisibilityValue(zone_index, pos, opt_obstacle_clearance_);
 }
 
-double PathManager::riskVisibilityValue(size_t zone_index,
-                                        const Eigen::Vector3d &pos) const
+double PathManager::riskVisibilityValue(size_t zone_index, const Eigen::Vector3d &pos,
+                                        double clearance) const
 {
-    return terrain_risk::visibilityValue(
-        terrainRiskMask(zone_index), terrain_data_, terrainRiskSettings(), pos);
+    return environment_->visibilityValue(zone_index, pos, clearance);
 }
 
-double PathManager::riskVisibility(size_t zone_index,
-                                   const Eigen::Vector3d &pos,
+double PathManager::riskVisibility(size_t zone_index, const Eigen::Vector3d &pos,
                                    Eigen::Vector3d *grad) const
 {
-    return terrain_risk::visibility(
-        terrainRiskMask(zone_index), terrain_data_, terrainRiskSettings(), pos,
-        grad);
+    return riskVisibility(zone_index, pos, grad, opt_obstacle_clearance_);
+}
+
+double PathManager::riskVisibility(size_t zone_index, const Eigen::Vector3d &pos,
+                                   Eigen::Vector3d *grad, double clearance) const
+{
+    return environment_->visibility(zone_index, pos, clearance, grad);
 }
 
 // Draped visibility-boundary heatmap. One latched GridMap summarises the
@@ -1965,25 +1880,35 @@ visualization::Stamp PathManager::visualizationStamp() const
 
 visualization::RiskView PathManager::riskVisualizationView() const
 {
-    return {risk_zones_,
-        {terrain_data_.valid, terrain_data_.resolution,
-         [this](double x, double y) { return terrain_data_.getElevation(x, y); },
+    return riskVisualizationView(opt_obstacle_clearance_);
+}
+
+visualization::RiskView PathManager::riskVisualizationView(double clearance) const
+{
+    return {environment_->riskZones(),
+        {environment_->terrain().valid, environment_->terrain().resolution,
+         [this](double x, double y) { return environment_->terrain().getElevation(x, y); },
          [this](double x, double y, float *h, float *dx, float *dy) {
-             return terrain_data_.getElevationAndGrad(x, y, h, dx, dy);
+             return environment_->terrain().getElevationAndGrad(x, y, h, dx, dy);
          }},
-        [this](size_t i, const Eigen::Vector3d &p) { return riskZoneValue(i, p); },
-        [this](size_t i, const Eigen::Vector3d &p) { return riskVisibilityValue(i, p); },
+        [this, clearance](size_t i, const Eigen::Vector3d &p) { return riskZoneValue(i, p, clearance); },
+        [this, clearance](size_t i, const Eigen::Vector3d &p) { return riskVisibilityValue(i, p, clearance); },
         [this](size_t i, const Eigen::Vector3d &p) { return riskShadowCeiling(i, p); }};
 }
 
 visualization::RiskSettings PathManager::riskVisualizationSettings() const
 {
+    return riskVisualizationSettings(opt_obstacle_clearance_);
+}
+
+visualization::RiskSettings PathManager::riskVisualizationSettings(double clearance) const
+{
     visualization::RiskSettings settings;
-    settings.vertical_ratio = risk_vertical_ratio_;
-    settings.softness = risk_mask_softness_;
+    settings.vertical_ratio = environment_->verticalRatio();
+    settings.softness = environment_->maskSoftness();
     settings.threshold = risk_mask_viz_threshold_;
-    settings.obstacle_clearance = opt_obstacle_clearance_;
-    settings.grounded = risk_grounded_;
+    settings.obstacle_clearance = clearance;
+    settings.grounded = environment_->groundedRisk();
     settings.max_velocity = max_vel_;
     settings.step = risk_mask_viz_step_;
     settings.slice_offset = risk_mask_viz_slice_offset_;
@@ -2017,7 +1942,7 @@ void PathManager::publishTubeMarker(
     float r, float g, float b, float a)
 {
     if (!visualization_) return;
-    auto message = visualization::makeTube(pts, traj_.local_traj.drone_id,
+    auto message = visualization::makeTube(pts, execution_->current().drone_id,
         path_scale_, ns_prefix, r, g, b, a, visualizationStamp());
     if (message) visualization_->tube(channel, *message);
 }
@@ -2034,16 +1959,21 @@ void PathManager::publishTrajTube(
 {
     if (!visualization_) return;
     auto message = visualization::makeTrajectoryTube(traj,
-        traj_.local_traj.drone_id, path_scale_, ns_prefix, r, g, b, a,
+        execution_->current().drone_id, path_scale_, ns_prefix, r, g, b, a,
         visualizationStamp());
     if (message) visualization_->tube(channel, *message);
 }
 
 void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
 {
+    publishTrajRisk(traj, opt_obstacle_clearance_);
+}
+
+void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj, double clearance)
+{
     if (!visualization_) return;
     auto result = visualization::makeTrajectoryRisk(
-        traj, riskVisualizationView(), visualizationStamp());
+        traj, riskVisualizationView(clearance), visualizationStamp());
     if (log_manager_ && !result.diagnostic.empty())
         log_manager_->infof("%s", result.diagnostic.c_str());
     visualization_->trajectoryRisk(result.message);
@@ -2058,9 +1988,14 @@ void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
 // 3-D trajectory sample with the exact same OR-combination as /viz/traj_risk.
 void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
 {
+    publishRiskProfile(traj, opt_obstacle_clearance_);
+}
+
+void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj, double clearance)
+{
     if (!visualization_) return;
     auto result = visualization::makeRiskProfile(
-        traj, riskVisualizationView(), riskVisualizationSettings());
+        traj, riskVisualizationView(clearance), riskVisualizationSettings(clearance));
     visualization_->riskProfile(result.message);
     if (log_manager_ && !result.diagnostic.empty())
         log_manager_->infof("%s", result.diagnostic.c_str());
@@ -2095,252 +2030,36 @@ void PathManager::publishEffectiveRiskField()
         riskVisualizationView(), riskVisualizationSettings(), visualizationStamp()));
 }
 
-void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg) {
-    if (!msg) {
-        log_manager_->warnf("Received null terrain GridMap");
-        return;
-    }
-
-    // world=none is published as an empty GridMap. It is an explicit state
-    // transition, not a malformed update: keeping the previous DEM here while
-    // RViz clears it would make the displayed terrain/risk field disagree with
-    // the one used for planning.
-    if (msg->layers.empty() && msg->data.empty()) {
-        const bool had_terrain = terrain_data_.valid;
-        const uint64_t next_generation = terrain_data_.generation + 1;
-        terrain_data_ = TerrainData{};
-        terrain_data_.generation = next_generation;
-        terrain_bbox_computed_ = false;
-        sdf_built_ = false;
-        // initOptimizer() may have captured a previous DEM resolution. Clear
-        // that sampling pitch together with the terrain state so optimizer
-        // swath/roughness checks cannot keep using a stale map cell size.
-        if (poly_traj_opt_) {
-            poly_traj_opt_->setTerrainHeightmap(
-                [this](double x, double y) -> float {
-                    return terrain_data_.valid
-                             ? terrain_data_.getElevation(x, y)
-                             : -std::numeric_limits<float>::infinity();
-                },
-                0.0);
-        }
-
-        // Every obstacle patch was tied to the old map/grid (including
-        // terrain-grounded z and infinite-column bounds), so it cannot safely
-        // survive an explicit world clear.
-        if (sdf_manager_.numActiveObstacles() > 0 ||
-            !dyn_patch_ids_.empty() || !pending_obstacles_.empty()) {
-            clearDynamicObstacles();
-        }
-        // Invalidate the old grid itself as well as PathManager's latch.
-        // Otherwise hasData() stays true and an obstacle added while no world
-        // is loaded is immediately grounded at sea level, then survives the
-        // next DEM load instead of being deferred and re-grounded.
-        if (sdf_manager_.hasData() &&
-            !sdf_manager_.initialize(sdf_voxel_size_, sdf_voxel_z_)) {
-            log_manager_->warnf(
-                "[TERRAIN] failed to invalidate SDF grid after world clear");
-        }
-
-        refreshEffectiveRiskZones();
-        rebuildTerrainRiskMasks();  // no DEM -> the planner's ideal LOS fallback
-
-        if (traj_.local_traj.traj_id > 0 &&
-            traj_.local_traj.duration > 0.0 &&
-            std::isfinite(traj_.local_traj.duration)) {
-            publishTrajRisk(traj_.local_traj.traj);
-            publishRiskProfile(traj_.local_traj.traj);
-        }
-        log_manager_->infof(
-            had_terrain
-                ? "[TERRAIN] cleared previous DEM (world=none)"
-                : "[TERRAIN] empty world confirmed (no DEM loaded)");
-        return;
-    }
-
-    // A non-empty but malformed message is not an instruction to discard a
-    // valid map. Reject it and retain the last accepted DEM on both planner
-    // and panel sides.
-    if (!(msg->info.resolution > 0.0) || msg->data.empty()) {
-        log_manager_->warnf("Invalid non-empty terrain GridMap");
-        return;
-    }
-    if (sdf_voxel_size_auto_ && msg->info.resolution > 1e-6) {
-        sdf_voxel_size_ = msg->info.resolution;
-    } else if (sdf_voxel_size_ <= 0.0 && msg->info.resolution > 1e-6) {
-        sdf_voxel_size_ = msg->info.resolution;
-        sdf_voxel_size_auto_ = true;    // keep tracking the DEM cell on re-crop
-        log_manager_->infof("[SDF] xy voxel auto-set to DEM cell: %.3f units",
-                            sdf_voxel_size_);
-    }
-
-    // Find elevation layer
-    int elev_idx = -1;
-    for (size_t i = 0; i < msg->layers.size(); ++i) {
-        if (msg->layers[i] == "elevation") {
-            elev_idx = static_cast<int>(i);
-            break;
-        }
-    }
-    if (elev_idx < 0) {
-        log_manager_->warnf("Elevation layer not found in terrain GridMap");
-        return;
-    }
-
-    if (static_cast<size_t>(elev_idx) >= msg->data.size()) {
-        log_manager_->warnf("Terrain GridMap elevation payload is missing");
-        return;
-    }
-    const auto& elev_data = msg->data[elev_idx];
-    if (elev_data.layout.dim.size() < 2) {
-        log_manager_->warnf("Invalid terrain GridMap data layout");
-        return;
-    }
-    const size_t cols = elev_data.layout.dim[0].size;
-    const size_t rows = elev_data.layout.dim[1].size;
-    if (cols == 0 || rows == 0 ||
-        cols > std::numeric_limits<size_t>::max() / rows ||
-        elev_data.data.size() < cols * rows) {
-        log_manager_->warnf("Invalid terrain GridMap dimensions/data size");
-        return;
-    }
-
-    // Geometry change (new world / corridor re-crop) invalidates everything
-    // derived from the OLD map: the boxes-only SDF grid and the cached
-    // terrain bbox were one-shot latches sized to the first map ever seen,
-    // so a corridor loaded after a nationwide map (or vice versa) kept
-    // planning against stale bounds. Reset the latches; the blocks below
-    // rebuild them from this message.
-    {
-        const double new_origin_x = msg->info.pose.position.x - msg->info.length_x / 2.0;
-        const double new_origin_y = msg->info.pose.position.y - msg->info.length_y / 2.0;
-        const bool geometry_changed = terrain_data_.valid &&
-            (std::abs(terrain_data_.resolution - msg->info.resolution) > 1e-9 ||
-             std::abs(terrain_data_.length_x - msg->info.length_x) > 1e-6 ||
-             std::abs(terrain_data_.length_y - msg->info.length_y) > 1e-6 ||
-             std::abs(terrain_data_.origin_x - new_origin_x) > 1e-6 ||
-             std::abs(terrain_data_.origin_y - new_origin_y) > 1e-6);
-        if (geometry_changed) {
-            log_manager_->warnf(
-                "[TERRAIN] map geometry changed (res %.4f->%.4f, origin (%.1f,%.1f)->(%.1f,%.1f)) "
-                "— rebuilding SDF grid and terrain bbox",
-                terrain_data_.resolution, msg->info.resolution,
-                terrain_data_.origin_x, terrain_data_.origin_y,
-                new_origin_x, new_origin_y);
-            sdf_built_ = false;
-            terrain_bbox_computed_ = false;
-            if (sdf_voxel_size_auto_) {
-                sdf_voxel_size_ = msg->info.resolution;   // re-track DEM cell
-            }
-            // Clear ALL patches: every patch was placed on the OLD grid/DEM —
-            // they baked groundedCenter() on the old ground, so they cannot
-            // survive a geometry change.
-            if (sdf_manager_.numActiveObstacles() > 0 ||
-                !dyn_patch_ids_.empty()) {
-                clearDynamicObstacles();
-            }
-        }
-    }
-
-    terrain_data_.cols = elev_data.layout.dim[0].size;
-    terrain_data_.rows = elev_data.layout.dim[1].size;
-    terrain_data_.resolution = msg->info.resolution;
-    terrain_data_.length_x = msg->info.length_x;
-    terrain_data_.length_y = msg->info.length_y;
-    terrain_data_.origin_x = msg->info.pose.position.x - msg->info.length_x / 2.0;
-    terrain_data_.origin_y = msg->info.pose.position.y - msg->info.length_y / 2.0;
-    terrain_data_.elevation = elev_data.data;
-    terrain_data_.valid = true;
-    // Invalidate the ELEV-MEMO: a same-geometry re-crop reuses the buffer, so
-    // the memo (keyed on generation) must see a new value or it serves stale
-    // samples from the previous crop.
-    ++terrain_data_.generation;
-
-    // The optimizer is commonly initialized before the first terrain message.
-    // Refresh both its callback and, crucially, its DEM-cell sampling pitch on
-    // every accepted map (including same-geometry data refreshes and
-    // full-map/corridor resolution changes).
+void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg)
+{
+    const auto update = environment_->ingestTerrain(msg);
+    if (!update.accepted()) return;
+    // The primary optimizer borrows the owner, but its DEM pitch is a value.
     if (poly_traj_opt_) {
         poly_traj_opt_->setTerrainHeightmap(
             [this](double x, double y) -> float {
-                return terrain_data_.valid
-                         ? terrain_data_.getElevation(x, y)
-                         : -std::numeric_limits<float>::infinity();
-            },
-            terrain_data_.resolution);
+                return environment_->terrain().valid ? environment_->terrain().getElevation(x, y)
+                    : -std::numeric_limits<float>::infinity();
+            }, environment_->terrain().valid ? environment_->terrain().resolution : 0.0);
     }
-
-    // Return freed arenas to the OS after a map swap. Alternating small/large
-    // corridor crops re-allocate every big grid (elevation, FM2 fields) at a
-    // different size each epoch; glibc keeps the fragmented arenas and
-    // manager RSS ratcheted ~+100 MB per revisit (measured; same-size
-    // re-crops stay flat). One trim per terrain message is microseconds.
-    malloc_trim(0);
-
-    log_manager_->infof("Terrain data loaded: %dx%d, resolution=%.3f, origin=(%.2f,%.2f), center=(%.2f,%.2f)",
-        terrain_data_.cols, terrain_data_.rows, terrain_data_.resolution,
-        terrain_data_.origin_x, terrain_data_.origin_y,
-        msg->info.pose.position.x, msg->info.pose.position.y);
-
-    // ALIGNMENT SELF-CHECK: terrainToWorld uses the cell-CENTRE convention,
-    // which provably matches the grid_map_rviz_plugin mesh (wx = L-(row+.5)res).
-    // Sampling the peak cell's world position back through getElevation must
-    // therefore return the peak value exactly (bilinear at an exact node).
-    // Before the half-cell fix this read the average of the 4 shifted
-    // neighbours instead (delta up to the full cell-to-cell relief, ~114 m
-    // horizontal displacement) — a nonzero delta here means the sampled
-    // surface is offset from the rendered terrain.
-    {
-        int pc = -1, pr = -1;
-        float peak = -std::numeric_limits<float>::infinity();
-        for (int c = 0; c < terrain_data_.cols; ++c) {
-            for (int r = 0; r < terrain_data_.rows; ++r) {
-                const float e = terrain_data_.elevation[c * terrain_data_.rows + r];
-                if (std::isfinite(e) && e > peak) { peak = e; pc = c; pr = r; }
-            }
-        }
-        if (pc >= 0) {
-            const Eigen::Vector3d w = terrain_data_.terrainToWorld(pc, pr, peak);
-            const float back = terrain_data_.getElevation(w.x(), w.y());
-            log_manager_->infof(
-                "[TERRAIN-ALIGN] peak cell (c=%d,r=%d) h=%.4f -> world (%.2f,%.2f) "
-                "-> getElevation=%.4f delta=%.4f %s",
-                pc, pr, peak, w.x(), w.y(), back, back - peak,
-                std::abs(back - peak) < 1e-3 ? "(ALIGNED)" : "(MISALIGNED!)");
-        }
+    if (update.obstacles_cleared) publishDynamicObstacles();
+    if (update.kind == TerrainUpdateKind::REPLACED &&
+        environment_->ensureTerrainDistanceField()) {
+        // Installation and revalidation precede the risk-mask refresh, as in
+        // the original ingestion path. The environment never reads execution.
+        flushPendingObstacles();
     }
-
-    // Eagerly build the (boxes-only, empty-static) SDF grid as soon as
-    // terrain arrives, so the dynamic-obstacle layer can accept clicks before
-    // any mission runs — patches need the grid to clip against. This replaced
-    // the old eager cache LOAD: the build is now instant (the static layer
-    // allocates nothing; terrain lives in the 2.5D heightmap).
-    if (!sdf_built_) {
-        Eigen::Vector3d lo, hi;
-        if (computeTerrainBBox(&lo, &hi)) {
-            if (buildSDFForBounds(lo, hi)) {
-                sdf_built_ = true;
-                flushPendingObstacles();
-            }
-        }
+    environment_->refreshRisk();
+    publishEffectiveRiskField();
+    if (execution_->current().traj_id > 0 && execution_->current().duration > 0.0 &&
+        std::isfinite(execution_->current().duration)) {
+        publishTrajRisk(execution_->current().traj);
+        publishRiskProfile(execution_->current().traj);
     }
-
-    // DEM coordinates and elevations are now authoritative. Re-ground the
-    // AGL zone sources onto the fresh heightmap, then rebuild the radial
-    // viewshed and replace the ideal circular RViz fallback.
-    refreshEffectiveRiskZones();
-    rebuildTerrainRiskMasks();
-
-    // The displayed risk channels are evaluated against the terrain mask, so
-    // a DEM replacement invalidates them even when the trajectory itself did
-    // not change. Re-evaluate those channels immediately for the current
-    // trajectory.
-    if (traj_.local_traj.traj_id > 0 &&
-        traj_.local_traj.duration > 0.0 &&
-        std::isfinite(traj_.local_traj.duration)) {
-        publishTrajRisk(traj_.local_traj.traj);
-        publishRiskProfile(traj_.local_traj.traj);
-    }
+    if (update.kind == TerrainUpdateKind::CLEARED)
+        log_manager_->infof(update.had_terrain
+            ? "[TERRAIN] cleared previous DEM (world=none)"
+            : "[TERRAIN] empty world confirmed (no DEM loaded)");
 }
 
 const PathManager::ObstacleMeshInfo& PathManager::meshFor(const std::string& model) const
@@ -2350,108 +2069,23 @@ const PathManager::ObstacleMeshInfo& PathManager::meshFor(const std::string& mod
     return it->second;
 }
 
-Eigen::Vector3d PathManager::groundedCenter(const Eigen::Vector3d& center,
-                                            double half_height) const
-{
-    if (!obstacle_ground_snap_) return center;
-    double base = 0.0;  // sea level
-    if (terrain_data_.valid) {
-        const float h = terrain_data_.getElevation(center.x(), center.y());
-        if (std::isfinite(h) && h > 0.0f) base = static_cast<double>(h);
-    }
-    Eigen::Vector3d out = center;
-    out.z() = base + half_height;
-    return out;
-}
 
-int PathManager::addDynamicSphere(const Eigen::Vector3d& center, double radius,
-                                  const std::string& model)
-{
-    if (!sdf_manager_.hasData()) {
-        // Defer: the SDF (ESDF) is built lazily on the first plan. Without a
-        // cache it is not ready yet, so queue and add once it exists.
-        pending_obstacles_.push_back({false, center,
-            Eigen::Vector3d(radius, radius, radius), radius, model});
-        ++execution_revision_;  // Deferred input also stales an unadopted result.
-        log_manager_->infof("addDynamicSphere: SDF not ready, deferred "
-                            "(center=%.2f,%.2f,%.2f r=%.2f)",
-                            center.x(), center.y(), center.z(), radius);
-        return -2;  // deferred (not an error)
-    }
-    const Eigen::Vector3d gcenter = groundedCenter(center, radius);
-    path_planner::sdf::PrimitiveSpec spec;
-    spec.kind = path_planner::sdf::PrimitiveKind::kSphere;
-    spec.center = gcenter;
-    const double d = 2.0 * radius;
-    spec.size = Eigen::Vector3d(d, d, d);
 
-    int id = sdf_manager_.addObstacle(spec);
-    if (id < 0) {
-        log_manager_->warnf("addDynamicSphere: addObstacle failed "
-                            "(center=%.2f,%.2f,%.2f r=%.2f)",
-                            center.x(), center.y(), center.z(), radius);
-        return -1;
-    }
-    dyn_patch_ids_.push_back(id);
-    dyn_patch_centers_.push_back(gcenter);
-    dyn_patch_sizes_.push_back(Eigen::Vector3d(d, d, d));  // sphere stored as (2r,2r,2r)
-    dyn_patch_is_box_.push_back(0);
-    dyn_patch_models_.push_back(model);
-    dyn_patch_yaws_.push_back(
-        std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_));
-    log_manager_->infof("Dynamic sphere added: id=%d center=(%.2f,%.2f,%.2f) r=%.2f "
-                        "(request z=%.2f), total=%zu",
-                        id, gcenter.x(), gcenter.y(), gcenter.z(), radius,
-                        center.z(), sdf_manager_.numActiveObstacles());
-    publishDynamicObstacles();
+int PathManager::addDynamicSphere(const Eigen::Vector3d &center, double radius,
+                                  const std::string &model)
+{
+    const int id = environment_->addSphere(center, radius, model);
+    if (id == -2) execution_->invalidatePending();  // queued inputs also stale computations
+    if (id >= 0) publishDynamicObstacles();
     return id;
 }
 
-int PathManager::addDynamicBox(const Eigen::Vector3d& center, const Eigen::Vector3d& size,
-                               const std::string& model)
+int PathManager::addDynamicBox(const Eigen::Vector3d &center, const Eigen::Vector3d &size,
+                               const std::string &model)
 {
-    if (!sdf_manager_.hasData()) {
-        // Defer until the SDF is built (see addDynamicSphere).
-        pending_obstacles_.push_back({true, center, size, 0.0, model});
-        ++execution_revision_;
-        log_manager_->infof("addDynamicBox: SDF not ready, deferred "
-                            "(center=%.2f,%.2f,%.2f)",
-                            center.x(), center.y(), center.z());
-        return -2;  // deferred (not an error)
-    }
-    // One heading per spawn, shared by BOTH the collision primitive and the
-    // RViz model marker. It used to be visual-only (collision stayed an
-    // axis-aligned box), so a rotated hull stuck out of its own collision
-    // volume and trajectories legally clipped the bow/stern.
-    const double yaw =
-        std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_);
-    const Eigen::Vector3d gcenter = groundedCenter(center, 0.5 * size.z());
-    path_planner::sdf::PrimitiveSpec spec;
-    spec.kind = path_planner::sdf::PrimitiveKind::kCube;
-    spec.center = gcenter;
-    spec.size = size;  // full extents (sx, sy, sz)
-    spec.yaw = yaw;
-
-    int id = sdf_manager_.addObstacle(spec);
-    if (id < 0) {
-        log_manager_->warnf("addDynamicBox: addObstacle failed "
-                            "(center=%.2f,%.2f,%.2f size=%.2f,%.2f,%.2f)",
-                            gcenter.x(), gcenter.y(), gcenter.z(),
-                            size.x(), size.y(), size.z());
-        return -1;
-    }
-    dyn_patch_ids_.push_back(id);
-    dyn_patch_centers_.push_back(gcenter);
-    dyn_patch_sizes_.push_back(size);
-    dyn_patch_is_box_.push_back(1);
-    dyn_patch_models_.push_back(model);
-    dyn_patch_yaws_.push_back(yaw);
-    log_manager_->infof("Dynamic box added: id=%d center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f) "
-                        "yaw=%.2f (request z=%.2f), total=%zu",
-                        id, gcenter.x(), gcenter.y(), gcenter.z(),
-                        size.x(), size.y(), size.z(), yaw,
-                        center.z(), sdf_manager_.numActiveObstacles());
-    publishDynamicObstacles();
+    const int id = environment_->addBox(center, size, model);
+    if (id == -2) execution_->invalidatePending();  // queued inputs also stale computations
+    if (id >= 0) publishDynamicObstacles();
     return id;
 }
 
@@ -2462,7 +2096,7 @@ bool PathManager::revalidateStoredTrajectory(double t_from,
                                              Eigen::Vector3d *hit,
                                              EnvChangeReason reason)
 {
-    auto &lt = traj_.local_traj;
+    const auto &lt = execution_->current();
     if (!(lt.duration > 0.0) || lt.traj.getPieceNum() == 0) return true;
     const double t0 = std::clamp(t_from, 0.0, lt.duration);
     if (lt.duration - t0 <= 1e-9) return true;
@@ -2497,33 +2131,17 @@ bool PathManager::revalidateStoredTrajectory(double t_from,
         "[ENV-CHANGE] the remaining trajectory (t=%.2f..%.2f s) is blocked at "
         "(%.2f, %.2f, %.2f) under the current obstacle set — withdrawing it",
         t0, lt.duration, bad.x(), bad.y(), bad.z());
-    // The hook runs FIRST, while traj_id still names the trajectory being
-    // withdrawn: it is what puts the ABORT on the wire, and clearing the slot
-    // first would leave the FSM announcing an id it can no longer read.
-    // Detection lives here; what to say about it belongs to the node that
-    // owns the publishers.
-    if (env_change_hook_)
-        env_change_hook_(reason, bad, t0);
-    // The same two fields SegmentChainPlanner::invalidateStoredTrajectory
-    // zeroes, and the same fields ReplanFSM gates execution on.
-    ++execution_revision_;
-    lt.duration = 0.0;
-    lt.start_time = 0.0;
+    // The execution owner captures the withdrawn identity and notifies
+    // before clearing the slot. Detection lives here; the ROS adapter owns
+    // publication and state-machine recovery.
+    execution_->revoke(reason, bad, t0, environmentRevision());
     clearTrajectoryViz();
     return false;
 }
 
 void PathManager::clearDynamicObstacles()
 {
-    sdf_manager_.clearObstacles();
-    dyn_patch_ids_.clear();
-    dyn_patch_centers_.clear();
-    dyn_patch_sizes_.clear();
-    dyn_patch_is_box_.clear();
-    dyn_patch_models_.clear();
-    dyn_patch_yaws_.clear();
-    pending_obstacles_.clear();
-    log_manager_->infof("Dynamic obstacles cleared");
+    environment_->clearObstacles();
     publishDynamicObstacles();
 }
 
@@ -2535,43 +2153,20 @@ void PathManager::clearDynamicObstacles()
 // installed HERE, so this is where they first become able to block anything.
 uint64_t PathManager::riskZoneFingerprint() const
 {
-    // Order-sensitive on purpose: a reordered set is a different set to the
-    // searcher, which indexes policy by position. Bit patterns rather than
-    // rounded values, so a change too small to print is still a change.
-    uint64_t h = 1469598103934665603ull;   // FNV-1a
-    const auto mix = [&h](uint64_t v) {
-        h ^= v;
-        h *= 1099511628211ull;
-    };
-    const auto mixd = [&mix](double d) {
-        uint64_t bits;
-        static_assert(sizeof(bits) == sizeof(d), "double must be 64-bit");
-        std::memcpy(&bits, &d, sizeof(bits));
-        mix(bits);
-    };
-    mix(risk_zones_.size());
-    for (const auto &z : risk_zones_) {
-        mixd(z.center.x()); mixd(z.center.y()); mixd(z.center.z());
-        mixd(z.reach); mixd(z.peak);
-    }
-    return h;
+    return environment_->riskZoneFingerprint();
 }
 
 void PathManager::invalidateStoredTrajectoryForEnvChange()
 {
-    if (env_change_hook_ && traj_.local_traj.duration > 0.0)
-        env_change_hook_(EnvChangeReason::POLICY_UNEVALUATED,
-                         Eigen::Vector3d::Zero(), 0.0);
-    ++execution_revision_;
-    traj_.local_traj.duration = 0.0;
-    traj_.local_traj.start_time = 0.0;
+    execution_->revoke(EnvChangeReason::POLICY_UNEVALUATED,
+                       Eigen::Vector3d::Zero(), 0.0, environmentRevision());
     clearTrajectoryViz();
 }
 
 void PathManager::revalidateAfterEnvChange(const char *what,
                                            EnvChangeReason reason)
 {
-    auto &lt = traj_.local_traj;
+    const auto &lt = execution_->current();
     if (!(lt.duration > 0.0)) return;
     const double t_cur = (lt.start_time > 0.0)
                              ? rclcpp::Clock(RCL_ROS_TIME).now().seconds() -
@@ -2591,15 +2186,14 @@ void PathManager::revalidateAfterEnvChange(const char *what,
 
 void PathManager::flushPendingObstacles()
 {
-    if (pending_obstacles_.empty() || !sdf_manager_.hasData()) return;
-    std::vector<PendingObstacle> pend;
-    pend.swap(pending_obstacles_);  // addDynamic* see an empty queue -> no re-defer
-    for (const auto& p : pend) {
+    const auto pending = environment_->takePendingObstacles();
+    if (pending.empty()) return;
+    for (const auto &p : pending) {
         if (p.is_box) addDynamicBox(p.center, p.size, p.model);
-        else          addDynamicSphere(p.center, p.radius, p.model);
+        else addDynamicSphere(p.center, p.radius, p.model);
     }
     log_manager_->infof("Flushed %zu deferred dynamic obstacle(s) after SDF ready",
-                        pend.size());
+                        pending.size());
     revalidateAfterEnvChange("a deferred obstacle batch",
                              EnvChangeReason::OBSTACLE_BLOCKED);
 }
@@ -2617,32 +2211,32 @@ bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
     const auto &nb = last_search_policy_.endpoint_exempt;
     const auto &so = last_search_policy_.soft_override;
     const bool ok =
-        (risk_zones_.empty() || (last_search_policy_measured_ &&
+        (environment_->riskZones().empty() || (last_search_policy_measured_ &&
           last_search_policy_.identity.leg == leg &&
           last_search_policy_.identity.search_serial == search_serial)) &&
-        zone_policy_epoch_generation_ == zone_policy_generation_;
+        zone_policy_epoch_generation_ == environment_->zoneGeneration();
     if (!ok) {
         if (log_manager_)
             log_manager_->warnf(
                 "[LEG-POLICY] leg %zu NOT capturable (pass %d, %zu zones, "
                 "no-barrier %zu, soft-override %zu, search generation %lu vs "
                 "data %lu) — no snapshot rather than a wrong one",
-                leg, pass, risk_zones_.size(), nb.size(), so.size(),
+                leg, pass, environment_->riskZones().size(), nb.size(), so.size(),
                 static_cast<unsigned long>(zone_policy_epoch_generation_),
-                static_cast<unsigned long>(zone_policy_generation_));
+                static_cast<unsigned long>(environment_->zoneGeneration()));
         return false;
     }
     out->leg = leg;
     out->search_serial = search_serial;
-    out->policy.generation = zone_policy_generation_;
+    out->policy.generation = environment_->zoneGeneration();
     out->policy.epoch = zone_policy_epoch_;
     // Valid PER LEG: this leg's search really did produce this policy.
     out->policy.valid = true;
     out->policy.zones.clear();
-    out->policy.zones.reserve(risk_zones_.size());
-    for (size_t i = 0; i < risk_zones_.size(); ++i) {
+    out->policy.zones.reserve(environment_->riskZones().size());
+    for (size_t i = 0; i < environment_->riskZones().size(); ++i) {
         ZonePolicySnapshot::Entry e;
-        e.zone = risk_zones_[i];
+        e.zone = environment_->riskZones()[i];
         e.disposition = last_search_policy_measured_ && i < last_search_policy_.dispositions.size()
             ? last_search_policy_.dispositions[i] : ZoneDisposition::HARD_AVOID;
         out->policy.zones.push_back(e);
@@ -2653,30 +2247,30 @@ bool PathManager::captureLegPolicySnapshot(size_t leg, uint64_t search_serial,
 PathManager::ZonePolicySnapshot PathManager::zonePolicySnapshot() const
 {
     ZonePolicySnapshot snap;
-    snap.generation = zone_policy_generation_;
+    snap.generation = environment_->zoneGeneration();
     snap.epoch = zone_policy_epoch_;
     const int pass = zoneAvoidPassNow();
     // A plan-wide answer requires one measured search on current data.
     // Multi-leg epochs still need their separately captured leg policies;
     // an unknown external policy must never borrow the canonical searcher's
     // last FM2 buffers. Empty zones retain the existing trivial verdict.
-    snap.valid = (risk_zones_.empty() ||
+    snap.valid = (environment_->riskZones().empty() ||
                   (last_search_policy_measured_ && zone_policy_epoch_searches_ == 1)) &&
-                 zone_policy_epoch_generation_ == zone_policy_generation_;
+                 zone_policy_epoch_generation_ == environment_->zoneGeneration();
     if (!snap.valid && log_manager_) {
         log_manager_->warnf(
             "[ZONE-POLICY] snapshot INVALID (pass %d, %zu zones, %lu leg "
             "searches this epoch, search generation %lu vs data %lu) — "
             "contract 2 requires ONE measured single-goal search on current data",
-            pass, risk_zones_.size(),
+            pass, environment_->riskZones().size(),
             static_cast<unsigned long>(zone_policy_epoch_searches_),
             static_cast<unsigned long>(zone_policy_epoch_generation_),
-            static_cast<unsigned long>(zone_policy_generation_));
+            static_cast<unsigned long>(environment_->zoneGeneration()));
     }
-    snap.zones.reserve(risk_zones_.size());
-    for (size_t i = 0; i < risk_zones_.size(); ++i) {
+    snap.zones.reserve(environment_->riskZones().size());
+    for (size_t i = 0; i < environment_->riskZones().size(); ++i) {
         ZonePolicySnapshot::Entry e;
-        e.zone = risk_zones_[i];
+        e.zone = environment_->riskZones()[i];
         e.disposition = last_search_policy_measured_ && i < last_search_policy_.dispositions.size()
             ? last_search_policy_.dispositions[i] : ZoneDisposition::HARD_AVOID;
         snap.zones.push_back(e);
@@ -2690,10 +2284,10 @@ PathManager::ZonePolicySnapshot PathManager::zonePolicySnapshot() const
 bool PathManager::zoneSnapshotCurrent(const ZonePolicySnapshot &snap,
                                       size_t idx) const
 {
-    if (snap.generation != zone_policy_generation_) return false;
+    if (snap.generation != environment_->zoneGeneration()) return false;
     if (snap.epoch != zone_policy_epoch_) return false;
-    if (idx >= snap.zones.size() || idx >= risk_zones_.size()) return false;
-    const RiskZone &live = risk_zones_[idx];
+    if (idx >= snap.zones.size() || idx >= environment_->riskZones().size()) return false;
+    const RiskZone &live = environment_->riskZones()[idx];
     const RiskZone &snapz = snap.zones[idx].zone;
     return (live.center - snapz.center).norm() <= 1e-9 &&
            std::abs(live.reach - snapz.reach) <= 1e-9 &&
@@ -2740,118 +2334,59 @@ void PathManager::bindRiskZonesToOptimizer()
     // Extracted from planFrontEnd for the same reason as the searcher bind:
     // the optimizer only learned about a zone update at the next plan, so
     // nothing could read what the BACK END prices without running a solve.
-    if (!poly_traj_opt_) return;
+    if (poly_traj_opt_) bindRiskZonesToOptimizer(*poly_traj_opt_, opt_obstacle_clearance_);
+}
+
+void PathManager::bindRiskZonesToOptimizer(ego_planner::PolyTrajOptimizer &optimizer,
+                                          double clearance)
+{
     ego_planner::OptimizerRiskEnvironment environment;
-    environment.zones.reserve(risk_zones_.size());
-    for (const auto &tz : risk_zones_) {
+    environment.zones.reserve(environment_->riskZones().size());
+    for (const auto &tz : environment_->riskZones()) {
         ego_planner::RiskZone oz;
         oz.center = tz.center;
         oz.reach = tz.reach;
         oz.peak = tz.peak;
-        oz.vertical_reach = tz.reach * risk_vertical_ratio_;
+        oz.vertical_reach = tz.reach * environment_->verticalRatio();
         environment.zones.push_back(oz);
     }
     environment.visibility =
-        [this](size_t zi, const Eigen::Vector3d &p,
+        [this, clearance](size_t zi, const Eigen::Vector3d &p,
                Eigen::Vector3d *grad) -> double {
-            return riskVisibility(zi, p, grad);
+            return riskVisibility(zi, p, grad, clearance);
         };
     environment.shadow_ceiling =
         [this](size_t zi, const Eigen::Vector3d &p) -> double {
             return riskShadowCeiling(zi, p);
         };
-    poly_traj_opt_->setRiskEnvironment(std::move(environment));
+    optimizer.setRiskEnvironment(std::move(environment));
 }
 
 void PathManager::bindRiskZonesToSearcher()
 {
-    // Pushes the effective zone set into the front-end searcher. Extracted
-    // from planFrontEnd so the zone SETTER can bind too: before this, the
-    // searcher only learned about a runtime zone update at the next plan, so
-    // the front-end field read empty in between and nothing could compare the
-    // layers outside a full solve.
-    //
-    // astar_risks_ is a member because the searcher keeps a raw pointer into
-    // it. Calling this from the setter is safe under the same single-threaded
-    // executor assumption that already governs risk_zones_ itself, which the
-    // setter has always mutated.
-    astar_risks_.clear();
-    astar_risks_.reserve(risk_zones_.size());
-    for (const auto &tz : risk_zones_) {
-        astar_risks_.push_back(
-            {tz.center, tz.reach, tz.peak, tz.reach * risk_vertical_ratio_});
-    }
-    searcher_.setRiskZones(astar_risks_.empty() ? nullptr : &astar_risks_);
+    environment_->refreshSearchRiskZones();
+    const auto &zones = environment_->searchRiskZones();
+    searcher_.setRiskZones(zones.empty() ? nullptr : &zones);
     searcher_.setRiskVisibility(
         [this](size_t zi, const Eigen::Vector3d &p) -> double {
             return riskVisibilityValue(zi, p);
         });
 }
 
-bool PathManager::setRiskZonesRuntime(const std::vector<RiskZone>& zones)
+bool PathManager::setRiskZonesRuntime(const std::vector<RiskZone> &zones)
 {
-    // [PA-7] ATOMIC REJECTION: refuse the SET, not the offending member.
-    // Keeping the survivors would delete a declared hazard from the field and
-    // the planner would route through it with nothing on record. Refusing
-    // leaves the previous known-good set in force and says why.
-    size_t bad = 0;
-    for (size_t i = 0; i < zones.size(); ++i) {
-        const auto &z = zones[i];
-        const bool geom_ok = std::isfinite(z.center.x()) &&
-                             std::isfinite(z.center.y()) &&
-                             std::isfinite(z.center.z()) &&
-                             std::isfinite(z.reach) && z.reach > 0.0;
-        if (!geom_ok || !mmp::risk::isValidPeak(z.peak)) {
-            ++bad;
-            if (log_manager_) {
-                log_manager_->errorf(
-                    "setRiskZonesRuntime: zone #%zu REJECTED "
-                    "center=(%.3f,%.3f,%.3f) reach=%.3f peak=%.3f — peak must "
-                    "be finite and in (0, 1], reach finite and > 0",
-                    i, z.center.x(), z.center.y(), z.center.z(), z.reach,
-                    z.peak);
-            }
-        }
-    }
-    if (bad > 0) {
-        if (log_manager_) {
-            log_manager_->errorf(
-                "setRiskZonesRuntime: REJECTING the whole update — %zu of %zu "
-                "zones invalid. Active set unchanged at %zu.",
-                bad, zones.size(), risk_zones_.size());
-        }
-        return false;
-    }
-
-    // Atomically replace the active zone list. The next planGlobalTraj
-    // call will re-bind A* and the optimizer with the new set via the
-    // existing setup paths (see planGlobalTraj where searcher_.setRiskZones
-    // and poly_traj_opt_->setRiskZones are called).
-    risk_zones_raw_ = zones;
-    refreshEffectiveRiskZones();
-    rebuildTerrainRiskMasks();
+    if (!environment_->setRiskZones(zones)) return false;
+    publishEffectiveRiskField();
     bindRiskZonesToSearcher();
     bindRiskZonesToOptimizer();
     // Avoid leaving the altitude panel and colored trajectory latched to the
     // previous zone set while waiting for another plan request. Empty zones
     // intentionally flow through these publishers as clear/delete messages.
-    if (traj_.local_traj.traj_id > 0 &&
-        traj_.local_traj.duration > 0.0 &&
-        std::isfinite(traj_.local_traj.duration)) {
-        publishTrajRisk(traj_.local_traj.traj);
-        publishRiskProfile(traj_.local_traj.traj);
-    }
-    if (log_manager_) {
-        log_manager_->infof(
-            "[risk_zones] runtime update: %zu zones now active",
-            risk_zones_.size());
-        for (size_t i = 0; i < risk_zones_.size(); ++i) {
-            const auto& tz = risk_zones_[i];
-            log_manager_->infof(
-                "  zone[%zu] center=(%.1f,%.1f,%.1f) reach=%.1f peak=%.2f",
-                i, tz.center.x(), tz.center.y(), tz.center.z(),
-                tz.reach, tz.peak);
-        }
+    if (execution_->current().traj_id > 0 &&
+        execution_->current().duration > 0.0 &&
+        std::isfinite(execution_->current().duration)) {
+        publishTrajRisk(execution_->current().traj);
+        publishRiskProfile(execution_->current().traj);
     }
     return true;
 }
@@ -2860,16 +2395,15 @@ void PathManager::publishDynamicObstacles()
 {
     if (!visualization_) return;
     std::vector<visualization::Obstacle> obstacles;
-    obstacles.reserve(dyn_patch_centers_.size());
-    for (size_t i = 0; i < dyn_patch_centers_.size(); ++i) {
-        const auto &mesh = meshFor(dyn_patch_models_[i]);
+    obstacles.reserve(environment_->obstacles().size());
+    for (const auto &patch : environment_->obstacles()) {
+        const auto &mesh = meshFor(patch.model);
         visualization::Obstacle obstacle;
-        obstacle.id = dyn_patch_ids_[i];
-        obstacle.center = dyn_patch_centers_[i];
-        obstacle.size = dyn_patch_sizes_[i];
-        obstacle.is_box = dyn_patch_is_box_[i];
-        // Yaw was consumed/committed by obstacle mutation, never rendering.
-        obstacle.yaw = i < dyn_patch_yaws_.size() ? dyn_patch_yaws_[i] : 0.0;
+        obstacle.id = patch.id;
+        obstacle.center = patch.center;
+        obstacle.size = patch.size;
+        obstacle.is_box = patch.is_box;
+        obstacle.yaw = patch.yaw;
         obstacle.mesh_resource = mesh.resource;
         obstacle.mesh_native_size = mesh.native_size;
         obstacle.mesh_scale = mesh.viz_scale;
@@ -2881,120 +2415,11 @@ void PathManager::publishDynamicObstacles()
 
 // Voxelize terrain + geometry obstacles into an occupancy grid and build ESDF.
 // Risk zones are NOT included: they are handled as soft cost elsewhere.
-bool PathManager::buildSDFForBounds(const Eigen::Vector3d &lo,
-                                    const Eigen::Vector3d &hi)
+
+
+bool PathManager::computeTerrainBBox(Eigen::Vector3d *lo, Eigen::Vector3d *hi)
 {
-    const double res = sdf_voxel_size_;
-    const double res_z = sdf_voxel_z_;
-    Eigen::Vector3d ext = hi - lo;
-    if ((ext.array() <= 0.0).any()) {
-        log_manager_->warnf("buildSDFForBounds: invalid bounds");
-        return false;
-    }
-    int nx = std::max(8, (int)std::ceil(ext.x() / res));
-    int ny = std::max(8, (int)std::ceil(ext.y() / res));
-    int nz = std::max(8, (int)std::ceil(ext.z() / res_z));
-
-    // NOTE: no occupancy grid is materialized. Terrain and static geometry
-    // are never voxelised here (see below), so the grid was PROVABLY all-zero
-    // — yet vector-init + the emptiness scan committed nx*ny*nz bytes
-    // (~5.8 GB on a 30 m corridor) just for SDFManager to notice it was
-    // empty and discard it. buildEmpty() takes that exact path directly.
-
-    // Terrain is NOT voxelised into the SDF any more. It is handled as a 2.5D
-    // heightmap (terrain_data_.getElevation, EXACT z) directly by the front end
-    // (checkOccupancy_esdf) and the optimizer (heightmap terrain term). Baking
-    // the DEM into 3D voxels quantised terrain z to sdf_voxel_z (~10 m) so it
-    // under-saw hills, AND double-counted terrain against the heightmap term
-    // (SDF-terrain + heightmap both firing -> line-search blowup on tall maps).
-    // So the static SDF now holds ONLY geometry obstacles (added as patches
-    // after the build): small, box-only, and terrain-precise everywhere.
-    if (!terrain_data_.valid) {
-        log_manager_->infof("SDF: terrain_data_ INVALID (heightmap terrain unavailable)");
-    }
-
-    // NOTE: ground and virtual ceiling are NOT voxelised here. Folding them
-    // into the SDF would drag the clearance band above/below the actual
-    // plane, so the trajectory would be pushed off a `-0.1` floor by up to
-    // `obstacle_clearance` metres. Instead they are enforced as hard
-    // half-space constraints inside the optimizer (sdfGradCostP), which
-    // applies a unit upward/downward gradient only when the query point
-    // crosses the plane — no clearance band, no lateral contamination.
-
-    const Eigen::Vector3d current_voxel = sdf_manager_.voxelSizes();
-    if (!sdf_manager_.isInitialized() ||
-        std::abs(current_voxel.x() - res) > 1e-12 ||
-        std::abs(current_voxel.y() - res) > 1e-12 ||
-        std::abs(current_voxel.z() - res_z) > 1e-12) {
-        if (!sdf_manager_.initialize(res, res_z)) {
-            log_manager_->warnf(
-                "buildSDFForBounds: SDF initialization failed");
-            return false;
-        }
-    }
-    bool ok = sdf_manager_.buildEmpty(nx, ny, nz, lo);
-    if (ok) {
-        log_manager_->infof("SDF built: shape=(%d,%d,%d) voxel=(%.2f,%.2f,%.2f) blocks=%zu",
-            nx, ny, nz, res, res, res_z, sdf_manager_.numAllocatedBlocks());
-    }
-    return ok;
-}
-
-bool PathManager::computeTerrainBBox(Eigen::Vector3d* lo, Eigen::Vector3d* hi)
-{
-    if (!terrain_data_.valid) return false;
-    if (terrain_bbox_computed_) {
-        *lo = terrain_bbox_lo_;
-        *hi = terrain_bbox_hi_;
-        return true;
-    }
-
-    // XY: walk the 4 corners of the terrain grid through terrainToWorld to
-    //     get the correct world-frame bounds after the X-mirror / rotation.
-    const int cols = terrain_data_.cols;
-    const int rows = terrain_data_.rows;
-    if (cols <= 0 || rows <= 0) return false;
-
-    std::vector<Eigen::Vector3d> corners = {
-        terrain_data_.terrainToWorld(0,        0,        0.0f),
-        terrain_data_.terrainToWorld(cols - 1, 0,        0.0f),
-        terrain_data_.terrainToWorld(0,        rows - 1, 0.0f),
-        terrain_data_.terrainToWorld(cols - 1, rows - 1, 0.0f),
-    };
-    double min_x = corners[0].x(), max_x = corners[0].x();
-    double min_y = corners[0].y(), max_y = corners[0].y();
-    for (const auto& c : corners) {
-        min_x = std::min(min_x, c.x()); max_x = std::max(max_x, c.x());
-        min_y = std::min(min_y, c.y()); max_y = std::max(max_y, c.y());
-    }
-    // terrainToWorld returns CELL CENTRES, so the corner walk gives a bbox
-    // inset by half a cell on every side vs the true published extent
-    // [origin, origin+length]. Expand by half a cell so the SDF/obstacle
-    // bounds cover the full map footprint — a box or risk zone in the outer
-    // half-cell ring was otherwise clipped out of the built grid.
-    const double half = 0.5 * terrain_data_.resolution;
-    min_x -= half; max_x += half;
-    min_y -= half; max_y += half;
-
-    // Z: scan all elevation samples for the actual peak, add flight headroom.
-    double min_z = std::numeric_limits<double>::infinity();
-    double max_z = -std::numeric_limits<double>::infinity();
-    for (float e : terrain_data_.elevation) {
-        if (!std::isfinite(e)) continue;
-        min_z = std::min(min_z, (double)e);
-        max_z = std::max(max_z, (double)e);
-    }
-    if (!std::isfinite(min_z) || !std::isfinite(max_z)) {
-        min_z = 0.0; max_z = 0.0;
-    }
-    const double z_headroom = 30.0;  // vertical margin above peak for traj room
-
-    terrain_bbox_lo_ = Eigen::Vector3d(min_x, min_y, std::min(0.0, min_z));
-    terrain_bbox_hi_ = Eigen::Vector3d(max_x, max_y, max_z + z_headroom);
-    terrain_bbox_computed_ = true;
-    *lo = terrain_bbox_lo_;
-    *hi = terrain_bbox_hi_;
-    return true;
+    return environment_->terrainBounds(lo, hi);
 }
 
 } // namespace path_manager

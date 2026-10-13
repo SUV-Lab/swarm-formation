@@ -40,7 +40,7 @@ public:
                       int segments, bool inherit_route = true);
 
   // Chained plan of one mission. Same contract as planGlobalTraj: on true,
-  // path_manager->traj_ holds a flyable local trajectory (the chained result,
+  // path_manager->executionTrajectory() holds a flyable local trajectory (the chained result,
   // or the baseline when the chain degraded). Under chain mode the GLOBAL
   // slot holds the baseline OPTIMIZED trajectory — not the MINCO seed — so
   // /planning/initial_trajectory becomes the baseline-vs-chain comparison
@@ -332,11 +332,10 @@ private:
   // [STAGE-2] Per-segment requirement overrides, from chain/seg<i>/params
   // (string array of "param=value"). Values parse against the DECLARED
   // parameter's type; unknown names skip loudly. Only optimization/* takes
-  // effect per segment — the segment run is preceded by a forced optimizer
-  // re-init, whose setParam re-reads the whole optimizer parameter surface;
-  // manager/FSM-side parameters load at startup and are warned about.
-  // Mission-wide values are restored on every exit path: the baseline, the
-  // next mission, and any fallback all plan with pristine parameters.
+  // effect per segment through an independent optimizer session and local
+  // altitude/clearance settings; manager/FSM-side parameters load at startup
+  // and are warned about. Profiles never change shared mission parameters,
+  // so the baseline, later missions and final evaluation keep their settings.
   struct SegmentOverrides {
     std::vector<rclcpp::Parameter> params;
     std::string label;  // "a=b, c=d" for the report; empty = none

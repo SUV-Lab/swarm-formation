@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -175,17 +176,43 @@ void exercise(const char *config_path, bool chained)
         Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
     checkRefusal(planner.plan(invalid_tail), mode + " invalid final velocity");
 
+    // These settings persist across calls. Each malformed field is paired
+    // with a valid positive OTHER override to catch partial application,
+    // not only refusal of a nonfinite value. The next real solve below must
+    // reproduce the original geometry and coefficients exactly.
+    for (double value : {std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::quiet_NaN()}) {
+      auto invalid_length = request;
+      invalid_length.length_per_piece = value;
+      invalid_length.obstacle_clearance = 5.0;
+      checkRefusal(planner.plan(invalid_length),
+                   mode + " nonfinite length with valid clearance");
+      auto invalid_clearance = request;
+      invalid_clearance.length_per_piece = 37.0;
+      invalid_clearance.obstacle_clearance = value;
+      checkRefusal(planner.plan(invalid_clearance),
+                   mode + " nonfinite clearance with valid length");
+    }
+
     // An already resolved or trajectory-derived start must not receive the
     // terrain offset again. Refusals above must also leave the API reusable.
     auto absolute = request;
     absolute.start_altitude = path_manager::StartAltitude::ABSOLUTE;
     absolute.head.pos_u = start;
+    absolute.length_per_piece = -3.0;
+    absolute.obstacle_clearance = -2.0;  // finite non-positive still keeps
     const auto again = planner.plan(absolute);
     check(again.hasTrajectory() && again.trajectory_id > retained.trajectory_id,
           mode + " successfully retries after refusals with a newer identity");
     if (again.hasTrajectory()) {
       check((again.trajectory.getJuncPos(0) - start).norm() < 1e-7,
             mode + " keeps an absolute head absolute");
+      check(coefficients(again.trajectory) == final_coefficients &&
+                coefficients(again.reference_trajectory) == reference_coefficients &&
+                again.status.outcome == retained.status.outcome &&
+                again.status.reason == retained.status.reason,
+            mode + " refused overrides preserve the next normal solve exactly");
     }
 
     check(planner.setTerrain(std::move(*path_manager::decodeTerrainGrid(flatTerrain(3.0f)).terrain)),

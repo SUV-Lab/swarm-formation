@@ -53,7 +53,8 @@ struct OptimizerRiskEnvironment {
 // remain alive while bound and stay stable during each solve,
 // including its parallel cost evaluation. Rebinding and solving are serial
 // operations. Rebind ordered risk geometry and its providers together when
-// the risk set changes. Empty fields explicitly remove previous bindings.
+// the risk set changes. When terrain resolution changes, rebind its queries
+// and terrain_cell_u together. Empty fields explicitly remove previous bindings.
 struct OptimizerEnvironment {
   const path_planner::sdf::IDistanceField *distance_field{nullptr};
   TerrainHeightQuery terrain_height;

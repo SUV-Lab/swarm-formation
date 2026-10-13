@@ -266,6 +266,13 @@ PlanningComputation RosPlanningBackend::compute(MissionPlanRequest request)
     if (!waypoint.allFinite())
       return failed(PlanResult::failed("mission waypoint is not finite"));
 
+  // Validate both persistent overrides before applying either one. A refused
+  // request must not poison later missions, including through its other,
+  // otherwise valid override. Finite non-positive values still mean keep.
+  if (!std::isfinite(request.length_per_piece) ||
+      !std::isfinite(request.obstacle_clearance))
+    return failed(PlanResult::failed("mission manager override is not finite"));
+
   if (request.length_per_piece > 0.0)
     manager_->setLengthPerPiece(request.length_per_piece);
   if (request.obstacle_clearance > 0.0)

@@ -3,8 +3,8 @@
 
 #include <Eigen/Eigen>
 #include <vector>
-#include <rclcpp/rclcpp.hpp>
-#include "poly_traj_utils.hpp"
+#include <cstdint>
+#include "path_optimizer/poly_traj_utils.hpp"
 
 using std::vector;
 

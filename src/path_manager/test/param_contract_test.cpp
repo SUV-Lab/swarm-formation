@@ -116,7 +116,7 @@ int main(int argc, char **argv) {
       pm->initOptimizer();
       console = cap.stop();
     }
-    expect(pm->traj_.local_traj.drone_id == 7,
+    expect(pm->executionTrajectory().drone_id == 7,
            "drone_id 가 궤적 컨테이너에 그대로 들어간다");
     expect(has(console, "[POLY_TRAJ_OPT][drone 7]"),
            "같은 drone_id 가 최적화기까지 전달된다 — 로그 접두사로 확인");

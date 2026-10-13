@@ -63,13 +63,26 @@ poly_traj::Trajectory sentinel(double x, double duration)
 
 void seedExecution(PathManager &manager)
 {
-  manager.traj_.setGlobalTraj(sentinel(10.0, 8.0), 123.0);
-  manager.traj_.setLocalTraj(sentinel(12.0, 4.0), 124.0, 7);
-  // setLocalTraj does not initialize this legacy field; initialize it here
-  // before copying/comparing the complete execution fixture.
-  manager.traj_.local_traj.end_time = 128.0;
-  manager.traj_.swarm_traj = {manager.traj_.local_traj};
-  manager.traj_.swarm_traj.front().drone_id = 8;
+  path_manager::PlanningComputation candidate;
+  candidate.status = path_manager::PlanResult::success();
+  candidate.recordProduct({sentinel(12.0, 4.0), sentinel(10.0, 8.0), 124.0, 123.0});
+  check(manager.applyPlanningComputation(
+            manager.sealPlanningComputation(std::move(candidate))).applied,
+        "execution fixture is adopted through the production boundary");
+  auto peer = manager.executionTrajectory();
+  peer.drone_id = 8;
+  peer.end_time = 128.0;
+  manager.replaceSwarmTrajectories({peer});
+}
+
+ego_planner::TrajContainer executionSnapshot(const PathManager &manager)
+{
+  ego_planner::TrajContainer result;
+  result.local_traj = manager.executionTrajectory();
+  result.global_traj = manager.referenceTrajectory();
+  result.swarm_traj = manager.swarmTrajectories();
+  result.next_traj_id_ = manager.sealPlanningComputation({}).previous_identity_counter;
+  return result;
 }
 
 bool sameLocal(const ego_planner::LocalTrajData &a,
@@ -181,7 +194,7 @@ void routeOnly(const char *config)
     // There are no pending obstacles or later environment updates. The
     // route API retains existing SDF-flush/ABORT behavior when those exist.
     seedExecution(manager);
-    const ego_planner::TrajContainer execution = manager.traj_;
+    const ego_planner::TrajContainer execution = executionSnapshot(manager);
     const auto stated = head();
     auto waypoints = mission();
     retained = manager.planCommittedRoute(stated, waypoints);
@@ -212,7 +225,7 @@ void routeOnly(const char *config)
           "the returned epoch identifies the two actual front-end captures");
     check(std::isfinite(route.front_end_ms) && route.front_end_ms > 0.0,
           "route-only result includes measured preparation time");
-    check(sameExecution(manager.traj_, execution) &&
+    check(sameExecution(executionSnapshot(manager), execution) &&
               !manager.lastHeadPolicy().evaluated && manager.lastPieceLeg().empty(),
           "route preparation does not run head optimization policy or adopt a flight");
 
@@ -244,7 +257,7 @@ void routeOnly(const char *config)
               manager.legPolicySnapshots().empty() &&
               manager.zonePolicyEpoch() == current_epoch,
           "stale inherited provenance loses attribution while geometry remains usable");
-    check(sameExecution(manager.traj_, execution),
+    check(sameExecution(executionSnapshot(manager), execution),
           "legacy route-only compatibility and provenance checks preserve execution storage");
 
     waypoints.front().x() = 170.0;
@@ -274,7 +287,7 @@ void routeOnly(const char *config)
             "entry refusal clears all products attributed to the refused call");
       check(manager.zonePolicyEpoch() == before_refusal &&
                 sameCaptures(manager.legPolicySnapshots(), captures) &&
-                sameExecution(manager.traj_, execution) && sameRoute(*retained, expected),
+                sameExecution(executionSnapshot(manager), execution) && sameRoute(*retained, expected),
             "entry refusal preserves existing policy captures, execution and owned results");
     }
     check(!manager.planCommittedRoute(stated, {}) &&
@@ -285,7 +298,7 @@ void routeOnly(const char *config)
     check(recovered && recovered->epoch == before_refusal + 1 &&
               samePoints(recovered->path, retained->path) && recovered->cap == retained->cap &&
               recovered->edge_leg == retained->edge_leg &&
-              sameExecution(manager.traj_, execution),
+              sameExecution(executionSnapshot(manager), execution),
           "the manager can prepare the original mission again after all refusals");
   }
   check(retained && sameRoute(*retained, expected),
@@ -299,7 +312,7 @@ void missingBackend(const char *config)
   manager.setTerrainData(flatTerrain());
   check(manager.setRiskZonesRuntime({}), "backend-free fixture clears configured zones");
   seedExecution(manager);
-  const ego_planner::TrajContainer execution = manager.traj_;
+  const ego_planner::TrajContainer execution = executionSnapshot(manager);
   const auto route = manager.planCommittedRoute(head(), mission());
   check(!manager.isOptimizerInitialized() && route.has_value(),
         "route-only preparation works before an optimizer is initialized");
@@ -311,7 +324,7 @@ void missingBackend(const char *config)
             manager.lastCommittedRouteEpoch() == route->epoch + 1 &&
             manager.lastHeadPolicy().evaluated && manager.lastPieceLeg().empty(),
         "legacy backend refusal retains this call's successfully committed route products");
-  check(sameExecution(manager.traj_, execution),
+  check(sameExecution(executionSnapshot(manager), execution),
         "backend refusal does not replace or renumber an already stored flight");
 }
 

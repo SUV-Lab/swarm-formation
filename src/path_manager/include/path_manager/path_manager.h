@@ -10,12 +10,14 @@
 #include "path_manager/start_state.h"
 #include "path_manager/route_slice_solver.h"
 #include "path_manager/risk_zone.h"
-#include "path_manager/terrain_risk.h"
+#include "path_manager/planning_environment_store.h"
 #include "path_manager/committed_route.h"
+#include "path_manager/direct_plan_settings.h"
 #include "path_manager/route_postprocessing.h"
 #include "path_manager/route_search_backend.h"
 #include "path_manager/zone_policy.h"
 #include "path_manager/planning_computation.h"
+#include "path_manager/planning_execution.h"
 #include "path_manager/ros_planning_visualization.h"
 #include <Eigen/Eigen>
 #include <algorithm>
@@ -109,7 +111,7 @@ namespace path_manager
         uint64_t epoch{0};                             // 0 = none, refuse
     };
 
-    // Calculation owns its trajectories and never adopts them into traj_.
+    // Calculation owns its trajectories and never adopts them into execution.
     // The live environment, policy diagnostics and ROS previews still belong
     // to this adapter. Serialize calls and environment/settings updates.
     std::optional<PlannedTrajectory> computeGlobalTrajectory(
@@ -121,16 +123,30 @@ namespace path_manager
         const std::vector<double> *cap_ref_override = nullptr,
         const RouteProvenance *provenance = nullptr);
 
+    // One independent direct solve, including route and risk/altitude settings.
+    // The session is local even for an empty overlay; mission settings remain
+    // unchanged. Providers are borrowed synchronously, as in the ordinary call.
+    std::optional<PlannedTrajectory> computeGlobalTrajectory(
+        const DirectPlanSettings &settings, const StartHead &head,
+        const std::vector<Eigen::Vector3d> &waypoints,
+        const ego_planner::TailBoundary &tail = {},
+        bool junction_goal = false,
+        const std::vector<Eigen::Vector3d> *route_override = nullptr,
+        const std::vector<double> *cap_ref_override = nullptr,
+        const RouteProvenance *provenance = nullptr);
+
     // Trusted in-process protocol, sealed only when calculation finishes.
     // Beginning another calculation supersedes pending results, including
     // when that new calculation fails before a route exists.
-    void beginPlanningComputation() { ++execution_revision_; }
+    void beginPlanningComputation() { execution_->invalidatePending(); }
     // Rejects foreign, stale or previously applied computations with no
     // mutation. An accepted failure may explicitly invalidate execution.
     PlanningComputation sealPlanningComputation(PlanningComputation value) const;
     ExecutionReceipt applyPlanningComputation(const PlanningComputation &value);
-    const LocalTrajData &executionTrajectory() const { return traj_.local_traj; }
-    const GlobalTrajData &referenceTrajectory() const { return traj_.global_traj; }
+    // Borrowed legacy views, valid until the next execution mutation or
+    // adapter destruction. Public library results instead own their values.
+    const LocalTrajData &executionTrajectory() const { return execution_->current(); }
+    const GlobalTrajData &referenceTrajectory() const { return execution_->reference(); }
 
     // Compatibility entry: compute, then adopt on success.
     bool planGlobalTraj(const StartHead &head,
@@ -160,8 +176,11 @@ namespace path_manager
     // read are safe by design (SDF static layer read-only, dynamic patches
     // under shared_mutex, terrain ELEV-MEMO thread_local, risk masks const).
     // Each optimizer borrows this manager's SDF/terrain/risk providers:
-    // the manager must outlive it and its solves, and environment updates
-    // must wait until every worker has finished.
+    // the manager must outlive it and its solves. Finish all worker solves
+    // before changing the manager's environment, model or shared settings,
+    // then recreate workers before their next solve. Workers capture zone
+    // geometry, DEM sampling pitch, settings and model bindings at creation,
+    // while their callbacks query the live manager.
     std::unique_ptr<ego_planner::PolyTrajOptimizer> makeConfiguredOptimizer();
     // Independent worker overlay: optimization/weight_time, weight_Risk,
     // max_vel and risk_parallel_threads only (complete existing names).
@@ -179,15 +198,12 @@ namespace path_manager
     // Canonical collision/risk queries and execution safety stay with manager.
     void setRouteSearchBackend(std::shared_ptr<RouteSearchBackend> backend);
 
-    RouteSliceConfig sliceSolveConfig() const {
-        return {max_vel_, alt_cap_headroom_, alt_floor_headroom_,
-                ground_height_, weight_altitude_};
-    }
+    RouteSliceConfig sliceSolveConfig() const;
 
     // Compatibility adapter for the value-returning solveRouteSlice function.
     // [CHAIN-PAR] Solve ONE route slice with pinned boundary states on the
     // GIVEN optimizer instance. Touches no PathManager mutable state (no
-    // traj_, no viz, no per-plan member writes) — safe to call from worker
+    // execution, no viz, no per-plan member writes) — safe to call from worker
     // threads with distinct instances. slice/cap by value: the optimizer
     // mutates its path in place.
     bool solveSlice(ego_planner::PolyTrajOptimizer &opt,
@@ -316,7 +332,7 @@ namespace path_manager
 
     void deliverTrajToOptimizer(void) {
         if (isOptimizerInitialized()) {
-            poly_traj_opt_->setSwarmTrajs(&traj_.swarm_traj);
+            poly_traj_opt_->setSwarmTrajs(&swarm_trajectories_);
         }
     };
     double getSwarmClearance(void) {
@@ -332,7 +348,13 @@ namespace path_manager
         poly_traj_opt_->setFormation(formation_positions, formation_size);
     }
 
-    TrajContainer traj_;
+    // Other aircraft are calculation inputs, separate from our execution slot.
+    // Replace only while idle; optimizer borrowers retain this vector object.
+    void replaceSwarmTrajectories(SwarmTrajData trajectories) {
+        swarm_trajectories_ = std::move(trajectories);
+        execution_->invalidatePending();
+    }
+    const SwarmTrajData &swarmTrajectories() const { return swarm_trajectories_; }
 
 
     // Set formation information for path planning
@@ -340,10 +362,10 @@ namespace path_manager
                          const std::vector<Eigen::Vector3d>& formation_pattern);
 
     void setLengthPerPiece(double val) {
-        length_per_piece_ = val; ++execution_revision_;
+        length_per_piece_ = val; execution_->invalidatePending();
     }
     void setObstacleClearance(double val) {
-        obstacle_clearance_ = val; ++execution_revision_;
+        obstacle_clearance_ = val; execution_->invalidatePending();
     }
 
     // Emergency stop: generate hovering trajectory at current position
@@ -351,12 +373,12 @@ namespace path_manager
 
     // Terrain data interface
     void setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg);
-    bool hasTerrainData() const { return terrain_data_.valid; }
+    bool hasTerrainData() const { return environment_->terrain().valid; }
     // Terrain elevation at (x, y) in frame units; false over water / off-DEM
     // / no terrain yet. Used by the FSM's [START AGL] seed conversion.
     bool terrainElevation(double x, double y, double *elev_out) const {
-        if (!terrain_data_.valid) return false;
-        const float e = terrain_data_.getElevation(x, y);
+        if (!environment_->terrain().valid) return false;
+        const float e = environment_->terrain().getElevation(x, y);
         if (e <= -1e9f) return false;
         *elev_out = static_cast<double>(e);
         return true;
@@ -407,18 +429,17 @@ namespace path_manager
     // Why the stored trajectory was withdrawn. Mirrors
     // TrajectoryExecutionControl's REASON_* so the wire value is not
     // re-derived from a string.
-    enum class EnvChangeReason { OBSTACLE_BLOCKED, TERRAIN_BLOCKED,
-                                 POLICY_UNEVALUATED };
+    using EnvChangeReason = ExecutionRevocationReason;
     bool revalidateStoredTrajectory(double t_from, Eigen::Vector3d *hit,
                                     EnvChangeReason reason);
     // Installed by ReplanFSM. PathManager detects; the FSM owns the
     // publishers and the state machine, so it decides what goes on the wire.
-    // Called BEFORE the local slot is cleared, so the trajectory id being
-    // withdrawn is still readable.
-    using EnvChangeHook =
-        std::function<void(EnvChangeReason, const Eigen::Vector3d &hit,
-                           double t_detected)>;
-    void setEnvChangeHook(EnvChangeHook hook) { env_change_hook_ = std::move(hook); }
+    // The owner captures the withdrawn identity and notifies BEFORE clearing
+    // the local slot; observers do not need to query the mutable adapter.
+    void setExecutionRevocationObserver(
+        PlanningExecutionStore::RevocationObserver observer) {
+        execution_->setRevocationObserver(std::move(observer));
+    }
     // Content fingerprint of the ACTIVE zone set. Republishing the same zones
     // must not withdraw a flight: the fail-closed rule is about the set
     // CHANGING, and a periodic re-send that changes nothing would otherwise
@@ -430,7 +451,7 @@ namespace path_manager
     // Drop the stored trajectory because the world changed in a way this node
     // cannot re-judge. Same two fields every other refusal zeroes.
     void invalidateStoredTrajectoryForEnvChange();
-    size_t numDynamicObstacles() const { return sdf_manager_.numActiveObstacles(); }
+    size_t numDynamicObstacles() const { return environment_->distanceField().numActiveObstacles(); }
 
     // Runtime risk-zone reset (called when ObstacleScenarioPanel / mission
     // authority publishes a new RiskZoneArray). Atomically replaces the
@@ -470,7 +491,7 @@ namespace path_manager
     const std::vector<LegPolicySnapshot> &legPolicySnapshots() const {
         return leg_policies_;
     }
-    uint64_t zonePolicyGeneration() const { return zone_policy_generation_; }
+    uint64_t zonePolicyGeneration() const { return environment_->zoneGeneration(); }
     // [ENV-CHANGE] One monotone number that moves when ANYTHING the planner
     // plans against changes: the risk-zone set, the terrain, or the SDF
     // (which is where dynamic obstacles land). Defined as the SUM of the
@@ -482,8 +503,7 @@ namespace path_manager
     // It is an identity, not a count. Consumers use it to tell two decisions
     // apart, not to measure how many changes happened.
     uint64_t environmentRevision() const {
-        return zone_policy_generation_ + terrain_data_.generation +
-               sdf_manager_.revision();
+        return environment_->revision();
     }
     // The front-end run the current leg_policies_ belong to. A piece map
     // minted in a different epoch names legs from a different search, and
@@ -538,12 +558,12 @@ namespace path_manager
     // taper-consistent variant must be added with that cost design.
     bool zoneExposureRaw(const ZonePolicySnapshot &snap, size_t idx,
                          const Eigen::Vector3d &p, double *exposure) const;
-    size_t numRiskZones() const { return risk_zones_.size(); }
+    size_t numRiskZones() const { return environment_->riskZones().size(); }
     // [CHAIN] hooks for the segment-chain planner: junction placement must
     // stay clear of the zone moat + GNRON taper band, and the chained result
     // needs the along-trajectory viz republished (the per-run publish only
     // covered the final span).
-    const std::vector<RiskZone>& riskZones() const { return risk_zones_; }
+    const std::vector<RiskZone>& riskZones() const { return environment_->riskZones(); }
     double riskGoalTaperRadius() const { return risk_goal_taper_radius_; }
     void publishTrajectoryViz(const poly_traj::Trajectory &opt,
                               const poly_traj::Trajectory &reference);
@@ -589,8 +609,8 @@ namespace path_manager
     // authored zone print the same number — so the audit reports q too.
     double getZoneEllipsoidRadius(size_t zone_index,
                                   const Eigen::Vector3d &pos) const {
-      if (zone_index >= risk_zones_.size()) return 1e9;
-      return riskEllipsoidRadius(risk_zones_[zone_index], pos);
+      if (zone_index >= environment_->riskZones().size()) return 1e9;
+      return riskEllipsoidRadius(environment_->riskZones()[zone_index], pos);
     }
     double getEffectiveRisk(size_t zone_index,
                             const Eigen::Vector3d &pos) const {
@@ -617,14 +637,10 @@ namespace path_manager
 
   private:
     std::shared_ptr<rclcpp::Node> node_;
-    const uint64_t execution_context_{nextRouteSearchIdentity()};
-    // Revision of the live calculation/adoption context, independent of the
-    // monotone execution ID. Also moves on a newer calculation or config.
-    uint64_t execution_revision_{0};
-    std::vector<RiskZone> risk_zones_;
-    // [S13] bumped by refreshEffectiveRiskZones (the single funnel every
-    // zone-list or terrain re-derivation goes through).
-    uint64_t zone_policy_generation_{0};
+    std::unique_ptr<PlanningEnvironmentStore> environment_;
+    // Concrete owner of adoption, identity and revocation state. Constructed
+    // after the ROS adapter resolves the required drone_id parameter.
+    std::unique_ptr<PlanningExecutionStore> execution_;
     bool zoneSnapshotCurrent(const ZonePolicySnapshot &snap,
                              size_t idx) const;
     // [S13] bumped at every front-end search; epoch_generation_ records
@@ -637,20 +653,6 @@ namespace path_manager
     uint64_t zone_policy_epoch_generation_{0};
     uint64_t zone_policy_epoch_searches_{0};
     std::vector<LegPolicySnapshot> leg_policies_;
-    // Searcher-facing copy of risk_zones_. PathSearcher::setRiskZones stores
-    // a RAW POINTER to this vector, so it must outlive the plan call — a
-    // function-local here left the searcher holding a dangling pointer
-    // between plans (latent: nothing dereferences it today, but any future
-    // between-plan getRiskCost query would be a use-after-free).
-    std::vector<path_planner::search::RiskZoneLite> astar_risks_;
-    // Zones exactly as authored (yaml param / runtime topic). risk_zones_ is
-    // DERIVED from this list: with risk_zone_agl_ on, center.z is height
-    // ABOVE the DEM at (x,y) — a source-height offset on the terrain — and the
-    // effective absolute z is re-derived whenever the DEM (re)arrives, so
-    // zone-before-terrain ordering does not change the result.
-    std::vector<RiskZone> risk_zones_raw_;
-    bool risk_zone_agl_{false};
-    void refreshEffectiveRiskZones();
     double risk_weight_;
     // [GNRON] endpoint moat taper radius, frame units (<=0 off). Fed to BOTH
     // the front-end field and the optimizer cost so they price one field.
@@ -658,27 +660,19 @@ namespace path_manager
     // Rv / Rh for the compact ellipsoidal risk envelope. Keeping this
     // independent of the LOS mask separates geometric risk coverage from
     // terrain visibility.
-    double risk_vertical_ratio_{0.35};
     double riskEllipsoidRadius(const RiskZone &zone,
                                const Eigen::Vector3d &pos) const;
-    // Pushes risk_zones_ into the front-end searcher. Called by both the
+    // Binds the environment's risk zones to the front-end searcher. Called by both the
     // plan path and the zone setter so the layers never disagree about which
     // zone set is live.
     void bindRiskZonesToSearcher();
     void bindRiskZonesToOptimizer();
+    void bindRiskZonesToOptimizer(ego_planner::PolyTrajOptimizer &optimizer,
+                                  double clearance);
+    double riskZoneValue(size_t zone_index, const Eigen::Vector3d &pos,
+                         double clearance) const;
     double riskZoneValue(size_t zone_index,
                          const Eigen::Vector3d &pos) const;
-    // Terrain-masked risk field (radial horizon / viewshed). For each source
-    // and azimuth, shadow_ceiling stores the highest terrain LOS line implied
-    // by all nearer DEM samples. A query is visible above that ceiling and
-    // shadowed below it. The field is O(1) to query in FM2's hot loop.
-    using TerrainRiskMask = terrain_risk::Mask;
-    std::vector<TerrainRiskMask> terrain_risk_masks_;
-    bool risk_terrain_mask_enable_{true};
-    double risk_mask_radial_step_{0.0};  // <=0: DEM resolution
-    double risk_mask_softness_{0.10};    // vertical sigmoid width (frame units)
-    bool risk_grounded_{true};           // visibility clamped at terrain+band
-                                         // ("no terrain-occluded state below the band")
     double risk_mask_viz_step_{0.0};     // <=0: auto per zone/DEM
     double risk_mask_viz_slice_offset_{0.0};
     double risk_mask_viz_threshold_{0.50};
@@ -707,19 +701,12 @@ namespace path_manager
     int risk_mask_viz_contours_{5};
     double risk_mask_viz_volume_alpha_{0.24};
     double risk_mask_viz_agl_{0.15};     // draped eval height above ground
-    // These values project the existing validated ROS settings; no separate
-    // defaults or mutable calculation configuration are kept here.
-    terrain_risk::Settings terrainRiskSettings() const {
-      return {risk_terrain_mask_enable_, risk_grounded_, risk_mask_radial_step_,
-              risk_mask_softness_, opt_obstacle_clearance_};
-    }
-    const TerrainRiskMask *terrainRiskMask(size_t zone_index) const {
-      return zone_index < terrain_risk_masks_.size()
-                 ? &terrain_risk_masks_[zone_index] : nullptr;
-    }
-    void rebuildTerrainRiskMasks();
     double riskShadowCeiling(size_t zone_index,
                              const Eigen::Vector3d &pos) const;
+    double riskVisibilityValue(size_t zone_index, const Eigen::Vector3d &pos,
+                               double clearance) const;
+    double riskVisibility(size_t zone_index, const Eigen::Vector3d &pos,
+                          Eigen::Vector3d *grad, double clearance) const;
     double riskVisibilityValue(size_t zone_index,
                                const Eigen::Vector3d &pos) const;
     double riskVisibility(size_t zone_index, const Eigen::Vector3d &pos,
@@ -738,6 +725,7 @@ namespace path_manager
     // The draped heatmap shows the ground-level visibility boundary, which is NOT
     // the flown risk — this line is.
     void publishTrajRisk(const poly_traj::Trajectory &traj);
+    void publishTrajRisk(const poly_traj::Trajectory &traj, double clearance);
     // Trajectory tube markers (/viz/opt_trajectory, /viz/global_trajectory,
     // /viz/front_end_path). SPHERE_LIST: a line has no thickness edge-on and
     // vanishes at some camera angles; dense spheres read as a tube from every
@@ -766,6 +754,7 @@ namespace path_manager
     // distinguish a shadow-safe pocket between two zones from uncovered sky.
     // NaN triplet means that zone has no visible vertical interval at (x,y).
     void publishRiskProfile(const poly_traj::Trajectory &traj);
+    void publishRiskProfile(const poly_traj::Trajectory &traj, double clearance);
     double dyn_obstacle_margin_{3.0};  // berth around dynamic obstacles
     double opt_obstacle_clearance_{0.7};  // optimizer penalty onset (< front-end margin)
     double weight_altitude_{1000.0};      // optimizer z-cap weight above mission band
@@ -789,10 +778,9 @@ namespace path_manager
     // piece of the trajectory just stored. Empty whenever the optimizer could
     // not vouch for the mapping.
     std::vector<size_t> last_piece_leg_;
-    EnvChangeHook env_change_hook_;
     Eigen::Vector3d map_lower_bound_;
     Eigen::Vector3d map_upper_bound_;
-    std::vector<LocalTrajData> swarm_traj_;
+    SwarmTrajData swarm_trajectories_;
     double max_vel_;
     double max_acc_;
     double length_per_piece_ = 2.0;
@@ -812,14 +800,6 @@ namespace path_manager
     // the front end: on the measured full-map missions the flight occupies
     // ~6 u of a 32-37 u box and this headroom is ~60% of the rest.
     double map_ceiling_headroom_ = 20.0;  // frame units
-    TerrainData terrain_data_;
-
-    // ESDF map for SDF-based RRT* queries (phase 3).
-    // Built from terrain inside planGlobalTraj.
-    path_planner::sdf::SDFManager sdf_manager_;
-    double sdf_voxel_size_ = 1.0;  // frame units
-    bool sdf_voxel_size_auto_ = false;   // param was <=0: track the DEM cell on map change
-    double sdf_voxel_z_{0.0};             // vertical voxel size; <=0 -> isotropic (= sdf_voxel_size_)
     // Canonical collision/risk queries retain the shared ESDF semantics.
     // The built-in route backend borrows this query object; an injected
     // backend supplies geometry without replacing execution safety queries.
@@ -829,27 +809,33 @@ namespace path_manager
     RouteSearchPolicy last_search_policy_;
     bool last_search_policy_measured_{false};
 
-    // Precomputed-ESDF paths (both optional, via yaml).
-    //   load: if set and file present, skip voxelization on first plan.
-    //   save: if set, write the freshly built ESDF after first build.
-    // When either is set, the ESDF covers the full loaded terrain (not the
-    // per-mission bbox) so the cached map is reusable across missions.
-    // Boxes-only SDF grid over the current terrain bbox. Built on the first
-    // terrain message and REBUILT when the map geometry changes (world switch
-    // / corridor re-crop) — setTerrainData resets this latch and clears the
-    // dynamic-obstacle patches, which were grounded on the old DEM.
-    bool sdf_built_ = false;
-
-    // Full-terrain bbox used when save/load is active. Computed once from
-    // terrain_data_ metadata on first use.
-    bool terrain_bbox_computed_ = false;
-    Eigen::Vector3d terrain_bbox_lo_ = Eigen::Vector3d::Zero();
-    Eigen::Vector3d terrain_bbox_hi_ = Eigen::Vector3d::Zero();
     bool computeTerrainBBox(Eigen::Vector3d* lo, Eigen::Vector3d* hi);
 
-    // Rebuilds sdf_manager_ from current terrain + obstacles, covering the
-    // bounding box given in world coords. Returns true on success.
-    bool buildSDFForBounds(const Eigen::Vector3d &lo, const Eigen::Vector3d &hi);
+    struct DirectPlanConfig {
+        double obstacle_clearance;
+        double weight_altitude;
+        double alt_cap_headroom;
+        double alt_floor_headroom;
+        double dynamics_unit_xy_m{100.0};
+        double flight_path_max_deg{30.0};
+    };
+    struct DirectSolveContext {
+        DirectPlanConfig config;
+        ego_planner::PolyTrajOptimizer *optimizer;
+    };
+    DirectPlanConfig readDirectPlanConfig(
+        const std::vector<rclcpp::Parameter> &overrides = {}) const;
+    DirectSolveContext missionSolveContext() const;
+    std::unique_ptr<ego_planner::PolyTrajOptimizer> configureOptimizer(
+        const DirectPlanConfig &config,
+        const std::vector<rclcpp::Parameter> &parameter_overrides);
+    std::optional<PlannedTrajectory> computeGlobalTrajectory(
+        const DirectSolveContext &context, const StartHead &head,
+        const std::vector<Eigen::Vector3d> &waypoints,
+        const ego_planner::TailBoundary &tail, bool junction_goal,
+        const std::vector<Eigen::Vector3d> *route_override,
+        const std::vector<double> *cap_ref_override,
+        const RouteProvenance *provenance);
 
     struct PreparedRoute {
         std::vector<Eigen::Vector3d> absolute_waypoints;
@@ -863,7 +849,7 @@ namespace path_manager
     // existing admission resets, SDF/obstacle effects and policy capture;
     // route/cap/tag compatibility copies precede any optimizer path edits.
     std::optional<PreparedRoute> prepareRoute(
-        const StartHead &head,
+        const DirectSolveContext &context, const StartHead &head,
         const std::vector<Eigen::Vector3d> &waypoints, bool junction_goal,
         const std::vector<Eigen::Vector3d> *route_override,
         const std::vector<double> *cap_ref_override,
@@ -873,18 +859,20 @@ namespace path_manager
     // processing and pipeline debug retain their ordering. Geometry, cap,
     // provenance and pre-denoise maximum return together on success. Only
     // leg 0 with takeoff_start may begin inside terrain clearance.
-    bool configureFrontEnd(RouteSearchProblem &problem);
+    bool configureFrontEnd(RouteSearchProblem &problem, const DirectSolveContext &context);
     void publishFrontEndRoute(const std::vector<Eigen::Vector3d> &route,
-                              double search_ms);
+                              double search_ms, double clearance);
     std::optional<RouteProfileResult> planFrontEnd(
         const Eigen::Vector3d &start_pos,
-        const std::vector<Eigen::Vector3d> &waypoints, bool takeoff_start);
+        const std::vector<Eigen::Vector3d> &waypoints, bool takeoff_start,
+        const DirectSolveContext &context);
 
     // Stage 2 adapter: supplies explicit values to the direct solver, then
     // returns and publishes successful seed/optimized trajectories. The tail
     // flags retain their explicit prescribed-boundary meaning. Optimizer path
     // edits and piece attribution are retained on both success and failure.
-    std::optional<PlannedTrajectory> optimizeStage(std::vector<Eigen::Vector3d> &clean_path,
+    std::optional<PlannedTrajectory> optimizeStage(
+                       const DirectSolveContext &context, std::vector<Eigen::Vector3d> &clean_path,
                        const Eigen::Vector3d &start_pos,
                        const Eigen::Vector3d &start_vel,
                        const Eigen::Vector3d &start_acc,
@@ -903,28 +891,13 @@ namespace path_manager
     std::unique_ptr<RosPlanningVisualization> visualization_;
     visualization::Stamp visualizationStamp() const;
     visualization::RiskView riskVisualizationView() const;
+    visualization::RiskView riskVisualizationView(double clearance) const;
     visualization::RiskSettings riskVisualizationSettings() const;
+    visualization::RiskSettings riskVisualizationSettings(double clearance) const;
     double path_scale_ = 1.5;  // tube diameter, frame units (1 u = 100 m)
     bool debug_pipeline_viz_{false};
     void publishPipelineDebug(const std::vector<Eigen::Vector3d> &shortcut_route,
                               const std::vector<Eigen::Vector3d> &inner_points);
-    // Tracks live patch ids so clearObstacles + visualization stay in sync.
-    std::vector<int> dyn_patch_ids_;
-    std::vector<Eigen::Vector3d> dyn_patch_centers_;
-    std::vector<Eigen::Vector3d> dyn_patch_sizes_;   // full extents [m]: box=(sx,sy,sz), sphere=(2r,2r,2r)
-    std::vector<uint8_t> dyn_patch_is_box_;          // 1=box (collision==visual), 0=sphere
-    std::vector<std::string> dyn_patch_models_;      // visual mesh catalog key per patch
-    std::vector<double> dyn_patch_yaws_;             // per-spawn yaw [rad]. NOT visual-only: oriented
-                                                     // boxes go into the SDF (samplePatch), so yaw
-                                                     // changes the FM2 route. Seed via manager/dyn_yaw_seed.
-    std::mt19937 yaw_rng_;   // spawn-orientation RNG; seeded from manager/dyn_yaw_seed (fixed=reproducible, <0=random)
-
-    // Dynamic obstacles requested before the SDF exists (e.g. no ESDF cache on a
-    // fresh run) are deferred here, then added once the SDF is built.
-    struct PendingObstacle {
-      bool is_box; Eigen::Vector3d center; Eigen::Vector3d size; double radius; std::string model;
-    };
-    std::vector<PendingObstacle> pending_obstacles_;
     void flushPendingObstacles();
     // Visual mesh catalog: model name -> mesh resource + rendered native size [m]
     // (convention: mesh base at z=0, XY centered). Collision is independent (SDF).
@@ -939,11 +912,6 @@ namespace path_manager
     std::string obstacle_mesh_resource_;
     double obstacle_mesh_height_{60.0};   // fixed building height [m] (spheres only)
     double obstacle_viz_scale_{1.0};      // mesh-only magnification (see decl site)
-    bool obstacle_ground_snap_{true};     // base obstacles on terrain/sea surface
-    // Grounded center for a dynamic obstacle: base at max(terrain, sea level)
-    // under (x, y), center half_height above it. Falls back to the given
-    // center when snapping is disabled.
-    Eigen::Vector3d groundedCenter(const Eigen::Vector3d& center, double half_height) const;
     void publishDynamicObstacles();
 
     std::shared_ptr<swarm_formation::LogManager> log_manager_;

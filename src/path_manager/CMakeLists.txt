@@ -53,12 +53,13 @@ find_package(ament_index_cpp REQUIRED)
 # the trajectory wire format (PolyTraj) lives in mmp_traj_msgs.
 
 # Reusable computations and the backend-independent facade. This target has
-# explicit inputs/results; it contains no FSM, publisher, execution storage or
-# concrete ROS backend. Optimizer calls retain the existing complete solver.
+# explicit inputs/results; it contains no FSM, publisher or concrete ROS
+# backend. Optimizer calls retain the existing complete solver.
 # Existing optimizer/search package dependencies still include ROS: splitting
 # targets here does not promise a separately deployable ROS-free SDK.
 add_library(${PROJECT_NAME}_calculations
   src/mission_planner.cpp
+  src/planning_execution.cpp
   src/planning_environment.cpp
   src/route_slice_solver.cpp
   src/route_slice_batch.cpp
@@ -87,6 +88,7 @@ target_link_libraries(${PROJECT_NAME}_calculations PUBLIC
 
 add_library(${PROJECT_NAME}_lib
   src/path_manager.cpp
+  src/planning_environment_store.cpp
   src/planning_visualization_data.cpp
   src/ros_planning_visualization.cpp
   src/ros_planning_backend.cpp
@@ -166,6 +168,9 @@ ament_target_dependencies(${PROJECT_NAME}_node
 # Standalone sanity test for the DynamicObstacleArray dispatch loop. The array
 # type now lives in mmp_mission_msgs, so this target depends on that package
 # instead of this one's generated interfaces.
+add_executable(planning_environment_store_test test/planning_environment_store_test.cpp)
+target_link_libraries(planning_environment_store_test ${PROJECT_NAME}_lib)
+
 add_executable(planning_visualization_test test/planning_visualization_test.cpp)
 target_link_libraries(planning_visualization_test ${PROJECT_NAME}_lib)
 
@@ -313,6 +318,9 @@ target_compile_features(mission_route_search_test PRIVATE cxx_std_17)
 add_executable(route_search_backend_test test/route_search_backend_test.cpp)
 target_link_libraries(route_search_backend_test ${PROJECT_NAME}_lib)
 
+add_executable(direct_plan_settings_test test/direct_plan_settings_test.cpp)
+target_link_libraries(direct_plan_settings_test ${PROJECT_NAME}_lib)
+
 add_executable(vehicle_model_injection_test test/vehicle_model_injection_test.cpp)
 target_link_libraries(vehicle_model_injection_test ${PROJECT_NAME}_lib)
 
@@ -359,6 +367,9 @@ target_link_libraries(planning_visualization_example ${PROJECT_NAME}_lib)
 
 add_executable(flight_evaluator_example examples/flight_evaluator_example.cpp)
 target_link_libraries(flight_evaluator_example ${PROJECT_NAME}_calculations)
+
+add_executable(planning_execution_test test/planning_execution_test.cpp)
+target_link_libraries(planning_execution_test ${PROJECT_NAME}_calculations)
 
 add_executable(execution_adoption_test test/execution_adoption_test.cpp)
 target_link_libraries(execution_adoption_test ${PROJECT_NAME}_lib)
@@ -468,12 +479,20 @@ if(BUILD_TESTING)
     COMMAND $<TARGET_FILE:mission_planner_core_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 30)
+  ament_add_test(planning_environment_store_test
+    COMMAND $<TARGET_FILE:planning_environment_store_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
   ament_add_test(planning_visualization_test
     COMMAND $<TARGET_FILE:planning_visualization_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 30)
   ament_add_test(flight_evaluator_test
     COMMAND $<TARGET_FILE:flight_evaluator_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 30)
+  ament_add_test(planning_execution_test
+    COMMAND $<TARGET_FILE:planning_execution_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 30)
   ament_add_test(execution_adoption_test
@@ -529,6 +548,12 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 180)
+  ament_add_test(direct_plan_settings_test
+    COMMAND $<TARGET_FILE:direct_plan_settings_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
   ament_add_test(vehicle_model_injection_test
     COMMAND $<TARGET_FILE:vehicle_model_injection_test>
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
@@ -601,6 +626,50 @@ if(BUILD_TESTING)
       $<TARGET_FILE:chain_experiment_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 900)
+
+  # Partial final-state prescriptions and explicit transition prefixes must
+  # survive segment policy and fallback decisions, including option combinations.
+  ament_add_test(chain_tailacc_baseline_ceiling
+    COMMAND $<TARGET_FILE:chain_experiment_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml 3 segdiff tailacc
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(chain_tailacc_route_ceiling
+    COMMAND $<TARGET_FILE:chain_experiment_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml 3 segdiff tailacc route
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(chain_tail_velocity_baseline_ceiling
+    COMMAND $<TARGET_FILE:chain_experiment_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml 2 tailcap
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(chain_tail_velocity_route_ceiling
+    COMMAND $<TARGET_FILE:chain_experiment_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml 2 tailcap route
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(chain_prefix_fallback
+    COMMAND $<TARGET_FILE:chain_experiment_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml 3 prefixfallback
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(chain_profile_baseline
+    COMMAND $<TARGET_FILE:chain_experiment_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml 3 profilebaseline
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
+
+  ament_add_test(chain_profile_fallback
+    COMMAND $<TARGET_FILE:chain_experiment_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml 3 profilefallback
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 120)
 
   # The 154-case risk harness. Its fixture path is resolved RELATIVE TO CWD
   # inside the binary, and ament runs tests from the build directory, so a
@@ -686,8 +755,8 @@ install(TARGETS mission_planner_test mission_planner_core_test
 install(TARGETS committed_route_test
   DESTINATION lib/${PROJECT_NAME})
 
-install(TARGETS planning_visualization_test planning_visualization_example
-  flight_evaluator_test execution_adoption_test flight_evaluator_example
+install(TARGETS direct_plan_settings_test planning_environment_store_test planning_visualization_test planning_visualization_example
+  flight_evaluator_test execution_adoption_test planning_execution_test flight_evaluator_example
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS mission_route_search_test route_search_backend_test vehicle_model_injection_test terrain_memo_test trajectory_message_test

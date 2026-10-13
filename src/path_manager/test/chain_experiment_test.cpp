@@ -150,6 +150,7 @@ int main(int argc, char **argv)
 
   bool with_zone = false, with_segdiff = false, with_twice = false,
        with_failrestore = false, with_altcap = false, with_terminal = false,
+       with_profilebaseline = false, with_profilefallback = false,
        with_tinyturn = false, with_route = false, with_par = false,
        with_auto = false, with_autosmall = false, with_tailfix = false,
        with_tailzero = false, with_tailacc = false, with_exclusive = false,
@@ -161,7 +162,8 @@ int main(int argc, char **argv)
        with_initnan = false, with_arredge2 = false, with_twophase = false,
        with_pvaprobe = false, with_initceiling = false,
        with_handoffcap = false, with_overroutebad = false,
-       with_transfallback = false, with_overrouteretry = false,
+       with_transfallback = false, with_prefixfallback = false,
+       with_tailcap = false, with_overrouteretry = false,
        with_badspans = false, with_zonesnapshot = false,
        with_zonewall = false, with_zonepass0 = false, with_hardpen = false,
        with_standoffpen = false, with_wpzone = false,
@@ -181,6 +183,18 @@ int main(int argc, char **argv)
     const std::string v(argv[a]);
     if (v == "zone") with_zone = true;
     if (v == "segdiff") with_segdiff = true;
+    // Full baseline profiles include manager-owned settings and thread
+    // budgets, unlike the narrower route-worker profile. Re-search each
+    // segment so its private front-end visibility provider is exercised.
+    if (v == "profilebaseline") {
+      with_profilebaseline = true; with_twice = true;
+    }
+    // Force a hard-limit fallback, then run a fresh unprofiled mission in
+    // the same process to detect either transient writes or leaked caps.
+    if (v == "profilefallback") {
+      with_profilefallback = true; with_route = true;
+      with_tailfix = true; with_failtail = true;
+    }
     // terminal: appends the stage-3 prescribed helix descent after the
     // chain. The whole-trajectory junction audit then covers its internal
     // Hermite joints AND the handoff seam under the same 1e-6 threshold.
@@ -236,19 +250,17 @@ int main(int argc, char **argv)
     if (v == "twophase") { with_route = true; with_phase = true; with_twophase = true; }
     if (v == "departop") { with_route = true; with_phase = true; with_departop = true; }
     if (v == "par") { with_route = true; with_par = true; }
-    // twice: plan the SAME mission twice in one process. If the scope-guard
-    // restore leaks a segment override, the second BASELINE (always planned
-    // with mission-wide params) solves a different problem and its duration
-    // shifts — bitwise-equal durations are the restore proof.
+    // twice: plan the SAME mission twice in one process. The second baseline
+    // must still use mission-wide settings, with identical duration/pieces.
     if (v == "twice") with_twice = true;
     // failrestore: seg2 gets an unflyable ceiling (0.5 u/s = 50 m/s, far
-    // below stall) so a segment run FAILS mid-chain with overrides applied;
-    // the chain must fall back to the baseline AND the restore must still
-    // happen (verified by the second plan's baseline).
+    // below stall) so a segment run FAILS mid-chain with a private profile;
+    // the chain must fall back to the baseline and the next plan must use
+    // unchanged mission settings (verified by its baseline).
     if (v == "failrestore") with_failrestore = true;
     // altcap: overrides one of the four PathManager-consumed optimization/*
-    // values (alt_cap_headroom) on seg2 — end-to-end proof of the re-read
-    // fix: the [ALT] z-band log line for seg2's solve shifts by +0.8 u.
+    // values (alt_cap_headroom) on seg2 — the [ALT] z-band log line for
+    // that solve shifts by +0.8 u without changing shared parameters.
     if (v == "altcap") with_altcap = true;
     // auto / autosmall: [AUTO-N] mission-sized segment count — see the
     // usage block above for what each one pins.
@@ -260,6 +272,9 @@ int main(int argc, char **argv)
     // relaxation opt-in), tailacc (acceleration-only prescription rides the
     // level entry).
     if (v == "tailfix") with_tailfix = true;
+    // A prescribed velocity above the segment ceiling must remain prescribed.
+    if (v == "tailcap") { with_tailfix = true; with_segdiff = true; with_tailcap = true; }
+    if (v == "prefixfallback") { with_route = true; with_prefixfallback = true; }
     // exclusive: terminal geometry toggled ON while the mission prescribes
     // the final state — the guard must skip the helix, so the prescribed
     // tail (tailfix checks) is still the trajectory's true end.
@@ -381,6 +396,9 @@ int main(int argc, char **argv)
     if (v == "unsafedirect") { with_route = true; with_autosmall = true; with_phase = true; with_unsafedirect = true; }
   }
   if (with_tinyturn) with_terminal = true;
+  // N=2 reaches the lowered arrival in this fixture; N=3 can restore the
+  // baseline after an unrelated middle solve and mask the boundary rewrite.
+  if (with_tailcap) segments = 2;
   // overrouteretry needs a mergeable interior junction: at N=3 with phase
   // on, the middle segment's BOTH junctions are protected (departure +
   // arrival), so the ladder exhausts into the single-shot fallback — a
@@ -519,6 +537,20 @@ int main(int argc, char **argv)
     std::cout << "altcap: seg2 alt_cap_headroom=1.2 (default 0.4)\n";
   }
 
+  if (with_profilebaseline) {
+    force("chain/seg2/params", std::vector<std::string>{
+        "optimization/max_vel=0.5", "optimization/max_vel=2.0",
+        "optimization/risk_parallel_threads=1",
+        "optimization/weight_altitude=1.0",
+        "optimization/alt_cap_headroom=1.2",
+        "optimization/alt_floor_headroom=0.4"});
+    force("chain/seg" + std::to_string(segments) + "/params",
+          std::vector<std::string>{"optimization/obstacle_clearance=0.1"});
+  }
+  if (with_profilefallback)
+    force("chain/seg2/params",
+          std::vector<std::string>{"optimization/max_vel=1.8"});
+
   const double helix_turns = with_tinyturn ? 0.05 : 1.0;
   if (with_tinyturn) {
     force("chain/terminal/turns", 0.05);
@@ -549,9 +581,21 @@ int main(int argc, char **argv)
     std::cout << "risk zone planted at (130, 150), reach 5\n";
   }
 
+  // A zone away from the flight supplies nonzero canonical risk queries
+  // without changing the mission corridor. Low probes exercise the terrain
+  // grounding band affected by a profile's obstacle-clearance setting.
+  if (with_profilebaseline || with_profilefallback) {
+    path_manager::RiskZone zone;
+    zone.center = Eigen::Vector3d(60.0, 40.0, 2.0);
+    zone.reach = 24.0;
+    zone.peak = 0.8;
+    expect(pm->setRiskZonesRuntime({zone}), "profile risk fixture installed");
+  }
+
   auto log = std::make_unique<swarm_formation::LogManager>(
       "chain_experiment", "./logs/runtime", swarm_formation::LogManager::INFO);
-  path_manager::SegmentChainPlanner chain(node, pm, log.get(), segments);
+  path_manager::SegmentChainPlanner chain(
+      node, pm, log.get(), segments, !with_profilebaseline);
 
   // 30 km eastbound mission over the hills: start at cruise, goal at 150 m
   // AGL. Start z is absolute (max terrain 1.8 u); goal z rides [GOAL AGL].
@@ -568,9 +612,15 @@ int main(int argc, char **argv)
   if (with_tailfix) {
     mtail.prescribe_vel = true;
     mtail.prescribe_acc = true;
-    mtail.vel = Eigen::Vector3d(1.55, 0.41, 0.0);   // |v|=1.60, +15 deg yaw
+    mtail.vel = with_tailcap ? Eigen::Vector3d(1.9, 0.0, 0.0)
+                            : Eigen::Vector3d(1.55, 0.41, 0.0);
     mtail.acc = Eigen::Vector3d(0.0, 0.05, 0.0);
-    std::cout << "tailfix: final vel (1.55,0.41,0) acc (0,0.05,0)\n";
+    if (with_profilefallback) {
+      mtail.vel = Eigen::Vector3d(1.8, 0.0, 0.0);
+      mtail.acc.setZero();
+    }
+    std::cout << "tailfix: final vel " << mtail.vel.transpose()
+              << " acc " << mtail.acc.transpose() << "\n";
   } else if (with_tailacc) {
     mtail.prescribe_acc = true;
     mtail.acc = Eigen::Vector3d(0.0, 0.05, 0.0);
@@ -683,12 +733,12 @@ int main(int argc, char **argv)
     const path_manager::PlanResult r1 =
         chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r1.hasTrajectory(), "first plan (N=3) produces a trajectory");
-    const int p1 = pm->traj_.local_traj.traj.getPieceNum();
+    const int p1 = pm->executionTrajectory().traj.getPieceNum();
     force("chain/segments", 5);
     const path_manager::PlanResult r2 =
         chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r2.hasTrajectory(), "second plan (N=5) produces a trajectory");
-    const int p2 = pm->traj_.local_traj.traj.getPieceNum();
+    const int p2 = pm->executionTrajectory().traj.getPieceNum();
     std::cout << "twophase: N=3 -> " << p1 << " pieces, N=5 -> " << p2
               << " pieces, segments() -> " << chain.segments() << "\n";
     // The leak this guards against is a STALE N: plan 2 re-using plan 1's
@@ -749,7 +799,7 @@ int main(int argc, char **argv)
       std::cout << "FAIL: " << failures << " failed check(s)\n";
       return 1;
     }
-    const poly_traj::Trajectory &flight = pm->traj_.local_traj.traj;
+    const poly_traj::Trajectory &flight = pm->executionTrajectory().traj;
     const auto &spans = chain.lastPhaseSpans();
     double um = 100.0, uz = 100.0;
     node->get_parameter("optimization/dynamics_unit_xy_m", um);
@@ -1350,7 +1400,7 @@ int main(int argc, char **argv)
     std::cout << "transition: outcome " << static_cast<int>(r.outcome)
               << " reason " << static_cast<int>(r.reason) << "\n";
     expect(r.hasTrajectory(), "transition mission returns a flight");
-    const poly_traj::Trajectory &full = pm->traj_.local_traj.traj;
+    const poly_traj::Trajectory &full = pm->executionTrajectory().traj;
     expect(full.getPieceNum() > 0 && full.getTotalDuration() > 10.0,
            "full flight stored (transition + chain)");
     if (!r.hasTrajectory() || full.getPieceNum() == 0) {
@@ -1796,16 +1846,21 @@ int main(int argc, char **argv)
     // (replan_fsm.cpp:461), so those two fields ARE the executability
     // contract — and both must be non-zero going in, or the assertion
     // below would pass against a default-constructed slot.
-    pm->traj_.setLocalTraj(through, 100.0, 0);
-    expect(pm->traj_.local_traj.duration > 0.0 &&
-               pm->traj_.local_traj.start_time > 0.0,
+    path_manager::PlanningComputation fixture;
+    fixture.status = path_manager::PlanResult::success();
+    fixture.recordProduct({through, through, 100.0, 100.0});
+    expect(pm->applyPlanningComputation(
+               pm->sealPlanningComputation(std::move(fixture))).applied,
+           "fixture trajectory is adopted through the execution boundary");
+    expect(pm->executionTrajectory().duration > 0.0 &&
+               pm->executionTrajectory().start_time > 0.0,
            "the trajectory really is executable before the gate runs");
     const auto pr = chain.verdictResultForTest(fv);
     expect(!pr.hasTrajectory(), "a hard contact FAILS the plan");
     expect(pr.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
            "...as STITCHED_FLIGHT_UNSAFE, not an envelope budget");
-    expect(pm->traj_.local_traj.duration == 0.0 &&
-               pm->traj_.local_traj.start_time == 0.0,
+    expect(pm->executionTrajectory().duration == 0.0 &&
+               pm->executionTrajectory().start_time == 0.0,
            "...and the stored trajectory stops being executable");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
@@ -1894,12 +1949,20 @@ int main(int argc, char **argv)
       return mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos,
                     start_vel, start_acc);
     };
-    expect(pm->planGlobalTraj(head(), {goal[0]}), "a mission plans and stores");
-    const double dur = pm->traj_.local_traj.duration;
+    const auto plan_now = [&]() {
+      auto product = pm->computeGlobalTrajectory(head(), {goal[0]});
+      if (!product) return false;
+      product->start_time = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+      path_manager::PlanningComputation computed;
+      computed.status = path_manager::PlanResult::success();
+      computed.recordProduct(std::move(*product));
+      return pm->applyPlanningComputation(
+          pm->sealPlanningComputation(std::move(computed))).applied;
+    };
+    expect(plan_now(), "a mission plans and stores");
+    const double dur = pm->executionTrajectory().duration;
     expect(dur > 0.0, "...with an executable trajectory in the slot");
-    // Pretend it is flying: the FSM stamps start_time when it executes.
-    pm->traj_.local_traj.start_time =
-        rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+    // The fixture supplies its execution clock point before adoption.
 
     // (1) Nothing changed -> the flight is kept. A revalidation that refuses
     // whenever it is asked would ground every mission.
@@ -1914,17 +1977,19 @@ int main(int argc, char **argv)
       path_manager::PathManager::EnvChangeReason reason{};
       Eigen::Vector3d at{Eigen::Vector3d::Zero()};
     } ann;
-    pm->setEnvChangeHook(
-        [&](path_manager::PathManager::EnvChangeReason r,
-            const Eigen::Vector3d &h, double) {
+    pm->setExecutionRevocationObserver(
+        [&](const path_manager::ExecutionRevocation &event) {
           ++ann.n;
-          ann.reason = r;
-          ann.at = h;
-          // Read from the slot, as ReplanFSM::publishExecutionAbort does —
-          // which is why the hook must run BEFORE the slot is cleared.
-          ann.id = pm->traj_.local_traj.traj_id;
+          ann.reason = event.reason;
+          ann.at = event.hit;
+          ann.id = event.trajectory_id;
+          expect(pm->executionTrajectory().traj_id == event.trajectory_id &&
+                     pm->executionTrajectory().duration > 0.0,
+                 "revocation observer runs before invalidating the named slot");
+          expect(event.environment_generation == pm->environmentRevision(),
+                 "revocation captures the current complete environment revision");
         });
-    const uint64_t live_id = pm->traj_.local_traj.traj_id;
+    const uint64_t live_id = pm->executionTrajectory().traj_id;
     expect(live_id > 0, "the stored trajectory has an identity to withdraw");
 
     // [ABORT] The id must be unique for the life of the node, from the
@@ -1934,9 +1999,9 @@ int main(int argc, char **argv)
     // exists to prevent. A wire test that publishes hand-made ids cannot see
     // that: it has to come from a real plan, twice.
     {
-      const uint64_t id1 = pm->traj_.local_traj.traj_id;
+      const uint64_t id1 = pm->executionTrajectory().traj_id;
       expect(pm->planGlobalTraj(head(), {goal[0]}), "the mission plans again");
-      const uint64_t id2 = pm->traj_.local_traj.traj_id;
+      const uint64_t id2 = pm->executionTrajectory().traj_id;
       std::cout << "[ENV-CHANGE] production ids: " << id1 << " -> " << id2
                 << "\n";
       expect(id2 > id1,
@@ -1944,18 +2009,16 @@ int main(int argc, char **argv)
              "would make an old abort stop a new flight");
     }
     // Re-establish the flight this section is about.
-    expect(pm->planGlobalTraj(head(), {goal[0]}), "and once more");
-    pm->traj_.local_traj.start_time =
-        rclcpp::Clock(RCL_ROS_TIME).now().seconds();
+    expect(plan_now(), "and once more");
 
-    const double dur_live = pm->traj_.local_traj.duration;
-    const uint64_t id_live = pm->traj_.local_traj.traj_id;
+    const double dur_live = pm->executionTrajectory().duration;
+    const uint64_t id_live = pm->executionTrajectory().traj_id;
     Eigen::Vector3d hit;
     expect(pm->revalidateStoredTrajectory(0.0, &hit,
                                        path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED),
            "an unchanged world leaves the flight alone");
     expect(ann.n == 0, "...and announces nothing");
-    expect(pm->traj_.local_traj.duration == dur_live, "...untouched, in fact");
+    expect(pm->executionTrajectory().duration == dur_live, "...untouched, in fact");
 
     // [ENV-CHANGE] The revision on the wire has to move for the changes that
     // actually cause these aborts. It used to carry the zone policy
@@ -1987,21 +2050,21 @@ int main(int argc, char **argv)
     expect(pm->revalidateStoredTrajectory(0.0, &hit,
                                        path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED),
            "...and does not touch a flight it cannot reach");
-    expect(pm->traj_.local_traj.duration == dur_live, "...still executable");
+    expect(pm->executionTrajectory().duration == dur_live, "...still executable");
     expect(ann.n == 0, "...and still announces nothing");
 
     // (3) An obstacle ON the remainder -> the flight is stopped. Placed at
     // the trajectory's own midpoint so it is unambiguously in the way, with a
     // radius that clears the grounding lift (centre z = base + r).
     const Eigen::Vector3d mid_pt =
-        pm->traj_.local_traj.traj.getPos(0.5 * dur_live);
+        pm->executionTrajectory().traj.getPos(0.5 * dur_live);
     expect(pm->addDynamicSphere(mid_pt, 12.0) >= 0,
            "an obstacle lands on the remaining route");
     const bool kept = pm->revalidateStoredTrajectory(0.0, &hit,
                                        path_manager::PathManager::EnvChangeReason::OBSTACLE_BLOCKED);
     std::cout << "[ENV-CHANGE] kept=" << (kept ? 1 : 0)
-              << " dur=" << pm->traj_.local_traj.duration
-              << " start_time=" << pm->traj_.local_traj.start_time
+              << " dur=" << pm->executionTrajectory().duration
+              << " start_time=" << pm->executionTrajectory().start_time
               << " hit=(" << hit.x() << ", " << hit.y() << ", " << hit.z()
               << ")\n";
     expect(!kept, "a blocked remainder is REFUSED");
@@ -2014,8 +2077,8 @@ int main(int argc, char **argv)
            "...with the obstacle reason, not a generic one");
     expect((ann.at - hit).norm() < 1e-9,
            "...and the point the check actually tripped on");
-    expect(pm->traj_.local_traj.duration <= 0.0 &&
-               pm->traj_.local_traj.start_time <= 0.0,
+    expect(pm->executionTrajectory().duration <= 0.0 &&
+               pm->executionTrajectory().start_time <= 0.0,
            "...by zeroing the two fields ReplanFSM gates execution on, so "
            "EXEC_TRAJ parks instead of flying into it");
 
@@ -2023,8 +2086,8 @@ int main(int argc, char **argv)
     // obstacle BEHIND the aircraft and ask about the remainder only.
     pm->clearDynamicObstacles();
     expect(pm->planGlobalTraj(head(), {goal[0]}), "the mission re-plans");
-    const double dur2 = pm->traj_.local_traj.duration;
-    const Eigen::Vector3d behind = pm->traj_.local_traj.traj.getPos(0.1 * dur2);
+    const double dur2 = pm->executionTrajectory().duration;
+    const Eigen::Vector3d behind = pm->executionTrajectory().traj.getPos(0.1 * dur2);
     expect(pm->addDynamicSphere(behind, 12.0) >= 0,
            "an obstacle appears where the flight has already been");
     expect(pm->revalidateStoredTrajectory(0.4 * dur2, &hit,
@@ -2038,17 +2101,15 @@ int main(int argc, char **argv)
     // flushPendingObstacles, so that is where they first become able to block
     // anything. revalidateAfterEnvChange drives the same check from there and
     // from the terrain path.
-    expect(pm->planGlobalTraj(head(), {goal[0]}), "the mission re-plans again");
-    const double dur3 = pm->traj_.local_traj.duration;
-    pm->traj_.local_traj.start_time =
-        rclcpp::Clock(RCL_ROS_TIME).now().seconds();
-    const Eigen::Vector3d on_path = pm->traj_.local_traj.traj.getPos(0.5 * dur3);
+    expect(plan_now(), "the mission re-plans again");
+    const double dur3 = pm->executionTrajectory().duration;
+    const Eigen::Vector3d on_path = pm->executionTrajectory().traj.getPos(0.5 * dur3);
     expect(pm->addDynamicSphere(on_path, 12.0) >= 0, "an obstacle is placed");
     ann.n = 0;
     pm->revalidateAfterEnvChange(
         "a test-driven environment change",
         path_manager::PathManager::EnvChangeReason::TERRAIN_BLOCKED);
-    expect(pm->traj_.local_traj.duration <= 0.0,
+    expect(pm->executionTrajectory().duration <= 0.0,
            "an environment change reported from ANY trigger invalidates a "
            "flight it blocks, not only one that came in on the obstacle topic");
     // The REASON has to survive the trip. It used to be hardcoded to
@@ -2086,15 +2147,15 @@ int main(int argc, char **argv)
     std::cout << "[FM2-FAIL] plan=" << (ok ? 1 : 0)
               << " route=" << pm->lastCommittedRoute().size()
               << " piece_leg=" << pm->lastPieceLeg().size()
-              << " pieces=" << pm->traj_.local_traj.traj.getPieceNum()
-              << " dur=" << pm->traj_.local_traj.duration << "\n";
+              << " pieces=" << pm->executionTrajectory().traj.getPieceNum()
+              << " dur=" << pm->executionTrajectory().duration << "\n";
     expect(!ok, "an FM2 grid that cannot be built fails the plan");
     expect(pm->lastCommittedRoute().empty(),
            "...leaving NO committed route — a straight line nobody checked "
            "for obstacles is not an answer to a failed search");
     expect(pm->lastPieceLeg().empty() && pm->legPolicySnapshots().empty(),
            "...and no provenance");
-    expect(pm->traj_.local_traj.duration <= 0.0,
+    expect(pm->executionTrajectory().duration <= 0.0,
            "...and nothing executable in the trajectory slot");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
@@ -2159,7 +2220,7 @@ int main(int argc, char **argv)
     // in metres.
     const auto trajClearance =
         [&](const std::vector<std::pair<Eigen::Vector3d, double>> &obs) {
-      const poly_traj::Trajectory &fl = pm->traj_.local_traj.traj;
+      const poly_traj::Trajectory &fl = pm->executionTrajectory().traj;
       if (fl.getPieceNum() == 0) return -1e9;
       const double T = fl.getTotalDuration();
       double len = 0.0;
@@ -2240,7 +2301,7 @@ int main(int argc, char **argv)
         if (best < 20.0) ++pen;
       }
       int jpen = 0;
-      const poly_traj::Trajectory &fl = pm->traj_.local_traj.traj;
+      const poly_traj::Trajectory &fl = pm->executionTrajectory().traj;
       if (ok && fl.getPieceNum() > 0) {
         const double T = fl.getTotalDuration();
         for (int k = 0; k <= 4000; ++k) {
@@ -2662,7 +2723,7 @@ int main(int argc, char **argv)
     std::cout << "[TRANS-WP] no zones: outcome=" << (int)r0.outcome
               << " reason=" << (int)r0.reason
               << " legs=" << pm->legPolicySnapshots().size()
-              << " pieces=" << pm->traj_.local_traj.traj.getPieceNum() << "\n";
+              << " pieces=" << pm->executionTrajectory().traj.getPieceNum() << "\n";
     expect(r0.hasTrajectory(),
            "a multi-waypoint TRANSITION mission with no zones flies — it "
            "reaches the stitched path that planImpl's guard hides");
@@ -3111,7 +3172,7 @@ int main(int argc, char **argv)
                start_vel, start_acc),
         {near_goal});
     expect(ok, "the short mission plans");
-    const poly_traj::Trajectory &flight = pm->traj_.local_traj.traj;
+    const poly_traj::Trajectory &flight = pm->executionTrajectory().traj;
     const auto &route = pm->lastCommittedRoute();
     const auto &pl = pm->lastPieceLeg();
     std::cout << "[LEG-MID] route=" << route.size()
@@ -3366,7 +3427,7 @@ int main(int argc, char **argv)
       // trajectory that actually came out — the optimizer withholds it
       // otherwise. This is what turns a flight time into a policy: find the
       // piece, read its leg.
-      const poly_traj::Trajectory &flight = pm->traj_.local_traj.traj;
+      const poly_traj::Trajectory &flight = pm->executionTrajectory().traj;
       const auto &pl = pm->lastPieceLeg();
       if (with_legleadin) {
         // The lead-in plants an extra vertex just past the start, so the
@@ -3900,8 +3961,8 @@ int main(int argc, char **argv)
            "a baseline whose zone policy cannot be judged is REFUSED");
     expect(r.reason == path_manager::PlanReason::STITCHED_FLIGHT_UNSAFE,
            "...as STITCHED_FLIGHT_UNSAFE");
-    expect(pm->traj_.local_traj.duration == 0.0 &&
-               pm->traj_.local_traj.start_time == 0.0,
+    expect(pm->executionTrajectory().duration == 0.0 &&
+               pm->executionTrajectory().start_time == 0.0,
            "...and nothing executable is left behind");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
@@ -3924,8 +3985,8 @@ int main(int argc, char **argv)
            "with phase OFF the direct product is still gated and refused");
     expect(r.reason == path_manager::PlanReason::DIRECT_FALLBACK_UNSAFE,
            "...as DIRECT_FALLBACK_UNSAFE");
-    expect(pm->traj_.local_traj.duration == 0.0 &&
-               pm->traj_.local_traj.start_time == 0.0,
+    expect(pm->executionTrajectory().duration == 0.0 &&
+               pm->executionTrajectory().start_time == 0.0,
            "...and the stored trajectory stops being executable");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
@@ -4083,15 +4144,20 @@ int main(int argc, char **argv)
 
     // And the caller must receive it as a flyable, labelled degradation
     // with its trajectory intact.
-    pm->traj_.setLocalTraj(grazing, 100.0, 0);
+    path_manager::PlanningComputation fixture;
+    fixture.status = path_manager::PlanResult::success();
+    fixture.recordProduct({grazing, grazing, 100.0, 100.0});
+    expect(pm->applyPlanningComputation(
+               pm->sealPlanningComputation(std::move(fixture))).applied,
+           "fixture trajectory is adopted through the execution boundary");
     const auto pr = chain.verdictResultForTest(fv);
     expect(pr.hasTrajectory(), "the standoff graze keeps its trajectory");
     expect(pr.outcome == path_manager::PlanOutcome::DEGRADED,
            "...as DEGRADED, not SUCCESS — the operator is told");
     expect(pr.reason == path_manager::PlanReason::STITCHED_ZONE_STANDOFF,
            "...with the standoff reason, not an envelope budget");
-    expect(pm->traj_.local_traj.duration > 0.0 &&
-               pm->traj_.local_traj.start_time > 0.0,
+    expect(pm->executionTrajectory().duration > 0.0 &&
+               pm->executionTrajectory().start_time > 0.0,
            "...and the stored trajectory stays executable");
     rclcpp::shutdown();
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
@@ -4146,7 +4212,7 @@ int main(int argc, char **argv)
     const path_manager::PlanResult r0 =
         chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {});
     expect(r0.hasTrajectory(), "fixture plan succeeds");
-    const poly_traj::Trajectory traj = pm->traj_.local_traj.traj;
+    const poly_traj::Trajectory traj = pm->executionTrajectory().traj;
     const double T = traj.getTotalDuration();
     using PK = path_manager::SegmentChainPlanner::PhaseKind;
     // Each span-contract violation must yield UNEVALUATED.
@@ -4199,7 +4265,7 @@ int main(int argc, char **argv)
     const int n_confirmed = chain.segments();
     const path_manager::PlanResult ra = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(ra.hasTrajectory(), "reference call succeeds");
-    const poly_traj::Trajectory ref = pm->traj_.local_traj.traj;
+    const poly_traj::Trajectory ref = pm->executionTrajectory().traj;
 
     force("chain/jitter/fail_segment", 2);  // one-shot: forces a merge
     const path_manager::PlanResult rb = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
@@ -4218,7 +4284,7 @@ int main(int argc, char **argv)
 
     const path_manager::PlanResult rc = chain.planOverRoute(route, cap, fe_ms, mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc), goal, false, {});
     expect(rc.hasTrajectory(), "post-merge clean call succeeds");
-    const poly_traj::Trajectory &out = pm->traj_.local_traj.traj;
+    const poly_traj::Trajectory &out = pm->executionTrajectory().traj;
     std::cout << "overrouteretry: ref " << ref.getPieceNum() << " pieces "
               << ref.getTotalDuration() << " s vs post-merge "
               << out.getPieceNum() << " pieces " << out.getTotalDuration()
@@ -4268,6 +4334,57 @@ int main(int argc, char **argv)
     if (failures == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }
     std::cout << "FAIL: " << failures << " failed check(s)\n";
     return 1;
+  }
+
+  if (with_prefixfallback) {
+    // The prefix itself is the transition claim. A caller of planOverRoute
+    // must not need to duplicate it through setTransitionActive(true).
+    std::vector<Eigen::Vector3d> route;
+    std::vector<double> cap;
+    double fe_ms = 0.0;
+    const auto normal_head = mkHead(
+        path_manager::StartStateSource::STATED_SPEED,
+        start_pos, start_vel, start_acc);
+    expect(chain.commitRoute(normal_head, goal, false, &route, &cap, &fe_ms),
+           "prefix fallback fixture commits a route");
+    path_manager::SegmentChainPlanner::TransitionPrefix prefix;
+    Eigen::Matrix<double, 3, 6> coefficients =
+        Eigen::Matrix<double, 3, 6>::Zero();
+    coefficients.col(4) = start_vel;
+    coefficients.col(5) = start_pos - 10.0 * start_vel;
+    prefix.traj.emplace_back(10.0, coefficients);
+    const auto handoff = mkHead(
+        path_manager::StartStateSource::TRANSITION_HANDOFF,
+        start_pos, start_vel, start_acc, true);
+    force("chain/jitter/fail_segment", -1);
+    const auto refused = chain.planOverRoute(
+        route, cap, fe_ms, handoff, goal, false, {}, &prefix);
+    expect(!refused.hasTrajectory() &&
+               refused.detail.find("forbidden while a transition is active") !=
+                   std::string::npos,
+           "a supplied prefix prevents fallback without a legacy flag");
+    expect(node->get_parameter("chain/jitter/fail_segment").as_int() == 0,
+           "prefix request reaches and consumes the forced worker failures");
+    expect(!chain.lastFlightVerdict().evaluated &&
+               chain.lastPhaseSpans().empty(),
+           "refused prefix fallback does not claim a direct-flight evaluation");
+
+    force("chain/jitter/fail_segment", -1);
+    const auto next = chain.planOverRoute(
+        route, cap, fe_ms, normal_head, goal, false, {});
+    expect(next.hasTrajectory() &&
+               next.reason == path_manager::PlanReason::SINGLE_PLAN_FALLBACK,
+           "a subsequent request without a prefix may use direct fallback");
+    expect(node->get_parameter("chain/jitter/fail_segment").as_int() == 0 &&
+               chain.lastFlightVerdict().evaluated &&
+               chain.lastPhaseSpans().size() == 1 &&
+               chain.lastPhaseSpans().front().kind ==
+                   path_manager::PhaseKind::CRUISE,
+           "next request owns its failure injection and direct-flight diagnostics");
+    rclcpp::shutdown();
+    std::cout << (failures == 0 ? "PASS" : "FAIL") << ": " << failures
+              << " failed check(s)\n";
+    return failures == 0 ? 0 : 1;
   }
 
   if (with_transfallback) {
@@ -4483,37 +4600,85 @@ int main(int argc, char **argv)
   // envelope and must never be misclassified as INITIAL_MODE_UNSUPPORTED.
   if (with_initok) start_vel = Eigen::Vector3d(0.0, -1.6, 0.2);
   const bool vel_commanded = with_departop || with_initok;
-  // A route worker's private profile must never become a temporary public
-  // mission parameter, even during construction and edge/merge repair.
-  // Existing variants below prove these are real solves with the requested
-  // speeds/tails/seams; the callback catches transient changes a final-value
-  // check alone cannot see.
-  const bool inspect_worker_profiles =
-      with_par || with_phaseweight || with_mergetail || with_depedge || with_arredge;
-  const std::vector<std::string> worker_keys = {
-      "optimization/weight_time", "optimization/weight_Risk",
-      "optimization/max_vel", "optimization/risk_parallel_threads"};
-  const auto worker_pristine = node->get_parameters(worker_keys);
-  size_t worker_parameter_writes = 0;
-  const auto worker_parameter_probe = node->add_on_set_parameters_callback(
+  // Observe every optimization setting, including transient writes that a
+  // final-value check misses. Baseline, route workers and hard-limit
+  // fallbacks must all leave the shared mission parameter store untouched.
+  std::vector<std::string> profile_keys;
+  for (const auto &name : node->list_parameters({}, 0).names)
+    if (name.rfind("optimization/", 0) == 0) profile_keys.push_back(name);
+  const auto profile_pristine = node->get_parameters(profile_keys);
+  size_t profile_parameter_writes = 0;
+  const auto profile_parameter_probe = node->add_on_set_parameters_callback(
       [&](const std::vector<rclcpp::Parameter> &changes) {
-        if (inspect_worker_profiles)
-          for (const auto &change : changes)
-            if (std::find(worker_keys.begin(), worker_keys.end(),
-                          change.get_name()) != worker_keys.end())
-              ++worker_parameter_writes;
+        for (const auto &change : changes)
+          // rclcpp also invokes this callback before inserting a first-use
+          // declaration. Only an already declared key can be a mission write.
+          if (change.get_name().rfind("optimization/", 0) == 0 &&
+              node->has_parameter(change.get_name()))
+            ++profile_parameter_writes;
         rcl_interfaces::msg::SetParametersResult accepted;
         accepted.successful = true;
         return accepted;
       });
+  const auto check_profile_parameters = [&]() {
+    expect(profile_parameter_writes == 0,
+           "per-call profiles never write shared optimization parameters");
+    expect(node->get_parameters(profile_keys) == profile_pristine,
+           "shared optimizer parameters retain their pristine typed values");
+  };
+  struct RiskProbe {
+    Eigen::Vector3d position;
+    double manager, front_end, back_end;
+    bool back_end_active;
+  };
+  std::vector<RiskProbe> risk_probes;
+  if (with_profilebaseline || with_profilefallback) {
+    bool positive = false, terrain_valid = true, canonical_match = true;
+    for (int i = 1; i <= 20; ++i) {
+      const double x = 60.0 + i;
+      double elevation = 0.0;
+      terrain_valid &= pm->terrainElevation(x, 40.0, &elevation);
+      for (const double height : {0.05, 0.4, 0.8, 1.5}) {
+        RiskProbe probe;
+        probe.position = Eigen::Vector3d(x, 40.0, elevation + height);
+        probe.manager = pm->getEffectiveRisk(0, probe.position);
+        probe.front_end = pm->getFrontEndRisk(probe.position);
+        canonical_match &= std::abs(probe.manager - probe.front_end) < 1e-12;
+        Eigen::Vector3d gp, gv;
+        probe.back_end = 0.0;
+        probe.back_end_active = pm->getBackEndRiskCost(
+            probe.position, start_vel, gp, gv, probe.back_end);
+        positive |= probe.manager > 0.0 && probe.back_end > 0.0;
+        risk_probes.push_back(probe);
+      }
+    }
+    expect(terrain_valid && canonical_match,
+           "profile risk probes lie on terrain and agree across canonical layers");
+    expect(positive, "profile risk probes reach the real nonzero risk cost");
+  }
+  const auto check_profile_risk = [&]() {
+    if (risk_probes.empty()) return;
+    double manager_error = 0.0, front_error = 0.0, back_error = 0.0;
+    bool same_active = true;
+    for (const auto &probe : risk_probes) {
+      manager_error = std::max(manager_error,
+          std::abs(pm->getEffectiveRisk(0, probe.position) - probe.manager));
+      front_error = std::max(front_error,
+          std::abs(pm->getFrontEndRisk(probe.position) - probe.front_end));
+      Eigen::Vector3d gp, gv;
+      double cost = 0.0;
+      same_active &= pm->getBackEndRiskCost(
+          probe.position, start_vel, gp, gv, cost) == probe.back_end_active;
+      back_error = std::max(back_error, std::abs(cost - probe.back_end));
+    }
+    expect(manager_error < 1e-12 && front_error < 1e-12 &&
+               back_error < 1e-12 && same_active,
+           "between requests manager/front-end/back-end risk retains mission settings");
+  };
   const path_manager::PlanResult pres =
       chain.plan(mkHead(path_manager::StartStateSource::TRAJECTORY_DERIVED, start_pos, start_vel, start_acc, false), goal, mtail);
-  if (inspect_worker_profiles) {
-    expect(worker_parameter_writes == 0,
-           "worker and retry profiles never mutate shared mission parameters");
-    expect(node->get_parameters(worker_keys) == worker_pristine,
-           "shared optimizer parameters retain their pristine typed values");
-  }
+  check_profile_parameters();
+  check_profile_risk();
   if (vel_commanded)
     expect(pres.reason != path_manager::PlanReason::INITIAL_MODE_UNSUPPORTED,
            "within-envelope commanded start not misclassified as "
@@ -4526,8 +4691,8 @@ int main(int argc, char **argv)
     return 1;
   }
 
-  const poly_traj::Trajectory &chained = pm->traj_.local_traj.traj;
-  const poly_traj::Trajectory &baseline = pm->traj_.global_traj.traj;
+  const poly_traj::Trajectory &chained = pm->executionTrajectory().traj;
+  const poly_traj::Trajectory &baseline = pm->referenceTrajectory().traj;
   expect(chained.getPieceNum() > 0 && baseline.getPieceNum() > 0,
          "both chained and baseline trajectories are stored");
 
@@ -4653,6 +4818,17 @@ int main(int argc, char **argv)
     expect(pres.outcome == path_manager::PlanOutcome::DEGRADED,
            "all-fail fallback reports DEGRADED");
   }
+  if (with_profilebaseline)
+    expect(chain.lastPhaseSpans().size() == static_cast<size_t>(segments),
+           "full baseline profile solves every segment, including duplicate last-wins ceiling");
+  if (with_profilefallback) {
+    expect(pres.detail.find("hard limits preserved conservatively") != std::string::npos,
+           "forced fallback reports conservative hard-limit preservation");
+    expect(chain.lastPhaseSpans().size() == 1,
+           "hard-limit fallback records one evaluated direct span");
+    expect(chained.getVel(0.5 * ct).norm() < 1.9,
+           "hard-limit fallback actually uses the 1.8 speed ceiling");
+  }
   if (with_phaseweight) {
     const double T = chained.getTotalDuration();
     double v_end = 0.0, n_end = 0.0, v_mid = 0.0, n_mid = 0.0;
@@ -4764,6 +4940,9 @@ int main(int argc, char **argv)
     expect(pres.detail.find("N=2") != std::string::npos,
            "reason names the N=2 shared-handoff policy, not a screening miss");
   }
+  if (with_tailcap || (with_segdiff && with_tailacc))
+    expect(chain.lastPhaseSpans().size() == static_cast<size_t>(segments),
+           "the prescribed tail reaches the lowered arrival worker without fallback");
   if (with_tailfix) {
     const Eigen::Vector3d tv = chained.getJuncVel(chained.getPieceNum());
     const Eigen::Vector3d ta = chained.getJuncAcc(chained.getPieceNum());
@@ -4803,20 +4982,33 @@ int main(int argc, char **argv)
            "unflyable segment fell back to the baseline");
   }
   if (with_twice || with_failrestore) {
-    // Restore proof: a second plan in the SAME process. Its baseline always
-    // runs with mission-wide parameters — if the scope guard leaked any
-    // segment override, the second baseline solves a different problem and
-    // its duration/piece count shifts.
+    // A second plan in the SAME process must solve the same mission-wide
+    // baseline even after a profiled segment failure.
     const double base1 = bt;
     const int base1_pieces = baseline.getPieceNum();
     const bool ok2 = chain.plan(mkHead(path_manager::StartStateSource::STATED_SPEED, start_pos, start_vel, start_acc, false), goal, {})
                          .hasTrajectory();
     expect(ok2, "second plan in the same process succeeds");
-    const poly_traj::Trajectory &base2 = pm->traj_.global_traj.traj;
+    const poly_traj::Trajectory &base2 = pm->referenceTrajectory().traj;
     expect(std::abs(base2.getTotalDuration() - base1) < 1e-9 &&
                base2.getPieceNum() == base1_pieces,
-           "second baseline identical — mission-wide parameters were "
-           "restored after the first chain");
+           "second baseline identical — mission-wide settings remain unchanged");
+    check_profile_parameters();
+    check_profile_risk();
+  }
+  if (with_profilefallback) {
+    force("chain/seg2/params", std::vector<std::string>{});
+    const auto next = chain.plan(mkHead(
+        path_manager::StartStateSource::TRAJECTORY_DERIVED,
+        start_pos, start_vel, start_acc, false), goal, mtail);
+    expect(next.hasTrajectory(), "next unprofiled request succeeds after hard-limit fallback");
+    if (next.hasTrajectory()) {
+      const auto &flight = pm->executionTrajectory().traj;
+      expect(flight.getVel(0.5 * flight.getTotalDuration()).norm() > 1.95,
+             "next request returns to mission cruise speed without leaked cap");
+    }
+    check_profile_parameters();
+    check_profile_risk();
   }
 
   rclcpp::shutdown();

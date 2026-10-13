@@ -28,8 +28,9 @@ struct MissionPlanRequest {
   std::string formation_type{"none"};
   std::vector<Eigen::Vector3d> formation_pattern;
   int formation_size{1};
-  // Positive values apply the existing manager overrides. They persist on
-  // this planner instance; a later non-positive value retains its setting.
+  // Both values must be finite; otherwise the request is refused before
+  // either override is applied. Positive values persist on this planner
+  // instance; a later finite non-positive value retains its setting.
   double length_per_piece{0.0};
   double obstacle_clearance{0.0};
 };

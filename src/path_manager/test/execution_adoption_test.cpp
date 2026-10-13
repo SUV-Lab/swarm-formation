@@ -2,17 +2,60 @@
 // Numerical/evaluation regressions live in the existing mission/chain tests;
 // this test checks that a candidate does not become execution state merely
 // because it was calculated, and that delayed/replayed adoption is refused.
+#include "path_manager/mission_planner.h"
 #include "path_manager/path_manager.h"
 #include "path_manager/ros_planning_backend.h"
 #include "path_manager/ros_terrain_grid.h"
 
 #include <iostream>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace pm = path_manager;
 namespace {
+// Compile-time contract: the execution adapter offers const views and explicit
+// adoption/update methods; old raw slots and concrete owners cannot escape.
+template <typename T, typename = void>
+struct HasPublicRawTrajectorySlot : std::false_type {};
+template <typename T>
+struct HasPublicRawTrajectorySlot<T,
+    std::void_t<decltype(std::declval<T &>().traj_)>> : std::true_type {};
+template <typename T, typename = void>
+struct HasPublicExecutionOwner : std::false_type {};
+template <typename T>
+struct HasPublicExecutionOwner<T,
+    std::void_t<decltype(std::declval<T &>().execution_)>> : std::true_type {};
+template <typename T, typename = void>
+struct HasPublicEnvironmentOwner : std::false_type {};
+template <typename T>
+struct HasPublicEnvironmentOwner<T,
+    std::void_t<decltype(std::declval<T &>().environment_)>> : std::true_type {};
+template <typename T, typename = void>
+struct HasExecutionManager : std::false_type {};
+template <typename T>
+struct HasExecutionManager<T,
+    std::void_t<decltype(std::declval<T &>().executionManager())>> : std::true_type {};
+
+static_assert(!HasPublicRawTrajectorySlot<pm::PathManager>::value,
+              "the legacy raw trajectory slot must not be public");
+static_assert(!HasPublicExecutionOwner<pm::PathManager>::value,
+              "the execution owner must remain private");
+static_assert(!HasPublicEnvironmentOwner<pm::PathManager>::value,
+              "the environment owner must remain private");
+static_assert(!HasExecutionManager<pm::MissionPlanner>::value,
+              "the generic planner API must not expose the ROS execution adapter");
+static_assert(std::is_same_v<decltype(std::declval<pm::PathManager &>().executionTrajectory()),
+                             const ego_planner::LocalTrajData &>);
+static_assert(std::is_same_v<decltype(std::declval<pm::PathManager &>().referenceTrajectory()),
+                             const ego_planner::GlobalTrajData &>);
+static_assert(std::is_same_v<decltype(std::declval<pm::PathManager &>().swarmTrajectories()),
+                             const ego_planner::SwarmTrajData &>);
+static_assert(std::is_same_v<decltype(std::declval<pm::PathManager &>().riskZones()),
+                             const std::vector<pm::RiskZone> &>);
+static_assert(std::is_const_v<mmp_vehicle_dynamics::VehicleModel::Ptr::element_type>);
+
 int failures = 0;
 void check(bool condition, const std::string &message)
 {
