@@ -1,13 +1,31 @@
 #include "path_manager/ros_terrain_grid.h"
+#include "terrain_grid_validation.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace path_manager {
-TerrainGridDecode decodeTerrainGrid(
+namespace {
+TerrainGrid geometryFromMessage(const grid_map_msgs::msg::GridMap &message,
+                                size_t index)
+{
+  TerrainGrid terrain;
+  const auto &layer = message.data[index];
+  terrain.cols = layer.layout.dim[0].size;
+  terrain.rows = layer.layout.dim[1].size;
+  terrain.resolution = message.info.resolution;
+  terrain.center_x = message.info.pose.position.x;
+  terrain.center_y = message.info.pose.position.y;
+  terrain.length_x = message.info.length_x;
+  terrain.length_y = message.info.length_y;
+  return terrain;
+}
+}
+
+TerrainGridInspection inspectTerrainGrid(
     const grid_map_msgs::msg::GridMap::SharedPtr &message)
 {
-  TerrainGridDecode result;
+  TerrainGridInspection result;
   if (!message) return result;
   if (message->layers.empty() && message->data.empty()) {
     result.update = TerrainGridUpdate::CLEAR;
@@ -24,21 +42,28 @@ TerrainGridDecode decodeTerrainGrid(
   if (index >= message->data.size()) return reject("elevation payload is missing");
   const auto &layer = message->data[index];
   if (layer.layout.dim.size() < 2) return reject("elevation layout has fewer than two dimensions");
-  TerrainGrid terrain;
-  terrain.cols = layer.layout.dim[0].size;
-  terrain.rows = layer.layout.dim[1].size;
-  terrain.resolution = message->info.resolution;
-  terrain.center_x = message->info.pose.position.x;
-  terrain.center_y = message->info.pose.position.y;
-  terrain.length_x = message->info.length_x;
-  terrain.length_y = message->info.length_y;
-  terrain.elevation = layer.data;
-  if (!validateTerrainGrid(terrain, &result.detail)) {
+  const auto terrain = geometryFromMessage(*message, index);
+  if (!detail::validateTerrainGridMetadata(terrain, layer.data.size(), &result.detail)) {
     result.update = TerrainGridUpdate::REJECTED;
     return result;
   }
   result.update = TerrainGridUpdate::REPLACE;
-  result.terrain = std::move(terrain);
+  result.elevation_layer = index;
+  return result;
+}
+
+TerrainGridDecode decodeTerrainGrid(
+    const grid_map_msgs::msg::GridMap::SharedPtr &message)
+{
+  const auto inspection = inspectTerrainGrid(message);
+  TerrainGridDecode result;
+  result.update = inspection.update;
+  result.detail = inspection.detail;
+  if (inspection.update == TerrainGridUpdate::REPLACE) {
+    auto terrain = geometryFromMessage(*message, inspection.elevation_layer);
+    terrain.elevation = message->data[inspection.elevation_layer].data;
+    result.terrain = std::move(terrain);
+  }
   return result;
 }
 

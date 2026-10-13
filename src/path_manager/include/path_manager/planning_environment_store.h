@@ -86,7 +86,8 @@ class PlanningEnvironmentStore {
   // retains the address of this owned vector between searches.
   void refreshSearchRiskZones();
 
-  // Same legacy result: >=0 installed, -1 failed, -2 queued until grid ready.
+  // >=0 installed, -1 failed, -2 queued until grid ready. Nonfinite centers,
+  // nonpositive/nonfinite radius or extents are rejected before any mutation.
   int addSphere(const Eigen::Vector3d &center, double radius,
                 const std::string &model = "");
   int addBox(const Eigen::Vector3d &center, const Eigen::Vector3d &size,

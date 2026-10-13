@@ -372,7 +372,9 @@ namespace path_manager
     bool EmergencyStop(const Eigen::Vector3d& stop_pos);
 
     // Terrain data interface
-    void setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg);
+    // Rejected input leaves terrain, auto resolution and revisions unchanged.
+    // The ROS receipt must describe only an accepted replacement or clear.
+    TerrainUpdate setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg);
     bool hasTerrainData() const { return environment_->terrain().valid; }
     // Terrain elevation at (x, y) in frame units; false over water / off-DEM
     // / no terrain yet. Used by the FSM's [START AGL] seed conversion.

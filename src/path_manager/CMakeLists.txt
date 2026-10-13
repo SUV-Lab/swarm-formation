@@ -318,6 +318,9 @@ target_compile_features(mission_route_search_test PRIVATE cxx_std_17)
 add_executable(route_search_backend_test test/route_search_backend_test.cpp)
 target_link_libraries(route_search_backend_test ${PROJECT_NAME}_lib)
 
+add_executable(chain_profile_contract_test test/chain_profile_contract_test.cpp)
+target_link_libraries(chain_profile_contract_test ${PROJECT_NAME}_lib)
+
 add_executable(direct_plan_settings_test test/direct_plan_settings_test.cpp)
 target_link_libraries(direct_plan_settings_test ${PROJECT_NAME}_lib)
 
@@ -548,6 +551,12 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 180)
+  ament_add_test(chain_profile_contract_test
+    COMMAND $<TARGET_FILE:chain_profile_contract_test>
+      ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
+    TIMEOUT 180
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO)
+
   ament_add_test(direct_plan_settings_test
     COMMAND $<TARGET_FILE:direct_plan_settings_test>
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
@@ -755,7 +764,7 @@ install(TARGETS mission_planner_test mission_planner_core_test
 install(TARGETS committed_route_test
   DESTINATION lib/${PROJECT_NAME})
 
-install(TARGETS direct_plan_settings_test planning_environment_store_test planning_visualization_test planning_visualization_example
+install(TARGETS chain_profile_contract_test direct_plan_settings_test planning_environment_store_test planning_visualization_test planning_visualization_example
   flight_evaluator_test execution_adoption_test planning_execution_test flight_evaluator_example
   DESTINATION lib/${PROJECT_NAME})
 

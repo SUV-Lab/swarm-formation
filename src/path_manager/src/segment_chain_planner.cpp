@@ -23,6 +23,14 @@
 namespace path_manager {
 
 namespace {
+// A malformed explicit hard requirement cannot be discarded like an optional
+// soft-profile typo. Entry adapters turn this configuration refusal into an
+// owned FAILED result without adopting an intermediate solve.
+class InvalidHardProfile : public std::invalid_argument {
+ public:
+  using std::invalid_argument::invalid_argument;
+};
+
 // Type-tolerant runtime parameter read. Statically-typed declares throw at
 // PLAN time when a CLI/YAML override carries the other numeric type
 // ("-p x:=-10" is an int, "x: 1" for a bool...) — and a try/catch around
@@ -228,6 +236,11 @@ PlanningComputation SegmentChainPlanner::compute(
   PlanningComputation computed;
   try {
     computed.status = planInto(state, computed, head, waypoints, mission_tail);
+  } catch (const InvalidHardProfile &error) {
+    computed = PlanningComputation{};
+    computed.status = PlanResult::failed(error.what());
+    state.verdict = FlightVerdict{};
+    state.spans.clear();
   } catch (...) {
     captureDiagnostics(state);
     throw;
@@ -2020,16 +2033,14 @@ PlanResult SegmentChainPlanner::planRouteFallback(PlanContext &state,
   if (!eff.empty()) {
     for (const auto &e : eff) collect(e);
   } else {
-    // [PHASE] The EARLY fallbacks (front-end failure, auto-N below the
-    // split threshold) run before eff is built, so scanning eff alone
-    // preserved nothing and the direct plan quietly flew past an operator's
-    // hard limit — the exact lie this preservation exists to prevent
-    // (review find). Read the declared profiles directly instead.
-    collect(readOverrideList("chain/phase/departure/params",
-                             "phase-departure"));
-    collect(readOverrideList("chain/phase/cruise/params", "phase-cruise"));
-    collect(readOverrideList("chain/phase/arrival/params", "phase-arrival"));
-    for (const auto &so : readSegmentOverrides(state)) collect(so);
+    // Early fallbacks have no workers yet. Resolve the SAME active profiles
+    // first: phase enable, positional selection, segment precedence and the
+    // last value of a duplicate key must not change merely because this
+    // mission was too short to split or its first search failed.
+    const bool phase_requested =
+        readNumParam(node_, "chain/phase/enable", 0.0) != 0.0;
+    const auto profiles = readRouteWorkerProfiles(state, phase_requested);
+    for (const auto &profile : profiles.effective) collect(profile);
   }
   std::optional<PlannedTrajectory> fallback_product;
   if (!hardmin.empty()) {
@@ -2128,14 +2139,70 @@ PlanResult SegmentChainPlanner::planRouteFallback(PlanContext &state,
 }
 
 SegmentChainPlanner::RouteWorkerSetup
-SegmentChainPlanner::prepareRouteWorkers(const PlanContext &state, std::vector<Contract> &contracts,
-                                          bool run_parallel,
-                                          bool phase_requested)
+SegmentChainPlanner::readRouteWorkerProfiles(
+    const PlanContext &state, bool phase_requested) const
 {
   RouteWorkerSetup setup;
   auto &prof_dep = setup.departure;
   auto &prof_cru = setup.cruise;
   auto &prof_arr = setup.arrival;
+  auto &eff = setup.effective;
+  // [PHASE] Build the effective per-worker override lists: phase profile
+  // by POSITION (departure = first, arrival = last, cruise between; only
+  // when phase mode is on), then seg<i> on top (explicit index wins).
+  // Whitelisted optimizer-owned keys only — everything else is dropped
+  // loudly (PathManager-shared values cannot differ per parallel worker).
+  if (phase_requested) {
+    prof_dep = readOverrideList("chain/phase/departure/params",
+                                "phase-departure");
+    if (state.segments > 2)
+      prof_cru = readOverrideList("chain/phase/cruise/params", "phase-cruise");
+    prof_arr = readOverrideList("chain/phase/arrival/params", "phase-arrival");
+  }
+  const std::vector<SegmentOverrides> seg_over = readSegmentOverrides(state);
+  eff.assign(static_cast<size_t>(state.segments), SegmentOverrides{});
+  for (int i = 0; i < state.segments; ++i) {
+    std::map<std::string, rclcpp::Parameter> m;
+    std::map<std::string, std::string> invalid_hard;
+    const auto take = [&](const SegmentOverrides &src, const char *origin) {
+      for (const auto &pp : src.params) {
+        if (!whitelistFind(pp.get_name())) {
+          log_->warnf("[PHASE] %s override '%s' is not route-mode "
+                      "whitelisted — dropped (baseline flow applies the "
+                      "full surface)", origin, pp.get_name().c_str());
+          continue;
+        }
+        m[pp.get_name()] = pp;
+        invalid_hard.erase(pp.get_name());
+      }
+      for (const auto &error : src.invalid_hard) {
+        m.erase(error.first);
+        invalid_hard[error.first] = error.second;
+      }
+    };
+    if (phase_requested)
+      take(i == 0 ? prof_dep : (i + 1 == state.segments ? prof_arr : prof_cru),
+           i == 0 ? "departure" : (i + 1 == state.segments ? "arrival" : "cruise"));
+    take(seg_over[static_cast<size_t>(i)], "seg");
+    if (!invalid_hard.empty())
+      throw InvalidHardProfile(invalid_hard.begin()->second);
+    auto &e = eff[static_cast<size_t>(i)];
+    for (const auto &kv : m) {
+      e.params.push_back(kv.second);
+      e.label += (e.label.empty() ? "" : ", ") + kv.first + "=" +
+                 kv.second.value_to_string();
+    }
+  }
+
+  return setup;
+}
+
+SegmentChainPlanner::RouteWorkerSetup
+SegmentChainPlanner::prepareRouteWorkers(const PlanContext &state, std::vector<Contract> &contracts,
+                                          bool run_parallel,
+                                          bool phase_requested)
+{
+  RouteWorkerSetup setup = readRouteWorkerProfiles(state, phase_requested);
   auto &eff = setup.effective;
   auto &opts = setup.optimizers;
   // Only the initial concurrent batch shares the inner OpenMP budget.
@@ -2150,42 +2217,6 @@ SegmentChainPlanner::prepareRouteWorkers(const PlanContext &state, std::vector<C
                 "each", hw, state.segments, per);
     inner_threads = per;
   }
-  // [PHASE] Build the effective per-worker override lists: phase profile
-  // by POSITION (departure = first, arrival = last, cruise between; only
-  // when phase mode is on), then seg<i> on top (explicit index wins).
-  // Whitelisted optimizer-owned keys only — everything else is dropped
-  // loudly (PathManager-shared values cannot differ per parallel worker).
-  prof_dep = readOverrideList("chain/phase/departure/params",
-                              "phase-departure");
-  prof_cru = readOverrideList("chain/phase/cruise/params", "phase-cruise");
-  prof_arr = readOverrideList("chain/phase/arrival/params", "phase-arrival");
-  const std::vector<SegmentOverrides> seg_over = readSegmentOverrides(state);
-  eff.assign(static_cast<size_t>(state.segments), SegmentOverrides{});
-  for (int i = 0; i < state.segments; ++i) {
-    std::map<std::string, rclcpp::Parameter> m;
-    const auto take = [&](const SegmentOverrides &src, const char *origin) {
-      for (const auto &pp : src.params) {
-        if (!whitelistFind(pp.get_name())) {
-          log_->warnf("[PHASE] %s override '%s' is not route-mode "
-                      "whitelisted — dropped (baseline flow applies the "
-                      "full surface)", origin, pp.get_name().c_str());
-          continue;
-        }
-        m[pp.get_name()] = pp;
-      }
-    };
-    if (phase_requested)
-      take(i == 0 ? prof_dep : (i + 1 == state.segments ? prof_arr : prof_cru),
-           i == 0 ? "departure" : (i + 1 == state.segments ? "arrival" : "cruise"));
-    take(seg_over[static_cast<size_t>(i)], "seg");
-    auto &e = eff[static_cast<size_t>(i)];
-    for (const auto &kv : m) {
-      e.params.push_back(kv.second);
-      e.label += (e.label.empty() ? "" : ", ") + kv.first + "=" +
-                 kv.second.value_to_string();
-    }
-  }
-
   // [PHASE] The baseline-mode ceiling rules, ported (found by the
   // phaseweight harness variant): a profile/seg override that lowers a
   // worker's max_vel below the authored contract speed hands it an
@@ -2298,6 +2329,11 @@ SegmentChainPlanner::mergedRetryProfile(const PlanContext &state,
     for (const auto &parameter : phase.params)
       if (whitelistFind(parameter.get_name()))
         values[parameter.get_name()] = parameter;
+    // Invalid phase values reached here only if every affected original
+    // worker overrode them with a valid segment value. Do not resurrect an
+    // earlier phase occurrence; the validated effective hard limits below
+    // are the requirements of this merged span.
+    for (const auto &error : phase.invalid_hard) values.erase(error.first);
   }
   for (int side : {candidate.lo, candidate.hi}) {
     for (const auto &parameter :
@@ -2470,6 +2506,11 @@ PlanResult SegmentChainPlanner::planOverRoute(
   try {
     computed.status = computeOverRoute(state, computed, committed, head, waypoints,
                                       run_parallel, mission_tail, transition);
+  } catch (const InvalidHardProfile &error) {
+    computed = PlanningComputation{};
+    computed.status = PlanResult::failed(error.what());
+    state.verdict = FlightVerdict{};
+    state.spans.clear();
   } catch (...) {
     captureDiagnostics(state);
     throw;
@@ -3348,6 +3389,10 @@ SegmentChainPlanner::readOverrideList(const std::string &pname,
                                       const std::string &who) const
 {
   SegmentOverrides so;
+  // Keep the final occurrence authoritative even for malformed hard values:
+  // an earlier invalid value superseded by a valid one is not active, while
+  // a final invalid value cannot silently resurrect an earlier valid value.
+  std::map<std::string, std::string> hard_errors;
   if (!node_->has_parameter(pname))
     node_->declare_parameter(pname, std::vector<std::string>{});
   std::vector<std::string> specs;
@@ -3356,8 +3401,14 @@ SegmentChainPlanner::readOverrideList(const std::string &pname,
     for (const std::string &spec : specs) {
       const size_t eq = spec.find('=');
       if (eq == std::string::npos || eq == 0 || eq + 1 >= spec.size()) {
-        log_->warnf("[CHAIN] %s override '%s' is not name=value — skipped",
-                    who.c_str(), spec.c_str());
+        const std::string name = spec.substr(0, eq);
+        const OvrKey *key = whitelistFind(name);
+        if (key && key->tag == OvrTag::kHardMax)
+          hard_errors[name] = "invalid hard profile " + who + " '" + spec +
+                              "': hard maximum requires name=value";
+        else
+          log_->warnf("[CHAIN] %s override '%s' is not name=value — skipped",
+                      who.c_str(), spec.c_str());
         continue;
       }
       const std::string name = spec.substr(0, eq);
@@ -3374,6 +3425,8 @@ SegmentChainPlanner::readOverrideList(const std::string &pname,
                     "startup) — its consumer will not see this per-call "
                     "value this mission", who.c_str(), name.c_str());
       }
+      const OvrKey *key = whitelistFind(name);
+      const bool hard_max = key && key->tag == OvrTag::kHardMax;
       try {
         switch (node_->get_parameter(name).get_type()) {
           case rclcpp::ParameterType::PARAMETER_DOUBLE: {
@@ -3384,6 +3437,8 @@ SegmentChainPlanner::readOverrideList(const std::string &pname,
             const double d = std::stod(val, &pos);
             if (pos != val.size())
               throw std::invalid_argument("trailing '" + val.substr(pos) + "'");
+            if (hard_max && (!std::isfinite(d) || !(d > 0.0)))
+              throw std::invalid_argument("hard maximum must be finite and positive");
             so.params.emplace_back(name, d);
             break;
           }
@@ -3415,13 +3470,19 @@ SegmentChainPlanner::readOverrideList(const std::string &pname,
             continue;
         }
       } catch (const std::exception &e) {
-        log_->warnf("[CHAIN] %s override '%s': value parse failed (%s) — "
-                    "skipped", who.c_str(), spec.c_str(), e.what());
+        if (hard_max)
+          hard_errors[name] = "invalid hard profile " + who + " '" + spec +
+                              "': " + e.what();
+        else
+          log_->warnf("[CHAIN] %s override '%s': value parse failed (%s) — "
+                      "skipped", who.c_str(), spec.c_str(), e.what());
         continue;
       }
+      if (hard_max) hard_errors.erase(name);
       so.label += (so.label.empty() ? "" : ", ") + spec;
     }
   }
+  so.invalid_hard = std::move(hard_errors);
   return so;
 }
 
@@ -3429,10 +3490,16 @@ std::vector<SegmentChainPlanner::SegmentOverrides>
 SegmentChainPlanner::readSegmentOverrides(const PlanContext &state) const
 {
   std::vector<SegmentOverrides> out(static_cast<size_t>(state.segments));
-  for (int i = 0; i < state.segments; ++i)
-    out[static_cast<size_t>(i)] = readOverrideList(
+  for (int i = 0; i < state.segments; ++i) {
+    auto &profile = out[static_cast<size_t>(i)];
+    profile = readOverrideList(
         "chain/seg" + std::to_string(i + 1) + "/params",
         "seg" + std::to_string(i + 1));
+    // No later profile can override a segment entry. This also validates
+    // baseline-mode profiles, which do not use route phase composition.
+    if (!profile.invalid_hard.empty())
+      throw InvalidHardProfile(profile.invalid_hard.begin()->second);
+  }
   return out;
 }
 

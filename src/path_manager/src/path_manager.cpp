@@ -2030,10 +2030,10 @@ void PathManager::publishEffectiveRiskField()
         riskVisualizationView(), riskVisualizationSettings(), visualizationStamp()));
 }
 
-void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg)
+TerrainUpdate PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &msg)
 {
     const auto update = environment_->ingestTerrain(msg);
-    if (!update.accepted()) return;
+    if (!update.accepted()) return update;
     // The primary optimizer borrows the owner, but its DEM pitch is a value.
     if (poly_traj_opt_) {
         poly_traj_opt_->setTerrainHeightmap(
@@ -2060,6 +2060,7 @@ void PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::SharedPtr &m
         log_manager_->infof(update.had_terrain
             ? "[TERRAIN] cleared previous DEM (world=none)"
             : "[TERRAIN] empty world confirmed (no DEM loaded)");
+    return update;
 }
 
 const PathManager::ObstacleMeshInfo& PathManager::meshFor(const std::string& model) const

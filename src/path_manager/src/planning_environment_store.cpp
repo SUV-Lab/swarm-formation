@@ -1,4 +1,5 @@
 #include "path_manager/planning_environment_store.h"
+#include "path_manager/ros_terrain_grid.h"
 #include "path_planner/risk_shape.h"
 #include <algorithm>
 #include <cmath>
@@ -348,11 +349,20 @@ TerrainUpdate PlanningEnvironmentStore::ingestTerrain(const grid_map_msgs::msg::
         return update;
     }
 
+    // Validate the entire representation before changing auto resolution,
+    // generation, queued obstacles or the last accepted map. This shares the
+    // value API's checks without making another copy of the elevation array.
+    const auto inspection = inspectTerrainGrid(msg);
+    if (inspection.update == TerrainGridUpdate::REJECTED) {
+        log_manager_->warnf("Invalid terrain GridMap: %s", inspection.detail.c_str());
+        return update;
+    }
+
     // world=none is published as an empty GridMap. It is an explicit state
     // transition, not a malformed update: keeping the previous DEM here while
     // RViz clears it would make the displayed terrain/risk field disagree with
     // the one used for planning.
-    if (msg->layers.empty() && msg->data.empty()) {
+    if (inspection.update == TerrainGridUpdate::CLEAR) {
         update.had_terrain = terrain_data_.valid;
         const uint64_t next_generation = terrain_data_.generation + 1;
         terrain_data_ = TerrainData{};
@@ -381,13 +391,6 @@ TerrainUpdate PlanningEnvironmentStore::ingestTerrain(const grid_map_msgs::msg::
         return update;
     }
 
-    // A non-empty but malformed message is not an instruction to discard a
-    // valid map. Reject it and retain the last accepted DEM on both planner
-    // and panel sides.
-    if (!(msg->info.resolution > 0.0) || msg->data.empty()) {
-        log_manager_->warnf("Invalid non-empty terrain GridMap");
-        return update;
-    }
     if (sdf_voxel_size_auto_ && msg->info.resolution > 1e-6) {
         sdf_voxel_size_ = msg->info.resolution;
     } else if (sdf_voxel_size_ <= 0.0 && msg->info.resolution > 1e-6) {
@@ -397,36 +400,7 @@ TerrainUpdate PlanningEnvironmentStore::ingestTerrain(const grid_map_msgs::msg::
                             sdf_voxel_size_);
     }
 
-    // Find elevation layer
-    int elev_idx = -1;
-    for (size_t i = 0; i < msg->layers.size(); ++i) {
-        if (msg->layers[i] == "elevation") {
-            elev_idx = static_cast<int>(i);
-            break;
-        }
-    }
-    if (elev_idx < 0) {
-        log_manager_->warnf("Elevation layer not found in terrain GridMap");
-        return update;
-    }
-
-    if (static_cast<size_t>(elev_idx) >= msg->data.size()) {
-        log_manager_->warnf("Terrain GridMap elevation payload is missing");
-        return update;
-    }
-    const auto& elev_data = msg->data[elev_idx];
-    if (elev_data.layout.dim.size() < 2) {
-        log_manager_->warnf("Invalid terrain GridMap data layout");
-        return update;
-    }
-    const size_t cols = elev_data.layout.dim[0].size;
-    const size_t rows = elev_data.layout.dim[1].size;
-    if (cols == 0 || rows == 0 ||
-        cols > std::numeric_limits<size_t>::max() / rows ||
-        elev_data.data.size() < cols * rows) {
-        log_manager_->warnf("Invalid terrain GridMap dimensions/data size");
-        return update;
-    }
+    const auto& elev_data = msg->data[inspection.elevation_layer];
 
     // Geometry change (new world / corridor re-crop) invalidates everything
     // derived from the OLD map: the boxes-only SDF grid and the cached
@@ -565,6 +539,10 @@ void PlanningEnvironmentStore::clearObstacles()
 int PlanningEnvironmentStore::addSphere(const Eigen::Vector3d& center, double radius,
                                   const std::string& model)
 {
+    if (!center.allFinite() || !std::isfinite(radius) || !(radius > 0.0)) {
+        log_manager_->warnf("addDynamicSphere: center must be finite and radius positive and finite");
+        return -1;
+    }
     if (!sdf_manager_.hasData()) {
         // Defer: the SDF (ESDF) is built lazily on the first plan. Without a
         // cache it is not ready yet, so queue and add once it exists.
@@ -602,6 +580,10 @@ int PlanningEnvironmentStore::addSphere(const Eigen::Vector3d& center, double ra
 int PlanningEnvironmentStore::addBox(const Eigen::Vector3d& center, const Eigen::Vector3d& size,
                                const std::string& model)
 {
+    if (!center.allFinite() || !size.allFinite() || !(size.array() > 0.0).all()) {
+        log_manager_->warnf("addDynamicBox: center must be finite and size positive and finite");
+        return -1;
+    }
     if (!sdf_manager_.hasData()) {
         // Defer until the SDF is built (see addDynamicSphere).
         pending_obstacles_.push_back({true, center, size, 0.0, model});

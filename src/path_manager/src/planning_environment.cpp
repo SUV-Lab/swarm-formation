@@ -1,10 +1,17 @@
 #include "path_manager/planning_environment.h"
+#include "terrain_grid_validation.h"
 
 #include <cmath>
 #include <limits>
 
 namespace path_manager {
 bool validateTerrainGrid(const TerrainGrid &terrain, std::string *error)
+{
+  return detail::validateTerrainGridMetadata(terrain, terrain.elevation.size(), error);
+}
+
+bool detail::validateTerrainGridMetadata(const TerrainGrid &terrain,
+                                         size_t elevation_cells, std::string *error)
 {
   const auto reject = [&](const char *detail) {
     if (error) *error = detail;
@@ -27,7 +34,7 @@ bool validateTerrainGrid(const TerrainGrid &terrain, std::string *error)
   if (terrain.rows == 0 || terrain.cols == 0 ||
       cells > static_cast<uint64_t>(std::numeric_limits<int>::max()))
     return reject("terrain dimensions exceed the current sampler's index range");
-  if (cells > terrain.elevation.size())
+  if (cells > elevation_cells)
     return reject("terrain elevation payload is shorter than rows * cols");
   if (error) error->clear();
   return true;

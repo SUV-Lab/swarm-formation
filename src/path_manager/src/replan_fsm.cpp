@@ -591,7 +591,8 @@ void ReplanFSM::changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_cal
 // carried arguments across a plain function call. The target and the route
 // waypoints are the only values that were ever read back out of it.
 void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
-                                 const std::vector<Eigen::Vector3d>& waypoints) {
+                                 const std::vector<Eigen::Vector3d>& waypoints,
+                                 double length_per_piece, double obstacle_clearance) {
     auto plan_start = std::chrono::high_resolution_clock::now();
     double ros_time_start = rclcpp::Clock(RCL_ROS_TIME).now().seconds();
 
@@ -794,7 +795,7 @@ void ReplanFSM::startMissionPlan(const Eigen::Vector3d& target,
                     drone_id_, route.size(), marker.header.frame_id.c_str(), marker.ns.c_str());
     }
 
-    triggerGlobalPlan(route);
+    triggerGlobalPlan(route, length_per_piece, obstacle_clearance);
 
     auto plan_end = std::chrono::high_resolution_clock::now();
     auto plan_duration = std::chrono::duration_cast<std::chrono::milliseconds>(plan_end - plan_start).count();
@@ -832,7 +833,8 @@ void ReplanFSM::resolveCommandedStartAgl()
     current_pos_.z() = z_abs;
 }
 
-void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints) {
+void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints,
+                                double length_per_piece, double obstacle_clearance) {
     last_plan_succeeded_ = false;
     // Only the ROS adapter consumes the once-per-command AGL flag and
     // updates the execution start position. The library also supports AGL
@@ -850,6 +852,11 @@ void ReplanFSM::triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints)
     request.formation_type = current_formation_type_;
     request.formation_pattern = current_formation_pattern_;
     request.formation_size = num_drones_;
+    // The same library boundary validates and applies both persistent
+    // overrides for ROS commands and direct callers. Writing the manager
+    // first allowed a refused command to leave a nonfinite setting behind.
+    request.length_per_piece = length_per_piece;
+    request.obstacle_clearance = obstacle_clearance;
 
     auto global_traj_start = std::chrono::high_resolution_clock::now();
     FSM_LOG_INFO("[TIMING] Starting global trajectory planning");
@@ -1178,13 +1185,6 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
     current_formation_type_ = msg->formation_type;
     current_formation_scale_ = msg->formation_scale;
 
-    // Pass trajectory parameters to PathManager
-    if (msg->length_per_piece > 0.0) {
-        path_manager_->setLengthPerPiece(msg->length_per_piece);
-    }
-    if (msg->obstacle_clearance > 0.0) {
-        path_manager_->setObstacleClearance(msg->obstacle_clearance);
-    }
     FSM_LOG_INFO("Drone %d: target=(%.2f, %.2f, %.2f), offset=(%.2f, %.2f, %.2f), %zu waypoints",
                 drone_id_,
                 target_position.x(), target_position.y(), target_position.z(),
@@ -1192,7 +1192,8 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
                 waypoints.size());
 
     last_plan_succeeded_ = false;  // also covers early returns before triggerGlobalPlan
-    startMissionPlan(target_position, waypoints);
+    startMissionPlan(target_position, waypoints,
+                     msg->length_per_piece, msg->obstacle_clearance);
 
     if (!last_plan_succeeded_) {
         // Plan failed or was rejected (e.g. the optimizer's collision audit).
@@ -1223,7 +1224,11 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
 
 void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg) {
     if (path_manager_) {
-        path_manager_->setTerrainData(msg);
+        const auto update = path_manager_->setTerrainData(msg);
+        if (!update.accepted()) {
+            FSM_LOG_WARN("Terrain update rejected; retaining the previous terrain receipt");
+            return;
+        }
         FSM_LOG_INFO("Terrain data received and forwarded to PathManager");
         // [ENV-CHANGE] A new DEM can put terrain under a flight that was
         // planned over open air. Same check as the obstacle path.
@@ -1243,17 +1248,12 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
         // the panel's only view of what the planner holds. There are three
         // outcomes inside setTerrainData and they are not interchangeable:
         // a good map (ingested -> full receipt), a malformed one (early
-        // return, the old DEM stands -> the previous receipt is still
-        // accurate, so re-publishing it changes nothing), and an EMPTY one
+        // return above, the previous receipt remains accurate), and an EMPTY one
         // (world=none: the explicit clear verb, which wipes the DEM, the
         // SDF and the dynamic obstacles). The clear is why the resolution-0
         // receipt below exists — see there.
-        const bool ingested =
-            msg->info.resolution > 0.0 && !msg->data.empty();
-        // setTerrainData's own clear test, verbatim — a malformed map is
-        // neither ingested nor a clear, and must emit nothing at all: the
-        // old DEM stands, so the previous receipt is still the truth.
-        const bool cleared = msg->layers.empty() && msg->data.empty();
+        const bool ingested = update.kind == TerrainUpdateKind::REPLACED;
+        const bool cleared = update.kind == TerrainUpdateKind::CLEARED;
         if (terrain_ready_pub_ && (ingested || cleared)) {
             std_msgs::msg::Float64MultiArray ready;
             if (ingested) {

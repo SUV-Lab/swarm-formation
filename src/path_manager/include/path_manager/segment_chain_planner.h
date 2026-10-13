@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -339,6 +340,10 @@ private:
   struct SegmentOverrides {
     std::vector<rclcpp::Parameter> params;
     std::string label;  // "a=b, c=d" for the report; empty = none
+    // Parse errors are overlaid with values. A higher-precedence valid value
+    // may replace an invalid phase value; an invalid final value may not
+    // resurrect an earlier valid one. Validate only the effective profile.
+    std::map<std::string, std::string> invalid_hard;
   };
   // Profiles and the optimizers configured from them form one preparation
   // result. Each worker consumes its own value overlay without changing node
@@ -348,6 +353,9 @@ private:
     std::vector<SegmentOverrides> effective;
     std::vector<std::unique_ptr<ego_planner::PolyTrajOptimizer>> optimizers;
   };
+  // Shared resolution for real workers and early direct fallback.
+  RouteWorkerSetup readRouteWorkerProfiles(const PlanContext &state,
+                                           bool phase_requested) const;
   RouteWorkerSetup prepareRouteWorkers(const PlanContext &state, std::vector<Contract> &contracts,
                                        bool run_parallel,
                                        bool phase_requested);

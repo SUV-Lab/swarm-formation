@@ -110,14 +110,16 @@ private:
     bool planFromGlobalTraj(int trial_times = 1);
     // Pure planning trigger: runs global planning for given waypoints and handles
     // success/FSM transition. No message dependency (uses member state + waypoints).
-    void triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints);
+    void triggerGlobalPlan(const std::vector<Eigen::Vector3d>& waypoints,
+                           double length_per_piece, double obstacle_clearance);
     void changeFSMExecState(FSM_EXEC_STATE new_state, std::string pos_call);
     bool callEmergencyStop(const Eigen::Vector3d& stop_pos);
     
     // Mission entry point: resolves the start state from the commanded target
     // and route, draws the waypoint markers, then runs the global plan.
     void startMissionPlan(const Eigen::Vector3d& target,
-                          const std::vector<Eigen::Vector3d>& waypoints);
+                          const std::vector<Eigen::Vector3d>& waypoints,
+                          double length_per_piece, double obstacle_clearance);
 
     std::shared_ptr<PathManager> path_manager_;
 

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -27,6 +28,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <grid_map_msgs/msg/grid_map.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 #include "path_manager/replan_fsm.h"
 #include "mmp_mission_msgs/msg/trajectory_command.hpp"
@@ -143,6 +145,12 @@ int main(int argc, char **argv) {
   auto qos = rclcpp::QoS(5).reliable().transient_local();
   std::vector<Traj> trajs;
   std::vector<Ctl> ctls;
+  std::vector<std::vector<double>> terrain_receipts;
+  auto terrain_sub = node->create_subscription<std_msgs::msg::Float64MultiArray>(
+      "/planning/terrain_ready", qos,
+      [&terrain_receipts](std_msgs::msg::Float64MultiArray::SharedPtr m) {
+        terrain_receipts.push_back(m->data);
+      });
   auto ts = node->create_subscription<Traj>(
       "/planning/trajectory", qos,
       [&trajs](Traj::SharedPtr m) { trajs.push_back(*m); });
@@ -154,6 +162,28 @@ int main(int argc, char **argv) {
   // (1) Ground under the mission.
   fsm.terrainCallback(makeFlatMap(0.0));
   spin(node, 200);
+  expect(!terrain_receipts.empty() &&
+             terrain_receipts.back() == std::vector<double>({2.,0.,0.,360.,300.}),
+         "terrain-ready receipt describes the accepted map");
+  const auto receipt_count = terrain_receipts.size();
+  auto malformed_map = makeFlatMap(0.0);
+  malformed_map->info.resolution = 4.;
+  malformed_map->data[0].data.clear();
+  fsm.terrainCallback(malformed_map);
+  fsm.terrainCallback(nullptr);
+  spin(node, 200);
+  expect(terrain_receipts.size() == receipt_count,
+         "rejected/null terrain does not certify requested geometry as ingested");
+  fsm.terrainCallback(std::make_shared<grid_map_msgs::msg::GridMap>());
+  spin(node, 200);
+  expect(terrain_receipts.size() == receipt_count + 1 &&
+             terrain_receipts.back() == std::vector<double>(5,0.),
+         "accepted explicit terrain clear publishes the zero receipt");
+  fsm.terrainCallback(makeFlatMap(0.0));
+  spin(node, 200);
+  expect(terrain_receipts.size() == receipt_count + 2 &&
+             terrain_receipts.back() == std::vector<double>({2.,0.,0.,360.,300.}),
+         "valid terrain after rejection/clear restores the true ready receipt");
 
   // (2) A zone set, BEFORE any trajectory exists. The set starts empty, so
   // this batch IS a change — installing it now means the no-op check below
@@ -302,6 +332,70 @@ int main(int argc, char **argv) {
   expect(trajs.size() == before_withdrawn + 1 &&
              trajs.back().trajectory_id > withdrawn_id,
          "a fresh library result recovers after pending publication was withdrawn");
+
+  // (11) ROS commands must use the same settings validation as the public
+  // mission API. Previously the FSM wrote these fields to PathManager first,
+  // then sent a request whose override fields were both zero. A refused
+  // +infinity clearance poisoned every later otherwise-valid mission.
+  const auto same_polynomial = [](const Traj &a, const Traj &b) {
+    return a.order == b.order && a.coef_x == b.coef_x &&
+           a.coef_y == b.coef_y && a.coef_z == b.coef_z &&
+           a.duration == b.duration;
+  };
+  Traj before_overrides;
+  fsm.polyTraj2ROSMsg(before_overrides);
+  int override_sequence = 7;
+  for (double invalid : {std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::quiet_NaN()}) {
+    for (bool invalid_length : {true, false}) {
+      const std::string mission_id = "override-" + std::to_string(override_sequence);
+      auto command = makeMission(override_sequence, mission_id, 330.0, 150.0, 4.0);
+      command->length_per_piece = invalid_length ? invalid : 37.0;
+      command->obstacle_clearance = invalid_length ? 5.0 : invalid;
+      fsm.trajectoryCommandCallback(command);
+      Traj refused;
+      fsm.polyTraj2ROSMsg(refused);
+      expect(refused.trajectory_id == before_overrides.trajectory_id &&
+                 refused.start_time == before_overrides.start_time &&
+                 same_polynomial(refused, before_overrides),
+             "nonfinite ROS override refuses without replacing the active result");
+
+      // The same sequence must remain available after refusal. Negative
+      // finite values retain the existing settings, including the OTHER
+      // field whose valid positive override was paired with the bad value.
+      command = makeMission(override_sequence, mission_id, 330.0, 150.0, 4.0);
+      command->length_per_piece = -3.0;
+      command->obstacle_clearance = -2.0;
+      fsm.trajectoryCommandCallback(command);
+      Traj corrected;
+      fsm.polyTraj2ROSMsg(corrected);
+      expect(corrected.trajectory_id == before_overrides.trajectory_id + 1 &&
+                 same_polynomial(corrected, before_overrides),
+             "same-sequence corrected ROS command reproduces every coefficient and piece time");
+      before_overrides = std::move(corrected);
+      ++override_sequence;
+    }
+  }
+
+  // Positive overrides still apply and persist. The next command deliberately
+  // omits them and must produce exactly the same changed polynomial.
+  auto positive = makeMission(override_sequence++, "positive-overrides", 330.0, 150.0, 4.0);
+  positive->length_per_piece = 12.5;
+  positive->obstacle_clearance = 0.45;
+  fsm.trajectoryCommandCallback(positive);
+  Traj changed;
+  fsm.polyTraj2ROSMsg(changed);
+  expect(changed.trajectory_id == before_overrides.trajectory_id + 1 &&
+             !same_polynomial(changed, before_overrides),
+         "valid positive ROS settings reach the library and change the solve");
+  fsm.trajectoryCommandCallback(makeMission(
+      override_sequence, "retained-overrides", 330.0, 150.0, 4.0));
+  Traj retained;
+  fsm.polyTraj2ROSMsg(retained);
+  expect(retained.trajectory_id == changed.trajectory_id + 1 &&
+             same_polynomial(retained, changed),
+         "omitted ROS settings retain both previously accepted overrides");
 
   rclcpp::shutdown();
   if (g_failed == 0) { std::cout << "PASS: 0 failed check(s)\n"; return 0; }

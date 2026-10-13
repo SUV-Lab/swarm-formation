@@ -4,6 +4,7 @@
 #include <iostream>
 #include <limits>
 #include <type_traits>
+#include <functional>
 
 namespace pm = path_manager;
 namespace {
@@ -130,6 +131,64 @@ int main(int argc, char **argv) {
             deferred.distanceField().getDistance(Eigen::Vector3d(2.2,2.1,1.5))==
                 immediate.distanceField().getDistance(Eigen::Vector3d(2.2,2.1,1.5)),
         "deferred replay preserves RNG order and oriented obstacle collision geometry");
+
+  auto auto_options = options(); auto_options.sdf_voxel_size_auto = true;
+  pm::PlanningEnvironmentStore transactional(auto_options, log, {zone});
+  transactional.ingestTerrain(terrain(2.f)); finishTerrain(transactional);
+  transactional.addSphere(Eigen::Vector3d(0,0,0), .5);
+  const auto accepted_revision = transactional.revision();
+  const auto accepted_fingerprint = transactional.riskZoneFingerprint();
+  using Message = grid_map_msgs::msg::GridMap;
+  const std::vector<std::function<void(Message &)>> malformed_updates{
+    [](Message &m) { m.data[0].data.clear(); },
+    [](Message &m) { m.layers = {"wrong"}; },
+    [](Message &m) { m.data[0].layout.dim.resize(1); },
+    [](Message &m) { m.info.resolution = std::numeric_limits<double>::infinity(); },
+    [](Message &m) { m.info.length_x = std::numeric_limits<double>::quiet_NaN(); },
+    [](Message &m) { m.info.length_y = -1.; },
+    [](Message &m) { m.info.pose.position.x = std::numeric_limits<double>::infinity(); },
+    [](Message &m) { m.data[0].layout.dim[0].size = std::numeric_limits<uint32_t>::max(); }
+  };
+  bool rejected_atomically = true;
+  for (const auto &mutate : malformed_updates) {
+    auto bad = terrain(9.f, 2.); mutate(*bad);
+    rejected_atomically &= !transactional.ingestTerrain(bad).accepted() &&
+        transactional.revision() == accepted_revision &&
+        transactional.voxelSize() == 1. &&
+        transactional.terrain().getElevation(0,0) == 2.f &&
+        transactional.obstacles().size() == 1 &&
+        transactional.riskZoneFingerprint() == accepted_fingerprint;
+  }
+  check(rejected_atomically,
+        "all malformed ROS terrain forms preserve data, auto pitch, revisions, risk and obstacles");
+  transactional.ingestTerrain(terrain(4.f, .5)); finishTerrain(transactional);
+  check(transactional.voxelSize() == .5 && transactional.terrain().getElevation(0,0) == 4.f,
+        "valid recrop after rejected inputs still updates auto pitch and terrain");
+
+  pm::PlanningEnvironmentStore invalid_obstacles(options(), log), control(options(), log);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const auto rejectObstacles = [&](pm::PlanningEnvironmentStore &s) {
+    const auto before = s.revision();
+    return s.addSphere(Eigen::Vector3d(nan,0,0), 1.) == -1 &&
+        s.addSphere(Eigen::Vector3d::Zero(), -1.) == -1 &&
+        s.addSphere(Eigen::Vector3d::Zero(), nan) == -1 &&
+        s.addBox(Eigen::Vector3d(0,nan,0), Eigen::Vector3d::Ones()) == -1 &&
+        s.addBox(Eigen::Vector3d::Zero(), Eigen::Vector3d(1.,0.,1.)) == -1 &&
+        s.addBox(Eigen::Vector3d::Zero(), Eigen::Vector3d(1.,nan,1.)) == -1 &&
+        s.revision() == before && s.obstacles().empty();
+  };
+  check(rejectObstacles(invalid_obstacles),
+        "malformed obstacles are rejected before deferral and do not change revisions");
+  invalid_obstacles.ingestTerrain(terrain(0.f)); finishTerrain(invalid_obstacles);
+  control.ingestTerrain(terrain(0.f)); finishTerrain(control);
+  check(invalid_obstacles.obstacles().empty() && rejectObstacles(invalid_obstacles),
+        "rejected obstacles never enter the deferred queue or live distance field");
+  invalid_obstacles.addBox(Eigen::Vector3d::Zero(), Eigen::Vector3d(1,2,3));
+  control.addBox(Eigen::Vector3d::Zero(), Eigen::Vector3d(1,2,3));
+  check(invalid_obstacles.obstacles()[0].yaw == control.obstacles()[0].yaw &&
+            invalid_obstacles.distanceField().getDistance(Eigen::Vector3d(.2,.1,1.5)) ==
+                control.distanceField().getDistance(Eigen::Vector3d(.2,.1,1.5)),
+        "rejected obstacles consume no yaw RNG and cannot affect the next valid shape");
   rclcpp::shutdown();
   std::cout << (failures ? "FAIL" : "PASS") << ": " << failures << " failed checks\n";
   return failures ? 1 : 0;

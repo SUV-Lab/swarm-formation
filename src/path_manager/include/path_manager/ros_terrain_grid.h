@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <grid_map_msgs/msg/grid_map.hpp>
@@ -14,12 +15,22 @@ struct TerrainGridDecode {
   std::string detail;
 };
 
+struct TerrainGridInspection {
+  TerrainGridUpdate update{TerrainGridUpdate::NO_CHANGE};
+  size_t elevation_layer{0};  // meaningful only for REPLACE
+  std::string detail;
+};
+
+// Same representation checks as the value API, without copying cell data.
+// Rejected messages do not authorize any live terrain/settings update.
+TerrainGridInspection inspectTerrainGrid(
+    const grid_map_msgs::msg::GridMap::SharedPtr &message);
+
 // Compatibility conversion for value-input callers. A null pointer means no
 // update; both empty layers/data mean clear. Invalid nonempty input is rejected.
 // Copy the fields used by PathManager, retaining raw float order and extra
 // payload; ignored GridMap offsets/strides/ring indices remain ignored.
-// The raw ROS callback still calls PathManager directly and keeps its original
-// validation order and side effects, including pre-rejection SDF pitch updates.
+// Raw ROS ingestion uses the same inspection before changing live state.
 TerrainGridDecode decodeTerrainGrid(
     const grid_map_msgs::msg::GridMap::SharedPtr &message);
 

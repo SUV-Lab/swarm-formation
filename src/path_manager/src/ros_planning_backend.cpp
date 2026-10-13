@@ -110,7 +110,8 @@ void RosPlanningBackend::initialize(PlanSettings settings, PlanningEnvironment e
     manager_->setRouteSearchBackend(std::move(settings.route_search_backend));
   // Preserve ingestion/grounding and deterministic obstacle spawn order.
   // Missing fields perform zero clears, retaining the existing YAML state.
-  if (initial_terrain) manager_->setTerrainData(initial_terrain);
+  if (initial_terrain && !manager_->setTerrainData(initial_terrain).accepted())
+    throw std::invalid_argument("initial terrain was rejected during ingestion");
   if (environment.risk_zones && !manager_->setRiskZonesRuntime(*environment.risk_zones))
     throw std::invalid_argument("initial risk-zone set was rejected");
   if (environment.dynamic_obstacles) {
@@ -163,8 +164,9 @@ bool RosPlanningBackend::setTerrain(TerrainGrid terrain, std::string *error)
   requireInitialized();
   auto message = encodeTerrainGrid(std::move(terrain), error);
   if (!message) return false;
-  manager_->setTerrainData(message);
-  return true;
+  const bool accepted = manager_->setTerrainData(message).accepted();
+  if (!accepted && error) *error = "terrain was rejected during ingestion";
+  return accepted;
 }
 void RosPlanningBackend::clearTerrain()
 {
