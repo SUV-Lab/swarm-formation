@@ -84,6 +84,7 @@ int main(int argc, char **argv)
     options.arguments({"--ros-args", "--params-file", argv[1]});
     // The test owns concurrency so runs on different machines agree.
     options.parameter_overrides({
+        rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
         rclcpp::Parameter("optimization/risk_parallel_threads", 1)});
     auto node = rclcpp::Node::make_shared("route_slice_solver_test", options);
     node->declare_parameter("drone_id", 0);

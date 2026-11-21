@@ -414,6 +414,7 @@ int main(int argc, char **argv)
   // later declare then returns the override).
   {
     std::vector<rclcpp::Parameter> ovr;
+    ovr.emplace_back("manager/risk_model_mode", std::string("legacy"));
     // zonepass0: 3-pass policy off -> pass stays 0 with zones present.
     if (with_zonepass0 || with_baserefuse || with_wpzonepass0)
       ovr.emplace_back("manager/zone_avoid_lexicographic", false);

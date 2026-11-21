@@ -20,6 +20,21 @@ template<class... Args> std::string formatDiagnostic(const char *format, Args...
 void require(bool condition, const char *message) {
   if (!condition) throw std::invalid_argument(message);
 }
+double trajectoryRisk(const RiskView &field, const Eigen::Vector3d &p,
+                      const Eigen::Vector3d &v) {
+  long double log_survival = 0;
+  bool certain = false;
+  for (size_t i = 0; i < field.zones.size(); ++i) {
+    const double risk = field.trajectory_value ? field.trajectory_value(i, p, v)
+                                               : field.value(i, p);
+    require(std::isfinite(risk) && risk >= 0 && risk <= 1,
+            "trajectory risk callback must return a probability");
+    // Saturation does not excuse an invalid later source callback.
+    if (risk == 1) certain = true;
+    else log_survival += std::log1p(-static_cast<long double>(risk));
+  }
+  return certain ? 1 : static_cast<double>(-std::expm1(log_survival));
+}
 void validateTrajectory(const poly_traj::Trajectory &trajectory) {
   require(std::isfinite(trajectory.getTotalDuration()), "visualization trajectory duration must be finite");
   for (const auto &piece : trajectory) {
@@ -321,19 +336,16 @@ Prepared<visualization_msgs::msg::Marker> makeTrajectoryRisk(
         return result;
     }
     validateZones(field);
-    require(static_cast<bool>(field.value), "risk value callback is missing");
+    require(static_cast<bool>(field.value) || static_cast<bool>(field.trajectory_value),
+            "risk value callback is missing");
     const int n = std::min(2000, std::max(50, checkedInt(T / 0.5)));
     m.points.reserve(n + 1);
     m.colors.reserve(n + 1);
     for (int i = 0; i <= n; ++i) {
         const double t = T * static_cast<double>(i) / n;
         const Eigen::Vector3d p = traj.getPos(std::min(t, T - 1e-9));
-        // OR-combined effective moat (terrain-masked, same field the
-        // optimizer prices): r = 1 - prod(1 - m_i).
-        double surv = 1.0;
-        for (size_t zi = 0; zi < field.zones.size(); ++zi)
-            surv *= (1.0 - field.value(zi, p));
-        const double r = 1.0 - surv;
+        // Physical final-trajectory risk has no endpoint taper or barrier.
+        const double r = trajectoryRisk(field, p, traj.getVel(std::min(t, T - 1e-9)));
         // Perceptual ramp: sqrt lifts the faint-halo values so "slightly
         // visible" is visibly yellow-ish instead of indistinguishable green.
         const double s = std::sqrt(std::clamp(r, 0.0, 1.0));
@@ -353,23 +365,20 @@ Prepared<visualization_msgs::msg::Marker> makeTrajectoryRisk(
         m.points.push_back(gp);
         m.colors.push_back(c);
     }
-    // Diagnostic: max experienced moat along the line — if this is 0 while
-    // the optimizer's risk_cost was nonzero, the viz field and the priced
-    // field have diverged (bug), or the cost was pure barrier/velocity terms.
+    // Report the display's explicit mode. exact/heading samples need not equal
+    // the optimizer's smooth, tapered planning cost.
     {
         double max_r = 0.0; Eigen::Vector3d max_p = Eigen::Vector3d::Zero();
         for (int i = 0; i <= n; ++i) {
             const double t = T * static_cast<double>(i) / n;
             const Eigen::Vector3d p = traj.getPos(std::min(t, T - 1e-9));
-            double surv = 1.0;
-            for (size_t zi = 0; zi < field.zones.size(); ++zi)
-                surv *= (1.0 - field.value(zi, p));
-            if (1.0 - surv > max_r) { max_r = 1.0 - surv; max_p = p; }
+            const double risk = trajectoryRisk(field, p, traj.getVel(std::min(t, T - 1e-9)));
+            if (risk > max_r) { max_r = risk; max_p = p; }
         }
         result.diagnostic = formatDiagnostic(
-            "[TRAJ-RISK] published %d pts, max experienced moat r=%.5f at "
+            "[TRAJ-RISK] mode=%s, published %d pts, max risk=%.5f at "
             "(%.1f, %.1f, %.2f), zones=%zu",
-            n + 1, max_r, max_p.x(), max_p.y(), max_p.z(), field.zones.size());
+            field.trajectory_mode.c_str(), n + 1, max_r, max_p.x(), max_p.y(), max_p.z(), field.zones.size());
     }
     return result;
 }
@@ -492,7 +501,8 @@ Prepared<std_msgs::msg::Float64MultiArray> makeRiskProfile(
     validateZones(field);
     validateRiskGeometry(settings);
     validateTerrain(field.terrain, true);
-    require(static_cast<bool>(field.value) && static_cast<bool>(field.shadow_ceiling), "risk profile callbacks are missing");
+    require((static_cast<bool>(field.value) || static_cast<bool>(field.trajectory_value)) &&
+            static_cast<bool>(field.shadow_ceiling), "risk profile callbacks are missing");
     require(std::isfinite(settings.max_velocity) && std::isfinite(settings.obstacle_clearance), "risk profile settings must be finite");
     const double est_len = std::max(1.0, T * settings.max_velocity);
     const int K = std::clamp(checkedInt(est_len / 1.0), 256, 16384);
@@ -515,10 +525,7 @@ Prepared<std_msgs::msg::Float64MultiArray> makeRiskProfile(
         s += (p - prev).head<2>().norm();
         prev = p;
 
-        double survival = 1.0;
-        for (size_t zi = 0; zi < zone_count; ++zi)
-            survival *= (1.0 - field.value(zi, p));
-        const double combined_risk = 1.0 - survival;
+        const double combined_risk = trajectoryRisk(field, p, traj.getVel(std::min(t, T - 1e-9)));
 
         msg.data.push_back(s);
         msg.data.push_back(p.x());
@@ -537,8 +544,8 @@ Prepared<std_msgs::msg::Float64MultiArray> makeRiskProfile(
         }
     }
     result.diagnostic = formatDiagnostic(
-        "[RISK-PROFILE] v4: %d samples over %.1f u, zones=%zu, width=%zu",
-        K + 1, s, zone_count, record_width);
+        "[RISK-PROFILE] v4 mode=%s: %d samples over %.1f u, zones=%zu, width=%zu",
+        field.trajectory_mode.c_str(), K + 1, s, zone_count, record_width);
     return result;
 }
 
@@ -581,14 +588,16 @@ Prepared<grid_map_msgs::msg::GridMap> makeRiskHeatmap(
     }
     const bool hm3d = settings.mode == "heatmap3d";
     if ((settings.mode != "heatmap" && !hm3d) || !(x1 > x0)) {
-        // Latched topic: replace any stale heatmap with an all-NaN stub.
+        // Latched topic: replace stale geometry with a grid containing no
+        // valid vertices. RViz's mesh renderer needs at least two cells per
+        // axis; a 1x1 update can leave the previous surface on screen.
         msg.info.resolution = 1.0;
-        msg.info.length_x = 1.0;
-        msg.info.length_y = 1.0;
+        msg.info.length_x = 2.0;
+        msg.info.length_y = 2.0;
         msg.info.pose.position.x = 0.0;
         msg.info.pose.position.y = 0.0;
         msg.info.pose.orientation.w = 1.0;
-        msg.data = {makeLayer(1, 1), makeLayer(1, 1)};
+        msg.data = {makeLayer(2, 2), makeLayer(2, 2)};
         return result;
     }
 
@@ -1189,6 +1198,7 @@ visualization_msgs::msg::MarkerArray makeDynamicObstacles(
     clear_marker.header.frame_id = "map";
     clear_marker.header.stamp = stamp();
     clear_marker.ns = "dynamic_obstacles";
+    clear_marker.id = -1;
     clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
     arr.markers.push_back(clear_marker);
 

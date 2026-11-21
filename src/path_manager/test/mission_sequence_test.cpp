@@ -154,6 +154,7 @@ int main(int argc, char **argv) {
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", argv[1]});
   options.parameter_overrides({
+      rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
       rclcpp::Parameter("drone_id", 0),
       rclcpp::Parameter("chain/enable", false),
   });

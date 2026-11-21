@@ -104,6 +104,7 @@ pm::RosPlanningOptions options(const char *config, const std::string &name)
 {
   pm::RosPlanningOptions result; result.node_name = name;
   result.node_options.arguments({"--ros-args", "--params-file", config});
+  result.node_options.append_parameter_override("manager/risk_model_mode", std::string("legacy"));
   result.node_options.append_parameter_override("chain/enable", false);
   return result;
 }

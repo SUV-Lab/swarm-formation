@@ -150,6 +150,9 @@
     # DEM radial-horizon/viewshed mask. center.z of each risk zone is the
     # source altitude; risk is removed below the highest intervening terrain
     # LOS and reappears if the vehicle climbs above that horizon.
+
+    manager/risk_model_mode: default
+
     manager/risk_terrain_mask_enable: true
     # Zone center.z semantics: true = AGL source height (effective source z =
     # DEM terrain at (x,y) + center.z; z=0 sits ON the ground — author x,y and
@@ -186,6 +189,13 @@
                                         # 그대로 3D로 확장한 뷰(2026-07-20).
     manager/risk_heatmap_agl_max: 2.0   # heatmap ramp saturates at this visibility-boundary AGL (frame units)
     manager/risk_heatmap_max_dim: 768   # heatmap grid cells along the longer AABB side
+    # auto: default + heatmap shows a local probability slice;
+    # legacy and heatmap3d keep the existing visibility-boundary meaning.
+    # visibility/probability explicitly select one layer (no overlaid meanings).
+    manager/risk_heatmap_content: auto
+    manager/risk_probability_heatmap_height_mode: agl # agl | msl
+    manager/risk_probability_heatmap_height_m: 100.0 # evaluation height, SI metres; display setting only
+    manager/risk_probability_heatmap_max_dim: 192 # 2..512; display grid, never a planner resolution
     manager/risk_heatmap_offset: 1.0   # drape height above DEM in frame units (1.0 = 100 m; must clear the rendered mesh on slopes)
     manager/risk_heatmap_preview_lift: 20.0  # [PREVIEW] extra lift BEFORE any DEM arrives (2 km): the
                                         # pre-plan ideal field would otherwise sit at sea level and be

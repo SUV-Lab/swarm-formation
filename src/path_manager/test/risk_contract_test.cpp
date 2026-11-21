@@ -1,30 +1,6 @@
-// Pins the RISK CONTRACT — not the risk formula.
-//
-// Audit PA-1 (2026-08-19) found that changing the searcher's attenuation from
-// u^2 to u passed the entire regression (86/0/0, 71/71, 154/0) while moving
-// nine of fourteen routes. The exponent was then examined as a contract
-// question and NOT approved as one: no tracked document requires it, the
-// flight-refusal verdict never reads it, and the optimizer used a cubic decay
-// until 47ce135 unified it to the quadratic for field sharing.
-//
-// So this file deliberately does not assert the exponent. It asserts the six
-// properties that were approved, each of which holds for any u^k with k > 0:
-//
-//   1. maximum at the centre, zero at the boundary
-//   2. monotonically non-increasing with radius
-//   3. finite and non-negative
-//   4. every layer prices risk through the one shared function
-//   5. value and analytic derivative always agree
-//   6. peak is admissible only in (0, 1], and a set containing an
-//      inadmissible zone is rejected ATOMICALLY  (PA-7)
-//
-// "Atomic rejection" is the precise claim, and it is narrower than
-// system-level fail-closed: a rejected initial config leaves zero zones and
-// planning continues. Whether it should is an open policy question.
-//
-// Property 4 is the one that kills the original mutation: re-inlining u*u at a
-// single call site separates that layer from mmp::risk::shape, and the
-// cross-layer checks below read both layers at the same points.
+// Legacy risk-field contract: bounded monotone shape, shared values across
+// search and optimization, consistent derivatives, and atomic rejection of
+// invalid peaks. These checks do not prescribe the shape's exponent.
 
 #include <cmath>
 #include <cstdio>
@@ -169,6 +145,7 @@ void testCrossLayerIdentity(const char *yaml) {
   // the gradient check passes vacuously. (Measured: it did.)
   rclcpp::NodeOptions opts;
   opts.arguments({"--ros-args", "--params-file", yaml});
+  opts.append_parameter_override("manager/risk_model_mode", std::string("legacy"));
   auto node = std::make_shared<rclcpp::Node>("risk_contract_test", opts);
   node->declare_parameter("drone_id", 1);
   path_manager::PathManager manager(node);

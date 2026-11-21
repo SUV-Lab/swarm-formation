@@ -274,6 +274,7 @@ rclcpp::Node::SharedPtr nodeFor(const char *config, const std::string &name) {
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", config});
   options.parameter_overrides({rclcpp::Parameter("manager/front_end", std::string("fm2")),
+      rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
       rclcpp::Parameter("chain/enable", true), rclcpp::Parameter("chain/segments", 3),
       rclcpp::Parameter("chain/phase/enable", false), rclcpp::Parameter("chain/author_from_route", true),
       rclcpp::Parameter("chain/parallel", true), rclcpp::Parameter("optimization/risk_parallel_threads", 1)});

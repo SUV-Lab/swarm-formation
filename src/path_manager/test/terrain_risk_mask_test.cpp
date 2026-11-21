@@ -59,6 +59,7 @@ int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   rclcpp::NodeOptions options;
+  options.append_parameter_override("manager/risk_model_mode", std::string("legacy"));
   // This fixture deliberately exercises the opt-in AGL authoring mode; the
   // production default is absolute z for backward-compatible scenarios.
   options.append_parameter_override("manager/risk_zone_agl", true);
@@ -275,16 +276,19 @@ int main(int argc, char **argv)
   auto heatmap_sub = node->create_subscription<grid_map_msgs::msg::GridMap>(
       "/viz/risk_heatmap", rclcpp::QoS(16).reliable().transient_local(),
       [&](grid_map_msgs::msg::GridMap::SharedPtr m) {
-        // Non-heatmap managers latch a 1x1 NaN stub; keep real maps only.
+        // Non-heatmap managers latch an all-NaN clearing grid; keep maps
+        // with actual rendered samples, independent of clearing-grid size.
         // Same-publisher reliable delivery is ordered, so the last kept map
         // is the post-DEM one.
-        if (!m->data.empty() && m->data[0].data.size() > 1) {
+        if (!m->data.empty() && std::any_of(m->data[0].data.begin(),
+            m->data[0].data.end(), [](float value) { return std::isfinite(value); })) {
           heatmap = *m;
           got_heatmap = true;
         }
       });
 
   rclcpp::NodeOptions hm_options;
+  hm_options.append_parameter_override("manager/risk_model_mode", std::string("legacy"));
   hm_options.append_parameter_override("manager/risk_zone_agl", true);
   hm_options.append_parameter_override("manager/risk_mask_viz_mode",
                                        std::string("heatmap"));

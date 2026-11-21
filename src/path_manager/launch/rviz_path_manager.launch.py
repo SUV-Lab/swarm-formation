@@ -109,6 +109,12 @@ def generate_launch_description():
             description='Debug mode passthrough (see path_manager.launch.py)'
         ),
         DeclareLaunchArgument(
+            'risk_model_mode',
+            default_value='',
+            choices=['', 'default', 'legacy'],
+            description='Risk model override; empty uses optimizer_params.yaml.'
+        ),
+        DeclareLaunchArgument(
             'follower',
             default_value='shared_3dof',
             description='Dynamics follower: shared_3dof (C++, same model as '
@@ -125,6 +131,7 @@ def generate_launch_description():
                 'record_bag': LaunchConfiguration('record_bag'),
                 'disable_file_logging': LaunchConfiguration('disable_file_logging'),
                 'world': LaunchConfiguration('world'),
+                'risk_model_mode': LaunchConfiguration('risk_model_mode'),
             }.items()
         ),
 

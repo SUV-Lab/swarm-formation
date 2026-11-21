@@ -125,6 +125,7 @@ rclcpp::Node::SharedPtr makeNode(const char *config, const std::string &name) {
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", config});
   options.parameter_overrides({rclcpp::Parameter("chain/enable", true),
+      rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
       rclcpp::Parameter("chain/segments", 3),
       rclcpp::Parameter("chain/phase/enable", false),
       rclcpp::Parameter("chain/author_from_route", true),

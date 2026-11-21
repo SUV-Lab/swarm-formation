@@ -3,6 +3,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <set>
 #include <stdexcept>
 
 namespace viz = path_manager::visualization;
@@ -71,6 +72,18 @@ int main() {
   const auto hidden_obstacle = viz::makeDynamicObstacles({sphere}, 0.0, stamp);
   check(hidden_obstacle.markers.at(1).scale.z == 0.0,
         "legacy zero sphere mesh height does not reject planning");
+  auto box = sphere;
+  sphere.id = 0;
+  box.id = 1;
+  box.is_box = true;
+  const auto obstacle_batch = viz::makeDynamicObstacles({sphere, box}, 1.0, stamp);
+  std::set<std::pair<std::string, int>> marker_keys;
+  for (const auto &marker : obstacle_batch.markers)
+    marker_keys.emplace(marker.ns, marker.id);
+  check(obstacle_batch.markers.size() == 5 &&
+        obstacle_batch.markers.front().action == visualization_msgs::msg::Marker::DELETEALL &&
+        marker_keys.size() == obstacle_batch.markers.size(),
+        "obstacle replacement has unique namespace/id pairs including DELETEALL and obstacle zero");
   const auto clear = viz::makeTrajectoryClear();
   check(clear.action == visualization_msgs::msg::Marker::DELETEALL &&
         clear.header.frame_id == "world", "trajectory clear keeps legacy action/frame");
@@ -93,6 +106,41 @@ int main() {
   const auto risk_line = viz::makeTrajectoryRisk(line(), field, stamp);
   check(!risk_line.message.points.empty() && risk_line.message.colors.size() ==
         risk_line.message.points.size(), "external canonical provider prepares colored geometry");
+  auto heading_field=field;
+  int heading_queries=0;
+  heading_field.trajectory_mode="exact/heading";
+  heading_field.trajectory_value=[&](size_t,const Eigen::Vector3d&,const Eigen::Vector3d& velocity) {
+    ++heading_queries;
+    return velocity.x()>0?.75:.05;
+  };
+  const auto heading_profile=viz::makeRiskProfile(line(),heading_field,config);
+  check(heading_queries>0 && std::abs(heading_profile.message.data.at(6)-.75)<1e-12 &&
+        heading_profile.message.data.at(0)==4,
+        "v4 profile uses trajectory velocity and exact provider while preserving layout");
+  const auto heading_line=viz::makeTrajectoryRisk(line(),heading_field,stamp);
+  check(heading_line.message.colors.front().r>risk_line.message.colors.front().r-.1 &&
+        heading_line.message.colors.front().g<risk_line.message.colors.front().g &&
+        heading_line.diagnostic.find("exact/heading")!=std::string::npos,
+        "final color uses heading risk and identifies its evaluation mode");
+  std::vector<path_manager::RiskZone> two_zones(2,zones.front());
+  viz::RiskView combined{two_zones,field.terrain,field.value,field.visibility,field.shadow_ceiling};
+  combined.trajectory_value=[](size_t,const Eigen::Vector3d&,const Eigen::Vector3d&) {return .5;};
+  check(std::abs(viz::makeRiskProfile(line(),combined,config).message.data.at(6)-.75)<1e-12,
+        "trajectory profile combines independent sources rather than their maximum");
+  combined.trajectory_value=[](size_t i,const Eigen::Vector3d&,const Eigen::Vector3d&) {
+    return i==0?1.0:.25;
+  };
+  check(viz::makeRiskProfile(line(),combined,config).message.data.at(6)==1,
+        "certain first source preserves saturated combined risk");
+  for (double invalid_risk:{std::numeric_limits<double>::quiet_NaN(),-0.1,1.1}) {
+    combined.trajectory_value=[invalid_risk](size_t i,const Eigen::Vector3d&,const Eigen::Vector3d&) {
+      return i==0?1.0:invalid_risk;
+    };
+    rejects([&] {viz::makeTrajectoryRisk(line(),combined,stamp);},
+            "saturated line still rejects invalid later source probability");
+    rejects([&] {viz::makeRiskProfile(line(),combined,config);},
+            "saturated profile still rejects invalid later source probability");
+  }
   const auto heatmap = viz::makeRiskHeatmap(field, config, stamp);
   check(heatmap.message.layers == std::vector<std::string>({"elevation", "color"}) &&
         heatmap.message.data[0].data.size() > 1,
@@ -123,9 +171,9 @@ int main() {
             visualization_msgs::msg::Marker::DELETE,
         "empty trajectory clears colored line");
   const auto empty_grid = viz::makeRiskHeatmap(empty, {}, stamp).message;
-  check(empty_grid.data.size() == 2 && empty_grid.data.front().data.size() == 1 &&
+  check(empty_grid.data.size() == 2 && empty_grid.data.front().data.size() == 4 &&
         std::isnan(empty_grid.data.front().data.front()),
-        "empty field replaces retained heatmap with NaN stub");
+        "empty field replaces retained heatmap with renderable 2x2 NaN stub");
 
   rejects([&] { viz::makeTrajectoryRisk(line(std::numeric_limits<double>::infinity()), field, stamp); },
           "infinite duration is rejected before sample conversion");

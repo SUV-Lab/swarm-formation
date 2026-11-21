@@ -14,6 +14,7 @@
 #include <vector>
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 constexpr double inf = 1e20;
 
@@ -94,6 +95,7 @@ private:
     // behind terrain. Keeping the callback per zone preserves the existing
     // probabilistic-OR composition and start/goal barrier exemptions.
     std::function<double(size_t, const Eigen::Vector3d &)> risk_visibility_;
+    std::function<double(size_t, const Eigen::Vector3d &)> risk_probability_;
     // [ROUGH] (H2 terrain-roughness routing) optional slope field for the
     // shared cost: bilinear h + dh/dxy from PathManager's TerrainData — the
     // same surface the optimizer's terrain terms use. Pure read with a
@@ -556,6 +558,21 @@ private:
     // inadmissible heuristic so its inflation factor stays dimensionless.
     inline double getRiskNorm(const Eigen::Vector3d &pos) const {
         if (!risk_zones_ || risk_zones_->empty()) return 0.0;
+        if (risk_probability_) {
+            long double log_survival = 0.0L;
+            bool certain = false;
+            for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
+                // Evaluate before the policy ellipsoid/AABB checks below:
+                // physical damage support and forbidden geometry are distinct.
+                const double physical = risk_probability_(zi, pos);
+                if (!std::isfinite(physical) || physical < 0.0 || physical > 1.0)
+                    throw std::domain_error("invalid physical risk probability");
+                const double planned = physical * endpointTaper(zi, pos);
+                if (planned == 1.0) certain = true;
+                else log_survival += std::log1p(-static_cast<long double>(planned));
+            }
+            return certain ? 1.0 : static_cast<double>(-std::expm1(log_survival));
+        }
         double survival = 1.0;
         for (size_t zi = 0; zi < risk_zones_->size(); ++zi) {
             const auto &tz = (*risk_zones_)[zi];
@@ -797,6 +814,10 @@ public:
     void setRiskVisibility(
         std::function<double(size_t, const Eigen::Vector3d &)> f) {
         risk_visibility_ = std::move(f);
+    }
+    void setRiskProbability(
+        std::function<double(size_t, const Eigen::Vector3d &)> f) {
+        risk_probability_ = std::move(f);
     }
     void setObstacleMargin(double m) { obstacle_margin_ = m; }
     // Extra berth around dynamic obstacles only (<= obstacle_margin_ disables).

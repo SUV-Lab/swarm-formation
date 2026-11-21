@@ -7,6 +7,7 @@
 #include "path_manager/mission_route_search.h"
 #include "path_manager/builtin_route_search.h"
 #include "path_manager/ros_route_search.h"
+#include "path_manager/probability_heatmap.h"
 #include "path_planner/risk_shape.h"
 
 #include <stdexcept>
@@ -96,6 +97,10 @@ namespace path_manager
         node_->declare_parameter("manager/risk_heatmap_preview_lift", 20.0);
         node_->declare_parameter("manager/risk_heatmap_safe_transparent",
                                  false);
+        node_->declare_parameter("manager/risk_heatmap_content", std::string("auto"));
+        node_->declare_parameter("manager/risk_probability_heatmap_height_mode", std::string("agl"));
+        node_->declare_parameter("manager/risk_probability_heatmap_height_m", 100.0);
+        node_->declare_parameter("manager/risk_probability_heatmap_max_dim", 192);
         node_->declare_parameter("manager/risk_mask_viz_contours", 5);
         node_->declare_parameter("manager/risk_mask_viz_volume_alpha", 0.24);
         node_->declare_parameter("manager/risk_mask_viz_agl", 0.15);
@@ -154,6 +159,15 @@ namespace path_manager
         risk_heatmap_offset_ = std::clamp(risk_heatmap_offset_, 0.0, 5.0);
         node_->get_parameter("manager/risk_heatmap_safe_transparent",
                              risk_heatmap_safe_transparent_);
+        node_->get_parameter("manager/risk_heatmap_content", probability_heatmap_content_);
+        node_->get_parameter("manager/risk_probability_heatmap_height_mode", probability_heatmap_height_mode_);
+        node_->get_parameter("manager/risk_probability_heatmap_height_m", probability_heatmap_height_m_);
+        node_->get_parameter("manager/risk_probability_heatmap_max_dim", probability_heatmap_max_dim_);
+        if (probability_heatmap_content_ != "auto" && probability_heatmap_content_ != "visibility" &&
+            probability_heatmap_content_ != "probability") {
+            RCLCPP_WARN(node_->get_logger(), "Unknown risk_heatmap_content; using auto");
+            probability_heatmap_content_ = "auto";
+        }
         node_->get_parameter("manager/risk_mask_viz_contours",
                              risk_mask_viz_contours_);
         node_->get_parameter("manager/risk_mask_viz_volume_alpha",
@@ -374,6 +388,7 @@ namespace path_manager
         // masked field as soon as the heightmap is ready.
         environment_ = std::make_unique<PlanningEnvironmentStore>(
             environment_options, log_manager_, std::move(initial_risk_zones));
+        initRiskProbabilityBridge();
         publishEffectiveRiskField();
     }
 
@@ -636,6 +651,7 @@ namespace path_manager
                        Eigen::Vector3d *grad) -> double {
                     return riskVisibility(zi, p, grad, clearance);
                 };
+            environment.risk.probability = probabilityHeadingCallback();
             // [OCCLUSION-CAP] raw LOS horizon for the visibility-aware cap: same
             // zone indexing as the visibility callback above.
             environment.risk.shadow_ceiling =
@@ -867,6 +883,10 @@ std::string PathManager::stateEnvelopeProblem(
         // "it cannot be read wrong" is.
         last_clean_path_.clear();
         last_cap_ref_.clear();
+        if (!probabilityRiskReady()) {
+            log_manager_->errorf("[RISK] default mode requires a valid resolved risk environment");
+            return std::nullopt;
+        }
         if (head.src == StartStateSource::UNSPECIFIED) {
             log_manager_->errorf(
                 "[HEAD-POLICY] planGlobalTraj called with an UNSPECIFIED "
@@ -1252,6 +1272,7 @@ std::string PathManager::stateEnvelopeProblem(
 
 bool PathManager::configureFrontEnd(RouteSearchProblem &problem, const DirectSolveContext &context)
 {
+    if (!probabilityRiskReady()) return false;
     bindRiskZonesToSearcher();
     searcher_.setLogManager(log_manager_);
     searcher_.setSDF(&environment_->distanceField(), map_lower_bound_,
@@ -1285,6 +1306,7 @@ bool PathManager::configureFrontEnd(RouteSearchProblem &problem, const DirectSol
     }
 
     auto &environment = problem.environment;
+    environment.risk_probability = probabilityReferenceCallback();
     environment.distance_field = &environment_->distanceField();
     environment.lower = map_lower_bound_;
     environment.upper = map_upper_bound_;
@@ -1325,55 +1347,33 @@ void PathManager::publishFrontEndRoute(
     log_manager_->infof("A* route: %zu waypoints (%.1f ms)",
         route.size(),
         search_ms);
-    // DEBUG: annotate each A* waypoint with the SAME risk field every
-    // consumer uses (dyn_a_star.h getRiskNorm and poly_traj_optimizer
-    // RiskGradCostP share it verbatim): terrain-masked ellipsoidal
-    // quadratic moat m_i = visibility_i*peak*(1-q_i)^2,
-    // OR-composed risk
-    // = 1 - prod_i (1 - m_i), in [0,1]. (Previously this logged a Gaussian *
-    // risk_weight — and later a 3D-sphere distance — neither matched the
-    // planner and made edge passes look far riskier than they are.)
-    // Full per-waypoint dump only for small routes: at FM2 k=1 the raw
-    // route is 30k+ points and 30k formatted log lines cost ~10 s/plan.
+    // This diagnostic uses the canonical position-only query, explicitly
+    // without endpoint taper, policy barrier, or objective weights. The
+    // actual FM cost may include those planning adjustments separately.
+    const char* mode = probabilityRiskMode() ? "reference/planning" : "legacy";
     const size_t kRiskDumpMax = 200;
-    double dbg_risk_max = 0.0, dbg_risk_sum = 0.0;
+    double risk_max = 0.0, risk_sum = 0.0;
     for (size_t ri = 0; ri < route.size(); ++ri) {
-        const auto &p = route[ri];
-        double survival = 1.0;
-        std::string per_zone;
-        const bool dump = route.size() <= kRiskDumpMax;
+        const auto& p = route[ri];
+        long double log_survival = 0;
+        bool certain = false;
         for (size_t zi = 0; zi < environment_->riskZones().size(); ++zi) {
-            const auto &tz = environment_->riskZones()[zi];
-            const double q = riskEllipsoidRadius(tz, p);
-            double moat = 0.0;
-            double visibility = 0.0;
-            if (q < 1.0) {
-                visibility = riskVisibilityValue(zi, p, clearance);
-                moat = tz.peak * mmp::risk::shape(q) * visibility;
-            }
-            survival *= (1.0 - std::min(moat, mmp::risk::kMoatCap));
-            if (dump) {
-                char buf[64];
-                std::snprintf(buf, sizeof(buf),
-                              " tz%zu(q=%.2f,v=%.2f,m=%.3f)",
-                              zi, q, visibility, moat);
-                per_zone += buf;
-            }
+            const double risk = riskZoneValue(zi, p, clearance);
+            if (!std::isfinite(risk) || risk < 0 || risk > 1)
+                throw std::domain_error("invalid front-end diagnostic risk");
+            if (risk == 1) certain = true;
+            else log_survival += std::log1p(-static_cast<long double>(risk));
         }
-        const double r = 1.0 - survival;
-        dbg_risk_max = std::max(dbg_risk_max, r);
-        dbg_risk_sum += r;
-        if (dump) {
-            log_manager_->infof("  A*[%zu]: (%.2f, %.2f, %.2f) risk=%.3f%s",
-                ri, p.x(), p.y(), p.z(), r, per_zone.c_str());
-        }
+        const double risk = certain ? 1.0 : static_cast<double>(-std::expm1(log_survival));
+        risk_max = std::max(risk_max, risk);
+        risk_sum += risk;
+        if (route.size() <= kRiskDumpMax)
+            log_manager_->infof("  FE[%zu]: (%.2f, %.2f, %.2f) risk=%.6f mode=%s untapered",
+                               ri, p.x(), p.y(), p.z(), risk, mode);
     }
-    if (route.size() > kRiskDumpMax) {
-        log_manager_->infof(
-            "  A* route risk: %zu wp, max=%.3f mean=%.4f (per-wp dump skipped)",
-            route.size(), dbg_risk_max,
-            dbg_risk_sum / std::max<size_t>(1, route.size()));
-    }
+    log_manager_->infof(
+        "  FE route risk: %zu wp, max=%.6f mean=%.6f mode=%s untapered; excludes barrier/weights",
+        route.size(), risk_max, risk_sum / std::max<size_t>(1, route.size()), mode);
 
     visualization_->frontEndPath(visualization::makeFrontEndPath(
         route, rclcpp::Clock(RCL_ROS_TIME).now()));
@@ -1811,6 +1811,10 @@ double PathManager::riskZoneValue(size_t zone_index, const Eigen::Vector3d &pos)
 double PathManager::riskZoneValue(size_t zone_index, const Eigen::Vector3d &pos,
                                   double clearance) const
 {
+    if (probabilityRiskMode()) {
+        const auto callback = probabilityReferenceCallback();
+        return callback(zone_index, pos);
+    }
     return environment_->riskValue(zone_index, pos, clearance);
 }
 
@@ -1886,7 +1890,7 @@ visualization::RiskView PathManager::riskVisualizationView() const
 
 visualization::RiskView PathManager::riskVisualizationView(double clearance) const
 {
-    return {environment_->riskZones(),
+    visualization::RiskView view{environment_->riskZones(),
         {environment_->terrain().valid, environment_->terrain().resolution,
          [this](double x, double y) { return environment_->terrain().getElevation(x, y); },
          [this](double x, double y, float *h, float *dx, float *dy) {
@@ -1895,6 +1899,21 @@ visualization::RiskView PathManager::riskVisualizationView(double clearance) con
         [this, clearance](size_t i, const Eigen::Vector3d &p) { return riskZoneValue(i, p, clearance); },
         [this, clearance](size_t i, const Eigen::Vector3d &p) { return riskVisibilityValue(i, p, clearance); },
         [this](size_t i, const Eigen::Vector3d &p) { return riskShadowCeiling(i, p); }};
+    if (const auto snapshot = riskProbabilitySnapshot()) {
+        view.trajectory_mode = "exact/heading";
+        view.trajectory_value = [snapshot](size_t i, const Eigen::Vector3d& p,
+                                          const Eigen::Vector3d& v) {
+            const auto scale = snapshot->scale;
+            const risk_model::Vec3 p_si{p.x()*scale.xy_m,p.y()*scale.xy_m,p.z()*scale.z_m};
+            const risk_model::Vec3 v_si{v.x()*scale.xy_m,v.y()*scale.xy_m,v.z()*scale.z_m};
+            const auto& source = snapshot->sources.at(i);
+            const auto visibility = snapshot->terrain ? snapshot->terrain->sample(source,p_si)
+                                                     : risk_model::VisibilitySample{};
+            return risk_model::evaluateSource(source,p_si,v_si,snapshot->settings,
+                risk_model::FormulaMode::Exact,risk_model::RcsMode::Heading,visibility).risk.value;
+        };
+    }
+    return view;
 }
 
 visualization::RiskSettings PathManager::riskVisualizationSettings() const
@@ -1972,6 +1991,7 @@ void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj)
 
 void PathManager::publishTrajRisk(const poly_traj::Trajectory &traj, double clearance)
 {
+    if (!probabilityRiskReady()) return;
     if (!visualization_) return;
     auto result = visualization::makeTrajectoryRisk(
         traj, riskVisualizationView(clearance), visualizationStamp());
@@ -1994,6 +2014,7 @@ void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj)
 
 void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj, double clearance)
 {
+    if (!probabilityRiskReady()) return;
     if (!visualization_) return;
     auto result = visualization::makeRiskProfile(
         traj, riskVisualizationView(clearance), riskVisualizationSettings(clearance));
@@ -2002,18 +2023,46 @@ void PathManager::publishRiskProfile(const poly_traj::Trajectory &traj, double c
         log_manager_->infof("%s", result.diagnostic.c_str());
 }
 
-// Safe corridors are rendered POSITIVELY instead of being the absence of
-// red. Rendering via grid_map_rviz_plugin reuses the terrain-mesh pipeline
-// (lighting, one mesh, no alpha-sorted marker soup), which is the point of
-// this mode.
+// Keep the old visibility-boundary layer distinct from the local probability
+// slice. In auto mode the normal 2D heatmap selects probability for the new
+// model and visibility for legacy; heatmap3d retains its ceiling semantics.
 void PathManager::publishRiskHeatmap()
 {
     if (!visualization_) return;
+    const bool show_probability = probability_heatmap_content_ == "probability" ||
+        (probability_heatmap_content_ == "auto" && probabilityRiskMode() &&
+         risk_mask_viz_mode_ == "heatmap");
+    auto settings = riskVisualizationSettings();
+    if (show_probability || !probabilityRiskReady()) settings.mode = "disabled";
     auto result = visualization::makeRiskHeatmap(
-        riskVisualizationView(), riskVisualizationSettings(), visualizationStamp());
+        riskVisualizationView(), settings, visualizationStamp());
     visualization_->riskHeatmap(result.message);
     if (log_manager_ && !result.diagnostic.empty())
         log_manager_->infof("%s", result.diagnostic.c_str());
+
+    visualization::ProbabilityHeatmapSettings slice;
+    slice.height_mode = probability_heatmap_height_mode_;
+    slice.height_m = probability_heatmap_height_m_;
+    slice.max_dim = probability_heatmap_max_dim_;
+    slice.drape_offset_frame = risk_heatmap_offset_;
+    const auto snapshot = show_probability ? riskProbabilitySnapshot() : nullptr;
+    // Failure of this probability-slice builder must not turn an already
+    // accepted environment into a rejected input or leave a stale map.
+    try {
+        auto map = visualization::makeProbabilityHeatmap(snapshot.get(), slice, node_->now());
+        if (!show_probability)
+            map.description = "N/A: probability heatmap inactive. Select manager/risk_heatmap_content=probability "
+                              "or auto with default mode and heatmap. Visibility uses a separate layer.";
+        else if (!probabilityRiskMode())
+            map.description = "N/A: probability heatmap requires default mode; legacy values are not probabilities.";
+        map.description += "\nPlanner session: " + riskSessionId();
+        visualization_->probabilityHeatmap(map.grid, map.description);
+    } catch (const std::exception &error) {
+        auto cleared = visualization::makeProbabilityHeatmap(nullptr, {}, node_->now());
+        cleared.description = std::string("N/A: probability heatmap error: ") + error.what();
+        visualization_->probabilityHeatmap(cleared.grid, cleared.description);
+        RCLCPP_WARN(node_->get_logger(), "%s", cleared.description.c_str());
+    }
 }
 
 // One MarkerArray per refresh is the entire risk field. Element 0 is a
@@ -2027,6 +2076,14 @@ void PathManager::publishEffectiveRiskField()
     // Preserve the existing streaming order; LOS masks were already rebuilt
     // by the caller and remain active even when this connection is absent.
     publishRiskHeatmap();
+    if (!probabilityRiskReady()) {
+        visualization_msgs::msg::MarkerArray clear;
+        visualization_msgs::msg::Marker marker;
+        marker.action = visualization_msgs::msg::Marker::DELETEALL;
+        clear.markers.push_back(marker);
+        visualization_->riskField(clear);
+        return;
+    }
     visualization_->riskField(visualization::makeRiskField(
         riskVisualizationView(), riskVisualizationSettings(), visualizationStamp()));
 }
@@ -2043,15 +2100,24 @@ TerrainUpdate PathManager::setTerrainData(const grid_map_msgs::msg::GridMap::Sha
                     : -std::numeric_limits<float>::infinity();
             }, environment_->terrain().valid ? environment_->terrain().resolution : 0.0);
     }
-    if (update.obstacles_cleared) publishDynamicObstacles();
-    if (update.kind == TerrainUpdateKind::REPLACED &&
-        environment_->ensureTerrainDistanceField()) {
-        // Installation and revalidation precede the risk-mask refresh, as in
-        // the original ingestion path. The environment never reads execution.
-        flushPendingObstacles();
+    size_t terrain_obstacles_installed = 0;
+    if (update.kind == TerrainUpdateKind::REPLACED) {
+        if (!environment_->ensureTerrainDistanceField()) {
+            throw std::runtime_error("terrain SDF rebuild failed; accepted obstacle inputs must not be omitted");
+        }
+        terrain_obstacles_installed = environment_->installPendingObstacles();
+        if (terrain_obstacles_installed > 0) publishDynamicObstacles();
     }
+    if (update.obstacles_cleared) publishDynamicObstacles();
     environment_->refreshRisk();
+    refreshRiskProbabilityForTerrain();
     publishEffectiveRiskField();
+    if (terrain_obstacles_installed > 0) {
+        // This batch was re-grounded because the terrain changed. Checking
+        // it through the ordinary obstacle-add path would mislabel ground
+        // penetrating a flight as an OBSTACLE_BLOCKED event.
+        revalidateAfterEnvChange("terrain obstacle re-grounding", EnvChangeReason::TERRAIN_BLOCKED);
+    }
     if (execution_->current().traj_id > 0 && execution_->current().duration > 0.0 &&
         std::isfinite(execution_->current().duration)) {
         publishTrajRisk(execution_->current().traj);
@@ -2192,14 +2258,13 @@ void PathManager::flushPendingObstacles()
     // Deferred inputs first become collision obstacles once an SDF exists.
     // Revalidate after this batch; ordinary environment setter calls do not
     // all perform execution revalidation.
-    const auto pending = environment_->takePendingObstacles();
-    if (pending.empty()) return;
-    for (const auto &p : pending) {
-        if (p.is_box) addDynamicBox(p.center, p.size, p.model);
-        else addDynamicSphere(p.center, p.radius, p.model);
-    }
+    const auto installed = environment_->installPendingObstacles();
+    if (installed == 0) return;
+    // Publish the complete rebuilt set once. Publishing immediately after
+    // clearing old SDF patches exposed an empty scenario during a re-crop.
+    publishDynamicObstacles();
     log_manager_->infof("Flushed %zu deferred dynamic obstacle(s) after SDF ready",
-                        pending.size());
+                        installed);
     revalidateAfterEnvChange("a deferred obstacle batch",
                              EnvChangeReason::OBSTACLE_BLOCKED);
 }
@@ -2347,6 +2412,7 @@ void PathManager::bindRiskZonesToOptimizer(ego_planner::PolyTrajOptimizer &optim
                                           double clearance)
 {
     ego_planner::OptimizerRiskEnvironment environment;
+    environment.probability = probabilityHeadingCallback();
     environment.zones.reserve(environment_->riskZones().size());
     for (const auto &tz : environment_->riskZones()) {
         ego_planner::RiskZone oz;
@@ -2373,6 +2439,7 @@ void PathManager::bindRiskZonesToSearcher()
     environment_->refreshSearchRiskZones();
     const auto &zones = environment_->searchRiskZones();
     searcher_.setRiskZones(zones.empty() ? nullptr : &zones);
+    searcher_.setRiskProbability(probabilityReferenceCallback());
     searcher_.setRiskVisibility(
         [this](size_t zi, const Eigen::Vector3d &p) -> double {
             return riskVisibilityValue(zi, p);
@@ -2381,6 +2448,7 @@ void PathManager::bindRiskZonesToSearcher()
 
 bool PathManager::setRiskZonesRuntime(const std::vector<RiskZone> &zones)
 {
+    if (probabilityRiskMode()) return false;
     if (!environment_->setRiskZones(zones)) return false;
     publishEffectiveRiskField();
     bindRiskZonesToSearcher();

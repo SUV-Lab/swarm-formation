@@ -47,6 +47,12 @@ struct OptimizerRiskEnvironment {
   std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)>
       visibility;
   ShadowCeilingQuery shadow_ceiling;
+  // Optional physical probability model, already including visibility.
+  // Position/velocity and returned derivatives use planner frame coordinates.
+  // Source order matches zones, but damage support may extend beyond the
+  // policy ellipsoids. Capture an immutable model/terrain snapshot by value.
+  std::function<double(size_t, const Eigen::Vector3d &, const Eigen::Vector3d &,
+                       Eigen::Vector3d *, Eigen::Vector3d *)> probability;
 };
 
 // A live binding, not an immutable environment snapshot. The object owns its

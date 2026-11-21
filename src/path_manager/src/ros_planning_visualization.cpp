@@ -19,6 +19,8 @@ RosPlanningVisualization::RosPlanningVisualization(rclcpp::Node &node,
   trajectory_risk_ = node.create_publisher<visualization_msgs::msg::Marker>("/viz/traj_risk", qos);
   profile_ = node.create_publisher<std_msgs::msg::Float64MultiArray>("/viz/risk_profile", qos);
   heatmap_ = node.create_publisher<grid_map_msgs::msg::GridMap>("/viz/risk_heatmap", qos);
+  probability_heatmap_ = node.create_publisher<grid_map_msgs::msg::GridMap>("/viz/risk_probability_heatmap", qos);
+  probability_heatmap_info_ = node.create_publisher<std_msgs::msg::String>("/viz/risk_probability_heatmap_info", qos);
 }
 void RosPlanningVisualization::frontEndPath(const nav_msgs::msg::Path &m) const { front_end_->publish(m); }
 void RosPlanningVisualization::tube(visualization::TubeChannel channel,
@@ -34,6 +36,13 @@ void RosPlanningVisualization::pipeline(const visualization_msgs::msg::MarkerArr
 void RosPlanningVisualization::trajectoryRisk(const visualization_msgs::msg::Marker &m) const { trajectory_risk_->publish(m); }
 void RosPlanningVisualization::riskProfile(const std_msgs::msg::Float64MultiArray &m) const { profile_->publish(m); }
 void RosPlanningVisualization::riskHeatmap(const grid_map_msgs::msg::GridMap &m) const { heatmap_->publish(m); }
+void RosPlanningVisualization::probabilityHeatmap(const grid_map_msgs::msg::GridMap &m,
+                                                 const std::string &description) const {
+  probability_heatmap_->publish(m);
+  std_msgs::msg::String info;
+  info.data = description;
+  probability_heatmap_info_->publish(info);
+}
 void RosPlanningVisualization::riskField(const visualization_msgs::msg::MarkerArray &m) const { risk_field_->publish(m); }
 void RosPlanningVisualization::dynamicObstacles(const visualization_msgs::msg::MarkerArray &m) const { obstacles_->publish(m); }
 void RosPlanningVisualization::clearTrajectory(const visualization_msgs::msg::Marker &m) const {

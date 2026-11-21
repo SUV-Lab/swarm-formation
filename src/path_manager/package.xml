@@ -19,6 +19,7 @@
   <depend>builtin_interfaces</depend>
   <depend>mmp_mission_msgs</depend>
   <depend>mmp_traj_msgs</depend>
+  <depend>mmp_risk_model</depend>
   <depend>visualization_msgs</depend>
   <depend>grid_map_msgs</depend>
   <depend>yaml-cpp</depend>

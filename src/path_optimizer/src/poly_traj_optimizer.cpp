@@ -1337,29 +1337,77 @@ namespace ego_planner
     return true;
   }
 
+  Eigen::VectorXd PolyTrajOptimizer::prepareObjectiveEvaluation(
+      const Eigen::MatrixXd &head, const Eigen::MatrixXd &tail,
+      const Eigen::MatrixXd &inner_points, const Eigen::VectorXd &durations,
+      const bool use_formation)
+  {
+    objective_prepared_ = false;
+    if (!parameters_initialized_ || head.rows()!=3 || head.cols()!=3 ||
+        tail.rows()!=3 || tail.cols()!=3 || inner_points.rows()!=3 ||
+        durations.size()<1 || inner_points.cols()!=durations.size()-1 ||
+        !head.allFinite() || !tail.allFinite() || !inner_points.allFinite() ||
+        !durations.allFinite() || (durations.array()<=0).any())
+      throw std::invalid_argument("full objective requires configured finite boundaries, inner points and positive durations");
+    t_now_ = node_->get_clock()->now().seconds();
+    piece_num_ = static_cast<int>(durations.size());
+    jerkOpt_.reset(head, tail, piece_num_);
+    setupTerrainTaper(head.col(0), tail.col(0));
+    buildH5Bounds(inner_points);
+    if (!use_formation) use_formation_ = false;
+    iter_num_ = 0;
+    variable_num_ = 4 * (piece_num_ - 1) + 1;
+    // Every callback writes every column before the variance term reads it.
+    // Direct inspection must not rely on optimizeFromPath's seed allocation.
+    cps_.resize_cp(piece_num_ * cps_num_prePiece_ + 1);
+    Eigen::VectorXd variables(variable_num_);
+    if (inner_points.size()>0)
+      Eigen::Map<Eigen::MatrixXd>(variables.data(),3,piece_num_-1)=inner_points;
+    if (h5_active_) {
+      int clamped=0;
+      for (int i=0; i<piece_num_-1; ++i) {
+        const double z=variables[3*i+2];
+        const double w=0.5*(h5_hi_(i)-h5_lo_(i));
+        const double c=0.5*(h5_hi_(i)+h5_lo_(i));
+        if (std::abs((z-c)/w)>1.0-h5_seed_margin_) ++clamped;
+        variables[3*i+2]=h5InvWarp(i,z);
+      }
+      if (clamped>0)
+        LOG_INFO("[H5] %d/%d seeds clamped into the box",clamped,piece_num_-1);
+    }
+    Eigen::Map<Eigen::VectorXd> virtual_times(variables.data()+inner_points.size(),durations.size());
+    RealT2VirtualT(durations,virtual_times);
+    objective_prepared_=true;
+    return variables;
+  }
+
+  PolyTrajOptimizer::ObjectiveEvaluation PolyTrajOptimizer::inspectObjectiveAt(
+      const Eigen::VectorXd &variables)
+  {
+    if (!objective_prepared_ || variables.size()!=variable_num_ || !variables.allFinite())
+      throw std::invalid_argument("full objective requires a prepared, finite decision vector of matching size");
+    ObjectiveEvaluation result;
+    result.gradient.resize(variable_num_);
+    result.cost=costFunctionCallback(this,variables.data(),result.gradient.data(),variable_num_);
+    result.smoothness_cost=cb_smoothness_cost_;
+    result.time_cost=cb_time_cost_;
+    result.integrated_costs=cb_costs_;
+    result.durations=cb_T_;
+    result.trajectory=jerkOpt_.getTraj();
+    return result;
+  }
+
   bool PolyTrajOptimizer::OptimizeTrajectory_lbfgs(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       Eigen::MatrixXd &optimal_points, const bool use_formation)
   {
-    if (initInnerPts.cols() != (initT.size() - 1))
-    {
+    Eigen::VectorXd seed;
+    try {
+      seed=prepareObjectiveEvaluation(iniState,finState,initInnerPts,initT,use_formation);
+    } catch (const std::invalid_argument&) {
       return false;
     }
-
-    t_now_ = node_->get_clock()->now().seconds();
-    piece_num_ = initT.size();
-
-    jerkOpt_.reset(iniState, finState, piece_num_);
-
-    Eigen::Vector3d start_pos = iniState.col(0);
-
-    // [TERRAIN-TAPER] arm the per-endpoint clearance taper (see header).
-    setupTerrainTaper(iniState.col(0), finState.col(0));
-
-    // [H5] freeze the bounded-z box now that the taper (floor targets) and the
-    // per-piece cap are both armed. No-op / byte-identical when off.
-    buildH5Bounds(initInnerPts);
 
     double final_cost;
 
@@ -1426,35 +1474,8 @@ namespace ego_planner
     lbfgs_params.max_iterations =
         std::min(20000, std::max(3000, 100 * piece_num_));
 
-    if (!use_formation)
-    {
-      use_formation_ = false;
-    }
-
-    iter_num_ = 0;
-
     int result;
-
-    // Direct 3D coordinate optimization with SDF-based obstacle penalty.
-    variable_num_ = 4 * (piece_num_ - 1) + 1;
-    std::vector<double> q(variable_num_);
-    memcpy(q.data(), initInnerPts.data(), initInnerPts.size() * sizeof(double));
-    // [H5] transform seed inner z into raw warp coordinates (inverse warp,
-    // seed-clamped): q now holds r, not z, for the z rows.
-    if (h5_active_) {
-      int clamped = 0;
-      for (int i = 0; i < piece_num_ - 1; ++i) {
-        const double z = q[3 * i + 2];
-        const double w = 0.5 * (h5_hi_(i) - h5_lo_(i));
-        const double c = 0.5 * (h5_hi_(i) + h5_lo_(i));
-        if (std::abs((z - c) / w) > 1.0 - h5_seed_margin_) ++clamped;
-        q[3 * i + 2] = h5InvWarp(i, z);
-      }
-      if (clamped > 0)
-        LOG_INFO("[H5] %d/%d seeds clamped into the box", clamped, piece_num_ - 1);
-    }
-    Eigen::Map<Eigen::VectorXd> Vt(q.data() + initInnerPts.size(), initT.size());
-    RealT2VirtualT(initT, Vt);
+    std::vector<double> q(seed.data(),seed.data()+seed.size());
 
     // [H5-FD] central-difference gradient probe on a few coords (z_raw of the
     // first/mid/last junction, one x, the last virtual time). Proves the warp
@@ -2408,6 +2429,8 @@ namespace ego_planner
         opt->dbg_cost_formation_ = obs_swarm_feas_qvar_costs(2);
     }
 
+    opt->cb_smoothness_cost_=smoo_cost;
+    opt->cb_time_cost_=time_cost;
     return smoo_cost + obs_swarm_feas_qvar_costs.sum() + time_cost;
   }
 
@@ -3692,6 +3715,100 @@ namespace ego_planner
   // instead of the ~1-2 m designed clip an inside ramp allowed. Zones
   // holding the plan start/goal are exempt — same must-enter rule as
   // prepareBarrier — so the back-end never opposes a committed crossing.
+  bool PolyTrajOptimizer::ProbabilityRiskGradCostP(
+      const Eigen::Vector3d &p, const Eigen::Vector3d &v,
+      Eigen::Vector3d &gradp, Eigen::Vector3d &gradv, double &costp)
+  {
+    gradp.setZero(); gradv.setZero(); costp = 0.0;
+    double survival = 1.0, barrier_survival = 1.0;
+    long double log_survival = 0.0L;
+    bool certain = false;
+    Eigen::Vector3d risk_gp = Eigen::Vector3d::Zero();
+    Eigen::Vector3d risk_gv = Eigen::Vector3d::Zero();
+    Eigen::Vector3d barrier_gp = Eigen::Vector3d::Zero();
+    for (size_t zi = 0; zi < risk_zones_.size(); ++zi) {
+      Eigen::Vector3d physical_gp = Eigen::Vector3d::Zero();
+      Eigen::Vector3d physical_gv = Eigen::Vector3d::Zero();
+      // Damage support is independent of policy reach. This query must be
+      // made before any policy geometry rejection, with each candidate p/v.
+      const double physical = risk_probability_(zi, p, v, &physical_gp, &physical_gv);
+      if (!std::isfinite(physical) || physical < 0.0 || physical > 1.0 ||
+          !physical_gp.allFinite() || !physical_gv.allFinite())
+        throw std::domain_error("invalid physical probability or derivative");
+
+      double taper = 1.0;
+      Eigen::Vector3d taper_gp = Eigen::Vector3d::Zero();
+      if (risk_goal_taper_radius_ > 0.0 && zi < zone_taper_anchors_.size()) {
+        for (const int anchor : zone_taper_anchors_[zi]) {
+          const Eigen::Vector3d offset = p - taper_anchors_[static_cast<size_t>(anchor)];
+          const double distance = offset.norm();
+          const double x = distance / risk_goal_taper_radius_;
+          if (x >= 1.0) continue;
+          const double step = x*x*(3.0-2.0*x);
+          Eigen::Vector3d step_gp = Eigen::Vector3d::Zero();
+          if (distance > 0.0)
+            step_gp = (6.0*x*(1.0-x)/(risk_goal_taper_radius_*distance))*offset;
+          taper_gp = taper_gp*step + taper*step_gp;
+          taper *= step;
+        }
+      }
+      const double planned = physical*taper;
+      if (planned == 1.0) certain = true;
+      else log_survival += std::log1p(-static_cast<long double>(planned));
+      const Eigen::Vector3d planned_gp = physical_gp*taper + physical*taper_gp;
+      const Eigen::Vector3d planned_gv = physical_gv*taper;
+      // Streaming product rule: no division by (1-T), including T=1.
+      risk_gp = risk_gp*(1.0-planned) + survival*planned_gp;
+      risk_gv = risk_gv*(1.0-planned) + survival*planned_gv;
+      survival *= 1.0-planned;
+
+      // Keep the existing avoidance policy and its visibility separate from
+      // the physical probability. The callback already includes its own V.
+      const bool exempt = zi < zone_barrier_exempt_.size() && zone_barrier_exempt_[zi];
+      if (wei_risk_barrier_ <= 0.0 || exempt) continue;
+      const auto &zone = risk_zones_[zi];
+      const auto &prepared = risk_zone_prep_[zi];
+      if (!prepared.valid) continue;
+      const Eigen::Vector3d delta = p-zone.center;
+      if (std::abs(delta.x()) >= prepared.reach_b ||
+          std::abs(delta.y()) >= prepared.reach_b ||
+          std::abs(delta.z()) >= prepared.rv_b) continue;
+      const double q = std::sqrt(delta.head<2>().squaredNorm()/(zone.reach*zone.reach) +
+          delta.z()*delta.z()/(prepared.rv*prepared.rv));
+      if (q >= 1.0+kRiskBarrierRampFrac) continue;
+      Eigen::Vector3d q_gp = Eigen::Vector3d::Zero();
+      if (q > 1e-9)
+        q_gp = Eigen::Vector3d(delta.x()/(zone.reach*zone.reach),
+            delta.y()/(zone.reach*zone.reach), delta.z()/(prepared.rv*prepared.rv))/q;
+      double visible = 1.0;
+      Eigen::Vector3d visible_gp = Eigen::Vector3d::Zero();
+      if (risk_visibility_)
+        visible = std::clamp(risk_visibility_(zi,p,&visible_gp),0.0,1.0);
+      const double t = std::min((1.0+kRiskBarrierRampFrac-q)/kRiskBarrierRampFrac,1.0);
+      const double shape = t*t*(3.0-2.0*t);
+      Eigen::Vector3d shape_gp = Eigen::Vector3d::Zero();
+      if (t < 1.0 && q > 1e-9)
+        shape_gp = (-6.0*t*(1.0-t)/kRiskBarrierRampFrac)*q_gp;
+      const double barrier = shape*visible;
+      const Eigen::Vector3d one_barrier_gp = visible*shape_gp + shape*visible_gp;
+      barrier_gp = barrier_gp*(1.0-barrier) + barrier_survival*one_barrier_gp;
+      barrier_survival *= 1.0-barrier;
+    }
+    const double risk = certain ? 1.0 : static_cast<double>(-std::expm1(log_survival));
+    const double barrier = 1.0-barrier_survival;
+    if (risk <= 0.0 && barrier <= 0.0) return false;
+    const double speed = v.norm();
+    const double density = wei_risk_*risk + wei_risk_barrier_*barrier;
+    costp = density*speed;
+    gradp = speed*(wei_risk_*risk_gp + wei_risk_barrier_*barrier_gp);
+    gradv = speed*wei_risk_*risk_gv;
+    if (speed > 0.0) gradv += density*v/speed;
+    // At exact v=0 the established C*||v|| integrand has no classical
+    // derivative for C>0. Retain its zero subgradient at that isolated sample;
+    // do not describe this as a smooth objective or a verified derivative.
+    return true;
+  }
+
   bool PolyTrajOptimizer::RiskGradCostP(const int i_dp,
                                            const Eigen::Vector3d &p,
                                            const Eigen::Vector3d &v,
@@ -3700,6 +3817,8 @@ namespace ego_planner
                                            double &costp)
   {
     (void)i_dp;  // consider all constraint points
+    if (risk_probability_)
+      return ProbabilityRiskGradCostP(p, v, gradp, gradv, costp);
     gradp.setZero();
     gradv.setZero();
     costp = 0.0;
@@ -3894,6 +4013,7 @@ namespace ego_planner
       const std::vector<rclcpp::Parameter> &parameter_overrides)
   {
     parameters_initialized_ = false;
+    objective_prepared_ = false;
     node_ = node;
     const RosParameterView parameters(node_, parameter_overrides);
     // Re-entrant declare: setParam runs AGAIN on every forced optimizer

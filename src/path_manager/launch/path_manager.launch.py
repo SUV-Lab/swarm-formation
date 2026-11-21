@@ -32,6 +32,7 @@ def create_drone_nodes(context, *args, **kwargs):
     # straight from a terminal). Empty string falls through to optimizer_params
     # yaml's manager/world default; a non-empty value wins via ROS param order.
     world_arg = context.perform_substitution(LaunchConfiguration('world'))
+    risk_model_mode = context.perform_substitution(LaunchConfiguration('risk_model_mode')).strip()
 
     disable_file_logging_str = context.perform_substitution(LaunchConfiguration('disable_file_logging'))
     disable_file_logging = (disable_file_logging_str.lower() == 'true')
@@ -150,6 +151,8 @@ def create_drone_nodes(context, *args, **kwargs):
         # Otherwise the yaml default stays in effect.
         if world_arg:
             params['manager/world'] = world_arg
+        if risk_model_mode:
+            params['manager/risk_model_mode'] = risk_model_mode
         if debug_mode:
             params['manager/debug_pipeline_viz'] = True
             params['enable_debug_logs'] = True
@@ -265,6 +268,12 @@ def generate_launch_description():
             default_value='',
             description='Map name (e.g. full_map, small_island). When set, '
                         'overrides manager/world in optimizer_params.yaml.'
+        ),
+        DeclareLaunchArgument(
+            'risk_model_mode',
+            default_value='',
+            choices=['', 'default', 'legacy'],
+            description='Risk model override; empty uses optimizer_params.yaml.'
         ),
         OpaqueFunction(function=create_drone_nodes),
     ])

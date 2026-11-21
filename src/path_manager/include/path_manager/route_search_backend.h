@@ -65,6 +65,8 @@ struct RouteSearchEnvironment {
   std::function<float(double, double)> elevation;
   std::function<bool(double, double, float *, float *, float *)> elevation_gradient;
   std::function<double(size_t, const Eigen::Vector3d &)> risk_visibility;
+  // Baseline-RCS physical risk; policy geometry remains in zones.
+  std::function<double(size_t, const Eigen::Vector3d &)> risk_probability;
 };
 
 struct RouteSearchProblem {

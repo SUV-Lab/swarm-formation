@@ -42,6 +42,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(mmp_mission_msgs REQUIRED)
 find_package(mmp_traj_msgs REQUIRED)
+find_package(mmp_risk_model REQUIRED)
 find_package(mmp_vehicle_dynamics REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(grid_map_msgs REQUIRED)
@@ -88,8 +89,10 @@ target_link_libraries(${PROJECT_NAME}_calculations PUBLIC
 
 add_library(${PROJECT_NAME}_lib
   src/path_manager.cpp
+  src/risk_probability_bridge.cpp
   src/planning_environment_store.cpp
   src/planning_visualization_data.cpp
+  src/probability_heatmap.cpp
   src/ros_planning_visualization.cpp
   src/ros_planning_backend.cpp
   src/ros_terrain_grid.cpp
@@ -101,7 +104,7 @@ add_library(${PROJECT_NAME}_lib
 )
 # Compatibility target for complete planning, ROS adapters and FSM execution.
 # Existing consumers keep their target name and inherit all computations.
-target_link_libraries(${PROJECT_NAME}_lib ${PROJECT_NAME}_calculations)
+target_link_libraries(${PROJECT_NAME}_lib ${PROJECT_NAME}_calculations mmp_risk_model::mmp_risk_model)
 
 # Public planning contracts use C++17 values such as std::optional. Export
 # the requirement so downstream callers do not rely on compiler defaults.
@@ -118,6 +121,7 @@ set(PATH_MANAGER_DEPENDENCIES
   geometry_msgs
   mmp_mission_msgs
   mmp_traj_msgs
+  mmp_risk_model
   mmp_vehicle_dynamics
   visualization_msgs
   grid_map_msgs
@@ -174,6 +178,13 @@ target_link_libraries(planning_environment_store_test ${PROJECT_NAME}_lib)
 add_executable(planning_visualization_test test/planning_visualization_test.cpp)
 target_link_libraries(planning_visualization_test ${PROJECT_NAME}_lib)
 
+add_executable(probability_heatmap_test test/probability_heatmap_test.cpp)
+target_link_libraries(probability_heatmap_test ${PROJECT_NAME}_lib)
+
+add_executable(probability_heatmap_ros_test test/probability_heatmap_ros_test.cpp)
+target_link_libraries(probability_heatmap_ros_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(probability_heatmap_ros_test ${PATH_MANAGER_DEPENDENCIES})
+
 add_executable(load_obstacles_test test/load_obstacles_test.cpp)
 ament_target_dependencies(load_obstacles_test mmp_mission_msgs)
 
@@ -198,6 +209,19 @@ add_executable(risk_contract_test test/risk_contract_test.cpp)
 target_link_libraries(risk_contract_test ${PROJECT_NAME}_lib)
 ament_target_dependencies(risk_contract_test
   ${PATH_MANAGER_DEPENDENCIES})
+
+add_executable(probability_optimizer_test test/probability_optimizer_test.cpp)
+target_link_libraries(probability_optimizer_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(probability_optimizer_test ${PATH_MANAGER_DEPENDENCIES})
+add_executable(probability_full_objective_test test/probability_full_objective_test.cpp)
+target_link_libraries(probability_full_objective_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(probability_full_objective_test ${PATH_MANAGER_DEPENDENCIES})
+add_executable(probability_bridge_test test/probability_bridge_test.cpp)
+target_link_libraries(probability_bridge_test ${PROJECT_NAME}_lib)
+ament_target_dependencies(probability_bridge_test ${PATH_MANAGER_DEPENDENCIES})
+add_executable(probability_visibility_partition_test test/probability_visibility_partition_test.cpp)
+target_link_libraries(probability_visibility_partition_test
+  ${PROJECT_NAME}_calculations mmp_risk_model::mmp_risk_model)
 
 add_executable(terrain_pitch_test test/terrain_pitch_test.cpp)
 target_link_libraries(terrain_pitch_test ${PROJECT_NAME}_lib)
@@ -433,6 +457,22 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/config/optimizer_params.yaml
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 300)
+  ament_add_test(probability_optimizer_test
+    COMMAND $<TARGET_FILE:probability_optimizer_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60)
+  ament_add_test(probability_full_objective_test
+    COMMAND $<TARGET_FILE:probability_full_objective_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 90)
+  ament_add_test(probability_visibility_partition_test
+    COMMAND $<TARGET_FILE:probability_visibility_partition_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 90)
+  ament_add_test(probability_bridge_test
+    COMMAND $<TARGET_FILE:probability_bridge_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 90)
   # The terrain repairer and the terrain judge must share one stride. Pure
   # math on a synthetic heightmap: fast, hermetic, no map, no node peers.
   ament_add_test(terrain_pitch_test
@@ -490,6 +530,14 @@ if(BUILD_TESTING)
     COMMAND $<TARGET_FILE:planning_visualization_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 30)
+  ament_add_test(probability_heatmap_test
+    COMMAND $<TARGET_FILE:probability_heatmap_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60)
+  ament_add_test(probability_heatmap_ros_test
+    COMMAND $<TARGET_FILE:probability_heatmap_ros_test>
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60)
   ament_add_test(flight_evaluator_test
     COMMAND $<TARGET_FILE:flight_evaluator_test>
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
@@ -805,7 +853,7 @@ install(FILES examples/planning_visualization_example.cpp
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
-set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner mmp_mission_msgs mmp_traj_msgs mmp_vehicle_dynamics visualization_msgs grid_map_msgs)
+set(EXPORT_DEPS rclcpp std_msgs nav_msgs Eigen3 path_optimizer geometry_msgs path_planner mmp_mission_msgs mmp_traj_msgs mmp_risk_model mmp_vehicle_dynamics visualization_msgs grid_map_msgs)
 ament_export_dependencies(${EXPORT_DEPS})
 
 # [PA-2] Under MMP_SANITIZE, a sanitizer diagnostic must FAIL the test that

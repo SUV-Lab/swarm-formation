@@ -141,6 +141,7 @@ std::unique_ptr<pm::RosPlanningBackend> backend(
   runtime.node_name = name;
   runtime.node_options.arguments({"--ros-args", "--params-file", config});
   runtime.node_options.parameter_overrides({
+      rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
       rclcpp::Parameter("drone_id", 7),
       rclcpp::Parameter("chain/enable", chain),
       rclcpp::Parameter("chain/segments", 3),

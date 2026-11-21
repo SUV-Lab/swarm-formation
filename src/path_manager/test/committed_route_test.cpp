@@ -140,6 +140,7 @@ rclcpp::Node::SharedPtr makeNode(const char *config, const std::string &name)
   rclcpp::NodeOptions options;
   options.arguments({"--ros-args", "--params-file", config});
   options.parameter_overrides({
+      rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
       rclcpp::Parameter("manager/front_end", std::string("fm2")),
       rclcpp::Parameter("manager/length_per_piece", 3.0),
       rclcpp::Parameter("manager/corner_fillet_radius", 0.0),

@@ -136,6 +136,7 @@ int main(int argc, char **argv) {
   // in this repo ever sets have_recv_pre_agent_. With any other id the plan
   // succeeds and is never published.
   options.parameter_overrides({
+      rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
       rclcpp::Parameter("drone_id", 0),
       rclcpp::Parameter("chain/enable", false),
   });
@@ -160,11 +161,13 @@ int main(int argc, char **argv) {
   spin(node, 300);
 
   // (1) Ground under the mission.
-  fsm.terrainCallback(makeFlatMap(0.0));
+  auto first_map=makeFlatMap(0.0);
+  first_map->header.stamp.sec=123;first_map->header.stamp.nanosec=456;
+  fsm.terrainCallback(first_map);
   spin(node, 200);
   expect(!terrain_receipts.empty() &&
-             terrain_receipts.back() == std::vector<double>({2.,0.,0.,360.,300.}),
-         "terrain-ready receipt describes the accepted map");
+             terrain_receipts.back() == std::vector<double>({2.,0.,0.,360.,300.,123.,456.}),
+         "terrain-ready receipt describes the accepted map and exact ingestion stamp");
   const auto receipt_count = terrain_receipts.size();
   auto malformed_map = makeFlatMap(0.0);
   malformed_map->info.resolution = 4.;
@@ -177,12 +180,12 @@ int main(int argc, char **argv) {
   fsm.terrainCallback(std::make_shared<grid_map_msgs::msg::GridMap>());
   spin(node, 200);
   expect(terrain_receipts.size() == receipt_count + 1 &&
-             terrain_receipts.back() == std::vector<double>(5,0.),
+             terrain_receipts.back() == std::vector<double>(7,0.),
          "accepted explicit terrain clear publishes the zero receipt");
   fsm.terrainCallback(makeFlatMap(0.0));
   spin(node, 200);
   expect(terrain_receipts.size() == receipt_count + 2 &&
-             terrain_receipts.back() == std::vector<double>({2.,0.,0.,360.,300.}),
+             terrain_receipts.back() == std::vector<double>({2.,0.,0.,360.,300.,0.,0.}),
          "valid terrain after rejection/clear restores the true ready receipt");
 
   // (2) A zone set, BEFORE any trajectory exists. The set starts empty, so

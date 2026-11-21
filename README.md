@@ -8,21 +8,21 @@ ROS 2 기반 드론/로버 경로 계획 및 편대 제어 시스템
 ros2 launch path_manager rviz_path_manager.launch.py
 ```
 
-> **참고**:
-> - 시작점·목표점은 RViz의 MissionConfig 패널에서 미션 yaml을 로드해 설정합니다
-> - 장애물·위험지대는 RViz ObstacleScenario 패널에서 yaml 로 로드합니다
->   (/mission/obstacles · /mission/risk_zones — scenario 런치 파라미터는 폐기)
+RViz의 `Scenario` 패널에서 `mission`, `risk_models`, `dynamic_obstacles`가 담긴
+YAML 하나를 실행합니다. 기본 모델은 `default`이며, 이전 `risk_zones` 입력은
+`manager/risk_model_mode: legacy`로 설정하고 계획기를 재시작합니다.
+빌드·RViz 실행과 예제 경로는 [MMP README](../../README.md)를 참고합니다.
 
 ### 주요 파라미터
 
 | 파라미터 | 설명 | 기본값 |
 |---------|------|--------|
-| `drone_id` | 실행할 드론 ID | 1 |
+| `drone_id` | 실행할 드론 ID | 비어 있음 (설정된 모든 기체) |
 | `world` | 지형 맵 이름 (비우면 optimizer_params 기본값) | (없음) |
 | `record_bag` | 궤적 토픽 rosbag 기록 | false |
 | `disable_file_logging` | 파일 로깅 비활성화 (콘솔만) | false |
 
-### 지형 차폐 위험영역
+### 지형 차폐 위험영역 (`legacy`)
 
 위험원의 `center.z`를 전파원 고도로 사용합니다. 각 방위각에서 DEM을
 가까운 셀부터 훑으며 최대 고도각을 누적하고, 그 고도각이 만드는

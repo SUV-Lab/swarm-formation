@@ -145,9 +145,8 @@ private:
     rclcpp::Publisher<mmp_traj_msgs::msg::PolyTraj>::SharedPtr global_path_pub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::TrajectoryCommand>::SharedPtr trajectory_cmd_sub_;
     rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr terrain_sub_;
-    // [TERRAIN-READY] latched ingestion receipt: [resolution_u, origin_x_u,
-    // origin_y_u] of the terrain the planner actually consumed — the panel's
-    // Run flow gates the mission command on it (see terrainCallback).
+    // Ingested terrain: [resolution, origin_x, origin_y, length_x, length_y,
+    // stamp.sec, stamp.nanosec]. The stamp distinguishes repeated crops.
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr terrain_ready_pub_;
     rclcpp::Subscription<mmp_mission_msgs::msg::DynamicObstacleArray>::SharedPtr
         load_obstacles_sub_;

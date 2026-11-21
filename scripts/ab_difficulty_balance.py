@@ -27,6 +27,7 @@ import shutil
 import signal
 import subprocess
 import time
+from pathlib import Path
 import yaml
 
 # Obstacle scenarios name their own mission in a comment; that pairing is the
@@ -292,6 +293,12 @@ def yaw_seed_for(mission, rep, override):
     return int(h[:8], 16) & 0x7FFFFFFF
 
 
+def mission_path(missions_dir, name):
+    root = Path(missions_dir)
+    path = root / f"{name}.yaml"
+    return path if path.is_file() else root / "probes" / f"{name}.yaml"
+
+
 def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir,
             logdir, yaw_seed):
     for nm in ("path_manager_node", "terrain_publisher", "topic pub"):
@@ -300,7 +307,7 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir,
     t_start = time.time()
     launched = []
 
-    mpath = f"{missions_dir}/{mission}.yaml"
+    mpath = mission_path(missions_dir, mission)
     import yaml as _y
     m = _y.safe_load(open(mpath))["mission"]
     prob = start_state_problem(m)
@@ -322,7 +329,7 @@ def run_one(ws, out, mission, scenario, arm, rep, missions_dir, obstacles_dir,
         f"exec ros2 run path_manager path_manager_node --ros-args "
           f"--params-file {ws}/install/path_manager/share/path_manager/config/optimizer_params.yaml "
           f"--params-file {ws}/install/path_manager/share/path_manager/config/drone_hardware.yaml "
-          f"-p drone_id:=0 -p manager/world:=full_map "
+          f"-p drone_id:=0 -p manager/world:=full_map -p manager/risk_model_mode:=legacy "
           f"-p chain/difficulty_balance:={dbal} "
           f"-p manager/dyn_yaw_seed:={yaw_seed} "
           f"-p chain/auto_pieces_per_segment:={pieces_target} "
@@ -555,7 +562,7 @@ def main():
     scen = os.path.join(a.ws, "src/mmp_terrain/data/scenarios")
     a.logdir = a.logdir or os.path.join(a.ws, "logs/runtime")
     a.missions = a.missions or os.path.join(scen, "missions")
-    a.obstacles = a.obstacles or os.path.join(scen, "obstacles")
+    a.obstacles = a.obstacles or os.path.join(scen, "legacy")
     for d in (a.missions, a.obstacles):
         if not os.path.isdir(d):
             raise SystemExit(f"scenario input missing from the pinned "
@@ -571,9 +578,9 @@ def main():
     # exactly like the source commit is.
     h = hashlib.sha256()
     for d in (a.missions, a.obstacles):
-        for f in sorted(os.listdir(d)):
-            h.update(f.encode())
-            h.update(open(os.path.join(d, f), "rb").read())
+        for path in sorted(Path(d).rglob("*.yaml")):
+            h.update(path.relative_to(d).as_posix().encode())
+            h.update(path.read_bytes())
     rasters = {}
     dd = os.path.join(a.ws, "src/mmp_terrain/data")
     for f in sorted(os.listdir(dd)) if os.path.isdir(dd) else []:
@@ -596,7 +603,7 @@ def main():
     bad = []
     for mission, _ in missions:
         try:
-            mm = yaml.safe_load(open(f"{a.missions}/{mission}.yaml"))["mission"]
+            mm = yaml.safe_load(mission_path(a.missions, mission).read_text())["mission"]
         except Exception as e:      # noqa: BLE001 - reported, not swallowed
             bad.append(f"{mission}: unreadable ({e})")
             continue

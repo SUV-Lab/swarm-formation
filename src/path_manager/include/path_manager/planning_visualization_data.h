@@ -26,8 +26,9 @@ namespace path_manager::visualization {
 // Callbacks required by a nonempty branch must be callable. Risk values and
 // visibility must be finite in [0,1]; shadow horizons may be nonfinite (the
 // existing full-visibility fallback). Terrain NaN/-inf mean unavailable terrain.
-// Provider functions must be observational and use the same canonical field as
-// planning. They are called synchronously and are not retained by the result.
+// Provider functions are observational. Environment slices use value; final
+// trajectory displays use trajectory_value when supplied (exact/heading risk).
+// They are called synchronously and are not retained by the result.
 using Stamp = std::function<builtin_interfaces::msg::Time()>;
 struct TerrainView {
   bool valid{false};
@@ -42,6 +43,8 @@ struct RiskView {
   std::function<double(size_t, const Eigen::Vector3d &)> value;
   std::function<double(size_t, const Eigen::Vector3d &)> visibility;
   std::function<double(size_t, const Eigen::Vector3d &)> shadow_ceiling;
+  std::function<double(size_t, const Eigen::Vector3d &, const Eigen::Vector3d &)> trajectory_value{};
+  std::string trajectory_mode{"legacy"};
 };
 // Projection of settings owned by PathManager. No duplicate parameter reads or
 // alternate defaults: adapters fill these from the existing setting authority.

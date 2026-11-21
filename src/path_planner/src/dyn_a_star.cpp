@@ -1,7 +1,7 @@
 #include "path_planner/dyn_a_star.h"
+#include "path_planner/eikonal_godunov.h"
 #ifdef PP_HAVE_CUDA
 #include "path_planner/fm2_gpu.h"
-#include "path_planner/eikonal_godunov.h"
 #endif
 #include <cmath>
 #include <cstdlib>

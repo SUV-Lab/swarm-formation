@@ -1,5 +1,4 @@
-// Run with the existing optimizer YAML. No FSM, executor, mission topic or
-// direct planner/optimizer sequencing is needed to obtain a whole flight.
+// Legacy planning API example with an in-memory terrain.
 #include "path_manager/mission_planner.h"
 #include "path_manager/ros_planning_backend.h"
 
@@ -7,6 +6,7 @@
 
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <utility>
 
 int main(int argc, char **argv)
@@ -23,6 +23,7 @@ int main(int argc, char **argv)
     path_manager::RosPlanningOptions runtime;
     runtime.node_name = "mission_planner_example";
     runtime.node_options.arguments({"--ros-args", "--params-file", argv[1]});
+    runtime.node_options.append_parameter_override("manager/risk_model_mode", std::string("legacy"));
     path_manager::PlanSettings settings;  // sparse typed overrides, if needed
 
     // A 36 km x 30 km flat terrain at 200 m ASL. Existing frame units are

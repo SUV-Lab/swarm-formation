@@ -31,15 +31,20 @@ SRC=$WS/src/mmp_path_planning
 # while never executing an instrumented binary. Bare-shell callers still get
 # the install path.
 BIN=${3:-}
+chain_use_workspace_setup=0
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
   BIN=$WS/install/path_manager/lib/path_manager/chain_experiment_test
+  chain_use_workspace_setup=1
 fi
 [ -x "$BIN" ] || { echo "ABORT: test binary not found: $BIN" >&2; exit 2; }
 echo "binary: $BIN"
 CFG=src/mmp_path_planning/src/path_manager/config/optimizer_params.yaml
 
-source /opt/ros/humble/setup.bash
-source "$WS/install/setup.bash"
+# An explicit build binary uses the caller's overlay and matching messages.
+if [ "$chain_use_workspace_setup" -eq 1 ]; then
+  source /opt/ros/humble/setup.bash
+  source "$WS/install/setup.bash"
+fi
 cd "$WS" || exit 1
 
 rm -rf "$OUT"; mkdir -p "$OUT"

@@ -39,6 +39,8 @@ void PolyTrajOptimizer::setRiskEnvironment(
   setRiskZones(environment.zones);
   setRiskVisibility(std::move(environment.visibility));
   setRiskShadowCeiling(std::move(environment.shadow_ceiling));
+  // An empty callback explicitly restores the legacy model on rebind.
+  setRiskProbability(std::move(environment.probability));
 }
 
 OptimizerSolveResult PolyTrajOptimizer::solve(OptimizerSolveRequest request)

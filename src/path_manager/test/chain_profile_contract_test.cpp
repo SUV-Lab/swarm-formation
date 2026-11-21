@@ -33,6 +33,7 @@ void exercise(const char *config)
   options.node_options.arguments({"--ros-args", "--params-file", config});
   pm::PlanSettings settings;
   settings.attach_visualization = false;
+  settings.parameters["manager/risk_model_mode"] = std::string("legacy");
   settings.parameters["chain/enable"] = true;
   settings.parameters["chain/segments"] = int64_t(0);
   settings.parameters["chain/auto_pieces_per_segment"] = int64_t(35);

@@ -31,6 +31,17 @@ struct PlanningEnvironmentOptions {
   bool risk_grounded;
 };
 
+struct PendingEnvironmentObstacle {
+  bool is_box;
+  Eigen::Vector3d center;
+  Eigen::Vector3d size;
+  double radius;
+  std::string model;
+  // A terrain reload reinstalls an existing spawn, not a new random heading.
+  bool has_yaw{false};
+  double yaw{0.0};
+};
+
 struct EnvironmentObstacle {
   int id;
   Eigen::Vector3d center;
@@ -38,14 +49,9 @@ struct EnvironmentObstacle {
   bool is_box;
   std::string model;
   double yaw;
-};
-
-struct PendingEnvironmentObstacle {
-  bool is_box;
-  Eigen::Vector3d center;
-  Eigen::Vector3d size;
-  double radius;
-  std::string model;
+  // Keep authored coordinates separate from terrain-derived center. Reusing
+  // the latter after a re-crop would bake the old ground into the new world.
+  PendingEnvironmentObstacle authored;
 };
 
 enum class TerrainUpdateKind { REJECTED, CLEARED, REPLACED };
@@ -53,6 +59,7 @@ struct TerrainUpdate {
   TerrainUpdateKind kind{TerrainUpdateKind::REJECTED};
   bool had_terrain{false};
   bool obstacles_cleared{false};
+  bool obstacles_requeued{false};
   bool accepted() const { return kind != TerrainUpdateKind::REJECTED; }
 };
 
@@ -74,6 +81,7 @@ class PlanningEnvironmentStore {
   PlanningEnvironmentStore &operator=(const PlanningEnvironmentStore &) = delete;
 
   TerrainUpdate ingestTerrain(const grid_map_msgs::msg::GridMap::SharedPtr &msg);
+  // True when ready, including an already-built grid. False on build failure.
   bool ensureTerrainDistanceField();
   bool ensureDistanceField(const Eigen::Vector3d &mission_lower,
                            const Eigen::Vector3d &mission_upper);
@@ -81,6 +89,9 @@ class PlanningEnvironmentStore {
   // Successful replacement refreshes effective geometry and masks. Malformed
   // zones leave the entire previous field and generation unchanged.
   bool setRiskZones(const std::vector<RiskZone> &zones);
+  // Probability input already resolved AGL into MSL. Preserve those centers
+  // while retaining the independent legacy exclusion geometry and policies.
+  bool setResolvedRiskZones(const std::vector<RiskZone> &zones);
   void refreshRisk();
   // Preserve the adapter's explicit search binding points. PathSearcher
   // retains the address of this owned vector between searches.
@@ -93,7 +104,14 @@ class PlanningEnvironmentStore {
   int addBox(const Eigen::Vector3d &center, const Eigen::Vector3d &size,
              const std::string &model = "");
   void clearObstacles();
+  // Install a complete batch before removing the previous one. Requires an
+  // ingested SDF; invalid or failed batches retain the accepted obstacles.
+  bool replaceObstacles(const std::vector<PendingEnvironmentObstacle> &requests);
   std::vector<PendingEnvironmentObstacle> takePendingObstacles();
+  // Install the complete pending batch, preserving any existing spawn yaw.
+  // Failed/unattempted inputs stay queued; failure throws rather than letting
+  // the adapter publish terrain-ready with missing accepted obstacles.
+  size_t installPendingObstacles();
 
   const TerrainData &terrain() const { return terrain_data_; }
   const path_planner::sdf::SDFManager &distanceField() const { return sdf_manager_; }
@@ -126,12 +144,16 @@ class PlanningEnvironmentStore {
   double riskValue(size_t zone, const Eigen::Vector3d &pos, double clearance) const;
 
  private:
+  bool setRiskZonesImpl(const std::vector<RiskZone>& zones, bool resolved);
+  bool risk_centers_resolved_{false};
   terrain_risk::Settings riskSettings(double clearance) const;
   const terrain_risk::Mask *riskMask(size_t zone) const;
   void refreshEffectiveRiskZones();
   void rebuildTerrainRiskMasks();
   bool buildSDFForBounds(const Eigen::Vector3d &lower, const Eigen::Vector3d &upper);
   Eigen::Vector3d groundedCenter(const Eigen::Vector3d &center, double half_height) const;
+  void requeueObstaclesForTerrain();
+  int installObstacle(const PendingEnvironmentObstacle &request);
 
   const PlanningEnvironmentOptions options_;
   double sdf_voxel_size_;
@@ -151,6 +173,7 @@ class PlanningEnvironmentStore {
   std::vector<EnvironmentObstacle> obstacles_;
   std::vector<PendingEnvironmentObstacle> pending_obstacles_;
   std::mt19937 yaw_rng_;
+  std::string terrain_frame_id_;
 };
 
 }  // namespace path_manager

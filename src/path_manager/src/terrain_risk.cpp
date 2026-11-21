@@ -122,8 +122,13 @@ double shadowCeiling(const Mask *input, bool enabled,
         return static_cast<double>(mask.shadow_ceiling[
             static_cast<size_t>(ai) * mask.radial_count + ri]);
     };
-    const double z0 = (1.0 - rt) * sample(a0, r0) + rt * sample(a0, r1);
-    const double z1 = (1.0 - rt) * sample(a1, r0) + rt * sample(a1, r1);
+    const double v00 = sample(a0, r0), v01 = sample(a0, r1);
+    const double v10 = sample(a1, r0), v11 = sample(a1, r1);
+    // Preserve a constant table patch exactly. The visibility partition can
+    // then locate its crossings with the actual polynomial z(t)-ceiling.
+    if (v00 == v01 && v00 == v10 && v00 == v11) return v00;
+    const double z0 = (1.0 - rt) * v00 + rt * v01;
+    const double z1 = (1.0 - rt) * v10 + rt * v11;
     return (1.0 - at) * z0 + at * z1;
 }
 

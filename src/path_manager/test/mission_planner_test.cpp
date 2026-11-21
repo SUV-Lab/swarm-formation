@@ -97,6 +97,7 @@ void exercise(const char *config_path, bool chained)
     rclcpp::NodeOptions options;
     options.arguments({"--ros-args", "--params-file", config_path});
     options.parameter_overrides({
+        rclcpp::Parameter("manager/risk_model_mode", std::string("legacy")),
         rclcpp::Parameter("drone_id", 7),
         rclcpp::Parameter("chain/enable", chained),
         rclcpp::Parameter("chain/segments", 3),

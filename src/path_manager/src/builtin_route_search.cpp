@@ -30,6 +30,7 @@ struct BuiltinRouteSearchBackend::Impl {
     searcher->setTerrainHeightmap({});
     searcher->setTerrainHeightGrad({});
     searcher->setRiskVisibility({});
+    searcher->setRiskProbability({});
     searcher->setRiskZones(nullptr);
     search_ready = false;
   }
@@ -57,6 +58,7 @@ bool BuiltinRouteSearchBackend::prepare(const RouteSearchProblem &problem,
     state.zones.push_back({zone.center, zone.reach, zone.peak, zone.vertical_reach});
   searcher.setRiskZones(state.zones.empty() ? nullptr : &state.zones);
   searcher.setRiskVisibility(environment.risk_visibility);
+  searcher.setRiskProbability(environment.risk_probability);
   searcher.setLogManager(state.logger);
   searcher.setSDF(environment.distance_field, environment.lower,
                  environment.upper - environment.lower,

@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""Publish a scenario yaml the way the RViz ObstacleScenario panel does.
+"""Emit publication commands for a scenarios/legacy/*.yaml input.
 
-Headless verification kept measuring the "zone missions" with no zones in
-them: risk zones and dynamic obstacles do not live in the mission yaml, they
-live in scenarios/obstacles/*.yaml and reach the planner only because the
-panel publishes them. A smoke test that skips this step gets
-`setRiskZones: 0 zones` and silently measures a different problem.
-
-Emits the two `ros2 topic pub -1` command lines the panel's Load button
-sends, in the same order (zones first, then obstacles — the planner installs
-the zone set before the SDF patches reference it).
+Requires manager/risk_model_mode=legacy. Publishes zones and obstacles.
 
 Unit convention is the panel's, verified against
 mmp_rviz_plugins/src/obstacle_scenario_panel.cpp:

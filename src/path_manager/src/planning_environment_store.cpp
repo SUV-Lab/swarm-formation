@@ -57,7 +57,7 @@ void PlanningEnvironmentStore::refreshEffectiveRiskZones()
     ++zone_policy_generation_;  // [S13] any zone/terrain re-derivation
                                 // invalidates every outstanding snapshot
     risk_zones_ = risk_zones_raw_;
-    if (!options_.risk_zone_agl || risk_zones_.empty()) return;
+    if (risk_centers_resolved_ || !options_.risk_zone_agl || risk_zones_.empty()) return;
     if (!terrain_data_.valid) {
         // No DEM yet: raw z is used as-is; setTerrainData() re-derives.
         if (log_manager_) {
@@ -357,18 +357,19 @@ TerrainUpdate PlanningEnvironmentStore::ingestTerrain(const grid_map_msgs::msg::
         log_manager_->warnf("Invalid terrain GridMap: %s", inspection.detail.c_str());
         return update;
     }
+    update.had_terrain = terrain_data_.valid;
 
     // world=none is published as an empty GridMap. It is an explicit state
     // transition, not a malformed update: keeping the previous DEM here while
     // RViz clears it would make the displayed terrain/risk field disagree with
     // the one used for planning.
     if (inspection.update == TerrainGridUpdate::CLEAR) {
-        update.had_terrain = terrain_data_.valid;
         const uint64_t next_generation = terrain_data_.generation + 1;
         terrain_data_ = TerrainData{};
         terrain_data_.generation = next_generation;
         terrain_bbox_computed_ = false;
         sdf_built_ = false;
+        terrain_frame_id_.clear();
         // Every obstacle patch was tied to the old map/grid (including
         // terrain-grounded z and infinite-column bounds), so it cannot safely
         // survive an explicit world clear.
@@ -402,15 +403,17 @@ TerrainUpdate PlanningEnvironmentStore::ingestTerrain(const grid_map_msgs::msg::
 
     const auto& elev_data = msg->data[inspection.elevation_layer];
 
-    // Geometry change (new world / corridor re-crop) invalidates everything
-    // derived from the OLD map: the boxes-only SDF grid and the cached
-    // terrain bbox were one-shot latches sized to the first map ever seen,
-    // so a corridor loaded after a nationwide map (or vice versa) kept
-    // planning against stale bounds. Reset the latches; the blocks below
-    // rebuild them from this message.
+    // A crop change is not an obstacle-clear command. Within the same map
+    // coordinate frame, preserve authored inputs and re-ground them on this
+    // DEM, including a same-geometry elevation update. A distinct frame or an
+    // explicit empty world does clear them: coordinates cannot be carried
+    // across an unidentified transform. Publishers which redefine an existing
+    // frame name must explicitly clear the world first.
     {
         const double new_origin_x = msg->info.pose.position.x - msg->info.length_x / 2.0;
         const double new_origin_y = msg->info.pose.position.y - msg->info.length_y / 2.0;
+        const bool frame_changed = terrain_data_.valid &&
+            terrain_frame_id_ != msg->header.frame_id;
         const bool geometry_changed = terrain_data_.valid &&
             (std::abs(terrain_data_.resolution - msg->info.resolution) > 1e-9 ||
              std::abs(terrain_data_.length_x - msg->info.length_x) > 1e-6 ||
@@ -424,20 +427,26 @@ TerrainUpdate PlanningEnvironmentStore::ingestTerrain(const grid_map_msgs::msg::
                 terrain_data_.resolution, msg->info.resolution,
                 terrain_data_.origin_x, terrain_data_.origin_y,
                 new_origin_x, new_origin_y);
-            sdf_built_ = false;
-            terrain_bbox_computed_ = false;
             if (sdf_voxel_size_auto_) {
                 sdf_voxel_size_ = msg->info.resolution;   // re-track DEM cell
             }
-            // Clear ALL patches: every patch was placed on the OLD grid/DEM —
-            // they baked groundedCenter() on the old ground, so they cannot
-            // survive a geometry change.
-            if (sdf_manager_.numActiveObstacles() > 0 ||
-                !obstacles_.empty()) {
-                clearObstacles();
-                update.obstacles_cleared = true;
-            }
         }
+        if (frame_changed) {
+            log_manager_->warnf("[TERRAIN] coordinate frame changed '%s' -> '%s' — "
+                                "clearing authored obstacle inputs",
+                                terrain_frame_id_.c_str(), msg->header.frame_id.c_str());
+            update.obstacles_cleared = !obstacles_.empty() || !pending_obstacles_.empty() ||
+                sdf_manager_.numActiveObstacles() > 0;
+            clearObstacles();
+        } else if (!obstacles_.empty()) {
+            requeueObstaclesForTerrain();
+            update.obstacles_requeued = true;
+        }
+        // The height range can change even if XY geometry did not. Rebuild
+        // the derived grid/bounds before replaying the retained raw inputs.
+        sdf_built_ = false;
+        terrain_bbox_computed_ = false;
+        terrain_frame_id_ = msg->header.frame_id;
     }
 
     terrain_data_.cols = elev_data.layout.dim[0].size;
@@ -500,7 +509,7 @@ TerrainUpdate PlanningEnvironmentStore::ingestTerrain(const grid_map_msgs::msg::
 
 bool PlanningEnvironmentStore::ensureTerrainDistanceField()
 {
-    if (sdf_built_) return false;
+    if (sdf_built_) return true;
     Eigen::Vector3d lo, hi;
     if (!terrainBounds(&lo, &hi) || !buildSDFForBounds(lo, hi)) return false;
     sdf_built_ = true;
@@ -535,6 +544,120 @@ void PlanningEnvironmentStore::clearObstacles()
     log_manager_->infof("Dynamic obstacles cleared");
 }
 
+bool PlanningEnvironmentStore::replaceObstacles(
+    const std::vector<PendingEnvironmentObstacle> &requests)
+{
+    if (!sdf_manager_.hasData() || (terrain_data_.valid && !sdf_built_)) return false;
+    for (const auto &request : requests) {
+        if (!request.center.allFinite() ||
+            (request.has_yaw && !std::isfinite(request.yaw))) return false;
+        if (request.is_box) {
+            if (!request.size.allFinite() || !(request.size.array() > 0.0).all()) return false;
+        } else if (!std::isfinite(request.radius) || !(request.radius > 0.0) ||
+                   !std::isfinite(2.0 * request.radius)) return false;
+        const double half_height = request.is_box ? 0.5 * request.size.z() : request.radius;
+        const auto center = groundedCenter(request.center, half_height);
+        const Eigen::Vector3d extent = request.is_box ? request.size :
+            Eigen::Vector3d::Constant(request.radius);
+        if (!center.allFinite() || !(center + extent).allFinite() ||
+            !(center - extent).allFinite()) return false;
+    }
+    const auto count = obstacles_.size();
+    const auto rng = yaw_rng_;
+    try {
+        obstacles_.reserve(count + requests.size());
+        for (const auto &request : requests) {
+            if (installObstacle(request) < 0) throw std::runtime_error("obstacle installation failed");
+        }
+    } catch (const std::exception &) {
+        for (size_t i = count; i < obstacles_.size(); ++i)
+            sdf_manager_.removeObstacle(obstacles_[i].id);
+        obstacles_.resize(count);
+        yaw_rng_ = rng;
+        return false;
+    }
+    for (size_t i = 0; i < count; ++i) sdf_manager_.removeObstacle(obstacles_[i].id);
+    obstacles_.erase(obstacles_.begin(), obstacles_.begin() + count);
+    pending_obstacles_.clear();
+    return true;
+}
+
+void PlanningEnvironmentStore::requeueObstaclesForTerrain()
+{
+    // Construct the replacement queue before mutating the live set. Existing
+    // spawns precede requests which have not yet acquired a heading.
+    std::vector<PendingEnvironmentObstacle> replay;
+    replay.reserve(obstacles_.size() + pending_obstacles_.size());
+    for (const auto &obstacle : obstacles_) replay.push_back(obstacle.authored);
+    replay.insert(replay.end(), pending_obstacles_.begin(), pending_obstacles_.end());
+    sdf_manager_.clearObstacles();
+    obstacles_.clear();
+    pending_obstacles_.swap(replay);
+    log_manager_->infof("[TERRAIN] retained %zu authored obstacle(s) for re-grounding",
+                        pending_obstacles_.size());
+}
+
+size_t PlanningEnvironmentStore::installPendingObstacles()
+{
+    if (pending_obstacles_.empty()) return 0;
+    if (!sdf_manager_.hasData() || (terrain_data_.valid && !sdf_built_)) {
+        throw std::runtime_error("accepted obstacle inputs remain pending: SDF is not ready");
+    }
+    size_t installed = 0;
+    try {
+        for (; installed < pending_obstacles_.size(); ++installed) {
+            if (installObstacle(pending_obstacles_[installed]) < 0) {
+                throw std::runtime_error("accepted obstacle replay failed; remaining inputs retained");
+            }
+        }
+    } catch (...) {
+        pending_obstacles_.erase(pending_obstacles_.begin(),
+                                 pending_obstacles_.begin() + installed);
+        throw;
+    }
+    pending_obstacles_.clear();
+    return installed;
+}
+
+int PlanningEnvironmentStore::installObstacle(const PendingEnvironmentObstacle &request)
+{
+    if (!sdf_manager_.hasData()) return -1;
+    const double half_height = request.is_box ? 0.5 * request.size.z() : request.radius;
+    const Eigen::Vector3d gcenter = groundedCenter(request.center, half_height);
+    const double diameter = 2.0 * request.radius;
+    const Eigen::Vector3d size = request.is_box ? request.size
+        : Eigen::Vector3d(diameter, diameter, diameter);
+    // Replaying a spawn consumes no RNG. Generate a new spawn's heading on a
+    // copy so an installation failure cannot alter the following request.
+    auto next_rng = yaw_rng_;
+    const double yaw = request.has_yaw ? request.yaw :
+        std::uniform_real_distribution<double>(0.0, 6.283185307179586)(next_rng);
+    path_planner::sdf::PrimitiveSpec spec;
+    spec.kind = request.is_box ? path_planner::sdf::PrimitiveKind::kCube
+                               : path_planner::sdf::PrimitiveKind::kSphere;
+    spec.center = gcenter;
+    spec.size = size;
+    if (request.is_box) spec.yaw = yaw;
+    const int id = sdf_manager_.addObstacle(spec);
+    if (id < 0) {
+        log_manager_->errorf("Dynamic obstacle installation failed; input retained by replay caller");
+        return -1;
+    }
+    auto authored = request;
+    authored.has_yaw = true;
+    authored.yaw = yaw;
+    obstacles_.push_back({id, gcenter, size, request.is_box, request.model, yaw,
+                          std::move(authored)});
+    if (!request.has_yaw) yaw_rng_ = next_rng;
+    log_manager_->infof("Dynamic %s added: id=%d center=(%.2f,%.2f,%.2f) "
+                        "yaw=%.2f (request z=%.2f), total=%zu%s",
+                        request.is_box ? "box" : "sphere", id,
+                        gcenter.x(), gcenter.y(), gcenter.z(), yaw,
+                        request.center.z(), sdf_manager_.numActiveObstacles(),
+                        request.has_yaw ? " [retained spawn]" : "");
+    return id;
+}
+
 
 int PlanningEnvironmentStore::addSphere(const Eigen::Vector3d& center, double radius,
                                   const std::string& model)
@@ -543,7 +666,7 @@ int PlanningEnvironmentStore::addSphere(const Eigen::Vector3d& center, double ra
         log_manager_->warnf("addDynamicSphere: center must be finite and radius positive and finite");
         return -1;
     }
-    if (!sdf_manager_.hasData()) {
+    if (!sdf_manager_.hasData() || (terrain_data_.valid && !sdf_built_)) {
         // Defer: the SDF (ESDF) is built lazily on the first plan. Without a
         // cache it is not ready yet, so queue and add once it exists.
         pending_obstacles_.push_back({false, center,
@@ -553,28 +676,7 @@ int PlanningEnvironmentStore::addSphere(const Eigen::Vector3d& center, double ra
                             center.x(), center.y(), center.z(), radius);
         return -2;  // deferred (not an error)
     }
-    const Eigen::Vector3d gcenter = groundedCenter(center, radius);
-    path_planner::sdf::PrimitiveSpec spec;
-    spec.kind = path_planner::sdf::PrimitiveKind::kSphere;
-    spec.center = gcenter;
-    const double d = 2.0 * radius;
-    spec.size = Eigen::Vector3d(d, d, d);
-
-    int id = sdf_manager_.addObstacle(spec);
-    if (id < 0) {
-        log_manager_->warnf("addDynamicSphere: addObstacle failed "
-                            "(center=%.2f,%.2f,%.2f r=%.2f)",
-                            center.x(), center.y(), center.z(), radius);
-        return -1;
-    }
-    const double yaw =
-        std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_);
-    obstacles_.push_back({id, gcenter, Eigen::Vector3d(d, d, d), false, model, yaw});
-    log_manager_->infof("Dynamic sphere added: id=%d center=(%.2f,%.2f,%.2f) r=%.2f "
-                        "(request z=%.2f), total=%zu",
-                        id, gcenter.x(), gcenter.y(), gcenter.z(), radius,
-                        center.z(), sdf_manager_.numActiveObstacles());
-    return id;
+    return installObstacle({false, center, Eigen::Vector3d(radius, radius, radius), radius, model});
 }
 
 int PlanningEnvironmentStore::addBox(const Eigen::Vector3d& center, const Eigen::Vector3d& size,
@@ -584,7 +686,7 @@ int PlanningEnvironmentStore::addBox(const Eigen::Vector3d& center, const Eigen:
         log_manager_->warnf("addDynamicBox: center must be finite and size positive and finite");
         return -1;
     }
-    if (!sdf_manager_.hasData()) {
+    if (!sdf_manager_.hasData() || (terrain_data_.valid && !sdf_built_)) {
         // Defer until the SDF is built (see addDynamicSphere).
         pending_obstacles_.push_back({true, center, size, 0.0, model});
         log_manager_->infof("addDynamicBox: SDF not ready, deferred "
@@ -592,37 +694,21 @@ int PlanningEnvironmentStore::addBox(const Eigen::Vector3d& center, const Eigen:
                             center.x(), center.y(), center.z());
         return -2;  // deferred (not an error)
     }
-    // One heading per spawn, shared by BOTH the collision primitive and the
-    // RViz model marker. It used to be visual-only (collision stayed an
-    // axis-aligned box), so a rotated hull stuck out of its own collision
-    // volume and trajectories legally clipped the bow/stern.
-    const double yaw =
-        std::uniform_real_distribution<double>(0.0, 6.283185307179586)(yaw_rng_);
-    const Eigen::Vector3d gcenter = groundedCenter(center, 0.5 * size.z());
-    path_planner::sdf::PrimitiveSpec spec;
-    spec.kind = path_planner::sdf::PrimitiveKind::kCube;
-    spec.center = gcenter;
-    spec.size = size;  // full extents (sx, sy, sz)
-    spec.yaw = yaw;
-
-    int id = sdf_manager_.addObstacle(spec);
-    if (id < 0) {
-        log_manager_->warnf("addDynamicBox: addObstacle failed "
-                            "(center=%.2f,%.2f,%.2f size=%.2f,%.2f,%.2f)",
-                            gcenter.x(), gcenter.y(), gcenter.z(),
-                            size.x(), size.y(), size.z());
-        return -1;
-    }
-    obstacles_.push_back({id, gcenter, size, true, model, yaw});
-    log_manager_->infof("Dynamic box added: id=%d center=(%.2f,%.2f,%.2f) size=(%.2f,%.2f,%.2f) "
-                        "yaw=%.2f (request z=%.2f), total=%zu",
-                        id, gcenter.x(), gcenter.y(), gcenter.z(),
-                        size.x(), size.y(), size.z(), yaw,
-                        center.z(), sdf_manager_.numActiveObstacles());
-    return id;
+    return installObstacle({true, center, size, 0.0, model});
 }
 
 bool PlanningEnvironmentStore::setRiskZones(const std::vector<RiskZone>& zones)
+{
+    return setRiskZonesImpl(zones, false);
+}
+
+bool PlanningEnvironmentStore::setResolvedRiskZones(const std::vector<RiskZone>& zones)
+{
+    return setRiskZonesImpl(zones, true);
+}
+
+bool PlanningEnvironmentStore::setRiskZonesImpl(const std::vector<RiskZone>& zones,
+                                              bool resolved)
 {
     // [PA-7] ATOMIC REJECTION: refuse the SET, not the offending member.
     // Keeping the survivors would delete a declared hazard from the field and
@@ -659,6 +745,7 @@ bool PlanningEnvironmentStore::setRiskZones(const std::vector<RiskZone>& zones)
 
     // The adapter rebinds search/optimizer consumers after this replacement.
     risk_zones_raw_ = zones;
+    risk_centers_resolved_ = resolved;
     refreshRisk();
     if (log_manager_) {
         log_manager_->infof(

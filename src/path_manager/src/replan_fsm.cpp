@@ -201,6 +201,7 @@ ReplanFSM::ReplanFSM(rclcpp::Node::SharedPtr node)
     // With MultiThreadedExecutor, these groups can run in parallel threads
     timer_callback_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     subscription_callback_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    path_manager_->setProbabilityCallbackGroup(subscription_callback_group_);
 
     FSM_LOG_INFO("Callback groups created: timer, subscription (all MutuallyExclusive)");
 
@@ -498,6 +499,7 @@ void ReplanFSM::polyTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
     const auto &data = path_manager_->executionTrajectory();
     msg = makeTrajectoryMessage(data.traj, drone_id_, data.traj_id,
                                 storedTrajectoryTime(data.start_time));
+    msg.planner_session_id = path_manager_->riskSessionId();
 }
 
 void ReplanFSM::globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
@@ -513,6 +515,7 @@ void ReplanFSM::globalTraj2ROSMsg(mmp_traj_msgs::msg::PolyTraj &msg)
     stamp.nanosec = now.nanoseconds() % 1000000000;
     msg = makeTrajectoryMessage(path_manager_->referenceTrajectory().traj,
                                 drone_id_, msg.trajectory_id, stamp);
+    msg.planner_session_id = path_manager_->riskSessionId();
 }
 
 bool ReplanFSM::publishExecutionTrajectory() {
@@ -532,9 +535,10 @@ bool ReplanFSM::publishExecutionTrajectory() {
             ? pending_plan_->reference_trajectory : path_manager_->referenceTrajectory().traj;
         log_manager_->infof("[publishExecutionTrajectory] Using pre-optimized trajectory (duration=%.3f)", local_traj.duration);
 
-        const auto msg = makeTrajectoryMessage(
+        auto msg = makeTrajectoryMessage(
             trajectory, drone_id_, local_traj.traj_id,
             storedTrajectoryTime(start_time));
+        msg.planner_session_id = path_manager_->riskSessionId();
         optimized_path_pub_->publish(msg);
         have_local_traj_ = true;
 
@@ -545,8 +549,9 @@ bool ReplanFSM::publishExecutionTrajectory() {
             builtin_interfaces::msg::Time stamp;
             stamp.sec = now.seconds();
             stamp.nanosec = now.nanoseconds() % 1000000000;
-            global_path_pub_->publish(
-                makeTrajectoryMessage(reference, drone_id_, 0, stamp));
+            auto reference_message = makeTrajectoryMessage(reference, drone_id_, 0, stamp);
+            reference_message.planner_session_id = path_manager_->riskSessionId();
+            global_path_pub_->publish(reference_message);
         }
         pending_plan_.reset();
         return true;
@@ -1040,6 +1045,33 @@ void ReplanFSM::trajectoryCommandCallback(const mmp_mission_msgs::msg::Trajector
                      msg->initial_speed);
     }
 
+    if (msg->has_scenario_environment) {
+        const auto finite_point = [](const auto& p) {
+            return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+        };
+        const auto nonnegative = [](double value) {
+            return std::isfinite(value) && value >= 0.0;
+        };
+        if (mission_start_claim_.src == StartStateSource::UNSPECIFIED ||
+            !finite_point(msg->start_position) || !finite_point(msg->target_position) ||
+            msg->target_position.z < -0.1 ||
+            !std::all_of(msg->waypoints.begin(),msg->waypoints.end(),finite_point) ||
+            !std::all_of(msg->formation_pattern.begin(),msg->formation_pattern.end(),finite_point) ||
+            !nonnegative(msg->formation_scale) || !nonnegative(msg->length_per_piece) ||
+            !nonnegative(msg->obstacle_clearance) ||
+            (msg->use_final_velocity && !finite_point(msg->final_velocity)) ||
+            (msg->use_final_acceleration && !finite_point(msg->final_acceleration))) {
+            FSM_LOG_ERROR("[SCENARIO] malformed mission; environment unchanged");
+            return;
+        }
+        std::string reason;
+        if (!path_manager_ || !path_manager_->setScenarioEnvironmentRuntime(
+                msg->scenario_environment,&reason)) {
+            FSM_LOG_ERROR("[SCENARIO] environment rejected: %s",reason.c_str());
+            return;
+        }
+    }
+
     // Capture the pre-command sequencing state: if the plan below fails or is
     // rejected, both are ROLLED BACK at the end of this callback so a resend
     // of the SAME command retries instead of dying in the dedup gate above.
@@ -1281,6 +1313,8 @@ void ReplanFSM::terrainCallback(const grid_map_msgs::msg::GridMap::SharedPtr msg
                 // real ingestion instead of trusting a stale one.
                 ready.data = {0.0, 0.0, 0.0, 0.0, 0.0};
             }
+            ready.data.push_back(msg->header.stamp.sec);
+            ready.data.push_back(msg->header.stamp.nanosec);
             terrain_ready_pub_->publish(ready);
         }
     }
@@ -1368,6 +1402,7 @@ void ReplanFSM::loadRiskZonesCallback(
     const mmp_mission_msgs::msg::RiskZoneArray::SharedPtr msg)
 {
     if (!path_manager_) return;
+    if (path_manager_->probabilityRiskMode()) return;
     // [ENV-CHANGE] Zones are NOT obstacles and must not be re-checked with the
     // obstacle predicate: the same volume is HARD_AVOID on one leg and a
     // SOFT_ENDPOINT containment exemption on another, so "is this point

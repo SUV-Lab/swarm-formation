@@ -82,6 +82,8 @@ namespace ego_planner
     // per solve, and these used to be heap-allocated locals every call.
     // resize() on an unchanged size is a no-op, so reuse costs nothing.
     Eigen::VectorXd cb_T_, cb_gradT_, cb_costs_;
+    double cb_smoothness_cost_{0.0}, cb_time_cost_{0.0};
+    bool objective_prepared_{false};
     Eigen::MatrixXd sqrvar_gdp_, sqrvar_dps_;      // distance-variance work
     Eigen::VectorXd sqrvar_dsqrs_;
     SwarmGraph::Ptr swarm_graph_;
@@ -310,6 +312,8 @@ namespace ego_planner
     // Return value is visibility in [0,1]. grad may be null.
     std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)>
         risk_visibility_;
+    std::function<double(size_t, const Eigen::Vector3d &, const Eigen::Vector3d &,
+                         Eigen::Vector3d *, Eigen::Vector3d *)> risk_probability_;
     // Raw per-zone LOS shadow ceiling (PathManager::riskShadowCeiling): the z
     // below which terrain occludes (x,y) from that zone's source. -inf = no
     // shadow information (masking off, invalid mask, or outside the zone's
@@ -628,6 +632,11 @@ namespace ego_planner
         std::function<double(size_t, const Eigen::Vector3d &, Eigen::Vector3d *)> f) {
         risk_visibility_ = std::move(f);
     }
+    void setRiskProbability(
+        std::function<double(size_t, const Eigen::Vector3d &, const Eigen::Vector3d &,
+                             Eigen::Vector3d *, Eigen::Vector3d *)> f) {
+        risk_probability_ = std::move(f);
+    }
     void setRiskShadowCeiling(
         std::function<double(size_t, const Eigen::Vector3d &)> f) {
         risk_shadow_ceiling_ = std::move(f);
@@ -662,6 +671,24 @@ namespace ego_planner
     bool OptimizeTrajectory_lbfgs(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                   const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                   Eigen::MatrixXd &optimal_points, const bool use_formation);
+
+    // Diagnostic access to the SAME initialized decision variables and full
+    // cost callback used by OptimizeTrajectory_lbfgs. Preparation freezes
+    // endpoint tapers and optional z bounds; querying does not run L-BFGS or
+    // publish a trajectory. Both calls require exclusive access to this
+    // configured instance and stable environment providers.
+    // Variables are flattened inner xyz, followed by one virtual time per
+    // piece. The returned gradient is with respect to precisely that vector.
+    struct ObjectiveEvaluation {
+      double cost{0.0}, smoothness_cost{0.0}, time_cost{0.0};
+      Eigen::VectorXd gradient, durations, integrated_costs;
+      poly_traj::Trajectory trajectory;
+    };
+    Eigen::VectorXd prepareObjectiveEvaluation(
+        const Eigen::MatrixXd &head, const Eigen::MatrixXd &tail,
+        const Eigen::MatrixXd &inner_points, const Eigen::VectorXd &durations,
+        bool use_formation=false);
+    ObjectiveEvaluation inspectObjectiveAt(const Eigen::VectorXd &variables);
 
     // Legacy nonvirtual entry: build a MINCO initial trajectory from the
     // front-end path, then optimize it. New callers should use solve(request)
@@ -770,6 +797,11 @@ namespace ego_planner
                          Eigen::Vector3d &gradp,
                          Eigen::Vector3d &gradv,
                          double &costp);
+    bool ProbabilityRiskGradCostP(const Eigen::Vector3d &p,
+                                 const Eigen::Vector3d &v,
+                                 Eigen::Vector3d &gradp,
+                                 Eigen::Vector3d &gradv,
+                                 double &costp);
 
     bool feasibilityGradCostV(const Eigen::Vector3d &v,
                               Eigen::Vector3d &gradv,

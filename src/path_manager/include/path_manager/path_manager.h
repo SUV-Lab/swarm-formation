@@ -39,6 +39,10 @@
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <mmp_mission_msgs/msg/risk_model_array.hpp>
+#include <mmp_mission_msgs/msg/scenario_environment.hpp>
+#include <mmp_traj_msgs/msg/poly_traj.hpp>
+#include <risk_model/model.hpp>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <fstream>
@@ -48,6 +52,7 @@ using namespace ego_planner;
 namespace path_manager
 {
   class BuiltinRouteSearchBackend;
+  class RiskProbabilityBridge;
 
   class PathManager
   {
@@ -463,6 +468,19 @@ namespace path_manager
     // Validating here as well as at the message boundary means no caller can
     // install a zone whose peak violates the (0, 1] the struct declares.
     bool setRiskZonesRuntime(const std::vector<RiskZone>& zones);
+    bool probabilityRiskMode() const;
+    // True means a valid request was accepted immediately OR queued awaiting
+    // its DEM. RiskEnvironment.request_status distinguishes both outcomes;
+    // probabilityRiskReady() remains the separate planning readiness gate.
+    // A malformed request returns false without changing accepted/pending data.
+    bool setRiskModelsRuntime(const mmp_mission_msgs::msg::RiskModelArray& models,
+                             std::string* reason = nullptr);
+    bool setScenarioEnvironmentRuntime(
+        const mmp_mission_msgs::msg::ScenarioEnvironment& scenario,
+        std::string* reason = nullptr);
+    std::shared_ptr<const risk_model::EnvironmentSnapshot> riskProbabilitySnapshot() const;
+    std::string riskSessionId() const;
+    void setProbabilityCallbackGroup(rclcpp::CallbackGroup::SharedPtr group);
     // [S13] Per-zone policy snapshot for the transition generator (contract
     // §5 zone_policy[]). A pass NUMBER is not a policy: endpoint-contained
     // zones are exempt individually, the pass-2 fallback leaves the WHOLE
@@ -639,6 +657,17 @@ namespace path_manager
   private:
     std::shared_ptr<rclcpp::Node> node_;
     std::unique_ptr<PlanningEnvironmentStore> environment_;
+    std::shared_ptr<RiskProbabilityBridge> probability_bridge_;
+    void initRiskProbabilityBridge();
+    void evaluateProbabilityWire(const mmp_traj_msgs::msg::PolyTraj::ConstSharedPtr& message);
+    void refreshRiskProbabilityForTerrain();
+    bool probabilityRiskReady() const;
+    bool setRiskModelsRuntimeImpl(const mmp_mission_msgs::msg::RiskModelArray& models,
+        std::string* reason, bool require_ready,
+        const std::function<void()>& before_commit = {});
+    std::function<double(size_t, const Eigen::Vector3d&)> probabilityReferenceCallback() const;
+    std::function<double(size_t, const Eigen::Vector3d&, const Eigen::Vector3d&,
+                         Eigen::Vector3d*, Eigen::Vector3d*)> probabilityHeadingCallback() const;
     // Concrete owner of adoption, identity and revocation state. Constructed
     // after the ROS adapter resolves the required drone_id parameter.
     std::unique_ptr<PlanningExecutionStore> execution_;
@@ -720,6 +749,11 @@ namespace path_manager
     double riskGroundedZ(const Eigen::Vector3d &pos, double *dzeff_dz) const;
     void publishEffectiveRiskField();
     void publishRiskHeatmap();
+    // Display selection and slice coordinates never enter planning costs.
+    std::string probability_heatmap_content_{"auto"};
+    std::string probability_heatmap_height_mode_{"agl"};
+    double probability_heatmap_height_m_{100.0};
+    int probability_heatmap_max_dim_{192};
     // [TRAJ-RISK] the one view where color == cost: the planned trajectory
     // painted by the risk density the aircraft ACTUALLY experiences at its 3D
     // position (OR-combined terrain-masked moats). Green (0) -> yellow -> red.
