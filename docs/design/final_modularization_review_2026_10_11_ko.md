@@ -111,7 +111,7 @@ RViz는 일반 설치 경로의 실행 파일과 실제 `/proc/<pid>/exe` 해시
 이번에는 별도 반복 성능 벤치마크를 수행하지 않았다. 기존 compiler warning은 남는다.
 
 원본 로그·재현 전후·소스 patch·외부 consumer·화면·해시와 검사기는
-[최종 검토 검증 자료](../validation/final_review_2026_10_11/README.md)에 보존한다.
+[최종 검토 검증 자료](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/final_review_2026_10_11/README.md)에 보존한다.
 기존 검증 자료와 이번 실제 재실행 결과를 구분했다. 시험 프로세스와 이번 검토용
 격리 display는 정리했으며 정상 `/ws/install`에는 수정본이 빌드되어 있다.
 

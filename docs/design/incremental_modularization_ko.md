@@ -1031,7 +1031,7 @@ double 결과를 기존 wire 형식으로 변환한 값도 일치했다. 이를 
 5개 병렬 구간을 유지했다. 시험용 ROS·RViz·지형 로더와 격리 display는 종료했다.
 
 기존 원시 결과를 수정하지 않고 핵심 로그·수치 입력/결과·비교기·설정과 새 검증의
-소스/바이너리 해시를 [검증 자료 디렉터리](../validation/planning_library_2026_10_08/README.md)에
+소스/바이너리 해시를 [검증 자료 디렉터리](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/planning_library_2026_10_08/README.md)에
 보존했다. 과거 자료와 이번 재검증을 구분하며, 무결성과 수치 비교는 해당 디렉터리의
 검증 스크립트로 확인할 수 있다. 대용량 DEM과 실행 바이너리는 보관하지 않으므로
 실제 재실행에는 기존 ROS 환경과 지형 데이터가 필요하다.
@@ -1134,7 +1134,7 @@ baseline chain의 중간 증가량을 보존하며, 중간 궤적이 계산 중 
 실제 수치 결과는 최종 빌드 후 다시 비교했다. R2의 raw double 시간 합은
 521.0625247312521초이며 float32 wire와 각자 같은 표현끼리 비교했다.
 
-기준과 최종 증거를 [단계 1·2 검증 자료](../validation/planning_computation_2026_10_10/README.md)에
+기준과 최종 증거를 [단계 1·2 검증 자료](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/planning_computation_2026_10_10/README.md)에
 보존했다. 원래 `/tmp/mmp_next_modularization_20261010/{baseline,after,evaluator}`의
 최종·예비 결과를 구분하며, 보존 자료 자체의 무결성 확인은 새 runtime 검증이 아니다.
 
@@ -1190,7 +1190,7 @@ R2 최대 오차는 **0.11871286239252095 m**, 최대 사용률은 **0.983109924
 실제 RViz R2 로드·계획·환경 변경 철회·새 임무 복구를 다시 실행했다. 궤적 190조각과
 모든 계수·시간, 전단 경로, 평가·후처리·비용 프로필이 기존 기준과 같다. 검증 대상
 7개 변경 소스의 해시는 빌드 전후 같다. 증거는 상위 저장소의
-`docs/validation/trajectory_simulation_2026_10_10`에 보존했으며 오프라인 검증은
+[docs/validation/trajectory_simulation_2026_10_10](https://github.com/SUV-Lab/MMP/tree/11a609cc7177d3ef5805bffe7b8c2630aa9f256a/docs/validation/trajectory_simulation_2026_10_10)에 보존했으며 오프라인 검증은
 새 실행을 대신하지 않는다.
 
 다음 단계 4는 표시 메시지의 준비와 ROS 발행을 옮긴다. 표시를 끌 때도 환경 마스크
@@ -1248,7 +1248,7 @@ visibility·shadow·장애물 collision yaw·다음 난수 값이 원본 및 연
 정확히 같고 float32 wire 비교도 통과했다. 표시 빌더의 최종 검사는 **28/28**이다.
 비교 하네스 첫 복사에서 기존 `compare_runs.py` helper가 빠진 것은 보존하고,
 helper를 추가한 뒤 두 모드의 비교를 완료했다. 제품 코드는 바꾸지 않았다.
-증거는 [단계 4 검증 자료](../validation/planning_visualization_2026_10_10/README.md)에
+증거는 [단계 4 검증 자료](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/planning_visualization_2026_10_10/README.md)에
 보관한다. 다음 단계는 기존 Python 지도 처리의 같은 계산 경로를 함수로 제공하는
 작업이며, ROS 서비스의 설정·rollback·발행 책임은 유지한다.
 
@@ -1297,7 +1297,7 @@ R2의 **2804×4119**, **30 m**, **654,218개 NaN** 지형은 모든 float32 비�
 컨테이너에서 `src/mmp_terrain`만 명시하여 패키지를 빌드했다. 격리 검증 뒤 공백 6곳을
 정리한 변경은 AST가 같음을 확인하고 최종 설치 시험을 수행했다. 진행 중 새 검사의
 NumPy 배열 비교 assertion을 수정한 기록도 최종 결과와 구분해 보존한다.
-증거는 상위 저장소 `docs/validation/map_loader_2026_10_10`에 보관한다. 큰 원시 DEM·
+증거는 상위 저장소 [docs/validation/map_loader_2026_10_10](https://github.com/SUV-Lab/MMP/tree/11a609cc7177d3ef5805bffe7b8c2630aa9f256a/docs/validation/map_loader_2026_10_10)에 보관한다. 큰 원시 DEM·
 배열 자체를 저장소에 복제하지 않으며, 오프라인 해시 검수는 새 runtime 시험이 아니다.
 
 다음 단계 6은 검증된 계산 함수를 하나의 계산 target으로 묶고, 기존 전체 계획 target의
@@ -1346,7 +1346,7 @@ target만 연결한다. 지도 예제는 단계 5에서 검증한 설치 Python 
   계수·시간·전단 경로, 평가 38개·후처리 2개·비용 프로필 10개 비교 통과.
 - 검증 대상 소스·입력 **183개** 및 외부 소비자가 사용한 설치물의 시험 전후 해시 유지.
 
-최종 증거는 [단계 6 검증 자료](../validation/modularized_api_2026_10_10/README.md)에
+최종 증거는 [단계 6 검증 자료](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/modularized_api_2026_10_10/README.md)에
 보관한다. 단계 3의 원본 노드/DDS·시뮬레이션 이력, 단계 4의 표시 on/off 및 메시지,
 단계 5의 설치 Python 69개 검사·R2 지형 27개 비교는 각 단계 기록과 함께 사용한다.
 이번 target 분리로 바뀐 링크·실행은 최종 CTest·외부 소비자·실제 GUI로 검증했다.
@@ -1466,7 +1466,7 @@ PM 초기화·mask 생성·질의·파일 기록·종료를 포함하며 hot loo
 컨테이너의 명시적 optimizer/PM 패키지 경로로 증분 Release 빌드를 수행했다. 새 머신의
 완전한 clean workspace 빌드나 모든 미션에서의 성공률을 주장하지 않는다.
 
-증거는 [이번 검증 자료](../validation/internal_cleanup_2026_10_11/README.md)에
+증거는 [이번 검증 자료](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/internal_cleanup_2026_10_11/README.md)에
 보존한다. `verify.py`는 보존 자료의 해시·수치 비교를 재확인하며 ROS를 새로 실행하는
 시험과 구분한다.
 
@@ -1505,7 +1505,7 @@ CTest 5개 중 4개와 비유한 override의 후속 정상 요청 검사는 수�
 설치물 전후 해시가 같다. 새 반복 성능 측정은 하지 않았다.
 
 원본 결과와 집계 스크립트의 변형 개수 보정까지
-[최종 검토 검증 기록](../validation/final_review_2026_10_11/README.md)에 보존한다.
+[최종 검토 검증 기록](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/final_review_2026_10_11/README.md)에 보존한다.
 후속 구조 우선순위는 호출별 baseline/fallback 설정 전달, manager의 환경/실행 책임
 분리, 호환 호출자 정리 후 내부 접근 제한이다. 이번 검토에 해당 구조 작업을 추가로
 섞지는 않았다. 기존 미추적 그림·stash·무관한 자료와 금지한 디렉터리는 건드리지 않았다.
@@ -1589,7 +1589,7 @@ R2 전체 소유 결과 JSON 및 실제 RViz 메시지 계수/시간이 같고, 
 주장하지 않는다. 기존 MINCO/L-BFGS 본체와 좌표·단위·기본값은 변경하지 않았다.
 
 [잔여 세 경계 구현 설명](remaining_modularization_2026_10_11_ko.md)과
-[보존 검증 자료](../validation/remaining_boundaries_2026_10_11/README.md)에 결과를 정리했다.
+[보존 검증 자료](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/remaining_boundaries_2026_10_11/README.md)에 결과를 정리했다.
 설정/chain, 환경, 실행/공개 API를 나누어 독립 검수했고 검토 범위에서 추가로 조치할
 결함은 발견하지 않았다. **이번에 합의한 세 완료 기준은 충족했다.** ROS 제거·C++ 지형
 이식과 별개로 새 구조 과제를 완료 조건에 추가하지 않는다. 변경은 작업 폴더에 남겼다.
@@ -1609,7 +1609,7 @@ merge retry에 검증된 제한을 전달한다. MINCO/L-BFGS 내부는 그대�
 환경 lifecycle 48,125 지점 조회도 같으며, 거부된 지도의 해상도를 잘못 기억하던 메타데이터
 두 값은 의도적으로 교정됐다. 이번 수정 범위·초기 테스트 등록 오류·검증 한계까지
 [상세 감사](deep_final_audit_2026_10_11_ko.md)와
-[원본 검증 자료](../validation/deep_final_audit_2026_10_11/README.md)에 기록했다.
+[원본 검증 자료](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/deep_final_audit_2026_10_11/README.md)에 기록했다.
 
 
 ## 계약 설명·private 함수 이름 정리 (2026-10-13)
@@ -1631,5 +1631,5 @@ Claude의 독립 파일·계약 검토에서도 차단 결함이나 범위 초�
 검증용 프로세스는 종료했다. 이후 사용자 승인에 따라 소스와 설계·검토·검증 자료를
 계획 서브모듈과 상위 저장소에 함께 커밋해 보존한다.
 
-[적용 내용·검토 범위·초기 검증 오류·원본 증거](../validation/api_naming_2026_10_13/README.md)에
+[적용 내용·검토 범위·초기 검증 오류·원본 증거](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/api_naming_2026_10_13/README.md)에
 자세히 기록했다. 공개 개명이나 추가 구조 변경으로 범위를 확장하지 않았다.

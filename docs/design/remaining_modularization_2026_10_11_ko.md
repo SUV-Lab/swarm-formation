@@ -78,7 +78,7 @@ swarm vector의 주소는 교체 함수 호출 후에도 안정적이다. 기존
 ## 검증
 
 최종 실행 결과와 원본 로그는
-[검증 기록](../validation/remaining_boundaries_2026_10_11/README.md)에 보존한다.
+[검증 기록](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/remaining_boundaries_2026_10_11/README.md)에 보존한다.
 단계별 기록은 [증분 모듈화 기록](incremental_modularization_ko.md)의
 “잔여 경계 정리” 항목에서 볼 수 있다.
 

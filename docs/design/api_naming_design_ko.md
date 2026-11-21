@@ -2,7 +2,7 @@
 
 2026-10-13 설계. **같은 날 사용자 승인에 따라 계약 설명과 내부 함수 네 개만
 구현·검증했다.** 공개 함수·필드 개명 등 나머지 항목은 제안 상태다.
-[적용 범위와 최종 검증](../validation/api_naming_2026_10_13/README.md)을 참고한다.
+[적용 범위와 최종 검증](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/api_naming_2026_10_13/README.md)을 참고한다.
 
 사용자의 요청에 따라 Claude 세션이 독립 검토했고, 반론을 현재 소스에서 대조해 아래 설계에 반영했다. 공동 검토의 판단과 확인 범위는 §9에 기록한다.
 
@@ -209,4 +209,4 @@ Claude 원문의 1차 제안과 반론은 검토 이력이며, 최종 확인은 
 
 위 원문은 설계 단계의 공동 검토 기록이다. 이후 구현 단계에서는 이 문서의 private
 네 함수명과 계약 설명만 정리했다. 수치 계산·ROS 동작은 유지했으며,
-[구현 후 Claude 검토](../validation/api_naming_2026_10_13/claude_final_review.md)를 별도로 보존한다.
+[구현 후 Claude 검토](https://github.com/SUV-Lab/swarm-formation/blob/49efc09918c8d04a89ca6485efd24bc143d4465f/docs/validation/api_naming_2026_10_13/claude_final_review.md)를 별도로 보존한다.

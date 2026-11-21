@@ -18,8 +18,7 @@ ROS를 필요로 한다. 기존 `ReplanFSM`도 같은 계획 API를 사용하며
 [계산·채택·평가 사용 계약](planning_computation_usage_ko.md)을 참고한다.
 
 이 문서는 현재 API를 기준으로 한다. 변경 과정과 과거 API는
-[단계별 구현 기록](incremental_modularization_ko.md), 수치 회귀와 재현 정보는
-[보존된 검증 자료](../validation/planning_library_2026_10_08/README.md)를 참고한다.
+[단계별 구현 기록](incremental_modularization_ko.md)을 참고한다.
 
 ## 실행 가능한 예제
 
